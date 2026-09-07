@@ -34,24 +34,33 @@ html {
   --muted-foreground: var(--muted);
   --border: #262626;
   --border-strong: #404040;
-  --panel: #000000;
-  --panel-soft: #0a0a0a;
+  --panel: #0a0a0a;
+  --panel-soft: #111111;
   --panel-warm: #171717;
-  --panel-elevated: #0a0a0a;
-  --sidebar: #000000;
+  --panel-elevated: #171717;
+  --sidebar: #0a0a0a;
   --sidebar-hover: #171717;
-  --sidebar-active: #222222;
-  --accent: #56c7a8;
-  --accent-hover: #6bd1b4;
-  --accent-strong: #72d7ba;
+  --sidebar-active: #262626;
+  --sidebar-foreground: #e5e5e5;
+  --sidebar-muted: #a3a3a3;
+  --sidebar-selected-foreground: #fafafa;
+  --sidebar-border: #262626;
+  --sidebar-border-strong: #525252;
+  --sidebar-scrollbar-thumb: #525252;
+  --sidebar-scrollbar-hover: #737373;
+  --sidebar-scrollbar-active: #a3a3a3;
+  --accent: #e5e5e5;
+  --accent-hover: #d4d4d4;
+  --accent-strong: #bdbdbd;
   --accent-soft: color-mix(in srgb, var(--accent) 14%, var(--panel));
   --accent-border: color-mix(in srgb, var(--accent) 34%, var(--border));
-  --action-bg: var(--accent-strong);
-  --action-bg-hover: color-mix(in srgb, var(--accent-strong) 88%, #ffffff);
-  --focus-ring: var(--accent-strong);
+  --action-bg: var(--accent);
+  --action-bg-hover: var(--accent-hover);
+  --focus-ring: #a3a3a3;
   --danger: #f87171;
   --warning: #fbbf24;
-  --success: #34d399;
+  --success: #d4d4d4;
+  --info: #a3a3a3;
   --body-gradient: linear-gradient(transparent, transparent);
   --app-overlay: rgba(0, 0, 0, 0.58);
   --code-panel: #050505;
@@ -63,9 +72,22 @@ html {
   --shadow-lg: 0 28px 86px rgba(0, 0, 0, 0.5);
   --modal-overlay-bg: rgba(0, 0, 0, 0.62);
   --modal-shadow: 0 28px 90px rgba(0, 0, 0, 0.5);
-  --button-neutral-bg: var(--panel-soft);
-  --button-neutral-hover-bg: var(--panel-warm);
-  --button-neutral-border: var(--border);
+  --button-neutral-bg: #171717;
+  --button-neutral-hover-bg: #262626;
+  --button-neutral-border: #404040;
+  --accent-foreground: #171717;
+  --button-neutral-active-bg: #333333;
+  --button-neutral-foreground: #e5e5e5;
+  --control-hover-bg: #262626;
+  --control-hover-foreground: #f5f5f5;
+  --scrollbar-thumb: #525252;
+  --scrollbar-thumb-hover: #737373;
+  --scrollbar-thumb-active: #a3a3a3;
+  --selection-bg: #404040;
+  --selection-foreground: #fafafa;
+  --disabled-bg: #262626;
+  --disabled-foreground: #737373;
+  --table-header-bg: #1c1c1c;
   color-scheme: dark;
 }
 
@@ -85,8 +107,8 @@ body {
 }
 
 *::-webkit-scrollbar {
-  height: 8px !important;
-  width: 8px !important;
+  height: 10px !important;
+  width: 10px !important;
 }
 
 *::-webkit-scrollbar-button {
@@ -103,14 +125,24 @@ body {
 *::-webkit-scrollbar-thumb {
   background-color: var(--scrollbar-thumb) !important;
   background-clip: padding-box !important;
-  border: 2px dashed transparent !important;
-  border-radius: 5px !important;
-  padding: 2px !important;
+  border: 2px solid transparent !important;
+  border-radius: 999px !important;
 }
 
 *::-webkit-scrollbar-thumb:hover {
   background-color: var(--scrollbar-thumb-hover) !important;
   background-clip: padding-box !important;
+}
+
+*::-webkit-scrollbar-thumb:active {
+  background-color: var(--scrollbar-thumb-active) !important;
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+  }
 }
 
 :where(button, input, textarea, select):not([data-slot], [data-slot] *) {
@@ -134,8 +166,38 @@ body {
 }
 
 ::selection {
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
-  color: var(--foreground);
+  background: var(--selection-bg);
+  color: var(--selection-foreground);
+}
+
+/* Adornments share the input shell without internal dividers. */
+:is([data-slot="input-group"], [data-slot="input"], [data-slot="textarea"]) {
+  border-width: 1px;
+  box-shadow: none;
+  transition: background-color var(--motion-normal) var(--ease-standard), border-color var(--motion-normal) var(--ease-standard);
+}
+
+:is([data-slot="input-group"], [data-slot="input"], [data-slot="textarea"]):hover:not(:focus-within, :disabled, [data-disabled="true"]) {
+  background-color: var(--field-hover);
+  border-color: var(--field-border-hover);
+}
+
+:is([data-slot="input-group"], [data-slot="input"], [data-slot="textarea"]):is(:focus-within, [data-focus-within="true"], [data-focused="true"]):not(:disabled, [data-disabled="true"]) {
+  background-color: var(--field-focus);
+  border-color: var(--field-border-focus);
+  box-shadow: none;
+  outline: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :is([data-slot="input-group"], [data-slot="input"], [data-slot="textarea"], .custom-select-button) {
+    transition: none;
+  }
+}
+
+[data-slot="input-group-prefix"],
+[data-slot="input-group-suffix"] {
+  border: 0;
 }
 
 :where(button, a, input, textarea, select, summary):not([data-slot], [data-slot] *):focus-visible {
@@ -147,6 +209,56 @@ body {
   display: inline-block;
   white-space: nowrap;
   word-break: keep-all;
+}
+
+/* Shared by Markdown tables and the data-table component. */
+.table-root--primary {
+  background: var(--table-header-bg);
+  border: 1px solid var(--table-border);
+  border-radius: 20px;
+  padding: 0 3px 3px;
+}
+
+.table-root .table__content {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.table-root :is(.table__header, .table__column) {
+  background: var(--table-header-bg);
+}
+
+.table-root .table__column {
+  color: var(--table-header-foreground);
+}
+
+.table-root .table__column::after {
+  background: var(--table-border);
+}
+
+.table-root .table__cell {
+  border-bottom: 1px solid var(--table-border);
+}
+
+.table-root--primary .table__body > tr:last-child > :is(td, th) {
+  border-bottom: 0;
+}
+
+/* React Aria renders row headers as th; both cell types share the body corners. */
+.table-root--primary .table__body > tr:first-child > :is(td, th):first-child {
+  border-start-start-radius: 16px;
+}
+
+.table-root--primary .table__body > tr:first-child > :is(td, th):last-child {
+  border-start-end-radius: 16px;
+}
+
+.table-root--primary .table__body > tr:last-child > :is(td, th):first-child {
+  border-end-start-radius: 16px;
+}
+
+.table-root--primary .table__body > tr:last-child > :is(td, th):last-child {
+  border-end-end-radius: 16px;
 }
 
 .app-data-table.is-compact :is(.table__column, .table__cell) {
@@ -193,7 +305,7 @@ body {
 }
 
 .ui-button--neutral {
-  color: var(--foreground);
+  color: var(--button-neutral-foreground);
   background: var(--button-neutral-bg);
   border-color: var(--button-neutral-border);
   box-shadow: var(--shadow-xs);
@@ -344,9 +456,8 @@ input[type="checkbox"]:not([data-slot], [data-slot] *):focus-visible {
   padding: 0 12px;
   text-align: left;
   transition:
-    background 0.16s ease,
-    border-color 0.16s ease,
-    box-shadow 0.16s ease;
+    background-color var(--motion-normal) var(--ease-standard),
+    border-color var(--motion-normal) var(--ease-standard);
   width: 100%;
 }
 
@@ -355,10 +466,10 @@ input[type="checkbox"]:not([data-slot], [data-slot] *):focus-visible {
   border-color: var(--field-border-hover, var(--field-border, var(--border)));
 }
 
-.custom-select-button:focus-visible {
+.custom-select-button:is(:focus, :focus-visible, [aria-expanded="true"]):not(:disabled) {
   background: var(--field-focus, var(--field-background, var(--default)));
   border-color: var(--field-border-focus, var(--field-border, var(--border)));
-  box-shadow: var(--field-shadow), 0 0 0 2px var(--focus);
+  box-shadow: none;
   outline: 0;
 }
 
@@ -406,7 +517,7 @@ input[type="checkbox"]:not([data-slot], [data-slot] *):focus-visible {
 }
 
 .custom-select-search:focus-within {
-  color: #4b4f56;
+  color: var(--foreground);
   background: var(--panel);
   border-color: var(--focus-ring);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus-ring) 13%, transparent);
@@ -464,14 +575,14 @@ input[type="checkbox"]:not([data-slot], [data-slot] *):focus-visible {
 
 .custom-select-option:hover,
 .custom-select-option.active {
-  background: var(--app-surface-hover);
-  color: var(--foreground);
+  background: var(--menu-hover-bg);
+  color: var(--menu-hover-foreground);
 }
 
 .custom-select-option[aria-selected="true"],
 .custom-select-option[aria-selected="true"]:hover {
-  background: var(--accent-soft);
-  color: var(--accent-strong);
+  background: var(--menu-selected-bg);
+  color: var(--menu-selected-foreground);
 }
 
 .custom-select-option > span > b,
@@ -723,13 +834,13 @@ input[type="checkbox"]:not([data-slot], [data-slot] *):focus-visible {
 
 /* Compact form dialogs use one quiet, input-first card language. */
 .ui-modal:is(.ui-modal--form, .automation-dialog, .login-account-modal, .ui-modal--personal-memory, .browser-chat-message-generation-dialog) {
-  --form-dialog-surface: #ffffff;
-  --form-dialog-field: #f5f5f6;
-  --form-dialog-field-border: #e4e4e7;
-  --form-dialog-title: #18181b;
-  --form-dialog-label: #52525b;
-  --form-dialog-value: #18181b;
-  --form-dialog-placeholder: #85858d;
+  --form-dialog-surface: var(--panel-elevated);
+  --form-dialog-field: var(--panel-soft);
+  --form-dialog-field-border: var(--border);
+  --form-dialog-title: var(--foreground);
+  --form-dialog-label: var(--muted-strong);
+  --form-dialog-value: var(--foreground);
+  --form-dialog-placeholder: var(--muted);
   background: var(--form-dialog-surface);
   border-color: var(--form-dialog-field-border);
   border-radius: 28px;
@@ -737,13 +848,6 @@ input[type="checkbox"]:not([data-slot], [data-slot] *):focus-visible {
 }
 
 :root[data-theme="dark"] .ui-modal:is(.ui-modal--form, .automation-dialog, .login-account-modal, .ui-modal--personal-memory, .browser-chat-message-generation-dialog) {
-  --form-dialog-surface: #17181c;
-  --form-dialog-field: #242426;
-  --form-dialog-field-border: #3a3a3d;
-  --form-dialog-title: #fafafa;
-  --form-dialog-label: #c4c4c8;
-  --form-dialog-value: #f4f4f5;
-  --form-dialog-placeholder: #98989f;
   background: var(--form-dialog-surface) !important;
   border-color: var(--form-dialog-field-border) !important;
   box-shadow: 0 28px 88px rgba(0, 0, 0, .58);
@@ -962,48 +1066,44 @@ input[type="checkbox"]:not([data-slot], [data-slot] *):focus-visible {
 }
 
 .magic-rainbow-button {
-  --magic-rainbow-angle: 0deg;
-  --magic-rainbow-surface: #17181a;
-  --magic-rainbow-foreground: #ffffff;
-  --magic-rainbow-1: #ff6b6b;
-  --magic-rainbow-2: #f7c948;
-  --magic-rainbow-3: #55d6be;
-  --magic-rainbow-4: #6c8cff;
-  --magic-rainbow-5: #c874ff;
-  background-color: transparent;
-  background-image:
-    linear-gradient(var(--magic-rainbow-surface), var(--magic-rainbow-surface)),
-    conic-gradient(from var(--magic-rainbow-angle), var(--magic-rainbow-1), var(--magic-rainbow-2), var(--magic-rainbow-3), var(--magic-rainbow-4), var(--magic-rainbow-5), var(--magic-rainbow-1));
-  background-clip: padding-box, border-box;
-  background-origin: padding-box, border-box;
-  background-repeat: no-repeat;
-  background-position: 0 0;
-  background-size: 100% 100%;
-  border: 2px solid transparent;
-  color: var(--magic-rainbow-foreground);
+  background: var(--button-primary-bg);
+  border: 1px solid var(--button-primary-bg);
+  color: var(--button-primary-foreground);
   isolation: isolate;
   overflow: hidden;
-  animation: magic-rainbow-spin 4s linear infinite;
+}
+
+.magic-rainbow-button:not(:disabled):hover {
+  background: var(--button-primary-hover-bg);
+  border-color: var(--button-primary-hover-bg);
+}
+
+:is(.ui-button--primary, .magic-rainbow-button):not(:disabled):active {
+  background: var(--button-primary-active-bg);
+  border-color: var(--button-primary-active-bg);
+}
+
+.ui-button--neutral:not(:disabled):active {
+  background: var(--button-neutral-active-bg);
+}
+
+:is(.ui-button, .magic-rainbow-button):disabled {
+  background: var(--disabled-bg);
+  border-color: var(--disabled-bg);
+  color: var(--disabled-foreground);
+  box-shadow: none;
+  opacity: 1;
 }
 
 .magic-rainbow-button::after {
-  background: linear-gradient(90deg, var(--magic-rainbow-1), var(--magic-rainbow-3), var(--magic-rainbow-5));
-  border-radius: 50%;
-  bottom: -25%;
-  content: '';
-  filter: blur(11px);
-  height: 24%;
-  left: 20%;
-  opacity: .55;
-  pointer-events: none;
-  position: absolute;
-  width: 60%;
-  z-index: -1;
+  content: none;
 }
 
 .magic-rainbow-button--outline {
-  --magic-rainbow-surface: var(--panel);
-  --magic-rainbow-foreground: var(--foreground);
+  --button-primary-bg: var(--button-neutral-bg);
+  --button-primary-hover-bg: var(--button-neutral-hover-bg);
+  --button-primary-active-bg: var(--button-neutral-active-bg);
+  --button-primary-foreground: var(--button-neutral-foreground);
 }
 
 .magic-rainbow-button:focus-visible {

@@ -173,6 +173,13 @@
       "@webpilot/capability-media/node": [
         "./packages/capability-media/src/node.ts"
       ],
+      "@webpilot/capability-media/model-settings": ["./packages/capability-media/src/model-settings.ts"],
+      "@webpilot/capability-media/models": [
+        "./packages/capability-media/src/models.ts"
+      ],
+      "@webpilot/capability-media/ai-sdk": [
+        "./packages/capability-media/src/ai-sdk.ts"
+      ],
       "@webpilot/capability-media/runtime-skill": [
         "./packages/capability-media/src/runtime-skill.ts"
       ],

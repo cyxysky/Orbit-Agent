@@ -87,7 +87,7 @@ export function DataTable<T>({
   }), [getRowId, renderExpandedRow, sortedData]);
 
   return (
-    <Table className={['app-data-table', compact ? 'is-compact' : '', className || ''].filter(Boolean).join(' ')}>
+    <Table variant="primary" className={['app-data-table', compact ? 'is-compact' : '', className || ''].filter(Boolean).join(' ')}>
       <Table.ScrollContainer>
         <Table.Content
           aria-label={t('数据表')}

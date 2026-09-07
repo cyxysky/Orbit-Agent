@@ -2576,7 +2576,7 @@
 .browser-chat-agent-markdown p {
   font-size: 15px;
   white-space: pre-wrap;
-  padding: 6px 0;
+  padding: 0;
 }
 
 .browser-chat-agent-markdown a {
@@ -2603,8 +2603,12 @@
   padding-left: 20px;
   display: flex;
   flex-direction: column;
-  line-height: 1;
+  line-height: 1.6;
 }
+
+.browser-chat-agent-markdown ul { list-style: disc outside; }
+.browser-chat-agent-markdown ol { list-style: decimal outside; }
+.browser-chat-agent-markdown .task-list-item { list-style: none; }
 
 .browser-chat-agent-markdown code {
   background: var(--panel-warm);
@@ -3567,18 +3571,19 @@ html .browser-chat-tool-confirmation button.browser-chat-tool-confirm:hover:not(
 }
 
 .browser-chat-skill-menu {
-  background: #ffffff;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  bottom: calc(100% + 10px);
-  box-shadow: 0 16px 36px rgba(13, 13, 13, 0.12);
+  background: var(--panel);
+  border: 0;
+  border-radius: 16px;
+  bottom: calc(100% + 8px);
+  box-shadow: 0 4px 16px rgba(13, 13, 13, 0.06);
   display: grid;
   left: 0;
-  max-height: 260px;
+  max-height: 168px;
   overflow: auto;
-  padding: 6px;
+  padding: 0;
   position: absolute;
   right: 0;
+  scrollbar-gutter: stable;
   z-index: 30;
 }
 
@@ -3657,84 +3662,46 @@ html .browser-chat-tool-confirmation button.browser-chat-tool-confirm:hover:not(
 }
 
 .browser-chat-compose .browser-chat-skill-menu {
-  background: var(--panel);
-  bottom: calc(100% + 8px);
-  box-shadow: 0 16px 36px rgba(13, 13, 13, 0.12);
-  left: 0;
-  max-height: 260px;
-  position: absolute;
-  right: auto;
-  width: min(520px, 100%);
-  z-index: 30;
-}
-
-.browser-chat-skill-menu-head {
-  align-items: center;
-  border-bottom: 1px solid var(--border);
-  display: flex;
-  justify-content: space-between;
-  margin: 0 4px 4px;
-  padding: 6px 4px 8px;
-}
-
-.browser-chat-skill-menu-head b {
-  color: var(--foreground);
-  font-size: 12px;
-  font-weight: 900;
-}
-
-.browser-chat-skill-menu-head span {
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 780;
+  width: 100%;
 }
 
 .browser-chat-skill-menu button {
-  align-items: start;
+  align-items: center;
   background: transparent;
   border: 0;
-  border-radius: 6px;
+  border-radius: 0;
+  color: var(--muted);
   cursor: pointer;
-  display: grid;
-  gap: 8px;
-  grid-template-columns: auto minmax(0, 1fr);
-  padding: 8px 10px;
+  display: flex;
+  flex: none;
+  font-size: 12px;
+  font-weight: 400;
+  gap: 10px;
+  min-height: 40px;
+  padding: 8px 14px;
   text-align: left;
+}
+
+.browser-chat-skill-menu button + button {
+  border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
 }
 
 .browser-chat-skill-menu button:hover,
 .browser-chat-skill-menu button.active {
-  background: var(--panel-warm);
+  background: var(--panel-soft);
+  color: var(--foreground);
 }
 
 .browser-chat-skill-menu button svg {
-  color: var(--accent-strong);
-  margin-top: 1px;
-}
-
-.browser-chat-skill-menu button b,
-.browser-chat-skill-menu button span,
-.browser-chat-skill-menu button small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.browser-chat-skill-menu button b {
-  display: block;
-  color: var(--foreground);
-  font-size: 13px;
+  color: inherit;
+  flex: none;
 }
 
 .browser-chat-skill-menu button span {
-  display: grid;
-  gap: 2px;
   min-width: 0;
-}
-
-.browser-chat-skill-menu button small {
-  color: var(--muted);
-  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .browser-chat-skill-empty {
@@ -4418,26 +4385,24 @@ body.is-dragging-embedded-tab .browser-chat-compose--reference .browser-chat-inl
   z-index: 1;
 }
 
-html .browser-chat-tool-confirmation button.browser-chat-tool-confirm.magic-rainbow-button,
-html .browser-chat-tool-confirmation button.browser-chat-tool-confirm.magic-rainbow-button:hover:not(:disabled) {
-  --magic-rainbow-surface: #202124;
-  --magic-rainbow-foreground: #ffffff;
-  animation-duration: 3.8s;
-  background:
-    linear-gradient(var(--magic-rainbow-surface), var(--magic-rainbow-surface)) padding-box,
-    linear-gradient(100deg, var(--magic-rainbow-1), var(--magic-rainbow-2), var(--magic-rainbow-3), var(--magic-rainbow-4), var(--magic-rainbow-5), var(--magic-rainbow-1)) border-box !important;
-  background-position: 0 0, 0 50% !important;
-  background-size: 100% 100%, 240% 100% !important;
-  border: 2px solid transparent !important;
-  color: var(--magic-rainbow-foreground) !important;
+html .browser-chat-tool-confirmation button.browser-chat-tool-confirm.magic-rainbow-button {
+  background: var(--button-primary-bg) !important;
+  border: 1px solid var(--button-primary-bg) !important;
+  color: var(--button-primary-foreground) !important;
 }
 
-:root[data-theme="dark"] .browser-chat-tool-confirmation button.browser-chat-tool-confirm.magic-rainbow-button,
-:root[data-theme="dark"] .browser-chat-tool-confirmation button.browser-chat-tool-confirm.magic-rainbow-button:hover:not(:disabled) {
-  --magic-rainbow-surface: #f2f3f5;
-  --magic-rainbow-foreground: #17181a;
-  background:
-    linear-gradient(var(--magic-rainbow-surface), var(--magic-rainbow-surface)) padding-box,
-    linear-gradient(100deg, var(--magic-rainbow-1), var(--magic-rainbow-2), var(--magic-rainbow-3), var(--magic-rainbow-4), var(--magic-rainbow-5), var(--magic-rainbow-1)) border-box !important;
-  color: var(--magic-rainbow-foreground) !important;
+html .browser-chat-tool-confirmation button.browser-chat-tool-confirm.magic-rainbow-button:hover:not(:disabled) {
+  background: var(--button-primary-hover-bg) !important;
+  border-color: var(--button-primary-hover-bg) !important;
+}
+
+html .browser-chat-tool-confirmation button.browser-chat-tool-confirm.magic-rainbow-button:active:not(:disabled) {
+  background: var(--button-primary-active-bg) !important;
+  border-color: var(--button-primary-active-bg) !important;
+}
+
+html .browser-chat-tool-confirmation button.browser-chat-tool-confirm.magic-rainbow-button:disabled {
+  background: var(--disabled-bg) !important;
+  border-color: var(--disabled-bg) !important;
+  color: var(--disabled-foreground) !important;
 }

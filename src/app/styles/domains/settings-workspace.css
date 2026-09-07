@@ -11,7 +11,7 @@
     gap: 4px;
     margin-top: 0;
     min-height: 0;
-    padding: 0 2px;
+    padding: 0 var(--nav-group-inset);
   }
 
   .settings-workspace-route:not(.sidebar-collapsed) .browser-chat-subnav {
@@ -42,7 +42,7 @@
     appearance: none;
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 5px;
+    border-radius: var(--nav-item-radius);
     box-shadow: none;
     color: var(--muted);
     cursor: pointer;
@@ -51,11 +51,11 @@
     font-size: 13px;
     font-weight: 500;
     gap: 8px;
-    height: 30px;
+    height: var(--nav-item-height);
     justify-content: flex-start;
-    min-height: 30px;
+    min-height: var(--nav-item-height);
     min-width: 0;
-    padding: 0 8px;
+    padding: 0 var(--nav-item-padding-inline);
     position: relative;
     text-align: left;
     transition: background-color var(--motion-fast) ease, color var(--motion-fast) ease;
@@ -63,28 +63,17 @@
   }
 
   .settings-workspace-route:not(.sidebar-collapsed) .browser-chat-subnav button:hover {
-    background: transparent;
-    color: var(--foreground);
+    background: var(--menu-hover-bg);
+    color: var(--menu-hover-foreground);
   }
 
   .settings-workspace-route:not(.sidebar-collapsed) .browser-chat-subnav button.active,
   .settings-workspace-route:not(.sidebar-collapsed) .browser-chat-subnav button.active:hover {
-    background: transparent !important;
+    background: var(--menu-selected-bg);
     border-color: transparent;
     box-shadow: none !important;
-    color: var(--foreground);
+    color: var(--menu-selected-foreground);
     font-weight: 600;
-  }
-
-  .settings-workspace-route:not(.sidebar-collapsed) .browser-chat-subnav button.active::before {
-    background: var(--accent-strong);
-    border-radius: 999px;
-    bottom: 7px;
-    content: "";
-    left: 0;
-    position: absolute;
-    top: 7px;
-    width: 2px;
   }
 
   .settings-workspace-route:not(.sidebar-collapsed) .browser-chat-subnav button > svg:not(.browser-chat-settings-tab-lock) {
@@ -98,7 +87,7 @@
   }
 
   .settings-workspace-route:not(.sidebar-collapsed) .browser-chat-subnav button.active > svg:not(.browser-chat-settings-tab-lock) {
-    color: var(--accent-strong);
+    color: var(--menu-selected-foreground);
   }
 
   .settings-workspace-route:not(.sidebar-collapsed) .browser-chat-subnav button > span {

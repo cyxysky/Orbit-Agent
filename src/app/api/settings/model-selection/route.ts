@@ -1,6 +1,7 @@
+import { modelsForProvider, parseMediaModelSelection } from '@/lib/model-selection';
 import { NextRequest } from 'next/server';
 import { z } from 'zod';
-import { defaultModelForProvider, modelListForProvider, modelProviderDefinition, modelProviderValues } from '@/config/settings';
+import { modelProviderDefinition, isModelProvider } from '@/config/settings';
 import type { ModelProvider } from '@/server/ai/schemas/runtime.schema';
 import { requestApplicationUserId } from '@/server/auth/user-context';
 import { store } from '@/server/db/store';
@@ -12,8 +13,8 @@ export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 const selectionSchema = z.object({
-  model: z.string().trim().min(1).max(500),
-  provider: z.enum(modelProviderValues as [ModelProvider, ...ModelProvider[]]),
+  model: z.string().trim().min(1).max(1_000),
+  provider: z.custom<ModelProvider>((value) => typeof value === 'string' && isModelProvider(value)),
 }).strict();
 
 export async function GET(request: NextRequest) {
@@ -35,22 +36,21 @@ export async function POST(request: NextRequest) {
       if (currentProvider?.enabled !== true) {
         throw new ApiRequestError('该模型服务商尚未启用。', { code: 'model_provider_disabled', status: 400 });
       }
-      const models = modelListForProvider(definition, {
-        ...currentProvider,
-        models: [...(currentProvider?.models || []), selection.model],
-      });
-      const model = defaultModelForProvider(definition, { ...currentProvider, defaultModel: selection.model, model: selection.model, models });
+      const media = parseMediaModelSelection(selection.model);
+      const valid = media
+        ? currentProvider.media?.[media.kind]?.models.includes(media.id)
+        : modelsForProvider(saved, selection.provider).includes(selection.model);
+      if (!valid) throw new ApiRequestError('所选模型不存在或尚未启用。', { status: 400 });
       await store.saveModelConfig({
-        provider: selection.provider,
+        provider: media ? saved!.provider : selection.provider,
+        mediaSelections: media ? { ...saved?.mediaSelections, [media.kind]: { provider: selection.provider, model: media.id } } : saved?.mediaSelections,
         providers: {
           ...(saved?.providers || {}),
           [selection.provider]: {
             ...currentProvider,
             enabled: true,
             baseURL: currentProvider?.baseURL ?? definition.defaultBaseURL ?? '',
-            defaultModel: model,
-            model,
-            models,
+            selectedModel: media ? currentProvider.selectedModel : selection.model,
           },
         },
       });

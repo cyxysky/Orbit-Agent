@@ -6,6 +6,7 @@ import {
   scrypt,
 } from 'node:crypto';
 import { z } from 'zod';
+import { providerMediaSettingsSchema, mediaModelSelectionsSchema } from '@webpilot/capability-media/model-settings';
 import { isModelProvider, modelProviderDefinitionsForConfig } from '@/config/settings';
 import {
   exportLoginAccountCredentials,
@@ -66,6 +67,8 @@ const memoryItemSchema = z.object({
 }).strict();
 
 const modelProviderSettingsSchema = z.object({
+  media: providerMediaSettingsSchema.optional(),
+  selectedModel: z.string().max(1_000).optional(),
   displayName: z.string().trim().max(80).optional(),
   enabled: z.boolean().optional(),
   defaultModel: z.string().trim().max(1_000).optional(),
@@ -80,6 +83,7 @@ const modelProviderSettingsSchema = z.object({
 }).strict();
 
 const rawModelConfigSchema = z.object({
+  mediaSelections: mediaModelSelectionsSchema.optional(),
   provider: z.string(),
   providerOrder: z.array(z.string()).optional(),
   providers: z.record(z.string(), modelProviderSettingsSchema),
@@ -204,7 +208,7 @@ async function decryptSecretPayload(bundleValue: unknown, kind: SecretDataKind, 
   }
 }
 
-function parseModelConfig(value: unknown): Pick<Awaited<ReturnType<typeof store.saveModelConfig>>, 'provider' | 'providers' | 'providerOrder'> {
+function parseModelConfig(value: unknown): Pick<Awaited<ReturnType<typeof store.saveModelConfig>>, 'provider' | 'providers' | 'providerOrder' | 'mediaSelections'> {
   const parsed = rawModelConfigSchema.parse(value);
   if (!isModelProvider(parsed.provider)) throw new Error('模型服务商无效');
   const providers: Partial<Record<ModelProvider, ModelProviderSettings>> = {};
@@ -215,7 +219,7 @@ function parseModelConfig(value: unknown): Pick<Awaited<ReturnType<typeof store.
   const providerOrder = parsed.providerOrder === undefined
     ? undefined
     : modelProviderDefinitionsForConfig(providers, parsed.providerOrder).map(({ value }) => value);
-  return { provider: parsed.provider as ModelProvider, providers, providerOrder };
+  return { provider: parsed.provider as ModelProvider, providers, providerOrder, mediaSelections: parsed.mediaSelections };
 }
 
 function fileTimestamp(value: string) {
@@ -248,6 +252,8 @@ export async function exportPortableData(input: {
       const current = saved.providers[definition.value];
       if (!current) return [definition.value, undefined];
       return [definition.value, {
+        media: current.media,
+        selectedModel: current.selectedModel,
         displayName: current.displayName,
         enabled: current.enabled === true,
         defaultModel: current.defaultModel,
@@ -259,7 +265,7 @@ export async function exportPortableData(input: {
         extraRequestParameters: current.extraRequestParameters,
       }];
     }).filter((entry) => entry[1] !== undefined));
-    const config = parseModelConfig({ provider: saved.provider, providers, providerOrder: saved.providerOrder });
+    const config = parseModelConfig({ provider: saved.provider, providers, providerOrder: saved.providerOrder, mediaSelections: saved.mediaSelections });
     return {
       fileName: `webpilot-model-config-${suffix}.json`,
       bundle: await encryptSecretPayload('model', { config }, input.passphrase, exportedAt),

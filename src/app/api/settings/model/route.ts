@@ -16,6 +16,7 @@ import { idempotencyFingerprint, runIdempotentJson } from '@/server/http/idempot
 import { requestHasAdminSettingsAccess } from '@/server/settings/admin-settings-access';
 import { readModelSettingsState } from '@/server/settings/settings-snapshot';
 import { normalizeModelProvider } from '@/lib/model-selection';
+import { providerMediaSettingsSchema } from '@webpilot/capability-media/model-settings';
 
 const modelBodySchema = z.record(z.string(), z.unknown());
 
@@ -72,6 +73,8 @@ function readProviderSettings(value: unknown): Partial<Record<ModelProvider, Mod
       return typeof imageInput === 'boolean' ? [[modelId, { imageInput }]] : [];
     }));
     result[definition.value] = {
+      selectedModel: typeof item.selectedModel === 'string' ? item.selectedModel : undefined,
+      media: providerMediaSettingsSchema.parse(item.media || {}),
       displayName: typeof item.displayName === 'string' ? item.displayName.trim().slice(0, 80) : '',
       enabled: item.enabled === true,
       defaultModel: model,

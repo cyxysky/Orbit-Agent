@@ -1,3 +1,5 @@
+import { mediaModelSelectionId, parseMediaModelSelection, mediaModelTypeDefinitions, resolveMediaTypeSelection, mediaConfigurationForProviders } from '@webpilot/capability-media/model-settings';
+export { mediaModelSelectionId, parseMediaModelSelection } from '@webpilot/capability-media/model-settings';
 import {
   defaultModelByProvider,
   defaultModelForProvider,
@@ -8,7 +10,7 @@ import {
 } from '@/config/settings';
 import type { ModelConfigRecord, ModelProvider } from '@/server/ai/schemas/runtime.schema';
 
-export type RuntimeModelConfig = Pick<ModelConfigRecord, 'provider' | 'providers' | 'updatedAt'>;
+export type RuntimeModelConfig = Pick<ModelConfigRecord, 'provider' | 'providers' | 'providerOrder' | 'mediaSelections' | 'updatedAt'>;
 
 export type RuntimeModelSelection = {
   model: string;
@@ -20,8 +22,19 @@ export type RuntimeModelOption = {
   group?: string;
   label: string;
   selectedLabel?: string;
+  selected?: boolean;
   value: string;
 };
+
+export const modelTypeLabels: Record<string, string> = { language: '对话模型', ...Object.fromEntries(mediaModelTypeDefinitions.map(({ id, label }) => [id, label])) };
+
+function mediaProvidersForConfig(config: RuntimeModelConfig | null | undefined) {
+  return Object.fromEntries(enabledModelProviders(config).map((provider) => [provider, config!.providers[provider]]));
+}
+
+export function mediaModelsForConfig(config: RuntimeModelConfig | null | undefined) {
+  return mediaConfigurationForProviders(mediaProvidersForConfig(config), config?.mediaSelections);
+}
 
 const modelSelectionSeparator = '::model::';
 
@@ -55,7 +68,7 @@ export function isModelProviderEnabled(config: RuntimeModelConfig | null | undef
 
 export function enabledModelProviders(config: RuntimeModelConfig | null | undefined) {
   if (!config) return [];
-  return modelProviderDefinitionsForConfig(config.providers)
+  return modelProviderDefinitionsForConfig(config.providers, config.providerOrder)
     .map((definition) => definition.value)
     .filter((provider) => isModelProviderEnabled(config, provider));
 }
@@ -70,6 +83,7 @@ export function defaultModelForConfig(config: RuntimeModelConfig | null | undefi
 
 export function normalizeModelId(value: unknown, provider: ModelProvider, config?: RuntimeModelConfig | null) {
   const model = typeof value === 'string' ? value.trim() : '';
+  if (parseMediaModelSelection(model)) return defaultModelForConfig(config, provider);
   if (model && !config) return model;
   const models = modelsForProvider(config, provider);
   return model && models.includes(model) ? model : defaultModelForConfig(config, provider);
@@ -81,6 +95,8 @@ export function normalizeRuntimeModelConfig(config?: Partial<RuntimeModelConfig>
   return {
     provider,
     providers: config.providers || {},
+    providerOrder: config.providerOrder,
+    mediaSelections: config.mediaSelections,
     updatedAt: typeof config.updatedAt === 'string' ? config.updatedAt : '',
   };
 }
@@ -98,7 +114,7 @@ export function resolveRuntimeModelSelection(
     : requestedProvider;
   return {
     provider,
-    model: normalizeModelId(input.model, provider, config),
+    model: normalizeModelId((provider === requestedProvider ? input.model : undefined) ?? config?.providers[provider]?.selectedModel, provider, config),
   };
 }
 
@@ -116,24 +132,34 @@ export function modelSelectionDiagnosticLabel(
 ) {
   if (config && !enabledModelProviders(config).length) return '尚未启用模型服务商';
   const selection = resolveRuntimeModelSelection(config, input);
-  const provider = modelProviderDefinition(selection.provider);
-  const providerLabel = config?.providers?.[selection.provider]?.displayName?.trim() || provider.label;
-  const defaultModel = defaultModelForConfig(config, selection.provider);
-  const source = selection.model === defaultModel ? '当前使用默认模型' : '当前使用自选模型';
-  return `提供商：${providerLabel}\n模型：${selection.model}\n默认模型：${defaultModel}\n来源：${source}`;
+  const providerLabel = (provider: string) => config?.providers[provider as ModelProvider]?.displayName?.trim() || modelProviderDefinition(provider as ModelProvider).label;
+  const language = `对话模型：${selection.model}\n供应商：${providerLabel(selection.provider)}`;
+  return [language, ...mediaModelTypeDefinitions.map(({ id, label }) => {
+    const current = resolveMediaTypeSelection(mediaProvidersForConfig(config), id, config?.mediaSelections);
+    return current ? `${label}：${current.model}\n供应商：${providerLabel(current.provider)}` : `${label}：未配置`;
+  })].join('\n\n');
 }
 
-export function modelSelectionOptionsForConfig(config: RuntimeModelConfig | null | undefined): RuntimeModelOption[] {
+export function modelSelectionOptionsForConfig(config: RuntimeModelConfig | null | undefined, input: { model?: unknown; provider?: unknown } = {}): RuntimeModelOption[] {
   if (!config) return [];
-  return modelProviderDefinitionsForConfig(config.providers).flatMap((provider) => {
+  const language = resolveRuntimeModelSelection(config, input);
+  return modelProviderDefinitionsForConfig(config.providers, config.providerOrder).flatMap((provider) => {
     if (!isModelProviderEnabled(config, provider.value)) return [];
     const models = modelsForProvider(config, provider.value);
     const providerLabel = config.providers?.[provider.value]?.displayName?.trim() || provider.label;
-    return models.map((model) => ({
-      group: providerLabel,
+    return [...models.map((model) => ({
+      group: `${providerLabel} / ${modelTypeLabels.language}`,
       label: model,
+      selected: provider.value === language.provider && model === language.model,
       selectedLabel: `${providerLabel} - ${model}`,
       value: modelSelectionValue(provider.value, model),
-    }));
+    })), ...mediaModelTypeDefinitions.flatMap(({ id: kind }) => (config.providers[provider.value]?.media?.[kind]?.models || [])
+      .map((model) => ({
+        group: `${providerLabel} / ${modelTypeLabels[kind]}`,
+        label: model,
+        selectedLabel: `${providerLabel} - ${modelTypeLabels[kind]} - ${model}`,
+        selected: (() => { const current = resolveMediaTypeSelection(mediaProvidersForConfig(config), kind, config.mediaSelections); return current?.provider === provider.value && current.model === model; })(),
+        value: modelSelectionValue(provider.value, mediaModelSelectionId(kind, model)),
+      })))];
   });
 }

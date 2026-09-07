@@ -4,7 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNo
 import { TextArea } from '@heroui/react/textarea';
 import { InputGroup } from '@heroui/react/input-group';
 import Link from 'next/link';
-import { AlertCircle, ArrowLeft, ChevronDown, CircleCheck, Copy, FolderOpen, ImageIcon, KeyRound, Loader2, Maximize2, PencilLine, PlayCircle, Plus, RefreshCw, Save, Search, Trash2, X } from 'lucide-react';
+import { AlertCircle, ArrowLeft, BookOpen, Bot, Brain, Bug, ChartNoAxesCombined, ChevronDown, CircleCheck, ClipboardCheck, CodeXml, Copy, Database, Files, FolderOpen, GitBranch, ImageIcon, KeyRound, Layers, Loader2, Maximize2, MessagesSquare, Monitor, Navigation, Network, Palette, PencilLine, PlayCircle, Plug, Plus, RefreshCw, Save, ScanSearch, Search, Server, ShieldCheck, SlidersHorizontal, Terminal, Trash2, Workflow, X, type LucideIcon } from 'lucide-react';
 import { CustomSelect } from '@/components/CustomSelect';
 import { ConfirmDeleteModal } from '@/components/ConfirmDeleteModal';
 import { SkillsManager } from '@/components/SkillsManager';
@@ -20,12 +20,12 @@ import {
   type SettingsTab,
 } from '@/config/settings';
 import { useI18n } from '@/i18n/I18nProvider';
+import { ThemeColorControl } from '@/components/ThemeColorControl';
 import { LiquidGlassLoader } from '@/components/LiquidGlassLoader';
 import { languageOptions } from '@/i18n/language';
 import { startGlobalLoading, stopGlobalLoading } from '@/lib/global-loading';
 import { waitForMinimumLoading } from '@/lib/minimum-loading';
 import type { ModelConfigRecord, ModelProvider, ModelProviderSettings, RuntimeEnvRecord } from '@/server/ai/schemas/runtime.schema';
-import { useTheme } from '@/theme/ThemeProvider';
 import { readApiJson } from '@/lib/api-client';
 import { LoginAccountModal, type LoginAccountMetadata } from '@/components/LoginAccountModal';
 import { DataTransferButtons } from '@/components/DataTransferButtons';
@@ -33,7 +33,6 @@ import { ManagementDataTable } from '@/components/ManagementDataTable';
 import { ModelBrandIcon } from '@/components/ModelBrandIcon';
 import { AppInput } from '@/components/ui/app-input';
 import { AppModal } from '@/components/ui/app-modal';
-import { ColorPickerField } from '@/components/ui/color-picker-field';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 import {
   defaultModelCapabilities,
@@ -53,6 +52,9 @@ import type { SensitiveDataEvaluationCase } from '@/lib/sensitive-data-evaluatio
 import { WorkspaceSidebarArchiveRow } from '@/components/WorkspaceSidebarArchive';
 import { useWorkspaceBrand } from '@/brand/WorkspaceBrandProvider';
 import { ExternalIntegrationSettings } from '@/components/ExternalIntegrationSettings';
+import { ModelTypeSettings } from '@/components/ModelTypeSettings';
+import { createMediaTypeSettings, normalizeProviderMediaSettings, mediaSettingFields, mediaModelTypeDefinitions, type MediaTypeSettings } from '@webpilot/capability-media/model-settings';
+import { mediaModelDrivers, mediaModelDriver, type MediaModelKind, type MediaModelDriver } from '@webpilot/capability-media/models';
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, arrayMove, rectSortingStrategy, sortableKeyboardCoordinates, useSortable } from '@dnd-kit/sortable';
 import { CSS as DndCSS } from '@dnd-kit/utilities';
@@ -212,6 +214,45 @@ type SettingsSecondaryNavItem = {
   meta?: string;
 };
 
+// Section IDs stay stable when the displayed labels are translated.
+const settingsSectionIcons: Record<string, LucideIcon> = {
+  'general:appearance': Palette,
+  'integration:connector': Plug,
+  'integration:communication': MessagesSquare,
+  'integration:data': Database,
+  'integration:research': Search,
+  'sensitive:test': ScanSearch,
+  'sensitive:evaluation': ClipboardCheck,
+  '实时预览': PlayCircle,
+  '浏览器实例': Monitor,
+  '导航与诊断': Navigation,
+  '浏览器 Agent': Bot,
+  '浏览器调试': Bug,
+  'Agent 运行时': Bot,
+  '子 Agent': Network,
+  '对话运行': MessagesSquare,
+  '上下文管理': Layers,
+  '个性化记忆': Brain,
+  '工作流程': Workflow,
+  '代码沙箱': CodeXml,
+  '计算机': Monitor,
+  '文件能力': Files,
+  '数据与文件': Database,
+  'Git': GitBranch,
+  '知识库': BookOpen,
+  '媒体': ImageIcon,
+  '图表': ChartNoAxesCombined,
+  '连接器高级设置': Plug,
+  '通信高级设置': MessagesSquare,
+  '数据高级设置': Database,
+  '研究高级设置': Search,
+  '脱敏策略': ShieldCheck,
+  '脱敏模型': Brain,
+  '推理服务': Server,
+  'Codex CLI': Terminal,
+  '调试与追踪': Bug,
+};
+
 const customRuntimeSettingKeys = new Set(['AGENT_COMMUNICATION_ALLOW_SEND', 'AGENT_DATA_ALLOW_WRITES']);
 const browserRuntimeGroups = new Set(['浏览器 Agent']);
 const capabilityRuntimeGroups = new Set(['代码沙箱', '计算机', '文件能力', 'Git', '知识库', '媒体', '数据与文件']);
@@ -232,18 +273,22 @@ function SettingsSecondaryNav({
     <aside className="settings-secondary-nav">
       <span className="settings-secondary-nav-label">{label}</span>
       <nav aria-label={label}>
-        {items.map((item) => (
-          <button
-            aria-current={activeId === item.id ? 'page' : undefined}
-            className={activeId === item.id ? 'active' : undefined}
-            key={item.id}
-            onClick={() => onChange(item.id)}
-            type="button"
-          >
-            <span>{item.label}</span>
-            {item.meta ? <small>{item.meta}</small> : null}
-          </button>
-        ))}
+        {items.map((item) => {
+          const Icon = settingsSectionIcons[item.id] || SlidersHorizontal;
+          return (
+            <button
+              aria-current={activeId === item.id ? 'page' : undefined}
+              className={activeId === item.id ? 'active' : undefined}
+              key={item.id}
+              onClick={() => onChange(item.id)}
+              type="button"
+            >
+              <Icon aria-hidden="true" size={16} />
+              <span>{item.label}</span>
+              {item.meta ? <small>{item.meta}</small> : null}
+            </button>
+          );
+        })}
       </nav>
     </aside>
   );
@@ -473,6 +518,21 @@ function personalMemoryDraftApiPath(draft: PersonalMemoryDraft) {
   return withWebPilotBasePath(`/api/personal-memory/${encodeURIComponent(draft.id)}`);
 }
 
+function reconcileSavedModelDraft(draft: ModelConfig, saved: ModelConfig): ModelConfig {
+  const providers = { ...saved.providers };
+  for (const provider of Object.keys(providers) as ModelProvider[]) {
+    const savedSettings = providers[provider];
+    const draftSettings = draft.providers[provider];
+    if (!savedSettings) continue;
+    providers[provider] = {
+      ...savedSettings,
+      models: draftSettings?.models ?? savedSettings.models,
+      media: draftSettings?.media ?? savedSettings.media,
+    };
+  }
+  return { ...saved, providers };
+}
+
 function createModelConfig(input?: Partial<ModelConfig>): ModelConfig {
   const providers: Partial<Record<ModelProvider, ModelProviderSettings>> = {};
   for (const definition of modelProviderDefinitionsForConfig(input?.providers)) {
@@ -480,6 +540,8 @@ function createModelConfig(input?: Partial<ModelConfig>): ModelConfig {
     const models = modelListForProvider(definition, current);
     const model = defaultModelForProvider(definition, { ...current, models });
     providers[definition.value] = {
+      media: normalizeProviderMediaSettings(current?.media),
+      selectedModel: current?.selectedModel,
       displayName: current?.displayName || '',
       enabled: current?.enabled === true,
       defaultModel: model,
@@ -653,7 +715,6 @@ export function EnvironmentSettings({
   const shouldLoadEnvironmentConfig = !controlledActiveTab
     || !['skills', 'memory', 'accounts'].includes(controlledActiveTab);
   const { language, setLanguage, t } = useI18n();
-  const { color, scrollbarColor, setColor, setScrollbarColor } = useTheme();
   const { brandPrefix, brandText, setBrandPrefix, setBrandText } = useWorkspaceBrand();
   const [internalActiveTab, setInternalActiveTab] = useState<SettingsTab>('general');
   const [items, setItems] = useState<EnvRow[]>(() => initialData?.envItems || []);
@@ -661,10 +722,10 @@ export function EnvironmentSettings({
   const itemsRef = useRef(items);
   const [modelConfig, setModelConfig] = useState<ModelConfig>(() => createModelConfig(initialData?.modelConfig));
   const [modelDraft, setModelDraft] = useState<ModelConfig>(() => createModelConfig(initialData?.modelConfig));
+  const [modelKind, setModelKind] = useState<'language' | MediaModelKind>('language');
   const [selectedModelProvider, setSelectedModelProvider] = useState<ModelProvider>(() => (
     createModelConfig(initialData?.modelConfig).provider
   ));
-  const modelDraftRef = useRef(modelDraft);
   const providerListRef = useRef<HTMLDivElement>(null);
   const providerDragSensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -736,7 +797,6 @@ export function EnvironmentSettings({
     (onActiveTabChange || setInternalActiveTab)(tab);
   };
   itemsRef.current = items;
-  modelDraftRef.current = modelDraft;
   sensitiveDataEvaluationCasesRef.current = sensitiveDataEvaluationCases;
 
   function optionLabel(option: { label: string; value: string }) {
@@ -1201,7 +1261,8 @@ export function EnvironmentSettings({
         return;
       }
     }
-    const payload = createModelConfig(modelDraft || modelConfig);
+    const draftFingerprint = JSON.stringify(modelDraft);
+    const payload = createModelConfig(modelDraft);
     const sourceFingerprint = JSON.stringify(payload);
     setSavingModel(true);
     setModelAutoSaveError('');
@@ -1215,10 +1276,11 @@ export function EnvironmentSettings({
       const nextModel = createModelConfig(data.config);
       modelFailedFingerprintRef.current = '';
       setModelConfig(nextModel);
-      if (JSON.stringify(createModelConfig(modelDraftRef.current)) === sourceFingerprint) {
-        setModelDraft(nextModel);
-        setExtraRequestParameterRows(extraRequestParameterDrafts(nextModel));
-      }
+      // Compare the actual state, including draft rows, when applying the response.
+      // Normalized payload equality cannot detect an empty row added during saving.
+      setModelDraft((current) => JSON.stringify(current) === draftFingerprint
+        ? reconcileSavedModelDraft(current, nextModel)
+        : current);
       onModelSaved?.();
     } catch (error) {
       modelFailedFingerprintRef.current = sourceFingerprint;
@@ -2272,7 +2334,7 @@ export function EnvironmentSettings({
   }
 
   const envDirty = envItemsFingerprint(items) !== envItemsFingerprint(savedItems);
-  const modelDirty = JSON.stringify(modelDraft) !== JSON.stringify(modelConfig);
+  const modelDirty = JSON.stringify(createModelConfig(modelDraft)) !== JSON.stringify(createModelConfig(modelConfig));
   const sensitiveDataEvaluationFingerprint = JSON.stringify(sensitiveDataEvaluationPayload(sensitiveDataEvaluationCases));
   const sensitiveDataEvaluationDirty = sensitiveDataEvaluationFingerprint !== JSON.stringify(sensitiveDataEvaluationPayload(savedSensitiveDataEvaluationCases));
 
@@ -2332,6 +2394,68 @@ export function EnvironmentSettings({
   const activeProviderModels = draftModelRows(activeProviderOption, activeProviderSettings);
   const activeProviderDefaultModel = activeProviderSettings.defaultModel || activeProviderSettings.model || '';
   const activeProviderEnabled = activeProviderSettings.enabled === true;
+  const activeMediaKind = modelKind === 'language' ? undefined : modelKind;
+  const activeMediaSettings = activeMediaKind ? createMediaTypeSettings(activeProvider, activeMediaKind, activeProviderSettings.media?.[activeMediaKind]) : undefined;
+
+  function updateMediaSettings(patch: Partial<MediaTypeSettings>) {
+    if (!activeMediaKind || !activeMediaSettings) return;
+    updateActiveProviderSettings({ media: { ...activeProviderSettings.media, [activeMediaKind]: { ...activeMediaSettings, ...patch } } });
+  }
+
+  function updateMediaModels(models: string[], defaultModel = activeMediaSettings?.defaultModel || '') {
+    const available = models.map((model) => model.trim()).filter(Boolean);
+    updateMediaSettings({ models, defaultModel: available.includes(defaultModel) ? defaultModel : available[0] || '' });
+  }
+
+  function mediaSettingRow(label: string, description: string, children: ReactNode) {
+    return <div className="settings-row"><div><strong>{t(label)}</strong><span>{t(description)}</span></div><div className="settings-control">{children}</div></div>;
+  }
+
+  function renderMediaFields(group: 'connection' | 'generation') {
+    if (!activeMediaSettings || !activeMediaKind) return null;
+    const settings = activeMediaSettings;
+    return mediaSettingFields.filter((field) => field.group === group && field.kinds.includes(activeMediaKind)).map((field) => {
+      const raw = settings[field.key];
+      const value = typeof raw === 'number' ? raw / (field.scale || 1) : raw ?? '';
+      return <div key={field.key}>{mediaSettingRow(field.label, field.description, <AppInput
+        aria-label={t(field.label)} type={field.type} min={field.min} max={field.max} placeholder={field.placeholder} value={value}
+        onChange={(event) => {
+          const input = event.target.value;
+          if (!input && field.scale) return;
+          updateMediaSettings({ [field.key]: field.type === 'number' ? input ? Number(input) * (field.scale || 1) : undefined : input });
+        }}
+      />)}</div>;
+    });
+  }
+
+  function renderMediaConnection() {
+    if (!activeMediaSettings || !activeMediaKind) return null;
+    const settings = activeMediaSettings;
+    const driver = mediaModelDriver(settings.driver);
+    return <>
+      {mediaSettingRow('接口协议', '选择当前类型使用的请求格式、认证方式和任务查询流程。', <CustomSelect value={settings.driver} options={mediaModelDrivers.filter((item) => item.models[activeMediaKind]).map((item) => ({ label: item.label, value: item.id }))} onChange={(driver) => updateMediaSettings({ driver: driver as MediaModelDriver, baseURL: '', paths: {}, parameters: [] })} />)}
+      {mediaSettingRow('服务地址', '填写当前类型的 API 基础地址，与其他类型独立。', <AppInput aria-label={t('服务地址')} value={settings.baseURL} placeholder={driver.baseURL} onChange={(event) => updateMediaSettings({ baseURL: event.target.value })} />)}
+      {(driver.models[activeMediaKind]?.routes || []).map((route) => <div key={route.key}>{mediaSettingRow(route.label, '留空使用供应商默认路径；自定义路径以 / 开头，并保留占位符。', <AppInput aria-label={t(route.label)} value={settings.paths[route.key] || ''} placeholder={route.path} onChange={(event) => updateMediaSettings({ paths: { ...settings.paths, [route.key]: event.target.value } })} />)}</div>)}
+      {renderMediaFields('connection')}
+      {mediaSettingRow('额外请求参数', '填写当前类型 AI SDK 支持的参数名和值。', <div className="settings-extra-parameters-control">
+        {settings.parameters.map((parameter, index) => <div className="settings-extra-parameter-input-row" key={index}>
+          <AppInput aria-label={t('参数名')} placeholder={t('参数名')} value={parameter.key} onChange={(event) => updateMediaSettings({ parameters: settings.parameters.map((item, i) => i === index ? { ...item, key: event.target.value } : item) })} />
+          <AppInput aria-label={t('参数值')} placeholder={t('参数值')} value={parameter.value} onChange={(event) => updateMediaSettings({ parameters: settings.parameters.map((item, i) => i === index ? { ...item, value: event.target.value } : item) })} />
+          <button aria-label={t('删除参数')} className="settings-model-row-button danger" onClick={() => updateMediaSettings({ parameters: settings.parameters.filter((_, i) => i !== index) })} type="button"><Trash2 size={15} /></button>
+        </div>)}
+        <button className="ui-button settings-add-parameter-button" onClick={() => updateMediaSettings({ parameters: [...settings.parameters, { key: '', value: '' }] })} type="button"><Plus size={15} />{t('添加参数')}</button>
+      </div>)}
+    </>;
+  }
+
+  function renderMediaGenerationParameters() {
+    if (!activeMediaSettings || !activeMediaKind) return null;
+    return <section className="settings-detail-panel settings-model-group">
+      <header className="settings-detail-panel-head"><h3>{t('生成参数')}</h3><span>{t('留空使用模型默认值；可用参数取决于模型。')}</span></header>
+      {renderMediaFields('generation')}
+    </section>;
+  }
+
   const activeProviderSupportsExtraRequestParameters = activeProvider === 'minimax' || activeProvider.startsWith('openai-compatible');
   const activeProviderExtraRequestParameterRows = extraRequestParameterRows[activeProvider] || [];
   const activeProviderDuplicateExtraRequestParameterKeys = duplicateExtraRequestParameterKeys(activeProviderExtraRequestParameterRows);
@@ -2528,7 +2652,7 @@ export function EnvironmentSettings({
                 <section className="settings-detail-panel">
                   <header className="settings-detail-panel-head">
                     <h3>{t('基础设置')}</h3>
-                    <span>{t('调整品牌、语言与界面颜色。')}</span>
+                    <span>{t('调整品牌、界面语言与主题色。')}</span>
                   </header>
                 <div className="settings-row">
                   <div>
@@ -2576,28 +2700,9 @@ export function EnvironmentSettings({
                 <div className="settings-row">
                   <div>
                     <strong>{t('主题色')}</strong>
-                    <span>{t('调整按钮、滚动条和高亮状态使用的主题色。')}</span>
+                    <span>{t('按当前配色比例联动背景、按钮、菜单、选择器和滚动条。夜间保持黑白灰。')}</span>
                   </div>
-                  <div className="theme-color-picker">
-                    <ColorPickerField
-                      ariaLabel={t('主题色')}
-                      onChange={setColor}
-                      value={color}
-                    />
-                  </div>
-                </div>
-                <div className="settings-row">
-                  <div>
-                    <strong>{t('滚动条滑块颜色')}</strong>
-                    <span>{t('自定义全局滚动条滑块颜色。')}</span>
-                  </div>
-                  <div className="theme-color-picker">
-                    <ColorPickerField
-                      ariaLabel={t('滚动条滑块颜色')}
-                      onChange={setScrollbarColor}
-                      value={scrollbarColor}
-                    />
-                  </div>
+                  <ThemeColorControl />
                 </div>
                 </section>
               </div>
@@ -2693,70 +2798,6 @@ export function EnvironmentSettings({
                 </div>
                 <div className="settings-row">
                   <div>
-                    <strong>{t('默认模型')}</strong>
-                    <span>{t('从当前服务商配置的模型列表中选择默认模型。')}</span>
-                  </div>
-                  <CustomSelect
-                    className="settings-control"
-                    disabled={!activeProviderModels.length}
-                    value={activeProviderDefaultModel}
-                    onChange={(nextModel) => updateActiveProviderSettings({ defaultModel: nextModel, model: nextModel })}
-                    options={activeProviderModels.map((model) => ({ label: model, value: model }))}
-                  />
-                </div>
-                </section>
-                <section className="settings-detail-panel settings-model-group">
-                <header className="settings-detail-panel-head"><h3>{t('模型列表')}</h3><span>{t('管理该供应商在运行时可选择的模型。')}</span></header>
-                <div className="settings-row settings-model-list-row">
-                  <div>
-                    <span>{t('一个服务商可以维护多个模型，运行时可在下拉框里按服务商分组选择。')}</span>
-                  </div>
-                  <div className="settings-model-list-control">
-                    {activeProviderModels.map((model, index) => (
-                      <div className="settings-model-input-row" key={`${activeProvider}-${index}`}>
-                        <AppInput
-                          disabled={!activeProviderEnabled}
-                          prefix={<span className="settings-model-icon"><ModelBrandIcon model={model} provider={activeProvider} /></span>}
-                          value={model}
-                          onChange={(event) => updateActiveProviderModel(index, event.target.value)}
-                          placeholder={t('模型名称')}
-                          suffix={(
-                            <button
-                              aria-label={t('图片输入')}
-                              aria-pressed={activeProviderSettings.modelCapabilities?.[model]?.imageInput === true}
-                              className={`settings-model-capability-button${activeProviderSettings.modelCapabilities?.[model]?.imageInput === true ? ' on' : ''}`}
-                              disabled={!activeProviderEnabled || !model.trim()}
-                              onClick={() => setActiveModelImageInput(model, activeProviderSettings.modelCapabilities?.[model]?.imageInput !== true)}
-                              title={t(activeProviderSettings.modelCapabilities?.[model]?.imageInput === true ? '支持图片输入' : '不支持图片输入')}
-                              type="button"
-                            >
-                              <ImageIcon aria-hidden="true" size={16} strokeWidth={1.9} />
-                            </button>
-                          )}
-                        />
-                        <button
-                          aria-label={t('删除模型')}
-                          className="settings-model-row-button danger"
-                          disabled={!activeProviderEnabled}
-                          onClick={() => removeActiveProviderModel(index)}
-                          title={t('删除模型')}
-                          type="button"
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      </div>
-                    ))}
-                    <button className="ui-button settings-add-model-button" disabled={!activeProviderEnabled} onClick={addActiveProviderModel} type="button">
-                      <Plus size={15} />
-                      {t('添加模型')}
-                    </button>
-                  </div>
-                </div>
-                </section>
-                <section className="settings-detail-panel settings-model-group">
-                <header className="settings-detail-panel-head"><h3>{t('连接配置')}</h3><span>{t('访问密钥、服务地址和附加请求参数。')}</span></header>
-                <div className="settings-row">
-                  <div>
                     <strong>{t('访问密钥')}</strong>
                     <span>{t(activeProviderOption.keyLabel)}</span>
                   </div>
@@ -2772,6 +2813,40 @@ export function EnvironmentSettings({
                         : t('填写该服务商的访问密钥')}
                   />
                 </div>
+                </section>
+              <div className="settings-model-types" role="tablist" aria-label={t('模型类型')}>
+                {([{ id: 'language', label: '对话模型' }, ...mediaModelTypeDefinitions] as const).map((item) => (
+                  <button key={item.id} type="button" role="tab" aria-selected={modelKind === item.id} className={modelKind === item.id ? 'active' : ''} onClick={() => setModelKind(item.id)}>{t(item.label)}</button>
+                ))}
+              </div>
+              <ModelTypeSettings
+                key={activeProvider + modelKind}
+                provider={activeProvider}
+                enabled={activeProviderEnabled}
+                models={activeMediaSettings ? activeMediaSettings.models : activeProviderModels}
+                defaultModel={activeMediaSettings ? activeMediaSettings.defaultModel : activeProviderDefaultModel}
+                onDefaultChange={(model) => activeMediaSettings ? updateMediaSettings({ defaultModel: model }) : updateActiveProviderSettings({ defaultModel: model, model })}
+                onModelChange={(index, value) => {
+                  if (!activeMediaSettings) return updateActiveProviderModel(index, value);
+                  const models = [...activeMediaSettings.models];
+                  const previous = models[index];
+                  models[index] = value;
+                  updateMediaModels(models, previous === activeMediaSettings.defaultModel ? value.trim() : activeMediaSettings.defaultModel);
+                }}
+                onAdd={() => activeMediaSettings ? updateMediaModels([...activeMediaSettings.models, '']) : addActiveProviderModel()}
+                onRemove={(index) => activeMediaSettings ? updateMediaModels(activeMediaSettings.models.filter((_, i) => i !== index)) : removeActiveProviderModel(index)}
+                modelSuffix={modelKind === 'language' ? (model) => (
+                  <button
+                    aria-label={t('图片输入')}
+                    aria-pressed={activeProviderSettings.modelCapabilities?.[model]?.imageInput === true}
+                    className={`settings-model-capability-button${activeProviderSettings.modelCapabilities?.[model]?.imageInput === true ? ' on' : ''}`}
+                    disabled={!activeProviderEnabled || !model.trim()}
+                    onClick={() => setActiveModelImageInput(model, activeProviderSettings.modelCapabilities?.[model]?.imageInput !== true)}
+                    title={t(activeProviderSettings.modelCapabilities?.[model]?.imageInput === true ? '支持图片输入' : '不支持图片输入')}
+                    type="button"
+                  ><ImageIcon aria-hidden="true" size={16} strokeWidth={1.9} /></button>
+                ) : undefined}
+                connection={modelKind === 'language' ? <>
                 {activeProviderOption.baseUrlLabel ? (
                   <div className="settings-row">
                     <div>
@@ -2839,7 +2914,10 @@ export function EnvironmentSettings({
                     </div>
                   </div>
                 ) : null}
-                </section>
+                </> : renderMediaConnection()}
+              >
+                {renderMediaGenerationParameters()}
+              </ModelTypeSettings>
                 </div>
               </div>
             </section>

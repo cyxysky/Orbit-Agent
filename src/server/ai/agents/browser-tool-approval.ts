@@ -1,5 +1,6 @@
 import { analyzeBrowserCodeRisk } from '@webpilot/capability-browser/node';
 import { isReadOnlyStatement } from '@webpilot/capability-data';
+import { mediaGenerationActions } from '@webpilot/capability-media';
 
 export type BrowserToolApprovalRequest = {
   prompt: string;
@@ -40,7 +41,7 @@ export function browserToolApprovalRequest(input: {
     || (input.toolName === 'connectors' && action === 'call')
     || (input.toolName === 'knowledge' && action === 'delete')
     || (input.toolName === 'data' && action === 'query' && !isReadOnlyStatement(typeof record.statement === 'string' ? record.statement : ''))
-    || (input.toolName === 'media' && action === 'generateImage')
+    || (input.toolName === 'media' && mediaGenerationActions.some((candidate) => candidate === action))
     || (input.toolName === 'communication' && action === 'send')
     || (input.toolName === 'git' && (action === 'applyPatch' || action === 'commit'))
     || (input.toolName === 'computer' && ['click', 'type', 'key', 'scroll'].includes(action))

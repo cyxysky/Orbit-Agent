@@ -73,21 +73,25 @@
 .settings-tabs button {
   background: transparent;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--nav-item-radius);
   color: var(--muted-strong);
   cursor: pointer;
   font-family: inherit;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 760;
-  min-height: 42px;
-  padding: 0 14px;
+  min-height: var(--nav-item-height);
+  padding: 0 var(--nav-item-padding-inline);
   text-align: left;
 }
 
-.settings-tabs button.active,
+.settings-tabs button.active {
+  background: var(--menu-selected-bg);
+  color: var(--menu-selected-foreground);
+}
+
 .settings-tabs button:hover {
-  background: var(--accent-soft);
-  color: var(--accent-strong);
+  background: var(--menu-hover-bg);
+  color: var(--menu-hover-foreground);
 }
 
 .settings-content {
@@ -996,13 +1000,9 @@
   width: 100%;
 }
 
-.settings-workspace :is(
-  [data-slot="input-group"],
-  [data-slot="textarea"],
-  .custom-select-button
-) {
-  background: var(--panel-soft) !important;
-  border-color: var(--border) !important;
+.settings-workspace :is([data-slot="input-group"], [data-slot="input"], [data-slot="textarea"], .custom-select-button) {
+  --field-background: var(--panel-soft);
+  --field-border: var(--border);
   color: var(--foreground) !important;
 }
 
@@ -2546,8 +2546,7 @@
 }
 
 .browser-chat-settings-pane .settings-workspace .input:not([data-slot], [data-slot] *),
-.browser-chat-settings-pane .settings-workspace .textarea:not([data-slot], [data-slot] *),
-.browser-chat-settings-pane .theme-color-picker {
+.browser-chat-settings-pane .settings-workspace .textarea:not([data-slot], [data-slot] *) {
   background: var(--panel-soft);
   border-color: var(--border);
   border-radius: 8px;
@@ -2555,14 +2554,9 @@
 }
 
 .browser-chat-settings-pane .settings-workspace .input:not([data-slot], [data-slot] *):focus,
-.browser-chat-settings-pane .settings-workspace .textarea:not([data-slot], [data-slot] *):focus,
-.browser-chat-settings-pane .theme-color-picker:hover {
+.browser-chat-settings-pane .settings-workspace .textarea:not([data-slot], [data-slot] *):focus {
   border-color: color-mix(in srgb, var(--accent) 56%, var(--border));
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 13%, transparent);
-}
-
-.browser-chat-settings-pane .theme-color-picker {
-  justify-self: stretch;
 }
 
 .browser-chat-settings-pane .settings-model-list-row,
@@ -2600,8 +2594,7 @@
 
 
 :root[data-theme="dark"] .browser-chat-settings-pane .settings-workspace .input:not([data-slot], [data-slot] *),
-:root[data-theme="dark"] .browser-chat-settings-pane .settings-workspace .textarea:not([data-slot], [data-slot] *),
-:root[data-theme="dark"] .browser-chat-settings-pane .theme-color-picker {
+:root[data-theme="dark"] .browser-chat-settings-pane .settings-workspace .textarea:not([data-slot], [data-slot] *) {
   background: color-mix(in srgb, var(--panel-soft) 88%, #000000);
 }
 

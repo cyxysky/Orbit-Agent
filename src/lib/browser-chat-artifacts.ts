@@ -14,9 +14,23 @@ export type BrowserChatArtifactSummary = {
   url?: string;
 };
 
-const browserChatFileToolNames = new Set([
-  'file',
-]);
+/** Consume the shared artifact contract regardless of which tool produced it. */
+export function browserChatArtifactPayloads(value: unknown): Record<string, unknown>[] {
+  const payload = jsonRecordFromUnknown(value) || jsonRecordFromUnknown(jsonValueFromString(value));
+  if (!payload) return [];
+  const candidates = [payload, ...(Array.isArray(payload.data) ? payload.data : []),
+    ...(Array.isArray(payload.content) ? payload.content.filter((item) => jsonRecordFromUnknown(item)?.type === 'artifact') : [])];
+  const seen = new Set<string>();
+  return candidates.flatMap((value) => {
+    const item = jsonRecordFromUnknown(value);
+    if (!item) return [];
+    if (!item.artifactId && !item.downloadUrl && !(item.fileName && (item.path || item.url))) return [];
+    const id = String(item.artifactId || item.path || item.url || item.downloadUrl || '');
+    if (!id || seen.has(id)) return [];
+    seen.add(id);
+    return [item];
+  });
+}
 
 export function browserChatScreenshotIsInternalDocumentPreview(
   screenshot: { path?: string; title?: string },
@@ -45,53 +59,50 @@ export function browserChatArtifactIsImage(fileName: string) {
   return /\.(?:avif|gif|jpe?g|png|svg|webp)$/i.test(fileName);
 }
 
-function browserChatFileArtifact(tool: StepToolCall): BrowserChatArtifactSummary | undefined {
-  if (!browserChatFileToolNames.has(tool.name)) return undefined;
+function browserChatFileArtifacts(tool: StepToolCall): BrowserChatArtifactSummary[] {
   const rawResult = jsonRecordFromUnknown(tool.rawResult);
-  if (rawResult?.ok !== true) return undefined;
-  const payload = jsonRecordFromUnknown(rawResult.actual)
-    || jsonRecordFromUnknown(jsonValueFromString(rawResult.actual));
-  if (!payload) return undefined;
+  if (rawResult?.ok !== true) return [];
+  return browserChatArtifactPayloads(rawResult.actual ?? rawResult).flatMap((payload): BrowserChatArtifactSummary[] => {
 
-  const artifactId = typeof payload.artifactId === 'string' ? payload.artifactId.trim() : '';
-  const path = typeof payload.path === 'string' ? payload.path.trim() : '';
-  const url = typeof payload.url === 'string' ? payload.url.trim() : '';
-  const downloadUrl = typeof payload.downloadUrl === 'string' ? payload.downloadUrl.trim() : '';
-  const documentId = typeof payload.documentId === 'string' ? payload.documentId.trim() : '';
-  if (!artifactId && !path && !url && !downloadUrl) return undefined;
+    const artifactId = typeof payload.artifactId === 'string' ? payload.artifactId.trim() : '';
+    const path = typeof payload.path === 'string' ? payload.path.trim() : '';
+    const url = typeof payload.url === 'string' ? payload.url.trim() : '';
+    const downloadUrl = typeof payload.downloadUrl === 'string' ? payload.downloadUrl.trim() : '';
+    const documentId = typeof payload.documentId === 'string' ? payload.documentId.trim() : '';
+    if (!artifactId && !path && !url && !downloadUrl) return [];
 
-  const visualVerification = jsonRecordFromUnknown(payload.visualVerification);
-  const bytes = typeof payload.bytes === 'number' && Number.isFinite(payload.bytes) && payload.bytes >= 0
-    ? payload.bytes
-    : undefined;
-  const pageCount = typeof visualVerification?.pageCount === 'number'
-    && Number.isFinite(visualVerification.pageCount)
-    && visualVerification.pageCount > 0
-    ? Math.floor(visualVerification.pageCount)
-    : undefined;
-  const fileName = browserChatArtifactFileName(payload.fileName)
-    || browserChatArtifactFileName(path)
-    || browserChatArtifactFileName(artifactId)
-    || 'artifact';
-  return {
-    bytes,
-    documentId: documentId || undefined,
-    downloadUrl: downloadUrl || undefined,
-    fileName,
-    id: documentId
-      ? `file:document:${documentId}`
-      : `file:${artifactId || path || url || downloadUrl}`,
-    kind: browserChatArtifactIsImage(fileName) ? 'image' : 'file',
-    pageCount,
-    path: path || undefined,
-    url: url || undefined,
-  };
+    const visualVerification = jsonRecordFromUnknown(payload.visualVerification);
+    const bytes = typeof payload.bytes === 'number' && Number.isFinite(payload.bytes) && payload.bytes >= 0
+      ? payload.bytes
+      : undefined;
+    const pageCount = typeof visualVerification?.pageCount === 'number'
+      && Number.isFinite(visualVerification.pageCount)
+      && visualVerification.pageCount > 0
+      ? Math.floor(visualVerification.pageCount)
+      : undefined;
+    const fileName = browserChatArtifactFileName(payload.fileName)
+      || browserChatArtifactFileName(path)
+      || browserChatArtifactFileName(artifactId)
+      || 'artifact';
+    return [{
+      bytes,
+      documentId: documentId || undefined,
+      downloadUrl: downloadUrl || undefined,
+      fileName,
+      id: documentId
+        ? `file:document:${documentId}`
+        : `file:${artifactId || path || url || downloadUrl}`,
+      kind: browserChatArtifactIsImage(fileName) ? 'image' : 'file',
+      pageCount,
+      path: path || undefined,
+      url: url || (downloadUrl ? downloadUrl.replace(/([?&])download=1(&|$)/, '$1').replace(/[?&]$/, '') : undefined),
+    }];
+  });
 }
 
 export function browserChatArtifactsFromTool(tool: StepToolCall) {
   const artifacts: BrowserChatArtifactSummary[] = [];
-  const file = browserChatFileArtifact(tool);
-  if (file) artifacts.push(file);
+  artifacts.push(...browserChatFileArtifacts(tool));
   for (const screenshot of tool.screenshots || []) {
     if (browserChatScreenshotIsInternalDocumentPreview(screenshot)) continue;
     const path = screenshot.path?.trim();

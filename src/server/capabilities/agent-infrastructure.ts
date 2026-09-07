@@ -1,5 +1,6 @@
+import { mediaModelsForConfig } from '@/lib/model-selection';
 import { randomUUID } from 'node:crypto';
-import { copyFile, mkdir } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import ffmpegStaticPath from 'ffmpeg-static';
 import type { CapabilityProvider, CapabilityRunContext } from '@webpilot/capability-sdk';
@@ -15,6 +16,9 @@ import { createNodeKnowledgeCapability } from '@webpilot/capability-knowledge/no
 import { createDataCapability, createDataSourceRegistry, type AgentDataSource } from '@webpilot/capability-data';
 import { createMediaCapability, type MediaOperations } from '@webpilot/capability-media';
 import { createFfmpegMediaOperations } from '@webpilot/capability-media/node';
+import { fileFormatForMimeType } from '@webpilot/capability-file';
+import { createAiSdkMediaGenerationOperations } from '@webpilot/capability-media/ai-sdk';
+import { store } from '@/server/db/store';
 import { createNodeCommunicationCapability } from '@webpilot/capability-communication/node';
 import type { CommunicationChannel } from '@webpilot/capability-communication';
 import { createNodeGitCapability } from '@webpilot/capability-git/node';
@@ -101,7 +105,7 @@ async function configuredDataSources(): Promise<AgentDataSource[]> {
   }
 }
 
-function mediaOperations(input: { context: CapabilityRunContext; attachments: readonly BrowserCodeAttachmentBinding[] }): MediaOperations {
+export async function createConfiguredMediaOperations(input: { context: CapabilityRunContext; attachments: readonly BrowserCodeAttachmentBinding[] }): Promise<MediaOperations> {
   const byRef = new Map(input.attachments.map((attachment) => [attachment.ref, attachment.path]));
   const root = artifactsRoot();
   const resolveSource = async (sourceRef: string) => {
@@ -113,15 +117,40 @@ function mediaOperations(input: { context: CapabilityRunContext; attachments: re
     const markerIndex = pathname.indexOf(marker);
     if (markerIndex < 0) throw new Error('Media sourceRef must be a registered attachment id or Artifact URL.');
     const relative = pathname.slice(markerIndex + marker.length).split('/').map(decodeURIComponent);
+    if (relative.some((segment) => !segment || segment === '.' || segment === '..' || /[\\/]/.test(segment))) throw new Error('Invalid media artifact reference.');
+    const inRun = relative[0] === safeSegment(input.context.runId, 'shared');
+    const ownUpload = relative[0] === 'uploads' && relative[1] === input.context.userId;
+    if (!inRun && !ownUpload) throw new Error('Media sourceRef must belong to this run or be a registered attachment.');
     const resolved = path.resolve(root, ...relative);
     const relativeCheck = path.relative(root, resolved);
     if (relativeCheck.startsWith('..') || path.isAbsolute(relativeCheck)) throw new Error('Media artifact reference escapes the artifact root.');
     return resolved;
   };
-  if (!ffmpegStaticPath) {
-    return { inspect: async () => { throw new Error('FFmpeg runtime is unavailable.'); }, health: async () => ({ status: 'needs-runtime', message: 'FFmpeg runtime is unavailable.' }) };
-  }
-  return createFfmpegMediaOperations({
+  const configuration = mediaModelsForConfig(await store.getModelConfig());
+  const generation = createAiSdkMediaGenerationOperations({
+    configuration,
+    selectedModels: configuration.defaults,
+    async readSource(ref, context) {
+      context.abortSignal?.throwIfAborted();
+      const source = await resolveSource(ref);
+      if ((await stat(source)).size > 50 * 1024 * 1024) throw new Error('参考图片不能超过 50 MB。');
+      return readFile(source, { signal: context.abortSignal });
+    },
+    async publishArtifact(file, context) {
+      context.abortSignal?.throwIfAborted();
+      const format = fileFormatForMimeType(file.mediaType);
+      const expectedKind = file.kind === 'speech' ? 'audio' : file.kind;
+      if (!format || format.kind !== expectedKind) throw new Error(`不支持保存此媒体格式：${file.mediaType}`);
+      const directory = artifactPath(safeSegment(input.context.runId, 'shared'), 'media');
+      await mkdir(directory, { recursive: true });
+      const fileName = `${file.kind}_${randomUUID()}${format.extension}`;
+      const destination = path.join(directory, fileName);
+      await writeFile(destination, file.data, { signal: context.abortSignal });
+      const artifactId = path.relative(root, destination).split(path.sep).join('/');
+      return { artifactId, fileName, mediaType: file.mediaType, downloadUrl: `${artifactApiUrl(destination, { artifactsRoot: root })}?download=1`, description: `Generated ${file.kind}` };
+    },
+  });
+  const processing: MediaOperations = ffmpegStaticPath ? createFfmpegMediaOperations({
     ffmpegPath: ffmpegStaticPath,
     timeoutMs: Number(input.context.configuration.AGENT_MEDIA_TIMEOUT_MS) || 120_000,
     resolveSource,
@@ -132,9 +161,10 @@ function mediaOperations(input: { context: CapabilityRunContext; attachments: re
       const artifactId = `media_${randomUUID()}${extension}`;
       const destination = path.join(directory, artifactId);
       await copyFile(filePath, destination);
-      return { artifactId, mediaType: extension === '.jpg' || extension === '.jpeg' ? 'image/jpeg' : extension === '.png' ? 'image/png' : undefined, downloadUrl: artifactApiUrl(destination, { artifactsRoot: root }) };
+      return { artifactId: path.relative(root, destination).split(path.sep).join('/'), fileName: artifactId, mediaType: extension === '.jpg' || extension === '.jpeg' ? 'image/jpeg' : extension === '.png' ? 'image/png' : undefined, downloadUrl: `${artifactApiUrl(destination, { artifactsRoot: root })}?download=1` };
     },
-  });
+  }) : { inspect: async () => { throw new Error('FFmpeg runtime is unavailable.'); } };
+  return { ...processing, ...generation };
 }
 
 export function createAgentInfrastructureProviders(input: {
@@ -146,7 +176,7 @@ export function createAgentInfrastructureProviders(input: {
     createNodeConnectorsCapability({ connectors: configuredConnectors }),
     createNodeKnowledgeCapability({ directory: (context) => artifactPath('agent-infrastructure', 'knowledge', safeSegment(context.userId, 'shared')) }),
     createDataCapability({ createRegistry: async () => createDataSourceRegistry(await configuredDataSources()) }),
-    createMediaCapability({ createOperations: (context) => mediaOperations({ context, attachments: input.attachmentBindings || [] }) }),
+    createMediaCapability({ createOperations: (context) => createConfiguredMediaOperations({ context, attachments: input.attachmentBindings || [] }) }),
     createNodeCommunicationCapability({ channels: configuredCommunicationChannels, draftDirectory: (context) => artifactPath('agent-infrastructure', 'communication', safeSegment(context.userId, 'shared')) }),
     createNodeGitCapability({ repository: (context) => String(context.configuration.AGENT_GIT_REPOSITORY || '').trim() || process.cwd() }),
     createNodeComputerCapability({

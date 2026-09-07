@@ -13,7 +13,7 @@ export type EnvironmentSettingsTabGroup = {
 };
 
 export const environmentSettingsTabs: EnvironmentSettingsTab[] = [
-  { id: 'general', label: '外观与偏好', description: '语言、品牌和界面主题' },
+  { id: 'general', label: '外观与偏好', description: '语言与品牌' },
   { id: 'model', label: '模型与供应商', description: '模型、密钥和服务地址' },
   { id: 'runtime', label: 'Agent 运行', description: '推理、上下文和并发策略' },
   { id: 'browser', label: '浏览器', description: '实例、预览和浏览器 Agent' },

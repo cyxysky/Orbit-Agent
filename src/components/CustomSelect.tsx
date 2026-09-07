@@ -13,6 +13,7 @@ export type CustomSelectOption = {
   icon?: ReactNode;
   label: string;
   selectedLabel?: string;
+  selected?: boolean;
   value: string;
 };
 
@@ -211,6 +212,7 @@ export function CustomSelect({
         preferredWidth={className?.includes('browser-chat-provider-select') ? 336 : undefined}
         present={menuVisible}
         role="listbox"
+        ariaMultiselectable={options.some((option) => option.selected !== undefined) || undefined}
       >
           {searchEnabled ? (
             <div className="custom-select-search">
@@ -236,7 +238,7 @@ export function CustomSelect({
                 <Fragment key={option.value}>
                   {showGroup ? <div className="custom-select-group">{option.group}</div> : null}
                   <button
-                    aria-selected={option.value === value}
+                    aria-selected={option.selected ?? option.value === value}
                     className={`custom-select-option${index === activeIndex ? ' active' : ''}`}
                     disabled={option.disabled}
                     onClick={() => selectOption(option)}
@@ -251,7 +253,7 @@ export function CustomSelect({
                         {option.description ? <small>{option.description}</small> : null}
                       </span>
                     </span>
-                    {option.value === value ? <Check size={15} /> : null}
+                    {(option.selected ?? option.value === value) ? <Check size={15} /> : null}
                   </button>
                 </Fragment>
               );

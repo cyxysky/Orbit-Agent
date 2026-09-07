@@ -101,7 +101,7 @@ function attachmentKind(attachment: FileReadableAttachment): AttachmentKind {
   if (attachment.kind === 'image' || attachment.type.startsWith('image/') || format?.kind === 'image') return 'image';
   if (attachment.kind === 'tab') return 'tab';
   if (attachment.type === 'application/pdf' || format?.kind === 'pdf') return 'pdf';
-  if (format?.canRead && format.kind !== 'binary') return format.kind;
+  if (format?.canRead && format.kind !== 'binary' && format.kind !== 'audio' && format.kind !== 'video') return format.kind;
   if (attachment.type.startsWith('text/')) return 'text';
   return 'unknown';
 }

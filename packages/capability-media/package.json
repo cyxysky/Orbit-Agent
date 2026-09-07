@@ -1,19 +1,24 @@
 {
   "name": "@webpilot/capability-media",
   "version": "0.1.0",
-  "description": "Framework-neutral OCR, transcription, image generation, and media inspection capability.",
+  "description": "Framework-neutral image, video and speech generation, OCR, transcription and media inspection.",
   "type": "module",
   "sideEffects": false,
   "files": ["dist", "README.md"],
   "exports": {
     ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
     "./node": { "types": "./dist/node.d.ts", "import": "./dist/node.js" },
+    "./model-settings": { "types": "./dist/model-settings.d.ts", "import": "./dist/model-settings.js" },
+    "./models": { "types": "./dist/models.d.ts", "import": "./dist/models.js" },
+    "./ai-sdk": { "types": "./dist/ai-sdk.d.ts", "import": "./dist/ai-sdk.js" },
     "./mcp": { "types": "./dist/mcp.d.ts", "import": "./dist/mcp.js" },
     "./runtime-skill": { "types": "./dist/runtime-skill.d.ts", "import": "./dist/runtime-skill.js" },
     "./settings": { "types": "./dist/settings.d.ts", "import": "./dist/settings.js" }
   },
   "scripts": { "build": "tsc -p tsconfig.build.json", "prepack": "npm run build" },
   "dependencies": { "@webpilot/capability-adapter-mcp": "0.1.0", "@webpilot/capability-sdk": "0.1.0", "zod": "^4.4.3" },
+  "peerDependencies": { "ai": "^7.0.59", "@ai-sdk/openai": "^4.0.37", "@ai-sdk/openai-compatible": "^3.0.29", "@ai-sdk/google": "^4.0.40", "@ai-sdk/xai": "^4.0.34", "@ai-sdk/alibaba": "^2.0.30" },
+  "peerDependenciesMeta": { "ai": { "optional": true }, "@ai-sdk/openai": { "optional": true }, "@ai-sdk/openai-compatible": { "optional": true }, "@ai-sdk/google": { "optional": true }, "@ai-sdk/xai": { "optional": true }, "@ai-sdk/alibaba": { "optional": true } },
   "engines": { "node": ">=22.16" },
   "publishConfig": { "access": "public" }
 }

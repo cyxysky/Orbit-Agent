@@ -180,7 +180,7 @@ function normalizeStoredModelConfig(input?: ModelConfigRecord): ModelConfigRecor
     };
   }
   const providerOrder = modelProviderDefinitionsForConfig(providers, input.providerOrder).map(({ value }) => value);
-  return { provider, providers, providerOrder, updatedAt: input.updatedAt || now() };
+  return { provider, providers, providerOrder, mediaSelections: input.mediaSelections, updatedAt: input.updatedAt || now() };
 }
 
 function updateInitialEnv(values: Record<string, string | undefined>) {
@@ -388,10 +388,11 @@ export const store = {
   async getModelConfig() {
     return normalizeStoredModelConfig((await readConfigData()).modelConfig);
   },
-  async saveModelConfig(input: Pick<ModelConfigRecord, 'provider' | 'providers' | 'providerOrder'>) {
+  async saveModelConfig(input: Pick<ModelConfigRecord, 'provider' | 'providers' | 'providerOrder' | 'mediaSelections'>) {
     const data = await readConfigData();
     const existing = normalizeStoredModelConfig(data.modelConfig);
     const providers: Partial<Record<ModelProvider, ModelProviderSettings>> = {};
+    const { providerMediaSettingsSchema, mediaModelSelectionsSchema } = await import('@webpilot/capability-media/model-settings');
     const timestamp = now();
     const providerDefinitions = modelProviderDefinitionsForConfig({
       ...existing?.providers,
@@ -408,6 +409,7 @@ export const store = {
       providers[provider] = {
         ...defaultModelProviderSettings(provider),
         ...merged,
+        media: providerMediaSettingsSchema.parse(current?.media ?? previous?.media ?? {}),
         enabled: current?.enabled ?? previous?.enabled ?? false,
         defaultModel: model,
         model,
@@ -422,7 +424,7 @@ export const store = {
       };
     }
     const providerOrder = modelProviderDefinitionsForConfig(providers, input.providerOrder ?? existing?.providerOrder).map(({ value }) => value);
-    const config: ModelConfigRecord = { provider: input.provider, providers, providerOrder, updatedAt: timestamp };
+    const config: ModelConfigRecord = { provider: input.provider, providers, providerOrder, mediaSelections: mediaModelSelectionsSchema.parse(input.mediaSelections ?? existing?.mediaSelections ?? {}), updatedAt: timestamp };
     await writeConfigData({ ...data, modelConfig: config });
     applyModelConfig(config);
     return config;

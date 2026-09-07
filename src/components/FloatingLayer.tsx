@@ -22,6 +22,7 @@ type FloatingLayerProps = {
   allowNestedFloatingLayers?: boolean;
   anchorRef: RefObject<HTMLElement | null>;
   ariaLabel?: string;
+  ariaMultiselectable?: boolean;
   children: ReactNode;
   className: string;
   gap?: number;
@@ -91,6 +92,7 @@ export function FloatingLayer({
   preferredWidth,
   present,
   role,
+  ariaMultiselectable,
   style,
 }: FloatingLayerProps) {
   const internalLayerRef = useRef<HTMLDivElement | null>(null);
@@ -250,6 +252,7 @@ export function FloatingLayer({
       onPointerLeave={onPointerLeave}
       ref={setLayerNode}
       role={role}
+      aria-multiselectable={ariaMultiselectable}
       style={{ ...style, ...layoutStyle }}
     >
       {children}

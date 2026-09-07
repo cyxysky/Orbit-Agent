@@ -1,11 +1,13 @@
 export type FileFormatKind =
   | 'archive'
+  | 'audio'
   | 'binary'
   | 'image'
   | 'pdf'
   | 'presentation'
   | 'spreadsheet'
   | 'text'
+  | 'video'
   | 'word';
 
 export type FileFormat = {
@@ -16,6 +18,7 @@ export type FileFormat = {
   extension: `.${string}`;
   kind: FileFormatKind;
   mimeType: string;
+  mimeAliases?: readonly string[];
 };
 
 type FileFormatDefinition = Omit<
@@ -91,6 +94,16 @@ const formats: FileFormatDefinition[] = [
   { extension: '.tiff', kind: 'image', mimeType: 'image/tiff', canPreview: true },
   { extension: '.webp', kind: 'image', mimeType: 'image/webp', canPreview: true },
 
+  { extension: '.mp4', kind: 'video', mimeType: 'video/mp4', canRead: false },
+  { extension: '.webm', kind: 'video', mimeType: 'video/webm', canRead: false },
+  { extension: '.mov', kind: 'video', mimeType: 'video/quicktime', canRead: false },
+  { extension: '.mp3', kind: 'audio', mimeType: 'audio/mpeg', mimeAliases: ['audio/mp3'], canRead: false },
+  { extension: '.wav', kind: 'audio', mimeType: 'audio/wav', mimeAliases: ['audio/x-wav'], canRead: false },
+  { extension: '.ogg', kind: 'audio', mimeType: 'audio/ogg', canRead: false },
+  { extension: '.opus', kind: 'audio', mimeType: 'audio/ogg', mimeAliases: ['audio/opus'], canRead: false },
+  { extension: '.aac', kind: 'audio', mimeType: 'audio/aac', canRead: false },
+  { extension: '.flac', kind: 'audio', mimeType: 'audio/flac', canRead: false },
+  { extension: '.pcm', kind: 'audio', mimeType: 'audio/pcm', mimeAliases: ['audio/l16'], canRead: false },
   { extension: '.bin', kind: 'binary', mimeType: 'application/octet-stream', canRead: false },
 ];
 
@@ -102,6 +115,7 @@ export const fileFormats: readonly FileFormat[] = Object.freeze(formats.map((for
   extension: format.extension,
   kind: format.kind,
   mimeType: format.mimeType,
+  mimeAliases: format.mimeAliases,
 })));
 
 const formatsByExtension = new Map<string, FileFormat>(
@@ -109,8 +123,10 @@ const formatsByExtension = new Map<string, FileFormat>(
 );
 const formatsByMime = new Map<string, FileFormat>();
 for (const format of fileFormats) {
-  const mime = format.mimeType.split(';')[0].trim().toLowerCase();
-  if (!formatsByMime.has(mime)) formatsByMime.set(mime, format);
+  for (const mimeType of [format.mimeType, ...(format.mimeAliases || [])]) {
+    const mime = mimeType.split(';')[0].trim().toLowerCase();
+    if (!formatsByMime.has(mime)) formatsByMime.set(mime, format);
+  }
 }
 
 export function normalizedFileExtension(value: string) {

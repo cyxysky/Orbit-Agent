@@ -33,7 +33,7 @@ policy enforcement, result handling, and disposal.
 | `@webpilot/capability-connectors` | MCP Streamable HTTP, OpenAPI and custom external connectors |
 | `@webpilot/capability-knowledge` | Durable document ingestion and knowledge retrieval |
 | `@webpilot/capability-data` | Structured source discovery and bounded SQL querying |
-| `@webpilot/capability-media` | OCR, transcription, frame extraction and image-generation contracts |
+| `@webpilot/capability-media` | OCR, transcription, frame extraction and configurable image/video/speech generation |
 | `@webpilot/capability-communication` | Draft-first outbound communication channels |
 | `@webpilot/capability-git` | Bounded Git inspection and explicitly enabled repository writes |
 | `@webpilot/capability-computer` | Desktop observation and input through host-selected drivers |

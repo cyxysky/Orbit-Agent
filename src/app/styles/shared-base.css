@@ -207,8 +207,8 @@ a:not([data-slot], [data-slot] *) {
 }
 
 .custom-select-menu {
-  background: rgba(255, 255, 255, 0.985);
-  border: 1px solid rgba(24, 24, 27, 0.09);
+  background: var(--panel-elevated);
+  border: 1px solid var(--border);
   border-radius: 16px;
   box-shadow:
     0 2px 8px rgba(20, 24, 30, 0.06),
@@ -249,17 +249,17 @@ a:not([data-slot], [data-slot] *) {
 
 .custom-select-option.active,
 .custom-select-option:hover {
-  background: rgba(24, 24, 27, 0.045);
-  color: #303238;
+  background: var(--menu-hover-bg);
+  color: var(--menu-hover-foreground);
 }
 
 .custom-select-option[aria-selected="true"] {
-  background: #f0f4f8;
-  color: #24415f;
+  background: var(--menu-selected-bg);
+  color: var(--menu-selected-foreground);
 }
 
 .custom-select-option[aria-selected="true"]:hover {
-  background: #eaf0f6;
+  background: var(--menu-selected-bg);
 }
 
 .custom-select-option:disabled {
@@ -318,7 +318,7 @@ a:not([data-slot], [data-slot] *) {
 }
 
 .custom-select-option > svg {
-  color: #47739e;
+  color: currentColor;
   flex: none;
   justify-self: end;
 }
@@ -550,75 +550,6 @@ a:not([data-slot], [data-slot] *) {
 
 .browser-chat-message-generation-content .browser-chat-agent-markdown :where(ul, ol) {
   list-style: none;
-}
-
-
-
-
-
-
-
-
-.theme-color-picker {
-  align-items: center;
-  background: #ffffff;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  color: var(--muted-strong);
-  display: inline-flex;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 850;
-  gap: 10px;
-  justify-self: end;
-  min-height: 40px;
-  padding: 4px 12px 4px 5px;
-  transition:
-    background 0.16s ease,
-    border-color 0.16s ease,
-    box-shadow 0.16s ease;
-  white-space: nowrap;
-}
-
-.theme-color-picker:hover,
-.theme-color-picker:focus-within {
-  background: var(--accent-soft);
-  border-color: var(--accent-border);
-  box-shadow: 0 0 0 3px var(--focus);
-}
-
-.theme-color-picker label {
-  align-items: center;
-  cursor: pointer;
-  display: inline-flex;
-  height: 30px;
-  position: relative;
-  width: 30px;
-}
-
-.theme-color-picker label>span {
-  border-radius: 999px;
-  box-shadow: inset 0 0 0 1px rgba(13, 13, 13, 0.12);
-  display: block;
-  height: 30px;
-  width: 30px;
-}
-
-.theme-color-picker input {
-  cursor: pointer;
-  height: 30px;
-  inset: 0;
-  opacity: 0;
-  padding: 0;
-  position: absolute;
-  width: 30px;
-}
-
-.theme-color-picker code {
-  color: var(--muted-strong);
-  font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
-  font-weight: 900;
 }
 
 
@@ -942,23 +873,27 @@ a:not([data-slot], [data-slot] *) {
   align-items: center;
   background: transparent;
   border: 0;
-  border-radius: 12px;
+  border-radius: var(--nav-item-radius);
   color: var(--muted-strong);
   cursor: pointer;
   display: flex;
   font-size: 13px;
   font-weight: 650;
   gap: 8px;
-  min-height: 36px;
-  padding: 0 10px;
+  min-height: var(--nav-item-height);
+  padding: 0 var(--nav-item-padding-inline);
   text-align: left;
   width: 100%;
 }
 
-.browser-chat-subnav button.active,
+.browser-chat-subnav button.active {
+  background: var(--menu-selected-bg);
+  color: var(--menu-selected-foreground);
+}
+
 .browser-chat-subnav button:hover {
-  background: color-mix(in srgb, var(--foreground) 5%, transparent);
-  color: var(--foreground);
+  background: var(--menu-hover-bg);
+  color: var(--menu-hover-foreground);
 }
 
 .browser-chat-layout.sidebar-collapsed .browser-chat-settings-section h2,
@@ -1050,13 +985,13 @@ body.is-dragging-embedded-tab * {
   background: rgba(15, 17, 21, 0.82);
 }
 
-:root[data-theme="dark"] :where(.ui-modal, .browser-chat-sidebar, .browser-chat-chat-pane, .browser-chat-message>div:last-child, .browser-chat-composer-shell, .browser-chat-embedded-browser, .browser-chat-embedded-tab, .browser-chat-embedded-toolbar) {
+:root[data-theme="dark"] :where(.ui-modal, .browser-chat-chat-pane, .browser-chat-message>div:last-child, .browser-chat-composer-shell, .browser-chat-embedded-browser, .browser-chat-embedded-tab, .browser-chat-embedded-toolbar) {
   background-color: var(--panel);
   border-color: var(--border);
   color: var(--foreground);
 }
 
-:root[data-theme="dark"] :where(.input, .textarea, .file-input, .custom-select-menu, .settings-model-row-button, .settings-workspace .input, .browser-chat-compose textarea, .theme-color-picker):not([data-slot], [data-slot] *) {
+:root[data-theme="dark"] :where(.input, .textarea, .file-input, .custom-select-menu, .settings-model-row-button, .settings-workspace .input, .browser-chat-compose textarea):not([data-slot], [data-slot] *) {
   background-color: var(--panel-soft);
   border-color: var(--border);
   color: var(--foreground);
@@ -1075,12 +1010,12 @@ body.is-dragging-embedded-tab * {
 }
 
 :root[data-theme="dark"] .custom-select-option[aria-selected="true"] {
-  background: color-mix(in srgb, var(--accent) 16%, var(--panel-soft));
-  color: var(--foreground);
+  background: var(--menu-selected-bg);
+  color: var(--menu-selected-foreground);
 }
 
 :root[data-theme="dark"] .custom-select-option[aria-selected="true"]:hover {
-  background: color-mix(in srgb, var(--accent) 20%, var(--panel-warm));
+  background: var(--menu-selected-bg);
 }
 
 :root[data-theme="dark"] .custom-select-group {
@@ -1141,25 +1076,19 @@ body.is-dragging-embedded-tab * {
   color: var(--muted);
 }
 
-
-
-:root[data-theme="dark"] .theme-color-picker label>span {
-  box-shadow: inset 0 0 0 1px rgba(245, 245, 246, 0.16);
-}
-
 :root[data-theme="dark"] ::selection {
-  background: color-mix(in srgb, var(--accent) 34%, transparent);
-  color: var(--foreground);
+  background: var(--selection-bg);
+  color: var(--selection-foreground);
 }
 
 :root[data-theme="dark"] .ui-button--neutral {
   background: var(--button-neutral-bg);
-  color: var(--foreground);
+  color: var(--button-neutral-foreground);
 }
 
 :root[data-theme="dark"] .ui-button--neutral:not(:disabled):hover {
   background: var(--button-neutral-hover-bg);
-  color: var(--foreground);
+  color: var(--button-neutral-foreground);
 }
 
 :root[data-theme="dark"] :where(.ui-icon-button, .settings-model-row-button, .browser-chat-embedded-tool-button, .browser-chat-embedded-tab-close) {
@@ -1198,20 +1127,20 @@ body.is-dragging-embedded-tab * {
 }
 
 :root[data-theme="dark"] :where(.browser-chat-subnav button:hover) {
-  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+  background: var(--menu-hover-bg);
 }
 
 :root[data-theme="dark"] :where(.browser-chat-subnav button.active, .browser-chat-subnav button.active:hover) {
-  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+  background: var(--menu-selected-bg);
   box-shadow: none;
-  color: var(--foreground);
+  color: var(--menu-selected-foreground);
 }
 
-:is(.ui-icon-button, .settings-model-row-button, .browser-chat-embedded-tool-button, .browser-chat-embedded-tab-close):not(:disabled):hover {
+:is(.ui-icon-button, .settings-model-row-button, .browser-chat-embedded-tool-button):not(:disabled, .ui-icon-button--danger, .danger):hover {
   background: transparent !important;
   border-color: transparent !important;
   box-shadow: none !important;
-  color: var(--accent-strong) !important;
+  color: var(--control-hover-foreground) !important;
 }
 
 /* Settings workspace */
@@ -1222,7 +1151,7 @@ body.is-dragging-embedded-tab * {
   display: block;
 }
 
-.browser-chat-settings-pane :where(.settings-control, .settings-row-control, .theme-color-picker) {
+.browser-chat-settings-pane :where(.settings-control, .settings-row-control) {
   min-width: 0;
   width: 100%;
 }
@@ -1266,7 +1195,7 @@ body.is-dragging-embedded-tab * {
 @media (hover: hover) {
 
 :where(.browser-chat-subnav button):hover {
-    background: var(--app-surface-hover);
+    background: var(--menu-hover-bg);
   }
 }
 
@@ -1302,22 +1231,11 @@ body.is-dragging-embedded-tab * {
 /* Expanded sidebar: use one active surface across primary and secondary navigation. */
 .browser-chat-layout:not(.sidebar-collapsed) :is(.browser-chat-subnav button.active, .browser-chat-subnav button.active:hover),
 :root[data-theme="dark"] .browser-chat-layout:not(.sidebar-collapsed) :is(.browser-chat-subnav button.active, .browser-chat-subnav button.active:hover) {
-  background: transparent;
+  background: var(--menu-selected-bg);
   box-shadow: none;
-  color: var(--foreground);
+  color: var(--menu-selected-foreground);
   font-weight: 600;
   position: relative;
-}
-
-.browser-chat-layout:not(.sidebar-collapsed) .browser-chat-subnav button.active::before {
-  background: var(--accent-strong);
-  border-radius: 999px;
-  bottom: 7px;
-  content: "";
-  left: 0;
-  position: absolute;
-  top: 7px;
-  width: 2px;
 }
 
 /* Collapsed sidebar: consistent optical rhythm and compact active state. */
@@ -1349,28 +1267,16 @@ body.is-dragging-embedded-tab * {
   width: 17px;
 }
 
-.browser-chat-layout.sidebar-collapsed :is(.browser-chat-subnav button.active)::before {
-  background: var(--accent);
-  border-radius: 0 999px 999px 0;
-  content: "";
-  height: 18px;
-  left: -10px;
-  position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 2px;
-}
-
 .browser-chat-layout.sidebar-collapsed .browser-chat-subnav button.active,
 .browser-chat-layout.sidebar-collapsed .browser-chat-subnav button.active:hover,
 :root[data-theme="dark"] .browser-chat-layout.sidebar-collapsed .browser-chat-subnav button.active,
 :root[data-theme="dark"] .browser-chat-layout.sidebar-collapsed .browser-chat-subnav button.active:hover {
-  background: transparent;
+  background: var(--menu-selected-bg);
   box-shadow: none;
 }
 
 .browser-chat-layout.sidebar-collapsed :is(.browser-chat-subnav button.active) {
-  color: var(--accent-strong);
+  color: var(--menu-selected-foreground);
 }
 
 

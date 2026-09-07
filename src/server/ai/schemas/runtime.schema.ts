@@ -258,6 +258,8 @@ export type ModelProvider =
   | 'xai';
 
 export type ModelProviderSettings = {
+  selectedModel?: string;
+  media?: import('@webpilot/capability-media/model-settings').ProviderMediaSettings;
   displayName?: string;
   enabled?: boolean;
   defaultModel?: string;
@@ -275,6 +277,7 @@ export type ModelProviderSettings = {
 };
 
 export type ModelConfigRecord = {
+  mediaSelections?: import('@webpilot/capability-media/model-settings').MediaModelSelections;
   provider: ModelProvider;
   providerOrder?: ModelProvider[];
   providers: Partial<Record<ModelProvider, ModelProviderSettings>>;

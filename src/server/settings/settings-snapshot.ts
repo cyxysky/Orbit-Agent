@@ -67,6 +67,7 @@ export async function readModelSettingsState() {
       provider: saved?.provider || 'openrouter',
       providers,
       providerOrder: saved?.providerOrder,
+      mediaSelections: saved?.mediaSelections,
       updatedAt: saved?.updatedAt || '',
     },
   };

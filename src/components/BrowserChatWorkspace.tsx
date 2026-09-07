@@ -1,5 +1,7 @@
 'use client';
 
+import { parseMediaModelSelection } from '@/lib/model-selection';
+
 import { createContext, memo, type CSSProperties, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject, type WheelEvent as ReactWheelEvent, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   closestCenter,
@@ -32,6 +34,8 @@ import { Button } from '@heroui/react/button';
 import { Checkbox } from '@heroui/react/checkbox';
 import { Popover } from '@heroui/react/popover';
 import { HoverCard } from '@/components/HoverCard';
+import { IconAction } from '@/components/ui/icon-action';
+import { CopyTextButton } from '@/components/ui/copy-text-button';
 import { TextArea } from '@heroui/react/textarea';
 import dynamic from 'next/dynamic';
 import {
@@ -4901,34 +4905,10 @@ const BrowserChatMessageItem = memo(function BrowserChatMessageItem({
         )}
         {item.role === 'assistant' ? (
           <div className="browser-chat-message-actions">
-            {hasExecutionRecords ? (
-              <button className="browser-chat-log-button" onClick={() => onShowLogs(item.id)} type="button">
-                <ScrollText size={14} />
-                {t('查看日志')}
-              </button>
-            ) : null}
-            {canGenerateSkill ? (
-              <button
-                className="browser-chat-log-button"
-                disabled={actionDisabled}
-                onClick={() => void onGenerateSkill(item.id)}
-                type="button"
-              >
-                {generatingSkillMessageId === item.id ? <Loader2 className="spin" size={14} /> : <Sparkles size={14} />}
-                {t('生成 Skill')}
-              </button>
-            ) : null}
-            {canGenerateAutomationCase ? (
-              <button
-                className="browser-chat-log-button"
-                disabled={actionDisabled}
-                onClick={() => void onGenerateAutomationCase(item.id)}
-                type="button"
-              >
-                {generatingAutomationMessageId === item.id ? <Loader2 className="spin" size={14} /> : <Workflow size={14} />}
-                {t('生成任务')}
-              </button>
-            ) : null}
+            <CopyTextButton text={item.parts?.some((part) => part.type === 'text') ? item.parts.flatMap((part) => part.type === 'text' ? [part.text] : []).join('\n\n') : item.content || ''} label={t('复制回复')} className="browser-chat-reply-action" disabled={operationRunning || !item.content && !item.parts?.some((part) => part.type === 'text')} />
+            {hasExecutionRecords ? <IconAction label={t('查看日志')} className="browser-chat-reply-action" onClick={() => onShowLogs(item.id)}><ScrollText size={15} /></IconAction> : null}
+            {canGenerateSkill ? <IconAction label={t('生成 Skill')} className="browser-chat-reply-action" disabled={actionDisabled} onClick={() => void onGenerateSkill(item.id)}>{generatingSkillMessageId === item.id ? <Loader2 className="spin" size={15} /> : <Sparkles size={15} />}</IconAction> : null}
+            {canGenerateAutomationCase ? <IconAction label={t('生成任务')} className="browser-chat-reply-action" disabled={actionDisabled} onClick={() => void onGenerateAutomationCase(item.id)}>{generatingAutomationMessageId === item.id ? <Loader2 className="spin" size={15} /> : <Workflow size={15} />}</IconAction> : null}
           </div>
         ) : null}
       </div>
@@ -5865,8 +5845,8 @@ const BrowserChatComposer = memo(function BrowserChatComposer({
     const selection = parseModelSelectionValue(option.value);
     return {
       ...option,
-      icon: <ModelBrandIcon model={selection.model} provider={selection.provider} />,
-      selectedLabel: option.label.toLocaleLowerCase(),
+      icon: <ModelBrandIcon model={parseMediaModelSelection(selection.model)?.id || selection.model} provider={selection.provider} />,
+      selectedLabel: option.label,
     };
   }), [modelSelectionOptions]);
 
@@ -6371,10 +6351,6 @@ const BrowserChatComposer = memo(function BrowserChatComposer({
         {skillMenuOpen ? (
           <div className="browser-chat-compose-context">
             <div className="browser-chat-skill-menu" role="listbox" aria-label="Skills">
-                <div className="browser-chat-skill-menu-head">
-                  <b>Skills</b>
-                  {skillQuery ? <span>/{skillQuery}</span> : <span>/</span>}
-                </div>
                 {skillSuggestions.length ? skillSuggestions.map((skill, index) => (
                   <button
                     aria-selected={activeSkillIndex === index}
@@ -6383,13 +6359,11 @@ const BrowserChatComposer = memo(function BrowserChatComposer({
                     onClick={() => chooseSkill(skill)}
                     onMouseDown={(event) => event.preventDefault()}
                     role="option"
+                    title={skill.description}
                     type="button"
                   >
-                    <Braces size={15} />
-                    <span>
-                      <b>{skill.title}</b>
-                      <small>{skill.description}</small>
-                    </span>
+                    <FileText aria-hidden="true" size={14} />
+                    <span>{skill.title}</span>
                   </button>
                 )) : (
                   <div className="browser-chat-skill-empty">
@@ -8140,6 +8114,8 @@ export function BrowserChatWorkspace({
   const [modelProvider, setModelProvider] = useState<ModelProvider>(() => initialModelSelection.provider);
   const [modelId, setModelId] = useState(() => initialModelSelection.model);
   const [modelConfig, setModelConfig] = useState<BrowserChatModelConfig | null>(null);
+  const modelSelectionSaveRef = useRef<Promise<void>>(Promise.resolve());
+  const modelSelectionRevisionRef = useRef(0);
   const [attachments, setAttachments] = useState<BrowserChatAttachment[]>([]);
   const attachmentsRef = useRef<BrowserChatAttachment[]>([]);
   const [composerResetToken, setComposerResetToken] = useState(0);
@@ -8680,7 +8656,7 @@ export function BrowserChatWorkspace({
   const embeddedBrowserViewActive = embeddedBrowserActive && !embeddedBrowserCovered;
   const modelSelection = modelSelectionValueForConfig(modelConfig, { model: modelId, provider: modelProvider });
   const modelSelectionDiagnostic = modelSelectionDiagnosticLabel(modelConfig, { model: modelId, provider: modelProvider });
-  const modelSelectionOptions = useMemo(() => modelSelectionOptionsForConfig(modelConfig), [modelConfig]);
+  const modelSelectionOptions = useMemo(() => modelSelectionOptionsForConfig(modelConfig, { model: modelId, provider: modelProvider }), [modelConfig, modelId, modelProvider]);
   const selectedModelSupportsImageInput = modelCapabilities(
     modelConfig?.providers?.[modelProvider],
     modelProvider,
@@ -8703,37 +8679,32 @@ export function BrowserChatWorkspace({
   }, []);
 
   const changeModelSelection = useCallback((selection: { provider: ModelProvider; model: string }) => {
-    const next = resolveRuntimeModelSelection(modelConfig, selection);
-    setModelProvider(next.provider);
-    setModelId(next.model);
-
-    const providerConfig = modelConfig?.providers[next.provider];
-    if (!modelConfig || !providerConfig) return;
-    const nextConfig: BrowserChatModelConfig = {
-      ...modelConfig,
-      provider: next.provider,
-      providers: {
-        ...modelConfig.providers,
-        [next.provider]: {
-          ...providerConfig,
-          defaultModel: next.model,
-          model: next.model,
-          models: Array.from(new Set([...(providerConfig.models || []), next.model])),
-        },
-      },
-    };
-    setModelConfig(nextConfig);
-    void fetch(withWebPilotBasePath('/api/settings/model-selection'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ provider: next.provider, model: next.model }),
-    })
-      .then(async (response) => {
-        const data = await readApiJson<Record<string, unknown>>(response, '保存模型选择失败');
-        const persisted = normalizeRuntimeModelConfig(data.config as Partial<BrowserChatModelConfig> | undefined);
-        if (persisted) setModelConfig(persisted);
-      })
-      .catch(() => undefined);
+    const media = parseMediaModelSelection(selection.model);
+    const next = media ? selection : resolveRuntimeModelSelection(modelConfig, selection);
+    if (!media) {
+      setModelProvider(next.provider);
+      setModelId(next.model);
+    }
+    if (!modelConfig?.providers[next.provider]) return;
+    const revision = ++modelSelectionRevisionRef.current;
+    setModelConfig((current) => !current ? current : media ? {
+      ...current,
+      mediaSelections: { ...current.mediaSelections, [media.kind]: { provider: next.provider, model: media.id } },
+    } : {
+      ...current, provider: next.provider,
+      providers: { ...current.providers, [next.provider]: { ...current.providers[next.provider]!, selectedModel: next.model } },
+    });
+    const save = modelSelectionSaveRef.current.catch(() => undefined).then(async () => {
+      const response = await fetch(withWebPilotBasePath('/api/settings/model-selection'), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: next.provider, model: next.model }),
+      });
+      const data = await readApiJson<Record<string, unknown>>(response, '保存模型选择失败');
+      const persisted = normalizeRuntimeModelConfig(data.config as Partial<BrowserChatModelConfig> | undefined);
+      if (persisted && revision === modelSelectionRevisionRef.current) setModelConfig(persisted);
+    });
+    modelSelectionSaveRef.current = save;
+    void save.catch((error) => { if (revision === modelSelectionRevisionRef.current) setError(error instanceof Error ? error.message : '保存模型选择失败'); });
   }, [modelConfig]);
 
   const applyBrowserRuntimeSettings = useCallback((saved: Array<{ key?: string; value?: string }>) => {
@@ -9194,6 +9165,8 @@ export function BrowserChatWorkspace({
   }
 
   async function sendMessage(content: string, skillIds: string[] = [], messageAttachments?: BrowserChatAttachment[]) {
+    try { await modelSelectionSaveRef.current; }
+    catch (error) { setError(error instanceof Error ? error.message : '保存模型选择失败'); return false; }
     const trimmedContent = content.trim();
     const nextAttachments = messageAttachments ?? attachments;
     if (

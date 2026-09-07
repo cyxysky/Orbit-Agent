@@ -1,6 +1,8 @@
 'use client';
 
 import {
+  Children,
+  isValidElement,
   createContext,
   memo,
   type MouseEvent as ReactMouseEvent,
@@ -11,6 +13,7 @@ import {
   useRef,
 } from 'react';
 import ReactMarkdown from 'react-markdown';
+import { BrowserChatCodeBlock } from '@/components/BrowserChatCodeBlock';
 import rehypeKatex from 'rehype-katex';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -286,6 +289,12 @@ export const BrowserChatMarkdown = memo(function BrowserChatMarkdown({ markdown 
           rehypePlugins={[rehypeKatex]}
           remarkPlugins={[remarkGfm, remarkMath, remarkBrowserChatCjkStrong]}
           components={{
+            pre: ({ children }) => {
+              const code = Children.toArray(children)[0];
+              if (!isValidElement<{ className?: string; children?: ReactNode }>(code)) return <pre>{children}</pre>;
+              const language = /language-([^\s]+)/.exec(code.props.className || '')?.[1] || '';
+              return <BrowserChatCodeBlock code={String(code.props.children || '')} language={language} />;
+            },
             a: ({ href, onClick, ...props }) => (
               <a
                 {...props}
@@ -302,8 +311,8 @@ export const BrowserChatMarkdown = memo(function BrowserChatMarkdown({ markdown 
             thead: ({ children }) => <thead className="table__header">{children}</thead>,
             tbody: ({ children }) => <tbody className="table__body">{children}</tbody>,
             tr: ({ children }) => <tr className="table__row">{children}</tr>,
-            th: ({ children }) => <th className="table__column">{children}</th>,
-            td: ({ children }) => <td className="table__cell">{children}</td>,
+            th: ({ children, style }) => <th className="table__column" style={style}>{children}</th>,
+            td: ({ children, style }) => <td className="table__cell" style={style}>{children}</td>,
           }}
         >
           {block.markdown}
@@ -341,4 +350,3 @@ export const BrowserChatOrderedResponse = memo(function BrowserChatOrderedRespon
     return null;
   })}</div>;
 });
-

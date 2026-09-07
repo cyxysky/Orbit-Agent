@@ -1,3 +1,5 @@
+import { browserChatArtifactPayloads } from '@/lib/browser-chat-artifacts';
+
 type FileArtifactToolResult = {
   name: string;
   result?: unknown;
@@ -26,26 +28,26 @@ function verifiedArtifactDownloadUrl(value: unknown) {
   }
 }
 
-function fileArtifactDownloadFromToolResult(tool: FileArtifactToolResult): FileArtifactDownload | undefined {
-  if (tool.name !== 'file') return undefined;
-  if (!tool.result || typeof tool.result !== 'object' || !('ok' in tool.result) || tool.result.ok !== true) return undefined;
+function fileArtifactDownloadsFromToolResult(tool: FileArtifactToolResult): FileArtifactDownload[] {
+  if (!tool.result || typeof tool.result !== 'object' || !('ok' in tool.result) || tool.result.ok !== true) return [];
   try {
     const actual = 'actual' in tool.result && typeof tool.result.actual === 'string'
       ? tool.result.actual
       : '{}';
-    const payload = JSON.parse(actual) as ArtifactDownloadPayload;
-    const artifactId = String(payload.artifactId || '').trim();
-    const fileName = String(payload.fileName || '').trim();
-    const downloadUrl = verifiedArtifactDownloadUrl(payload.downloadUrl);
-    if (
-      !artifactId
-      || !fileName
-      || !downloadUrl
-      || artifactId.split('/').some((segment) => !segment || segment === '.' || segment === '..')
-    ) return undefined;
-    return { artifactId, downloadUrl, fileName };
+    return browserChatArtifactPayloads(actual).flatMap((payload: ArtifactDownloadPayload) => {
+      const artifactId = String(payload.artifactId || '').trim();
+      const fileName = String(payload.fileName || '').trim();
+      const downloadUrl = verifiedArtifactDownloadUrl(payload.downloadUrl);
+      if (
+        !artifactId
+        || !fileName
+        || !downloadUrl
+        || artifactId.split('/').some((segment) => !segment || segment === '.' || segment === '..')
+      ) return [];
+      return [{ artifactId, downloadUrl, fileName }];
+    });
   } catch {
-    return undefined;
+    return [];
   }
 }
 
@@ -105,7 +107,7 @@ function repairArtifactDownloadLinks(reply: string, downloads: FileArtifactDownl
 
 export function repairFileArtifactDownloadLinks(reply: string, tools: FileArtifactToolResult[]) {
   const downloads = tools
-    .map(fileArtifactDownloadFromToolResult)
+    .flatMap(fileArtifactDownloadsFromToolResult)
     .filter((item): item is FileArtifactDownload => Boolean(item));
   const unique = [...new Map(downloads.map((item) => [item.artifactId, item])).values()];
   return repairArtifactDownloadLinks(reply, unique);

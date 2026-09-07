@@ -12,7 +12,7 @@ export function createFfmpegMediaOperations(input: {
   ffmpegPath: string; ffprobePath?: string;
   resolveSource(sourceRef: string, context: CapabilityExecutionContext): Promise<string>;
   publishArtifact(filePath: string, context: CapabilityExecutionContext): Promise<MediaArtifact>;
-  timeoutMs?: number; ocr?: MediaOperations['ocr']; transcribe?: MediaOperations['transcribe']; generateImage?: MediaOperations['generateImage'];
+  timeoutMs?: number; ocr?: MediaOperations['ocr']; transcribe?: MediaOperations['transcribe'];
 }): MediaOperations {
   return {
     async inspect(sourceRef, context) {
@@ -43,7 +43,7 @@ export function createFfmpegMediaOperations(input: {
         return artifacts;
       } finally { await rm(directory, { recursive: true, force: true }); }
     },
-    ocr: input.ocr, transcribe: input.transcribe, generateImage: input.generateImage,
+    ocr: input.ocr, transcribe: input.transcribe,
     async health() { return input.ffmpegPath ? { status: 'healthy' } : { status: 'needs-runtime', message: 'FFmpeg path is not configured.' }; },
   };
 }

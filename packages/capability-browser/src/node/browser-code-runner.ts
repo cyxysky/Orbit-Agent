@@ -18,6 +18,12 @@ export type BrowserCodeConnection = {
   endpoint: string;
 };
 
+type BrowserCodeKernelInit = {
+  connection: BrowserCodeConnection;
+  playwrightEntryPath: string;
+  sessionGroupId?: string;
+};
+
 export type BrowserCodeUidReference = {
   uid: string;
   observationId: string;
@@ -320,7 +326,7 @@ type PendingExecution = {
 const maxDiagnosticChars = 4_000;
 const defaultBrowserCodeKernelReadyTimeoutMs = 10_000;
 const defaultBrowserCodeExecutionTimeoutMs = 90_000;
-export const BROWSER_CODE_KERNEL_RUNTIME_REVISION = 35;
+export const BROWSER_CODE_KERNEL_RUNTIME_REVISION = 37;
 
 function boundedInteger(value: unknown, fallback: number, min: number, max: number) {
   const parsed = typeof value === 'number' ? value : Number(value);
@@ -2762,10 +2768,12 @@ function browserCodeKernelMain() {
     });
   });
 
-  const initialize = async (input: { connection: BrowserCodeConnection; sessionGroupId?: string }) => {
+  const initialize = async (input: BrowserCodeKernelInit) => {
     if (browser || replServer) return;
     sessionGroupId = String(input.sessionGroupId || '').trim();
-    const { chromium } = childRequire('playwright') as typeof import('playwright');
+    // A bare import here probes ancestors of the temporary kernel directory
+    // before NODE_PATH, which can fail the permission check during resolution.
+    const { chromium } = childRequire(input.playwrightEntryPath) as typeof import('playwright');
     browser = input.connection.protocol === 'cdp'
       ? await chromium.connectOverCDP(input.connection.endpoint)
       : await chromium.connect(input.connection.endpoint);
@@ -2976,7 +2984,7 @@ function browserCodeKernelMain() {
     }
     chain = chain.then(async () => {
       if (input.type === 'init') {
-        await initialize(input as { connection: BrowserCodeConnection; sessionGroupId?: string });
+        await initialize(input as BrowserCodeKernelInit);
         return;
       }
       if (input.type === 'execute') {
@@ -2992,9 +3000,17 @@ function browserCodeKernelMain() {
       }
     }).catch((error: unknown) => {
       if (input.type === 'init') {
+        const diagnostic = error instanceof Error
+          ? error as Error & { code?: string; permission?: string; resource?: string }
+          : undefined;
         send({
           type: 'init-error',
-          error: error instanceof Error ? error.message : String(error),
+          error: [
+            diagnostic?.stack || String(error),
+            diagnostic?.code ? `code=${diagnostic.code}` : '',
+            diagnostic?.permission ? `permission=${diagnostic.permission}` : '',
+            diagnostic?.resource ? `resource=${diagnostic.resource}` : '',
+          ].filter(Boolean).join('\n'),
         });
         return;
       }
@@ -3026,8 +3042,33 @@ function childSource() {
   ].join('\n');
 }
 
-function browserCodeModuleReadRoots(environment: Readonly<Record<string, string | undefined>> = process.env) {
-  const roots = [path.resolve(process.cwd(), 'node_modules')];
+// Obtain createRequire at runtime: Webpack rewrites statically imported calls
+// with dynamic paths to undefined. Both resolvers must use Node's real loader
+// so dependency paths and the child's read permissions match the deployed tree.
+const browserCodeNodeModule = process.getBuiltinModule('node:module');
+const browserCodeHostRequire = browserCodeNodeModule.createRequire(path.join(process.cwd(), 'package.json'));
+
+function browserCodeResolvedPackageReadRoots(playwrightEntryPath: string) {
+  const roots: string[] = [];
+  const playwrightRequire = browserCodeNodeModule.createRequire(playwrightEntryPath);
+  for (const resolvedPath of [playwrightEntryPath, playwrightRequire.resolve('playwright-core')]) {
+    let current = path.dirname(path.resolve(resolvedPath));
+    roots.push(current);
+    while (path.basename(current).toLowerCase() !== 'node_modules') {
+      const parent = path.dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+    if (path.basename(current).toLowerCase() === 'node_modules') roots.push(current);
+  }
+  return roots;
+}
+
+function browserCodeModuleReadRoots(playwrightEntryPath: string, environment: Readonly<Record<string, string | undefined>> = process.env) {
+  const roots = [
+    path.resolve(process.cwd(), 'node_modules'),
+    ...browserCodeResolvedPackageReadRoots(playwrightEntryPath),
+  ];
   for (const entry of String(environment.NODE_PATH || '').split(path.delimiter)) {
     if (entry.trim()) roots.push(path.resolve(entry.trim()));
   }
@@ -3037,12 +3078,12 @@ function browserCodeModuleReadRoots(environment: Readonly<Record<string, string 
 function browserCodeChildArgs(
   tempDir: string,
   entryPath: string,
-  environment?: Readonly<Record<string, string | undefined>>,
+  moduleReadRoots: string[],
 ) {
   return [
     '--permission',
     '--experimental-vm-modules',
-    ...browserCodeModuleReadRoots(environment).map((root) => `--allow-fs-read=${root}`),
+    ...moduleReadRoots.map((root) => `--allow-fs-read=${root}`),
     `--allow-fs-read=${tempDir}`,
     `--allow-fs-write=${tempDir}`,
     '--max-old-space-size=128',
@@ -3054,6 +3095,7 @@ function browserCodeChildArgs(
 
 function browserCodeChildEnv(
   tempDir: string,
+  moduleReadRoots: string[],
   environment: Readonly<Record<string, string | undefined>> = process.env,
 ): NodeJS.ProcessEnv {
   const env = Object.fromEntries(
@@ -3063,7 +3105,7 @@ function browserCodeChildEnv(
   return {
     ...env,
     NODE_ENV: 'production',
-    NODE_PATH: browserCodeModuleReadRoots(environment).join(path.delimiter),
+    NODE_PATH: moduleReadRoots.join(path.delimiter),
     TEMP: tempDir,
     TMP: tempDir,
     TMPDIR: tempDir,
@@ -3237,7 +3279,11 @@ export class BrowserCodeKernel {
     const kernelId = randomUUID();
     const tempDir = path.join(os.tmpdir(), 'webpilot-browser-code', kernelId);
     const entryPath = path.join(tempDir, 'browser-code-kernel.cjs');
+    let playwrightEntryPath: string;
+    let moduleReadRoots: string[];
     try {
+      playwrightEntryPath = browserCodeHostRequire.resolve('playwright');
+      moduleReadRoots = browserCodeModuleReadRoots(playwrightEntryPath, this.options.environment);
       mkdirSync(tempDir, { recursive: true });
       writeFileSync(entryPath, childSource(), 'utf8');
     } catch (error) {
@@ -3253,9 +3299,9 @@ export class BrowserCodeKernel {
     this.readyPromise = readyPromise;
     let child: ChildProcess;
     try {
-      child = spawn(process.execPath, browserCodeChildArgs(tempDir, entryPath, this.options.environment), {
+      child = spawn(process.execPath, browserCodeChildArgs(tempDir, entryPath, moduleReadRoots), {
         cwd: process.cwd(),
-        env: browserCodeChildEnv(tempDir, this.options.environment),
+        env: browserCodeChildEnv(tempDir, moduleReadRoots, this.options.environment),
         stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
         windowsHide: true,
       });
@@ -3305,6 +3351,7 @@ export class BrowserCodeKernel {
     child.send({
       type: 'init',
       connection: this.connection,
+      playwrightEntryPath,
       sessionGroupId: String(this.options.sessionGroupId || '').trim(),
     }, (error) => {
       if (!error) return;
