@@ -876,9 +876,9 @@
 .browser-chat-message.user > div:last-child,
 :root[data-theme="dark"] .browser-chat-message.user > div:last-child {
   background: color-mix(in srgb, var(--accent) 7%, var(--panel));
-  border: 1px solid color-mix(in srgb, var(--accent) 13%, var(--border));
+  border: 0;
   border-radius: 16px 16px 5px 16px;
-  box-shadow: var(--shadow-xs);
+  box-shadow: none;
   color: var(--foreground);
   padding: 10px 14px;
 }
@@ -888,6 +888,11 @@
   color: var(--foreground);
   font-size: 14px;
   line-height: 1.68;
+}
+
+.browser-chat-agent-markdown img {
+  max-width: 100%;
+  height: auto;
 }
 
 .browser-chat-message-actions {

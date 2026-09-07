@@ -154,6 +154,7 @@ import {
 } from '@/components/browser-chat-ai-output';
 import {
   BrowserChatMarkdown,
+  BrowserChatMarkdownArtifactsContext,
   BrowserChatOrderedResponse,
   BrowserChatSessionIdContext,
   handleBrowserChatMarkdownLinkClick,
@@ -998,6 +999,12 @@ function summarizeToolFields(fields: unknown, t: (value: string, params?: Record
 }
 
 function browserChatToolLabel(name: string, input: unknown, t: (value: string) => string) {
+  if (name === 'media') {
+    const action = toolInputValue(asRecord(input), ['action']);
+    if (action === 'generateImage') return t('生成图片');
+    if (action === 'generateVideo') return t('生成视频');
+    if (action === 'generateSpeech') return t('生成语音');
+  }
   const filePresentation = browserChatFileToolPresentation(name, input);
   if (filePresentation) return t(filePresentation.label);
   if (name === 'browser') {
@@ -1123,7 +1130,8 @@ function BrowserChatToolIcon({ input, name }: { input?: unknown; name: string })
   if (name === 'data') return <Database size={13} />;
   if (name === 'media') {
     if (action === 'transcribe') return <Volume2 size={13} />;
-    if (action === 'generateImage') return <Sparkles size={13} />;
+    if (action === 'generateImage') return <ImageIcon size={13} />;
+    if (action === 'generateSpeech') return <Volume2 size={13} />;
     if (action === 'ocr') return <ScanSearch size={13} />;
     return <Clapperboard size={13} />;
   }
@@ -4679,6 +4687,7 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
   };
 
   return (
+    <BrowserChatMarkdownArtifactsContext.Provider value={message.artifacts || []}>
     <div className="browser-chat-agent-timeline">
       {hasProcessContent ? (
         <BrowserChatProcessDisclosure
@@ -4777,6 +4786,7 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
         />
       ) : null}
     </div>
+    </BrowserChatMarkdownArtifactsContext.Provider>
   );
 });
 
@@ -9279,6 +9289,9 @@ export function BrowserChatWorkspace({
     }
     interruptingRef.current = true;
     setInterrupting(true);
+    // Stop consuming the model stream immediately as well as revoking the
+    // server turn. Otherwise SDK status and streamed tools keep the UI busy.
+    void uiChatsRef.current.get(targetId)?.stop();
     setError('');
     const timestamp = new Date().toISOString();
     interruptGuardsRef.current.set(targetId, {

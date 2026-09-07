@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 export const mediaModelKinds = ['image', 'video', 'speech'] as const;
 export type MediaModelKind = typeof mediaModelKinds[number];
-export type MediaModelDriver = 'openai' | 'openai-compatible' | 'google' | 'xai' | 'alibaba';
+export type MediaModelDriver = 'openai' | 'openai-compatible' | 'google' | 'xai' | 'alibaba' | 'minimax';
 export type MediaModelRoute = { key: string; label: string; path: string };
 export type MediaModelDriverDefinition = {
   id: MediaModelDriver;
@@ -17,6 +17,12 @@ const imageRoutes = [
 ];
 const speechRoutes = [{ key: 'generate', label: '生成路径', path: '/audio/speech' }];
 export const mediaModelDrivers: readonly MediaModelDriverDefinition[] = [
+  { id: 'minimax', label: 'MiniMax', baseURL: 'https://api.minimaxi.com/v1', models: {
+    image: { placeholder: 'image-01', routes: [
+      { key: 'generate', label: '生成路径', path: '/image_generation' },
+      { key: 'edit', label: '参考图生成路径', path: '/image_generation' },
+    ] },
+  } },
   { id: 'openai', label: 'OpenAI', baseURL: 'https://api.openai.com/v1', models: {
     image: { placeholder: '填写图片模型 ID', routes: imageRoutes },
     speech: { placeholder: '填写语音模型 ID', routes: speechRoutes },
@@ -65,7 +71,7 @@ export const mediaModelSchema = z.object({
   id: z.string().trim().min(1).max(100),
   kind: z.enum(mediaModelKinds),
   name: z.string().trim().max(100),
-  driver: z.enum(['openai', 'openai-compatible', 'google', 'xai', 'alibaba']),
+  driver: z.enum(['openai', 'openai-compatible', 'google', 'xai', 'alibaba', 'minimax']),
   model: z.string().trim().max(500),
   enabled: z.boolean(),
   baseURL: z.string().trim().max(4_000).default(''),

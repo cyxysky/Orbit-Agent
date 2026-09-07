@@ -12,7 +12,8 @@ import {
   useMemo,
   useRef,
 } from 'react';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
+import { resolveBrowserChatArtifactReference, type BrowserChatArtifactSummary } from '@/lib/browser-chat-artifacts';
 import { BrowserChatCodeBlock } from '@/components/BrowserChatCodeBlock';
 import rehypeKatex from 'rehype-katex';
 import remarkGfm from 'remark-gfm';
@@ -272,9 +273,11 @@ function BrowserChatMarkdownTable({ children }: { children: ReactNode }) {
 }
 
 export const BrowserChatSessionIdContext = createContext<string | undefined>(undefined);
+export const BrowserChatMarkdownArtifactsContext = createContext<readonly BrowserChatArtifactSummary[]>([]);
 export const BrowserChatAutomationRunIdContext = createContext<string | undefined>(undefined);
 
 export const BrowserChatMarkdown = memo(function BrowserChatMarkdown({ markdown }: { markdown: string }) {
+  const artifacts = useContext(BrowserChatMarkdownArtifactsContext);
   const sessionId = useContext(BrowserChatSessionIdContext);
   const automationRunId = useContext(BrowserChatAutomationRunIdContext);
   const normalizedMarkdown = useMemo(() => normalizeBrowserChatMarkdown(markdown), [markdown]);
@@ -286,9 +289,13 @@ export const BrowserChatMarkdown = memo(function BrowserChatMarkdown({ markdown 
       ) : (
         <ReactMarkdown
           key={`markdown:${index}`}
+          urlTransform={(url, key) => defaultUrlTransform(resolveBrowserChatArtifactReference(url, artifacts, key === 'src'))}
           rehypePlugins={[rehypeKatex]}
           remarkPlugins={[remarkGfm, remarkMath, remarkBrowserChatCjkStrong]}
           components={{
+            img: ({ src, alt, title }) => typeof src === 'string' && src ? (
+              <img src={src} alt={alt || ''} title={title} loading="lazy" />
+            ) : <span>{alt || '图片暂不可用'}</span>,
             pre: ({ children }) => {
               const code = Children.toArray(children)[0];
               if (!isValidElement<{ className?: string; children?: ReactNode }>(code)) return <pre>{children}</pre>;

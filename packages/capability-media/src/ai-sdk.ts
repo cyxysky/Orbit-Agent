@@ -1,4 +1,5 @@
-import { createDownload, generateImage, generateSpeech, experimental_generateVideo as generateVideo } from 'ai';
+import { createDownload, generateImage, generateSpeech, experimental_generateVideo as generateVideo, type ImageModel } from 'ai';
+import { z } from 'zod';
 import type { CapabilityExecutionContext } from '@webpilot/capability-sdk';
 import type { MediaArtifact } from './index.js';
 import type { MediaGenerationInput, MediaGenerationOperations } from './generation.js';
@@ -77,8 +78,10 @@ function modelFetch(model: MediaModelConfig, fetcher: typeof globalThis.fetch, s
     if (!response.ok || model.driver !== 'openai-compatible' || model.kind !== 'image') return response;
     // Images-compatible APIs may return either base64 or a URL. Normalize the
     // documented Images response before the SDK's base64-only response parser.
-    const payload = JSON.parse(new TextDecoder().decode(await boundedBytes(response, signal, 100 * 1024 * 1024))) as { data?: Array<{ b64_json?: string; url?: string }> };
-    for (const item of payload.data || []) {
+    const payload = z.object({ data: z.array(z.object({ b64_json: z.string().optional(), url: z.string().optional() })) }).parse(
+      JSON.parse(new TextDecoder().decode(await boundedBytes(response, signal, 100 * 1024 * 1024))),
+    );
+    for (const item of payload.data) {
       if (item.b64_json || !item.url) continue;
       const url = new URL(item.url);
       if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) throw new Error('Invalid generated image URL.');
@@ -90,9 +93,65 @@ function modelFetch(model: MediaModelConfig, fetcher: typeof globalThis.fetch, s
   };
 }
 
+// Older settings used an OpenAI-compatible driver with MiniMax's native path.
+// Recognize only MiniMax hosts and that exact endpoint; custom gateways can
+// select the explicit MiniMax driver without changing their connection settings.
+function effectiveMediaModel(model: MediaModelConfig): MediaModelConfig {
+  if (model.driver !== 'openai-compatible' || model.kind !== 'image' || !model.baseURL) return model;
+  const host = new URL(model.baseURL).hostname;
+  return ['api.minimax.cn', 'api.minimaxi.com', 'api.minimax.io'].includes(host)
+    && model.paths.generate === '/image_generation' ? { ...model, driver: 'minimax' } : model;
+}
+
+function minimaxImageModel(model: MediaModelConfig, fetcher: typeof globalThis.fetch): ImageModel {
+  return {
+    specificationVersion: 'v4', provider: 'minimax.image', modelId: model.model, maxImagesPerCall: 9,
+    async doGenerate({ prompt, n, size, aspectRatio, seed, files, mask, abortSignal, providerOptions }) {
+      if (mask) throw new Error('MiniMax image generation does not support masks.');
+      const signal = abortSignal || AbortSignal.timeout(model.timeoutMs);
+      const [width, height] = size ? size.split('x').map(Number) : [];
+      const route = files?.length ? model.paths.edit : model.paths.generate;
+      const url = (model.baseURL || mediaModelDriver('minimax').baseURL).replace(/\/+$/, '') + (route || '/image_generation');
+      const response = await fetcher(url, {
+        method: 'POST', signal,
+        headers: { Authorization: `Bearer ${model.apiKey || ''}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          response_format: 'base64', ...providerOptions.minimax,
+          model: model.model, prompt, n,
+          ...(aspectRatio ? { aspect_ratio: aspectRatio } : {}),
+          ...(size ? { width, height } : {}),
+          ...(seed !== undefined ? { seed } : {}),
+          ...(files?.length ? { subject_reference: files.map((file) => ({
+            type: 'character',
+            image_file: file.type === 'url' ? file.url : `data:${file.mediaType};base64,${typeof file.data === 'string' ? file.data : Buffer.from(file.data).toString('base64')}`,
+          })) } : {}),
+        }),
+      });
+      const payload = z.object({
+        base_resp: z.object({ status_code: z.number(), status_msg: z.string().optional() }).optional(),
+        data: z.object({ image_base64: z.array(z.string()).optional(), image_urls: z.array(z.string()).optional() }).nullish(),
+      }).parse(JSON.parse(new TextDecoder().decode(await boundedBytes(response, signal, 100 * 1024 * 1024))));
+      if (payload.base_resp && payload.base_resp.status_code !== 0) {
+        throw new Error(`MiniMax image generation failed (${payload.base_resp.status_code}): ${payload.base_resp.status_msg || 'Unknown error'}`);
+      }
+      const images: Uint8Array[] = (payload.data?.image_base64 || []).filter(Boolean).map((data) => Buffer.from(data, 'base64'));
+      if (!images.length) {
+        for (const ref of payload.data?.image_urls || []) {
+          const imageUrl = new URL(ref);
+          if (!['https:', 'http:'].includes(imageUrl.protocol) || imageUrl.username || imageUrl.password) throw new Error('Invalid generated image URL.');
+          // CDN downloads must never receive the model API key.
+          images.push(await boundedBytes(await fetcher(imageUrl, { signal }), signal));
+        }
+      }
+      return { images, warnings: [], response: { timestamp: new Date(), modelId: model.model, headers: Object.fromEntries(response.headers) } };
+    },
+  };
+}
+
 async function loadModels(model: MediaModelConfig, fetch: typeof globalThis.fetch) {
   const settings = { apiKey: model.apiKey || '', baseURL: (model.baseURL || mediaModelDriver(model.driver).baseURL).replace(/\/+$/, ''), fetch };
   switch (model.driver) {
+    case 'minimax': return { image: () => minimaxImageModel(model, fetch) };
     case 'openai': {
       const { createOpenAI } = await import('@ai-sdk/openai');
       const provider = createOpenAI(settings);
@@ -126,7 +185,7 @@ async function loadModels(model: MediaModelConfig, fetch: typeof globalThis.fetc
 export function createAiSdkMediaGenerationOperations(options: AiSdkMediaOperationsOptions): MediaGenerationOperations {
   async function generate(kind: MediaModelKind, request: MediaGenerationInput, context: CapabilityExecutionContext) {
     context.abortSignal?.throwIfAborted();
-    const model = resolveMediaModel(options.configuration, kind, options.selectedModels?.[kind] || request.modelRef);
+    const model = effectiveMediaModel(resolveMediaModel(options.configuration, kind, options.selectedModels?.[kind] || request.modelRef));
     const signal = AbortSignal.any([AbortSignal.timeout(model.timeoutMs), ...(context.abortSignal ? [context.abortSignal] : [])]);
     const execution = { ...context, abortSignal: signal };
     await context.reportProgress?.({ phase: 'generating', message: `Generating ${kind} with ${model.name}.` });

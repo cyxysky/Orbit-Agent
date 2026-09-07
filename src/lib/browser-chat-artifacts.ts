@@ -14,6 +14,25 @@ export type BrowserChatArtifactSummary = {
   url?: string;
 };
 
+/** Resolve model attachment aliases only against artifacts actually delivered in this message. */
+export function resolveBrowserChatArtifactReference(
+  value: string,
+  artifacts: readonly BrowserChatArtifactSummary[],
+  image = false,
+) {
+  if (!/^attachment:\/\//i.test(value)) return value;
+  let reference: string;
+  try { reference = decodeURIComponent(value.slice('attachment://'.length)); } catch { return ''; }
+  const matches = artifacts.filter((artifact) => (
+    artifact.fileName === reference || artifact.id === reference
+    || artifact.id === `file:${reference}` || artifact.path === reference
+  ));
+  if (matches.length !== 1) return '';
+  const artifact = matches[0];
+  const url = image ? artifact.url || artifact.downloadUrl : artifact.downloadUrl || artifact.url;
+  return image ? (url || '').replace(/([?&])download=1(&|$)/, '$1').replace(/[?&]$/, '') : url || '';
+}
+
 /** Consume the shared artifact contract regardless of which tool produced it. */
 export function browserChatArtifactPayloads(value: unknown): Record<string, unknown>[] {
   const payload = jsonRecordFromUnknown(value) || jsonRecordFromUnknown(jsonValueFromString(value));

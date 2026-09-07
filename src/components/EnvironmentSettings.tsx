@@ -2433,7 +2433,7 @@ export function EnvironmentSettings({
     const settings = activeMediaSettings;
     const driver = mediaModelDriver(settings.driver);
     return <>
-      {mediaSettingRow('接口协议', '选择当前类型使用的请求格式、认证方式和任务查询流程。', <CustomSelect value={settings.driver} options={mediaModelDrivers.filter((item) => item.models[activeMediaKind]).map((item) => ({ label: item.label, value: item.id }))} onChange={(driver) => updateMediaSettings({ driver: driver as MediaModelDriver, baseURL: '', paths: {}, parameters: [] })} />)}
+      {mediaSettingRow('接口协议', '选择供应商实际使用的协议；自定义服务地址和路径不会转换请求或响应格式。', <CustomSelect value={settings.driver} options={mediaModelDrivers.filter((item) => item.models[activeMediaKind]).map((item) => ({ label: item.label, value: item.id }))} onChange={(driver) => updateMediaSettings({ driver: driver as MediaModelDriver, baseURL: '', paths: {}, parameters: [] })} />)}
       {mediaSettingRow('服务地址', '填写当前类型的 API 基础地址，与其他类型独立。', <AppInput aria-label={t('服务地址')} value={settings.baseURL} placeholder={driver.baseURL} onChange={(event) => updateMediaSettings({ baseURL: event.target.value })} />)}
       {(driver.models[activeMediaKind]?.routes || []).map((route) => <div key={route.key}>{mediaSettingRow(route.label, '留空使用供应商默认路径；自定义路径以 / 开头，并保留占位符。', <AppInput aria-label={t(route.label)} value={settings.paths[route.key] || ''} placeholder={route.path} onChange={(event) => updateMediaSettings({ paths: { ...settings.paths, [route.key]: event.target.value } })} />)}</div>)}
       {renderMediaFields('connection')}

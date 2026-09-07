@@ -60,6 +60,7 @@ install `ai` and the SDK packages for the selected providers when using this ada
 | --- | --- | --- | --- |
 | OpenAI | Images API | — | Speech API |
 | OpenAI compatible | Images API, base64 or URL responses | — | OpenAI Speech protocol |
+| MiniMax | Native image generation, base64 or URL responses, subject references | — | — |
 | Google | Imagen / Gemini image | Veo | Gemini TTS |
 | xAI | Grok image | Grok video | xAI TTS (no model id) |
 | Alibaba | — | Wan / native DashScope | — |
@@ -70,6 +71,11 @@ another. Paths are relative to the configured base URL and preserve the shown
 `{model}`, `{id}` or `{operation}` placeholders. Extra parameters use the selected
 AI SDK provider's option names (OpenAI-compatible image parameters are raw API
 body fields). No model names are hard-coded into the runtime.
+
+MiniMax image generation uses its native `aspect_ratio`, `width` / `height`, and
+`subject_reference` fields; masks are unsupported. Existing OpenAI-compatible
+image settings that point to `/image_generation` on an official MiniMax API host
+are recognized automatically. For custom gateways, select the MiniMax driver.
 
 The `media` tool exposes `listModels`, `generateImage`, `generateVideo` and
 `generateSpeech`. Use the configuration id as `modelRef`, or omit it for the
