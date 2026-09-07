@@ -91,8 +91,31 @@ function normalizeLoosePipeTables(value: string) {
   return normalized.join('\n');
 }
 
+function restoreCollapsedNestedLists(value: string) {
+  return value.split('\n').map((line) => {
+    const item = line.match(/^((?:[ \t]*>[ \t]?)*[ \t]*)([-+*]|\d+[.)])([ \t]+)(\S.*)$/);
+    if (!item) return line;
+    const [, prefix, marker, spacing, content] = item;
+    const separators = [...content.matchAll(/[ \t]+(?=(?:[-+*]|\d+[.)])[ \t]+\S)/g)];
+    if (separators.length < 2) return line;
+    const children = separators.map((separator, index) => content.slice(
+      separator.index! + separator[0].length,
+      separators[index + 1]?.index ?? content.length,
+    ));
+    // Recover only repeated, labelled child items. Ordinary hyphenated prose
+    // and arithmetic are ambiguous and must stay unchanged.
+    if (!children.every((child) => /^(?:[-+*]|\d+[.)])[ \t]+[^:：\n]+[:：][ \t]*\S/.test(child))) return line;
+    const parent = content.slice(0, separators[0].index);
+    const childIndent = ' '.repeat(marker.length + spacing.replace(/\t/g, '    ').length);
+    return [
+      `${prefix}${marker}${spacing}${parent}`,
+      ...children.map((child) => `${prefix}${childIndent}${child}`),
+    ].join('\n');
+  }).join('\n');
+}
+
 function normalizeMarkdownSegment(value: string) {
-  return normalizeLoosePipeTables(restoreCollapsedMarkdownBlocks(value))
+  return normalizeLoosePipeTables(restoreCollapsedMarkdownBlocks(restoreCollapsedNestedLists(value)))
     .replace(/(^|\n)(#{1,6})(?=[A-Za-z\u3400-\u9fff])/g, '$1$2 ')
     .replace(/\\\*\\\*([^\n]+?)\\\*\\\*/g, '**$1**')
     .replace(/\*\*((?:https?:\/\/)[^\s*<>]+)\*\*/gi, '**<$1>**')
@@ -100,8 +123,8 @@ function normalizeMarkdownSegment(value: string) {
     .replace(/(^|\n)[ \t]*\$\$([^\n]+?)\$\$[ \t]*(?=\n|$)/g, (_match, prefix: string, formula: string) => (
       `${prefix}$$\n${formula.trim()}\n$$`
     ))
-    .replace(/([。！？；;])\s+(?=\*\*[^*\n]{1,40}\*\*\s*[:：])/g, '$1\n\n')
-    .replace(/([:：。！？；;])\s+-\s+/g, '$1\n- ')
+    .replace(/([。！？；;])[ \t]+(?=\*\*[^*\n]{1,40}\*\*[ \t]*[:：])/g, '$1\n\n')
+    .replace(/([:：。！？；;])[ \t]+-[ \t]+/g, '$1\n- ')
     .replace(/\n{3,}/g, '\n\n');
 }
 
@@ -160,7 +183,7 @@ export function normalizeBrowserChatMarkdown(markdown: string) {
     .split(/(```[\s\S]*?```|`[^`\n]*`)/g)
     .map((part) => (part.startsWith('`') ? part : normalizeMarkdownSegment(part)))
     .join('')
-    .trim();
+    .replace(/^(?:[ \t]*\n)+|(?:\n[ \t]*)+$/g, '');
 }
 
 export type BrowserChatMarkdownBlock =
@@ -172,9 +195,9 @@ export function splitBrowserChatChartBlocks(markdown: string): BrowserChatMarkdo
   const bufferedLines: string[] = [];
   let fence: '`' | '~' | undefined;
   const flushMarkdown = () => {
-    const value = bufferedLines.join('\n').trim();
+    const value = bufferedLines.join('\n');
     bufferedLines.length = 0;
-    if (value) blocks.push({ kind: 'markdown', markdown: value });
+    if (value.trim()) blocks.push({ kind: 'markdown', markdown: value });
   };
   for (const line of markdown.split('\n')) {
     const fenceMatch = line.match(/^\s*(`{3,}|~{3,})/);

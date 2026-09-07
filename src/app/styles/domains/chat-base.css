@@ -2608,6 +2608,9 @@
 
 .browser-chat-agent-markdown ul { list-style: disc outside; }
 .browser-chat-agent-markdown ol { list-style: decimal outside; }
+.browser-chat-agent-markdown li > :is(ul, ol) { margin-block: 6px 2px; gap: 4px; }
+.browser-chat-agent-markdown li > ul { list-style-type: circle; }
+.browser-chat-agent-markdown li li > ul { list-style-type: square; }
 .browser-chat-agent-markdown .task-list-item { list-style: none; }
 
 .browser-chat-agent-markdown code {

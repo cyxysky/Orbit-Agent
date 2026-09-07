@@ -10016,26 +10016,28 @@ export function BrowserChatWorkspace({
   const renderChatPaneHeader = () => session && hasMessages ? (
     <header className="browser-chat-conversation-header">
       <div className="browser-chat-conversation-title-area" data-editing={editingConversationTitle || undefined}>
-        {editingConversationTitle ? (
-          <form
-            className="browser-chat-conversation-title-form"
-            onSubmit={(event) => {
-              event.preventDefault();
-              event.currentTarget.querySelector('input')?.blur();
-            }}
-          >
+        <form
+          className="browser-chat-conversation-title-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            event.currentTarget.querySelector('input')?.blur();
+          }}
+        >
+          <h1 title={sessionDisplayTitle(session)}>
             <input
               aria-label={t('对话标题')}
-              autoFocus
               className="browser-chat-conversation-title-input"
-              disabled={savingConversationTitle}
               maxLength={240}
+              readOnly={!editingConversationTitle || savingConversationTitle}
+              onFocus={() => {
+                if (!editingConversationTitle && !savingConversationTitle) startConversationTitleEdit();
+              }}
               onBlur={() => {
                 if (cancelConversationTitleSaveRef.current) {
                   cancelConversationTitleSaveRef.current = false;
                   return;
                 }
-                void saveConversationTitle();
+                if (editingConversationTitle) void saveConversationTitle();
               }}
               onChange={(event) => setConversationTitleDraft(event.target.value)}
               onKeyDown={(event) => {
@@ -10044,22 +10046,12 @@ export function BrowserChatWorkspace({
                 cancelConversationTitleSaveRef.current = true;
                 setConversationTitleDraft(sessionDisplayTitle(session));
                 setEditingConversationTitle(false);
+                event.currentTarget.blur();
               }}
-              value={conversationTitleDraft}
+              value={editingConversationTitle ? conversationTitleDraft : sessionDisplayTitle(session)}
             />
-          </form>
-        ) : (
-          <h1 title={sessionDisplayTitle(session)}>
-            <button
-              aria-label={t('修改对话标题')}
-              className="browser-chat-conversation-title-field"
-              onClick={startConversationTitleEdit}
-              type="button"
-            >
-              {sessionDisplayTitle(session)}
-            </button>
           </h1>
-        )}
+        </form>
       </div>
       <div className="browser-chat-conversation-header-actions">
         <button
