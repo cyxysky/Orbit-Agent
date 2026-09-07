@@ -28,6 +28,7 @@ import type { BrowserCodeAttachmentBinding } from '@webpilot/capability-browser/
 import { artifactApiUrl } from '@/lib/artifacts';
 import { artifactPath, artifactsRoot, codeSandboxRoot } from '@/server/storage/paths';
 import { resolveExternalIntegrations } from '@/server/integrations/external-integration-vault';
+import { withCodeSandboxArtifacts } from './code-sandbox-artifacts';
 import {
   createExternalCommunicationChannel,
   createExternalDataSource,
@@ -45,15 +46,15 @@ function createAgentCodeSandboxCapability(): CapabilityProvider {
     createExecutor(context) {
       const backend = context.configuration.AGENT_CODE_SANDBOX_BACKEND === 'local' ? 'local' : 'remote';
       if (backend === 'remote') {
-        return createHttpCodeSandboxExecutor({
+        return withCodeSandboxArtifacts(createHttpCodeSandboxExecutor({
           url: String(context.configuration.AGENT_CODE_SANDBOX_RUNNER_URL || '').trim(),
           token: String(context.configuration.AGENT_CODE_SANDBOX_RUNNER_TOKEN || '').trim() || undefined,
-        });
+        }), context);
       }
-      return createNodeProcessCodeSandbox({
+      return withCodeSandboxArtifacts(createNodeProcessCodeSandbox({
         workspaceDirectory: codeSandboxRoot('agent-infrastructure', 'code', safeSegment(context.userId, 'shared'), safeSegment(context.runId, 'run'), randomUUID()),
         maxConcurrent: Number(context.configuration.AGENT_CODE_SANDBOX_MAX_CONCURRENCY) || 2,
-      });
+      }), context);
     },
   });
 }

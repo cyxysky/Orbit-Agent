@@ -6,7 +6,8 @@ RUN apt-get update \
     && useradd --create-home --uid 10001 --shell /usr/sbin/nologin sandbox
 
 WORKDIR /runner
-COPY server/code-sandbox-runner.js ./code-sandbox-runner.js
+COPY server/code-sandbox-runner.js ./server/code-sandbox-runner.js
+COPY packages/capability-code-sandbox/runtime ./packages/capability-code-sandbox/runtime
 RUN chown -R sandbox:sandbox /runner
 
 ENV NODE_ENV=production \
@@ -15,4 +16,4 @@ ENV NODE_ENV=production \
     CODE_SANDBOX_RUNNER_WORKSPACE=/tmp/webpilot-code-sandbox
 
 EXPOSE 18100
-CMD ["node", "/runner/code-sandbox-runner.js"]
+CMD ["node", "/runner/server/code-sandbox-runner.js"]

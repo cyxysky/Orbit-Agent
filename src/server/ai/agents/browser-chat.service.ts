@@ -1702,6 +1702,12 @@ function conversationFileRegistry(
       `- upload | name=${JSON.stringify(attachment.name)} | attachmentId=${attachment.id} | contentRead=file(action=readContent, attachmentId=${JSON.stringify(attachment.id)})`
     )),
     ...artifacts.flatMap((artifact) => {
+      const sandboxId = artifact.id.startsWith('file:') ? artifact.id.slice(5) : '';
+      const sandboxPrefix = `uploads/${normalizeApplicationUserId(session.userId)}/sandbox/${session.id}/`;
+      if (sandboxId.startsWith(sandboxPrefix) && !sandboxId.split('/').some(part => !part || part === '.' || part === '..')
+        && existsSync(path.join(artifactsRoot(), sandboxId))) {
+        return [`- sandbox artifact | name=${JSON.stringify(artifact.fileName)} | artifactId=${sandboxId} | contentRead=codeSandbox(action=readFile, artifactId=${JSON.stringify(sandboxId)}) | reuse=codeSandbox(action=run, inputFiles=[{artifactId:${JSON.stringify(sandboxId)},path:"inputs/${artifact.fileName}"}]) | url=${artifact.url || ''} | downloadUrl=${artifact.downloadUrl || ''}`];
+      }
       const relative = artifact.path
         ? path.relative(artifactsRoot(), artifact.path).replace(/\\/g, '/')
         : '';

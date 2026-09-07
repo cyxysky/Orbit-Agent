@@ -1147,3 +1147,138 @@ input[type="checkbox"]:not([data-slot], [data-slot] *):focus-visible {
   .magic-rainbow-button { animation: none; }
   .magicui-theme-toggle-fallback { display: none; }
 }
+
+/* Shared portal surfaces must remain styled across route/chunk transitions. */
+.browser-chat-agent-markdown > svg,
+.browser-chat-agent-markdown > p > svg {
+  height: auto;
+  max-width: 100%;
+}
+
+.browser-chat-chart.capability-chart-interactive.capability-chart-interactive,
+.browser-chat-chart:not(.capability-chart-interactive),
+.browser-chat-html-card {
+  background: color-mix(in srgb, var(--panel-warm) 42%, var(--background));
+  border: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
+  border-radius: 24px;
+  box-shadow: 0 6px 24px color-mix(in srgb, var(--foreground) 3%, transparent);
+  box-sizing: border-box;
+  color: var(--foreground);
+  margin: 16px 0;
+  max-width: 100%;
+}
+
+.browser-chat-chart.capability-chart-interactive {
+  padding: 0;
+}
+
+.browser-chat-chart.capability-chart-interactive .capability-chart-header {
+  padding: 18px 20px 8px;
+  color: var(--foreground);
+}
+
+.browser-chat-chart .capability-chart-actions {
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+  border-radius: 14px;
+  padding: 4px;
+}
+
+.browser-chat-chart .capability-chart-actions :is(button, summary) {
+  border-radius: 10px;
+  color: var(--muted-strong);
+}
+
+.browser-chat-chart .capability-chart-actions :is(button, summary):hover {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--foreground);
+}
+
+.browser-chat-chart .capability-chart-action-divider {
+  background: var(--border);
+}
+
+.browser-chat-chart .capability-chart-viewport {
+  box-sizing: border-box;
+  padding: 0 10px 14px;
+  border-radius: 0 0 24px 24px;
+  overflow: hidden;
+}
+
+.browser-chat-html-card {
+  display: block;
+  padding: 20px;
+  overflow: hidden;
+}
+
+svg.browser-chat-html-card {
+  height: auto;
+  padding: 12px;
+  width: 100%;
+}
+
+.browser-chat-chart.capability-chart-interactive:fullscreen {
+  border-radius: 0;
+  margin: 0;
+}
+
+@media (max-width: 640px) {
+  .browser-chat-chart.capability-chart-interactive .capability-chart-header { padding: 14px 14px 8px; }
+  .browser-chat-html-card { padding: 14px; }
+  svg.browser-chat-html-card { padding: 6px; }
+}
+
+.ui-hover-card {
+  animation: hover-card-appear 120ms ease;
+  background: var(--panel);
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: 16px;
+  box-shadow: var(--shadow-lg);
+  box-sizing: border-box;
+  color: var(--foreground);
+  display: grid;
+  font-family: var(--app-font-sans);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  gap: 8px;
+  line-height: 1.55;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  padding: 14px 16px;
+  pointer-events: auto;
+  text-align: start;
+  white-space: normal;
+}
+
+.ui-hover-card-header {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.ui-hover-card-title {
+  display: -webkit-box;
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.45;
+  min-width: 0;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.ui-hover-card-aside {
+  color: var(--muted);
+  flex: 0 0 auto;
+  font-family: var(--app-font-mono);
+  font-size: 12px;
+}
+
+@keyframes hover-card-appear {
+  from { opacity: 0; transform: translateX(6px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-hover-card { animation: none; }
+}

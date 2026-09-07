@@ -27,6 +27,7 @@
   },
   "main": "electron/main.js",
   "scripts": {
+    "code-sandbox:start": "node server/start-code-sandbox-runner.js",
     "dev": "node --max-old-space-size=8144 server/webpilot-server.js --dev",
     "sensitive-data:install": "npm run install-runtime --workspace @webpilot/capability-sensitive-data",
     "sensitive-data:start": "npm run start-runtime --workspace @webpilot/capability-sensitive-data",
@@ -121,6 +122,8 @@
     "react-markdown": "^10.1.0",
     "reflect-metadata": "^0.2.2",
     "rehype-katex": "^7.0.1",
+    "rehype-raw": "^7.0.0",
+    "rehype-sanitize": "^6.0.0",
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",
     "sharp": "^0.34.5",

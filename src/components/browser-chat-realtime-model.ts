@@ -59,21 +59,29 @@ function insertRealtimeRecord<T>(
 }
 
 function mergeRealtimeStepTools(current: unknown[] = [], incoming: unknown[] = []) {
-  const currentById = new Map<string, Record<string, unknown>>();
-  for (const tool of current) {
-    if (!tool || typeof tool !== 'object' || Array.isArray(tool)) continue;
+  const merged = [...current];
+  const indexes = new Map<string, number>();
+  current.forEach((tool, index) => {
+    if (!tool || typeof tool !== 'object' || Array.isArray(tool)) return;
     const id = (tool as Record<string, unknown>).id;
-    if (typeof id === 'string' && id) currentById.set(id, tool as Record<string, unknown>);
-  }
-  const merged = incoming.map((tool, index) => {
-    if (!tool || typeof tool !== 'object' || Array.isArray(tool)) return tool;
+    if (typeof id === 'string' && id) indexes.set(id, index);
+  });
+  incoming.forEach((tool, incomingIndex) => {
+    if (!tool || typeof tool !== 'object' || Array.isArray(tool)) return;
     const record = tool as Record<string, unknown>;
     const id = typeof record.id === 'string' ? record.id : '';
-    const previous = (id ? currentById.get(id) : undefined)
-      || (current[index] && typeof current[index] === 'object' && !Array.isArray(current[index])
-        ? current[index] as Record<string, unknown>
-        : undefined);
-    if (!previous) return tool;
+    const positional = merged[incomingIndex];
+    // Positional matching is only for legacy records without IDs. A new ID
+    // must never replace an unrelated tool just because its array index matches.
+    const index = id ? indexes.get(id)
+      : positional && typeof positional === 'object' && !Array.isArray(positional)
+        && !(positional as Record<string, unknown>).id ? incomingIndex : undefined;
+    if (index === undefined) {
+      if (id) indexes.set(id, merged.length);
+      merged.push(tool);
+      return;
+    }
+    const previous = merged[index] as Record<string, unknown>;
     const next = { ...previous, ...record };
     // Realtime events may arrive out of order. Once a tool is terminal, a stale
     // "started" snapshot must never erase its result and make it look active again.
@@ -81,9 +89,8 @@ function mergeRealtimeStepTools(current: unknown[] = [], incoming: unknown[] = [
     for (const key of ['elapsedMs', 'error', 'rawResult', 'result'] as const) {
       if (previous[key] !== undefined && record[key] === undefined) next[key] = previous[key];
     }
-    return next;
+    merged[index] = next;
   });
-  if (current.length > incoming.length) merged.push(...current.slice(incoming.length));
   return merged;
 }
 
@@ -122,16 +129,15 @@ export function mergeBrowserChatRealtimeCollections<
     const existing = (index >= 0 ? steps[index] : undefined) as (TStep & { status?: string; tools?: unknown[] }) | undefined;
     const incoming = step as TStep & { status?: string; tools?: unknown[] };
     const wouldRegressCompletedStep = existing
-      && existing.status !== 'running'
+      && existing.status && !['queued', 'running'].includes(existing.status)
       && incoming.status === 'running';
-    if (wouldRegressCompletedStep) continue;
     if (!existing) {
       steps = insertRealtimeRecord(steps, step, (candidate) => candidate.index > step.index);
       continue;
     }
     const mergedStep = {
-      ...existing,
-      ...incoming,
+      ...(wouldRegressCompletedStep ? incoming : existing),
+      ...(wouldRegressCompletedStep ? existing : incoming),
     } as TStep & { tools?: unknown[] };
     if (existing.tools || incoming.tools) {
       mergedStep.tools = mergeRealtimeStepTools(existing.tools, incoming.tools);

@@ -1,3 +1,5 @@
+import { mergeBrowserChatRealtimeCollections } from './browser-chat-realtime-model';
+
 export type BrowserChatHistoryPageState = {
   cursor?: string;
   hasMore: boolean;
@@ -80,14 +82,13 @@ export function mergeBrowserChatSessionWindowData<
   if (!existing || existing.id !== incoming.id || !incoming.history) return incoming;
   const messages = new Map(existing.messages.map((message) => [messageKey(message), message]));
   for (const message of incoming.messages) messages.set(messageKey(message), message);
-  const steps = new Map(existing.steps.map((step) => [step.index, step]));
-  for (const step of incoming.steps) steps.set(step.index, step);
+  const { steps } = mergeBrowserChatRealtimeCollections(existing, { steps: incoming.steps });
   const logs = new Map(existing.logs.map((log) => [log.id, log]));
   for (const log of incoming.logs) logs.set(log.id, log);
   return {
     ...incoming,
     messages: [...messages.values()].sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || '')),
-    steps: [...steps.values()].sort((a, b) => a.index - b.index),
+    steps,
     logs: [...logs.values()].sort((a, b) => (a.time || '').localeCompare(b.time || '')),
     outputCycles: mergeHistoryRecords(existing.outputCycles, incoming.outputCycles),
     subagents: mergeHistoryRecords(existing.subagents, incoming.subagents),
@@ -113,8 +114,7 @@ export function mergeBrowserChatHistoryChunkData<
 ): TSession {
   const messages = new Map(current.messages.map((message) => [messageKey(message), message]));
   for (const message of chunk.messages || []) messages.set(messageKey(message), message);
-  const steps = new Map(current.steps.map((step) => [step.index, step]));
-  for (const step of chunk.steps || []) steps.set(step.index, step);
+  const { steps } = mergeBrowserChatRealtimeCollections(current, { steps: chunk.steps });
   const logs = new Map(current.logs.map((log) => [log.id, log]));
   for (const log of chunk.logs || []) logs.set(log.id, log);
   const previousHistory = current.history || {
@@ -125,7 +125,7 @@ export function mergeBrowserChatHistoryChunkData<
   return {
     ...current,
     messages: [...messages.values()].sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || '')),
-    steps: [...steps.values()].sort((a, b) => a.index - b.index),
+    steps,
     logs: [...logs.values()].sort((a, b) => (a.time || '').localeCompare(b.time || '')),
     outputCycles: mergeHistoryRecords(current.outputCycles, chunk.outputCycles),
     subagents: mergeHistoryRecords(current.subagents, chunk.subagents),

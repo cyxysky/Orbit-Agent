@@ -1,3 +1,5 @@
+import type { BrowserChatUIMessagePart } from '@/lib/browser-chat-ui-message';
+
 function restoreCollapsedMarkdownBlocks(value: string) {
   return value
     .replace(/[ \t]+---[ \t]+/g, (match, offset: number, source: string) => {
@@ -186,35 +188,17 @@ export function normalizeBrowserChatMarkdown(markdown: string) {
     .replace(/^(?:[ \t]*\n)+|(?:\n[ \t]*)+$/g, '');
 }
 
-export type BrowserChatMarkdownBlock =
-  | { chartId: string; kind: 'chart' }
-  | { kind: 'markdown'; markdown: string };
-
-export function splitBrowserChatChartBlocks(markdown: string): BrowserChatMarkdownBlock[] {
-  const blocks: BrowserChatMarkdownBlock[] = [];
-  const bufferedLines: string[] = [];
-  let fence: '`' | '~' | undefined;
-  const flushMarkdown = () => {
-    const value = bufferedLines.join('\n');
-    bufferedLines.length = 0;
-    if (value.trim()) blocks.push({ kind: 'markdown', markdown: value });
-  };
-  for (const line of markdown.split('\n')) {
-    const fenceMatch = line.match(/^\s*(`{3,}|~{3,})/);
-    if (fenceMatch) {
-      const marker = fenceMatch[1][0] as '`' | '~';
-      fence = fence === marker ? undefined : fence || marker;
-      bufferedLines.push(line);
-      continue;
+/** Only structured parts render charts; Markdown references remain ordinary text. */
+export function browserChatOrderedResponseParts(parts: BrowserChatUIMessagePart[] | undefined, fallbackText: string) {
+  const response = (parts || []).filter((part) => part.type === 'text' || part.type === 'data-chart' || part.type === 'data-ui');
+  const source = response.length ? response : [{ type: 'text' as const, text: fallbackText }];
+  const renderedCharts = new Set<string>();
+  return source.flatMap((part): BrowserChatUIMessagePart[] => {
+    if (part.type === 'data-chart') {
+      if (renderedCharts.has(part.data.chartId)) return [];
+      renderedCharts.add(part.data.chartId);
+      return [part];
     }
-    const chartId = fence ? undefined : line.match(/^\s*(chart_\d{6})\s*$/)?.[1];
-    if (!chartId) {
-      bufferedLines.push(line);
-      continue;
-    }
-    flushMarkdown();
-    blocks.push({ kind: 'chart', chartId });
-  }
-  flushMarkdown();
-  return blocks;
+    return [part];
+  });
 }

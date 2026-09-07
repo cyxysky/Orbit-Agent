@@ -23,9 +23,9 @@ This Skill is authoritative for the chart model tool and is supplied by the char
 3. Call action \`api\` again with the exact module id needed for the requested chart. Read more than one module when the design combines series, coordinates, datasets, maps, or interactions.
 4. Call action \`create\` with one complete JSON-serializable \`option\`. For 2D, engine defaults to \`echarts\` and loads the full ECharts package. For native 3D, read module \`three\`, set engine to \`three\`, and follow its separate data schema.
 5. Read the successful result and copy its exact chartId into a \`finalResponse\` chart block at the intended response position.
-6. Never invent an identifier and never reference one after a failed call. The standalone \`chart_000001\` text-line renderer remains available, but structured Agent replies must use chart blocks.
+6. Never invent an identifier and never reference one after a failed call. Charts render only through structured chart blocks. Include each chartId once; do not also append it to a Markdown block.
 
-The renderer recognizes only a standalone identifier with the exact form \`chart_000001\`. Ordinary mentions and identifiers inside code remain text.
+Markdown never renders charts. Identifiers such as \`chart_000001\`, including standalone lines and code examples, remain ordinary text.
 
 ## Supported ECharts surface
 

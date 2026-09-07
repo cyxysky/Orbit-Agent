@@ -4,12 +4,13 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { mkdtemp, mkdir, rm, writeFile, chmod } = require('node:fs/promises');
+const { collectFiles, stageFiles } = require('../packages/capability-code-sandbox/runtime/files.cjs');
 
 const HOST = process.env.CODE_SANDBOX_RUNNER_HOST || '127.0.0.1';
 const PORT = Number(process.env.CODE_SANDBOX_RUNNER_PORT || 18100);
 const TOKEN = String(process.env.CODE_SANDBOX_RUNNER_TOKEN || '').trim();
 const WORKSPACE_ROOT = path.resolve(process.env.CODE_SANDBOX_RUNNER_WORKSPACE || path.join(os.tmpdir(), 'webpilot-code-sandbox'));
-const MAX_BODY_BYTES = 1_000_000;
+const MAX_BODY_BYTES = 46 * 1024 * 1024;
 const MAX_CODE_CHARS = 100_000;
 const MAX_OUTPUT_CHARS = 200_000;
 const MAX_PACKAGES = 32;
@@ -85,6 +86,7 @@ function runBoundedProcess(input) {
     let stdout = '';
     let stderr = '';
     let outputLength = 0;
+    let outputLimitExceeded = false;
     let stopReason;
     let spawnError;
     let timer;
@@ -103,7 +105,7 @@ function runBoundedProcess(input) {
       outputLength += bounded.length;
       if (target === 'stdout') stdout += bounded;
       else stderr += bounded;
-      if (bounded.length < text.length) stop('output');
+      if (bounded.length < text.length) outputLimitExceeded = true;
     };
     child.stdout.on('data', (chunk) => append('stdout', chunk));
     child.stderr.on('data', (chunk) => append('stderr', chunk));
@@ -116,10 +118,10 @@ function runBoundedProcess(input) {
         signal: signal || undefined,
         stdout,
         stderr,
-        truncated: stopReason === 'output',
+        truncated: outputLimitExceeded,
         timedOut: stopReason === 'timeout',
         aborted: stopReason === 'abort',
-        outputLimitExceeded: stopReason === 'output',
+        outputLimitExceeded,
         error: spawnError,
       });
     });
@@ -212,6 +214,8 @@ async function execute(payload, signal) {
     await mkdir(WORKSPACE_ROOT, { recursive: true });
     jobDirectory = await mkdtemp(path.join(WORKSPACE_ROOT, 'job-'));
     await chmod(jobDirectory, 0o777).catch(() => undefined);
+    await stageFiles(jobDirectory, payload.inputFiles);
+    await chmod(path.join(jobDirectory, 'outputs'), 0o777).catch(() => undefined);
     await mkdir(path.join(jobDirectory, 'home'), { recursive: true });
     const file = path.join(jobDirectory, `run-${Date.now()}.${language === 'python' ? 'py' : 'mjs'}`);
     await writeFile(file, payload.code, 'utf8');
@@ -251,6 +255,7 @@ async function execute(payload, signal) {
       outputLimitExceeded: result.outputLimitExceeded,
       packagesInstalled: packages.length ? packages : undefined,
       installElapsedMs: install.elapsedMs || undefined,
+      files: !result.aborted && !result.timedOut ? await collectFiles(jobDirectory, payload.outputFiles) : [],
     };
   } finally {
     if (jobDirectory) await rm(jobDirectory, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }).catch(() => undefined);
@@ -323,4 +328,4 @@ if (!TOKEN) {
 server.requestTimeout = 0;
 server.headersTimeout = 10_000;
 server.keepAliveTimeout = 5_000;
-server.listen(PORT, HOST, () => console.log(`Code Sandbox runner listening on ${HOST}:${PORT} (network=full, concurrency=${MAX_CONCURRENCY})`));
+server.listen(PORT, HOST, () => console.log(`Code Sandbox runner listening on ${HOST}:${server.address().port} (network=full, concurrency=${MAX_CONCURRENCY})`));

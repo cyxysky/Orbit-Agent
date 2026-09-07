@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useId, useRef, useState, type FocusEventHandler, type PointerEventHandler, type ReactNode, type RefObject } from 'react';
 import { FloatingLayer, type FloatingLayerAlign, type FloatingLayerPlacement } from '@/components/FloatingLayer';
-import styles from './HoverCard.module.css';
 
 type HoverCardTriggerProps = {
   'aria-describedby'?: string;
@@ -78,7 +77,7 @@ export function HoverCard({
         <FloatingLayer
           align={align}
           anchorRef={triggerRef}
-          className={`ui-hover-card ${styles.card}`}
+          className="ui-hover-card"
           gap={8}
           id={id}
           onDismiss={dismiss}
@@ -90,9 +89,9 @@ export function HoverCard({
           role="tooltip"
         >
           {title ? (
-            <header className={styles.header}>
-              <strong className={styles.title}>{title}</strong>
-              {headerAside != null ? <span className={styles.aside}>{headerAside}</span> : null}
+            <header className="ui-hover-card-header">
+              <strong className="ui-hover-card-title">{title}</strong>
+              {headerAside != null ? <span className="ui-hover-card-aside">{headerAside}</span> : null}
             </header>
           ) : null}
           {content}

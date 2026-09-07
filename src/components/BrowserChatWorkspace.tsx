@@ -1880,8 +1880,7 @@ function overlayBrowserChatUIMessages(
       const userIndex = result.findIndex((message) => (
         message.role === 'user' && clientMessageId && message.clientMessageId === clientMessageId
       ));
-      if (userIndex >= 0) result[userIndex] = { ...result[userIndex], ...streamedUser };
-      else insertBrowserChatMessageChronologically(result, streamedUser);
+      if (userIndex < 0) insertBrowserChatMessageChronologically(result, streamedUser);
       continue;
     }
     const streamed: BrowserChatMessage = {
@@ -1900,6 +1899,12 @@ function overlayBrowserChatUIMessages(
       message.id === uiMessage.id
       || (clientMessageId && message.role === 'assistant' && message.clientMessageId === clientMessageId)
     ));
+    const previous = index >= 0 ? result[index] : undefined;
+    // A stream is a retained source of evidence, not authority to revive a
+    // stopped turn or replace a newer server checkpoint with stale content.
+    if (previous?.status && !['running', 'queued'].includes(previous.status)) continue;
+    if (previous?.id === streamed.id && previous.updatedAt && streamed.updatedAt
+      && previous.updatedAt > streamed.updatedAt) continue;
     if (index >= 0) result[index] = { ...result[index], ...streamed };
     else insertBrowserChatMessageChronologically(result, streamed);
   }
@@ -4938,7 +4943,6 @@ const emptyBrowserChatSteps: StepExecutionResult[] = [];
 const emptyBrowserChatOutputCycles: BrowserChatAiOutputCycle[] = [];
 const emptyBrowserChatSubagents: BrowserChatSubagentRecord[] = [];
 const emptyBrowserChatLogRecords: BrowserChatLogRecord[] = [];
-const emptyBrowserChatUIMessages: BrowserChatUIMessage[] = [];
 
 function useBrowserChatRecordsByMessageId<TRecord extends { messageId?: string }>(records: TRecord[]) {
   const previousGroupsRef = useRef(new Map<string, TRecord[]>());
@@ -8220,23 +8224,6 @@ export function BrowserChatWorkspace({
     chat: currentUIChat,
     throttle: 100,
   });
-  const currentUIMessageTransportActive = currentUIMessageStatus === 'submitted'
-    || currentUIMessageStatus === 'streaming';
-  const activeCurrentRequestUIMessages = currentUIMessageTransportActive
-    ? currentRequestUIMessages
-    : emptyBrowserChatUIMessages;
-  const currentUIMessageOwnerRef = useRef(new Map<string, string>());
-  useEffect(() => {
-    const owners = new Map<string, string>();
-    if (currentUIMessageTransportActive) {
-      for (const message of activeCurrentRequestUIMessages) {
-        const sessionId = message.metadata?.sessionId;
-        const clientMessageId = message.metadata?.clientMessageId;
-        if (sessionId && clientMessageId) owners.set(sessionId, clientMessageId);
-      }
-    }
-    currentUIMessageOwnerRef.current = owners;
-  }, [activeCurrentRequestUIMessages, currentUIMessageTransportActive]);
   const sessionUiKey = `${session?.userId || requestUserId}:${session?.id || 'new'}`;
   const selectedSessionRunning = isBrowserChatSessionRunning(session);
   const selectedRunningSession = selectedSessionRunning ? session : undefined;
@@ -8249,33 +8236,20 @@ export function BrowserChatWorkspace({
     [session?.queuedTurns],
   );
   const steps = useMemo(() => {
-    const persisted = session?.steps || [];
-    const streamed = browserChatUIMessageSteps(activeCurrentRequestUIMessages, session?.id || '');
-    let merged = persisted;
-    for (const step of streamed) {
-      const existingIndex = merged.findIndex((item) => item.index === step.index);
-      if (existingIndex >= 0) {
-        if (merged[existingIndex] === step) continue;
-        const next = [...merged];
-        next[existingIndex] = step;
-        merged = next;
-        continue;
-      }
-      const insertionIndex = merged.findIndex((item) => item.index > step.index);
-      merged = insertionIndex < 0
-        ? [...merged, step]
-        : [...merged.slice(0, insertionIndex), step, ...merged.slice(insertionIndex)];
-    }
-    return merged;
-  }, [activeCurrentRequestUIMessages, session?.id, session?.steps]);
+    // Received evidence outlives the HTTP stream. A disconnected/finished
+    // transport must not clear tools while the background turn is still active.
+    return mergeBrowserChatRealtimeCollections({ messages: [], logs: [], steps: session?.steps || [] }, {
+      steps: browserChatUIMessageSteps(currentRequestUIMessages, session?.id || ''),
+    }).steps;
+  }, [currentRequestUIMessages, session?.id, session?.steps]);
   const outputCycles = useMemo(() => appendMissingBrowserChatOutputCycles(
     session?.outputCycles,
-    browserChatUIMessageOutputCycles(activeCurrentRequestUIMessages, session?.id || ''),
-  ), [activeCurrentRequestUIMessages, session?.id, session?.outputCycles]);
+    browserChatUIMessageOutputCycles(currentRequestUIMessages, session?.id || ''),
+  ), [currentRequestUIMessages, session?.id, session?.outputCycles]);
   const subagents = useMemo(() => mergeBrowserChatRealtimeSubagents(
     session?.subagents,
-    browserChatUIMessageSubagents(activeCurrentRequestUIMessages, session?.id || ''),
-  ), [activeCurrentRequestUIMessages, session?.id, session?.subagents]);
+    browserChatUIMessageSubagents(currentRequestUIMessages, session?.id || ''),
+  ), [currentRequestUIMessages, session?.id, session?.subagents]);
   const logs = useMemo(() => session?.logs || [], [session?.logs]);
   const generationSkillsById = useMemo(() => new Map(skills.map((skill) => [skill.id, skill])), [skills]);
   const liveToolDialog = useMemo(() => {
@@ -8303,9 +8277,9 @@ export function BrowserChatWorkspace({
   }, [logs, steps, toolDialog]);
   const visibleMessages = useMemo(() => overlayBrowserChatUIMessages(
     messages,
-    activeCurrentRequestUIMessages,
+    currentRequestUIMessages,
     session?.id || '',
-  ), [activeCurrentRequestUIMessages, messages, session?.id]);
+  ), [currentRequestUIMessages, messages, session?.id]);
   const generatableMessageOptions = useMemo(() => visibleMessages.flatMap((message, messageIndex) => {
     if (message.role !== 'assistant' || message.status === 'running') return [];
     const declaredStepIndexes = new Set(message.stepIndexes || []);
@@ -9008,32 +8982,7 @@ export function BrowserChatWorkspace({
           continue;
         }
         if (!patch || next?.id !== event.id) continue;
-        const ownedClientMessageId = currentUIMessageOwnerRef.current.get(event.id);
-        const ownedMessageIds = new Set([
-          ...next.messages.filter((message) => (
-            ownedClientMessageId && message.clientMessageId === ownedClientMessageId
-          )).map((message) => message.id),
-          ...(patch.messages || []).filter((message) => (
-            ownedClientMessageId && message.clientMessageId === ownedClientMessageId
-          )).map((message) => message.id),
-        ]);
-        const ownedTurnReachedTerminalState = Boolean(ownedClientMessageId) && (
-          (patch.session.busy === false && patch.session.status !== 'running')
-          || (patch.messages || []).some((message) => (
-            message.role === 'assistant'
-            && message.clientMessageId === ownedClientMessageId
-            && Boolean(message.status)
-            && message.status !== 'running'
-            && message.status !== 'queued'
-          ))
-        );
-        const sessionPatch = ownedClientMessageId && !ownedTurnReachedTerminalState ? {
-          ...patch,
-          messages: patch.messages?.filter((message) => message.clientMessageId !== ownedClientMessageId),
-          steps: patch.steps?.filter((step) => !step.messageId || !ownedMessageIds.has(step.messageId)),
-          removedMessageIds: patch.removedMessageIds?.filter((messageId) => !ownedMessageIds.has(messageId)),
-        } : patch;
-        const merged = mergeBrowserChatSessionRealtimePatch(next, sessionPatch);
+        const merged = mergeBrowserChatSessionRealtimePatch(next, patch);
         const guarded = applyBrowserChatInterruptGuard(merged, interruptGuardsRef.current.get(event.id));
         if (guarded.release) interruptGuardsRef.current.delete(event.id);
         next = guarded.session;

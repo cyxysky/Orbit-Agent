@@ -114,7 +114,7 @@ export const chartStyles = `
 .capability-chart-code-loading{display:flex;align-items:center;justify-content:center;flex:1;color:#9eabb9;font-size:12px}
 .capability-chart-editor-empty{display:flex;flex:1;flex-direction:column;align-items:center;justify-content:center;gap:14px;color:#97a6bb}
 .capability-chart-sr-only{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
-.capability-chart-loading{position:absolute;top:45%;left:35%;color:#94a0b2;font-size:12px}
+.capability-chart-loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;pointer-events:none;color:#94a0b2;font-size:12px}
 .capability-chart-tooltip{position:absolute;pointer-events:none;background:#122033e8;color:white;padding:6px 9px;border-radius:6px;max-width:280px;z-index:2;font-size:12px}
 .capability-chart-legend{position:absolute;left:10px;right:10px;top:6px;display:flex;flex-wrap:wrap;justify-content:center;gap:5px 14px;pointer-events:none;font-size:12px}
 .capability-chart-legend span{background:#ffffffe6;padding:2px 6px;border-radius:4px;color:#24334b}

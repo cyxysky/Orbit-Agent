@@ -38,6 +38,7 @@ export function browserChatArtifactPayloads(value: unknown): Record<string, unkn
   const payload = jsonRecordFromUnknown(value) || jsonRecordFromUnknown(jsonValueFromString(value));
   if (!payload) return [];
   const candidates = [payload, ...(Array.isArray(payload.data) ? payload.data : []),
+    ...(Array.isArray(payload.artifacts) ? payload.artifacts : []),
     ...(Array.isArray(payload.content) ? payload.content.filter((item) => jsonRecordFromUnknown(item)?.type === 'artifact') : [])];
   const seen = new Set<string>();
   return candidates.flatMap((value) => {
@@ -91,8 +92,9 @@ function browserChatFileArtifacts(tool: StepToolCall): BrowserChatArtifactSummar
     if (!artifactId && !path && !url && !downloadUrl) return [];
 
     const visualVerification = jsonRecordFromUnknown(payload.visualVerification);
-    const bytes = typeof payload.bytes === 'number' && Number.isFinite(payload.bytes) && payload.bytes >= 0
-      ? payload.bytes
+    const payloadBytes = payload.bytes ?? payload.size;
+    const bytes = typeof payloadBytes === 'number' && Number.isFinite(payloadBytes) && payloadBytes >= 0
+      ? payloadBytes
       : undefined;
     const pageCount = typeof visualVerification?.pageCount === 'number'
       && Number.isFinite(visualVerification.pageCount)

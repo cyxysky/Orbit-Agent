@@ -133,7 +133,7 @@ export function ChartRenderer({ chart, classNames = {}, onSave, onReload, transl
     setSaving(true);
     try {
       const saved = onSave ? await onSave(next, base.revision || 0) : next;
-      setCurrent(saved); setEditing(false); setNotice(onSave ? '已保存，刷新后仍可查看。' : '已在当前页面应用；可下载 JSON 保存配置。');
+      setCurrent(saved); setEditing(false); setNotice(onSave ? '' : '已在当前页面应用；可下载 JSON 保存配置。');
     } finally { setSaving(false); }
   }
   function action(task: () => Promise<void> | void) { void Promise.resolve().then(task).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason))); }
@@ -164,7 +164,6 @@ export function ChartRenderer({ chart, classNames = {}, onSave, onReload, transl
       <div className={`${classNames.surface || 'capability-chart-surface'} capability-chart-render-surface`} ref={surfaceRef} />
       {!ready && !error && <span className="capability-chart-loading">{t("正在渲染图表…")}</span>}
     </div>
-    {isThree && <p className="capability-chart-hint">{t('拖动旋转 · 滚轮或双指缩放 · 右键拖动平移')}{threeView && current.engine !== 'three' ? ` · ${t('3D 预览不改动原图配置')}` : ''}</p>}
     {error && <p role="alert" className="capability-chart-message">{t(error)} <button type="button" onClick={() => setRefresh(refresh + 1)}>{t("重试渲染")}</button></p>}
     {notice && <p role="status" className="capability-chart-message">{t(notice)}</p>}
     {editing && <ChartDataEditor translate={t} option={(editSnapshotRef.current || current).option} title={current.title} saving={saving} onSave={save} onCancel={() => setEditing(false)}

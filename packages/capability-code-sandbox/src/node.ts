@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { createCodeSandboxCapability, type CodeSandboxExecutor, type CodeSandboxExecutionResult } from './index.js';
 import { runBoundedProcess } from './process-runner.js';
 import type { CapabilityRunContext } from '@webpilot/capability-sdk';
+import { collectFiles, stageFiles } from '../runtime/files.cjs';
 
 type LocalProcessOptions = {
   workspaceDirectory: string;
@@ -137,6 +138,7 @@ export function createNodeProcessCodeSandbox(input: LocalProcessOptions & { maxC
         await mkdir(workspace, { recursive: true });
         jobDirectory = await mkdtemp(path.join(workspace, 'job-'));
         await chmod(jobDirectory, 0o700).catch(() => undefined);
+        await stageFiles(jobDirectory, execution.inputFiles);
         const extension = execution.language === 'python' ? 'py' : 'mjs';
         const file = path.join(jobDirectory, `run-${randomUUID()}.${extension}`);
         await writeFile(file, execution.code, { encoding: 'utf8', flag: 'wx' });
@@ -180,6 +182,7 @@ export function createNodeProcessCodeSandbox(input: LocalProcessOptions & { maxC
           outputLimitExceeded: result.outputLimitExceeded,
           packagesInstalled: execution.packages.length ? [...execution.packages] : undefined,
           installElapsedMs: install.elapsedMs || undefined,
+          files: !result.aborted && !result.timedOut ? await collectFiles(jobDirectory, execution.outputFiles) : [],
         };
       } finally {
         if (jobDirectory) await rm(jobDirectory, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }).catch(() => undefined);

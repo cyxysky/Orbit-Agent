@@ -16,14 +16,17 @@ import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import { resolveBrowserChatArtifactReference, type BrowserChatArtifactSummary } from '@/lib/browser-chat-artifacts';
 import { BrowserChatCodeBlock } from '@/components/BrowserChatCodeBlock';
 import rehypeKatex from 'rehype-katex';
+import rehypeRaw from 'rehype-raw';
+import rehypeSanitize from 'rehype-sanitize';
+import { browserChatHtmlSchema, rehypeBrowserChatSvgReferences } from './browser-chat-html';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import { BrowserChatChart } from '@/components/BrowserChatChart';
 import { BrowserChatDataUI } from '@/components/BrowserChatDataUI';
 import {
+  browserChatOrderedResponseParts,
   normalizeBrowserChatMarkdown,
   remarkBrowserChatCjkStrong,
-  splitBrowserChatChartBlocks,
 } from '@/components/browser-chat-markdown';
 import { normalizeEmbeddedBrowserAddress } from '@/components/browser-chat-embedded-url';
 import type { BrowserChatUIMessagePart } from '@/lib/browser-chat-ui-message';
@@ -278,19 +281,12 @@ export const BrowserChatAutomationRunIdContext = createContext<string | undefine
 
 export const BrowserChatMarkdown = memo(function BrowserChatMarkdown({ markdown }: { markdown: string }) {
   const artifacts = useContext(BrowserChatMarkdownArtifactsContext);
-  const sessionId = useContext(BrowserChatSessionIdContext);
-  const automationRunId = useContext(BrowserChatAutomationRunIdContext);
   const normalizedMarkdown = useMemo(() => normalizeBrowserChatMarkdown(markdown), [markdown]);
-  const blocks = useMemo(() => splitBrowserChatChartBlocks(normalizedMarkdown), [normalizedMarkdown]);
   return (
     <div className="browser-chat-agent-markdown">
-      {blocks.map((block, index) => block.kind === 'chart' ? (
-        <BrowserChatChart chartId={block.chartId} key={`${block.chartId}:${index}`} sessionId={sessionId} automationRunId={automationRunId} />
-      ) : (
         <ReactMarkdown
-          key={`markdown:${index}`}
           urlTransform={(url, key) => defaultUrlTransform(resolveBrowserChatArtifactReference(url, artifacts, key === 'src'))}
-          rehypePlugins={[rehypeKatex]}
+          rehypePlugins={[rehypeRaw, [rehypeSanitize, browserChatHtmlSchema], rehypeBrowserChatSvgReferences, rehypeKatex]}
           remarkPlugins={[remarkGfm, remarkMath, remarkBrowserChatCjkStrong]}
           components={{
             img: ({ src, alt, title }) => typeof src === 'string' && src ? (
@@ -322,9 +318,8 @@ export const BrowserChatMarkdown = memo(function BrowserChatMarkdown({ markdown 
             td: ({ children, style }) => <td className="table__cell" style={style}>{children}</td>,
           }}
         >
-          {block.markdown}
+          {normalizedMarkdown}
         </ReactMarkdown>
-      ))}
     </div>
   );
 });
@@ -338,10 +333,8 @@ export const BrowserChatOrderedResponse = memo(function BrowserChatOrderedRespon
 }) {
   const sessionId = useContext(BrowserChatSessionIdContext);
   const automationRunId = useContext(BrowserChatAutomationRunIdContext);
-  const responseParts = (parts || []).filter((part) => (
-    part.type === 'text' || part.type === 'data-chart' || part.type === 'data-ui'
-  ));
-  if (!responseParts.length) return fallbackText.trim() ? <BrowserChatMarkdown markdown={fallbackText} /> : null;
+  const responseParts = useMemo(() => browserChatOrderedResponseParts(parts, fallbackText), [parts, fallbackText]);
+  if (!responseParts.length) return null;
   return <div className="browser-chat-ordered-response">{responseParts.map((part, index) => {
     if (part.type === 'text') return <BrowserChatMarkdown key={`text:${index}`} markdown={part.text} />;
     if (part.type === 'data-chart') {

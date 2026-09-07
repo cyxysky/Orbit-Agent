@@ -80,6 +80,9 @@ export async function GET(request: NextRequest, context: RouteContext) {
       'X-Content-Type-Options': 'nosniff',
       'x-request-id': requestId,
     };
+    if (/^(text\/html|image\/svg\+xml)(?:;|$)/.test(contentType)) {
+      headers['Content-Security-Policy'] = "sandbox; default-src 'none'; img-src data: https: http:; style-src 'unsafe-inline'";
+    }
     if (range) headers['Content-Range'] = `bytes ${range.start}-${range.end}/${fileStat.size}`;
     if (request.nextUrl.searchParams.get('download') === '1') {
       const fileName = contentDispositionHeader(filePath);

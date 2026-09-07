@@ -84,12 +84,13 @@ export function runBoundedProcess(input: {
     let stdout = '';
     let stderr = '';
     let outputLength = 0;
-    let stopReason: 'timeout' | 'abort' | 'output' | undefined;
+    let stopReason: 'timeout' | 'abort' | undefined;
+    let outputLimitExceeded = false;
     let spawnError: string | undefined;
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
-    const stop = (reason: 'timeout' | 'abort' | 'output') => {
+    const stop = (reason: 'timeout' | 'abort') => {
       if (stopReason) return;
       stopReason = reason;
       void Promise.resolve(input.onStop?.()).catch(() => undefined);
@@ -106,7 +107,7 @@ export function runBoundedProcess(input: {
       outputLength += bounded.text.length;
       if (target === 'stdout') stdout += bounded.text;
       else stderr += bounded.text;
-      if (bounded.overflow) stop('output');
+      if (bounded.overflow) outputLimitExceeded = true;
     };
     child.stdout?.on('data', (chunk: Buffer | string) => append('stdout', chunk));
     child.stderr?.on('data', (chunk: Buffer | string) => append('stderr', chunk));
@@ -123,10 +124,10 @@ export function runBoundedProcess(input: {
         signal: signal || undefined,
         stdout,
         stderr,
-        truncated: stopReason === 'output',
+        truncated: outputLimitExceeded,
         timedOut: stopReason === 'timeout',
         aborted: stopReason === 'abort',
-        outputLimitExceeded: stopReason === 'output',
+        outputLimitExceeded,
         error: spawnError,
       });
     });
