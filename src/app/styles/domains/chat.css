@@ -93,6 +93,10 @@
 
 .browser-chat-conversation-title-area {
   align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  box-sizing: border-box;
   color: var(--foreground);
   display: flex;
   flex: 1 1 600px;
@@ -100,10 +104,13 @@
   font-size: 15px;
   font-weight: 650;
   gap: 6px;
+  height: 40px;
   letter-spacing: -0.014em;
   line-height: 1.45;
+  margin-left: -12px;
   max-width: 600px;
   min-width: 0;
+  transition: background-color var(--motion-normal) var(--ease-standard), border-color var(--motion-normal) var(--ease-standard);
 }
 
 .browser-chat-conversation-title-area h1 {
@@ -122,8 +129,8 @@
   align-items: center;
   appearance: none;
   background: transparent;
-  border: 1px solid transparent;
-  border-radius: 14px;
+  border: 0;
+  border-radius: inherit;
   box-sizing: border-box;
   box-shadow: none;
   color: inherit;
@@ -133,16 +140,15 @@
   font-style: normal;
   font-variant: normal;
   font-weight: inherit;
-  height: 40px;
+  height: 38px;
   line-height: 1.45;
   letter-spacing: inherit;
-  margin-left: -12px;
+  margin: 0;
   max-width: 100%;
   overflow: hidden;
   padding: 0 14px;
   text-align: left;
   text-overflow: ellipsis;
-  transition: background-color var(--motion-normal) var(--ease-standard), border-color var(--motion-normal) var(--ease-standard);
   white-space: nowrap;
   width: 100%;
 }
@@ -153,28 +159,24 @@
   justify-content: flex-start;
 }
 
-.browser-chat-conversation-title-area :is(.browser-chat-conversation-title-field, .browser-chat-conversation-title-input):hover {
+.browser-chat-conversation-title-area:hover {
   background: var(--panel);
   border-color: var(--border-strong);
 }
 
-.browser-chat-conversation-title-area :is(.browser-chat-conversation-title-field, .browser-chat-conversation-title-input):is(:focus, :focus-visible) {
+.browser-chat-conversation-title-area:is(:focus-within, [data-editing="true"]) {
   background: var(--panel);
   border-color: var(--focus-ring);
+}
+
+.browser-chat-conversation-title-area :is(.browser-chat-conversation-title-field, .browser-chat-conversation-title-input):is(:hover, :focus, :focus-visible) {
+  background: transparent;
   box-shadow: none;
   outline: 0;
 }
 
-@starting-style {
-  .browser-chat-conversation-title-area .browser-chat-conversation-title-input:focus {
-    background: transparent;
-    border-color: transparent;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .browser-chat-conversation-title-field,
-  .browser-chat-conversation-title-input {
+  .browser-chat-conversation-title-area {
     transition: none;
   }
 }

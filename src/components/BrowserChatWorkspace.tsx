@@ -10015,7 +10015,7 @@ export function BrowserChatWorkspace({
 
   const renderChatPaneHeader = () => session && hasMessages ? (
     <header className="browser-chat-conversation-header">
-      <div className="browser-chat-conversation-title-area">
+      <div className="browser-chat-conversation-title-area" data-editing={editingConversationTitle || undefined}>
         {editingConversationTitle ? (
           <form
             className="browser-chat-conversation-title-form"
