@@ -3,6 +3,7 @@
 @import "../workspace-shared.css";
 @import "./settings.css";
 @import "./onboarding.css";
+@import "./settings-responsive.css";
 
 @media (min-width: 1025px) {
   .settings-workspace-route:not(.sidebar-collapsed) .browser-chat-settings-section {
