@@ -5918,7 +5918,7 @@ const BrowserChatComposer = memo(function BrowserChatComposer({
     return true;
   }, []);
 
-  const syncEditorState = useCallback((options: { scrollToBottom?: boolean } = {}) => {
+  const syncEditorState = useCallback((options: { revealCaret?: boolean } = {}) => {
     const editor = editorRef.current;
     if (editor === document.activeElement) ensureEmptyEditorCaret(editor);
     const skillIds = editor
@@ -5926,9 +5926,20 @@ const BrowserChatComposer = memo(function BrowserChatComposer({
       : [];
     setDraft(editorPlainText(editor));
     setSelectedSkillIds(Array.from(new Set(skillIds)));
-    if (options.scrollToBottom && editor) {
+    if (options.revealCaret && editor) {
       requestAnimationFrame(() => {
-        editor.scrollTop = editor.scrollHeight;
+        const selection = window.getSelection();
+        if (!editor.isConnected || editor !== document.activeElement
+          || !selection?.focusNode || !editor.contains(selection.focusNode)) return;
+        const caret = document.createRange();
+        caret.setStart(selection.focusNode, selection.focusOffset);
+        caret.collapse(true);
+        const caretRect = caret.getBoundingClientRect();
+        if (!caretRect.height) return;
+        const top = editor.getBoundingClientRect().top + editor.clientTop;
+        const bottom = top + editor.clientHeight;
+        if (caretRect.top < top + 4) editor.scrollTop += caretRect.top - top - 4;
+        else if (caretRect.bottom > bottom - 4) editor.scrollTop += caretRect.bottom - bottom + 4;
       });
     }
   }, [editorPlainText, ensureEmptyEditorCaret]);
@@ -6167,7 +6178,7 @@ const BrowserChatComposer = memo(function BrowserChatComposer({
   function editorRange() {
     const editor = editorRef.current;
     if (!editor) return undefined;
-    editor.focus();
+    editor.focus({ preventScroll: true });
     const selection = window.getSelection();
     if (selection?.rangeCount) {
       const range = selection.getRangeAt(0);
@@ -6242,7 +6253,7 @@ const BrowserChatComposer = memo(function BrowserChatComposer({
     return range;
   }
 
-  function finishInlineTokenInsertion(range: Range, token: HTMLElement, scrollToBottom = false) {
+  function finishInlineTokenInsertion(range: Range, token: HTMLElement) {
     range.insertNode(token);
     if (!token.previousSibling) {
       token.before(document.createTextNode('\u200B'));
@@ -6252,7 +6263,7 @@ const BrowserChatComposer = memo(function BrowserChatComposer({
     const trailingText = document.createTextNode('\u00A0');
     token.after(trailingText);
     setEditorSelection(trailingText, trailingText.data.length);
-    syncEditorState(scrollToBottom ? { scrollToBottom: true } : undefined);
+    syncEditorState({ revealCaret: true });
   }
 
   function insertSkillToken(skill: SkillRecord) {
@@ -6289,7 +6300,7 @@ const BrowserChatComposer = memo(function BrowserChatComposer({
     token.innerHTML = `<span class="browser-chat-inline-reference-icon">${inlineReferenceIconSvg(kind)}</span>`;
     token.append(document.createTextNode(attachment.name || t(browserChatReferenceLabel(kind))));
 
-    finishInlineTokenInsertion(range, token, true);
+    finishInlineTokenInsertion(range, token);
   }
 
   return (
@@ -6368,7 +6379,7 @@ const BrowserChatComposer = memo(function BrowserChatComposer({
             onPreviewAttachment(attachment);
           }}
           onFocus={() => syncEditorState()}
-          onInput={() => syncEditorState({ scrollToBottom: true })}
+          onInput={() => syncEditorState()}
           onKeyDown={(event) => {
             if (event.nativeEvent.isComposing) return;
             if (event.key === 'Backspace' || event.key === 'Delete') {
@@ -6376,7 +6387,7 @@ const BrowserChatComposer = memo(function BrowserChatComposer({
                 event.preventDefault();
                 return;
               }
-              requestAnimationFrame(() => syncEditorState({ scrollToBottom: true }));
+              requestAnimationFrame(() => syncEditorState());
             }
             if (skillMenuOpen && event.key === 'ArrowDown') {
               event.preventDefault();
@@ -6405,7 +6416,7 @@ const BrowserChatComposer = memo(function BrowserChatComposer({
             }
           }}
           onKeyUp={(event) => {
-            if (event.key === 'Backspace' || event.key === 'Delete') syncEditorState({ scrollToBottom: true });
+            if (event.key === 'Backspace' || event.key === 'Delete') syncEditorState();
           }}
           onPaste={(event) => {
             const itemFiles = Array.from(event.clipboardData.items || [])
@@ -6432,10 +6443,12 @@ const BrowserChatComposer = memo(function BrowserChatComposer({
             const text = event.clipboardData.getData('text/plain');
             if (!text) return;
             const range = editorRange();
-            range?.deleteContents();
-            range?.insertNode(document.createTextNode(text));
-            range?.collapse(false);
-            syncEditorState({ scrollToBottom: true });
+            if (!range) return;
+            const pastedText = document.createTextNode(text);
+            range.deleteContents();
+            range.insertNode(pastedText);
+            setEditorSelection(pastedText, pastedText.length);
+            syncEditorState({ revealCaret: true });
           }}
           role="textbox"
           suppressContentEditableWarning
