@@ -42,7 +42,7 @@ const retryableNetworkCodes = new Set([
   'UND_ERR_SOCKET',
 ]);
 
-const nonRetryableCodes = new Set([
+const invalidRequestCodes = new Set([
   'ERR_INVALID_ARG_TYPE',
   'ERR_INVALID_URL',
   'INVALID_API_KEY',
@@ -156,7 +156,7 @@ export function isProviderBillingLimitMessage(value: string) {
   const message = value.trim();
   if (!message) return false;
   return /(?:已达到|达到|超过|超出).{0,24}(?:Token Plan|用量|额度|套餐|积分).{0,16}(?:上限|限制)/i.test(message)
-    || /(?:用量|额度|积分).{0,16}(?:已用完|已用尽|不足)/.test(message)
+    || /(?:用量|额度|积分|余额).{0,16}(?:已用完|已用尽|不足)/.test(message)
     || /\b(?:token plan|billing quota|credit balance|credits?|account balance|quota).{0,48}(?:exhausted|exceeded|insufficient|depleted|limit reached)\b/i.test(message)
     || /\b(?:exhausted|exceeded|insufficient|depleted).{0,32}(?:credits?|quota|balance)\b/i.test(message);
 }
@@ -169,22 +169,30 @@ export function classifyRuntimeRetry(error: unknown, signal?: AbortSignal): Runt
   const code = (firstString(records, ['code', 'errno', 'type']) || '').toUpperCase();
   const statusCode = firstNumber(records, ['status', 'statusCode', 'httpStatusCode']);
   const retryAfterMs = retryAfterFromRecords(records);
-  const privateToolProtocolRetryable = records.some((record) => record.privateToolProtocolRetryable === true);
-  const privateToolProtocolFailure = records.some((record) => record.privateToolProtocolRetryable === false)
+  const privateToolProtocolFailure = records.some((record) => typeof record.privateToolProtocolRetryable === 'boolean')
     || name === 'AI_PrivateToolProtocolError';
 
-  if (name === 'RuntimeContextBudgetError') {
-    return { category: 'configuration', reason: message, retryable: false };
-  }
-
-  if (signal?.aborted || name === 'AbortError' || /\b(aborted|cancelled|canceled)\b/.test(normalizedMessage)) {
+  // Only the caller's cancellation is terminal; a provider abort can be retried.
+  if (signal?.aborted) {
     return { category: 'aborted', reason: 'request was aborted', retryable: false, statusCode };
+  }
+  if (statusCode === 402 || isProviderBillingLimitMessage(message)
+    || /\b(insufficient balance|payment required|billing quota)\b/.test(normalizedMessage)
+    || records.some((record) => [record.code, record.type].some((value) =>
+      ['INSUFFICIENT_QUOTA', 'INSUFFICIENT_BALANCE', 'CREDIT_BALANCE_TOO_LOW'].includes(String(value || '').toUpperCase())))) {
+    return { category: 'billing', reason: `provider balance is unavailable${statusCode ? ` (${statusCode})` : ''}`, retryable: false, statusCode };
+  }
+  if (name === 'RuntimeContextBudgetError') {
+    return { category: 'configuration', reason: message, retryable: true };
+  }
+  if (name === 'AbortError' || /\b(aborted|cancelled|canceled)\b/.test(normalizedMessage)) {
+    return { category: 'aborted', reason: 'provider request was aborted; caller is still active', retryAfterMs, retryable: true, statusCode };
   }
   if (privateToolProtocolFailure) {
     return {
       category: 'protocol',
       reason: 'provider emitted a private textual tool protocol',
-      retryable: privateToolProtocolRetryable,
+      retryable: true,
       statusCode,
     };
   }
@@ -197,10 +205,7 @@ export function classifyRuntimeRetry(error: unknown, signal?: AbortSignal): Runt
     };
   }
   if (statusCode === 401 || statusCode === 403 || /\b(api key|authentication|unauthori[sz]ed|forbidden)\b/.test(normalizedMessage)) {
-    return { category: 'authentication', reason: `authentication failure${statusCode ? ` (${statusCode})` : ''}`, retryable: false, statusCode };
-  }
-  if (statusCode === 402 || isProviderBillingLimitMessage(message) || /\b(insufficient balance|payment required|billing quota)\b/.test(normalizedMessage)) {
-    return { category: 'billing', reason: `provider balance is unavailable${statusCode ? ` (${statusCode})` : ''}`, retryable: false, statusCode };
+    return { category: 'authentication', reason: `authentication failure${statusCode ? ` (${statusCode})` : ''}`, retryable: true, statusCode };
   }
   if (
     statusCode === 400
@@ -217,11 +222,11 @@ export function classifyRuntimeRetry(error: unknown, signal?: AbortSignal): Runt
       statusCode,
     };
   }
-  if (statusCode === 400 || statusCode === 404 || statusCode === 405 || statusCode === 410 || statusCode === 422 || nonRetryableCodes.has(code)) {
-    return { category: 'invalid-request', reason: `deterministic request failure${statusCode ? ` (${statusCode})` : code ? ` (${code})` : ''}`, retryable: false, statusCode };
+  if (statusCode === 400 || statusCode === 404 || statusCode === 405 || statusCode === 410 || statusCode === 422 || invalidRequestCodes.has(code)) {
+    return { category: 'invalid-request', reason: `request failure${statusCode ? ` (${statusCode})` : code ? ` (${code})` : ''}`, retryable: true, statusCode };
   }
   if (/\b(model not found|unknown model|unsupported|invalid (request|argument|parameter)|schema|tool input)\b/.test(normalizedMessage)) {
-    return { category: 'configuration', reason: 'model or request configuration is invalid', retryable: false, statusCode };
+    return { category: 'configuration', reason: 'model or request configuration is invalid', retryable: true, statusCode };
   }
   if (statusCode === 429) {
     return { category: 'rate-limited', reason: 'provider rate limit', retryAfterMs, retryable: true, statusCode };
@@ -229,7 +234,7 @@ export function classifyRuntimeRetry(error: unknown, signal?: AbortSignal): Runt
   if (statusCode === 408 || statusCode === 425 || /timed? out|timeout/.test(normalizedMessage)) {
     return { category: 'request-timeout', reason: `temporary request timeout${statusCode ? ` (${statusCode})` : ''}`, retryAfterMs, retryable: true, statusCode };
   }
-  if (statusCode !== undefined && statusCode >= 500 && statusCode <= 599 && statusCode !== 501 && statusCode !== 505) {
+  if (statusCode !== undefined && statusCode >= 500 && statusCode <= 599) {
     return { category: 'server-error', reason: `provider server failure (${statusCode})`, retryAfterMs, retryable: true, statusCode };
   }
   if (statusCode === 503 || /\b(overloaded|over capacity|temporarily unavailable|service unavailable)\b/.test(normalizedMessage)) {
@@ -244,7 +249,7 @@ export function classifyRuntimeRetry(error: unknown, signal?: AbortSignal): Runt
   if (name === 'AI_NoOutputGeneratedError' || /\bno output generated\b/i.test(message)) {
     return { category: 'server-error', reason: 'provider stream ended without an output', retryAfterMs, retryable: true, statusCode };
   }
-  return { category: 'unknown', reason: 'error is not known to be transient', retryable: false, statusCode };
+  return { category: 'unknown', reason: 'retry request failure within the configured attempt limit', retryAfterMs, retryable: true, statusCode };
 }
 
 function configuredDelay(name: string, fallback: number) {

@@ -2298,7 +2298,6 @@ async function executeRuntimeStep(input: {
   let lastAiRequest: AiRequestSnapshot | undefined;
   let lastRetryState: RuntimeRetryState | undefined;
   let consecutiveRequestFailures = 0;
-  let privateToolProtocolFailures = 0;
   const durableTraces: ToolTrace[] = [];
   let durableTurnMessages: ModelMessage[] = [];
 
@@ -3364,7 +3363,6 @@ async function executeRuntimeStep(input: {
         ? ''
         : normalizeBrowserChatFinalReplyText(resultText || latestText);
       if (miniMaxRuntime && containsPrivateToolProtocol(resultText || latestText) && toolCallCount === 0) {
-        privateToolProtocolFailures += 1;
         if (lastRetryState) {
           lastRetryState.messages = [
             ...lastRetryState.messages,
@@ -3376,7 +3374,7 @@ async function executeRuntimeStep(input: {
         }
         const error = new Error('MiniMax emitted a private textual tool protocol instead of a standard structured tool call.');
         error.name = 'AI_PrivateToolProtocolError';
-        Object.assign(error, { privateToolProtocolRetryable: privateToolProtocolFailures === 1 });
+        Object.assign(error, { privateToolProtocolRetryable: true });
         throw error;
       }
       if (aiSdkEmptyStopRequiresRetry({
@@ -3472,8 +3470,8 @@ async function executeRuntimeStep(input: {
     };
   }
 
-  // Keep SDK retries disabled, but allow the runtime loop to retry transient upstream
-  // disconnects with the prepared model messages. A provider-rejected tool exchange
+  // Keep SDK retries disabled; the runtime retries request failures except exhausted
+  // provider quota, preserving prepared messages. A provider-rejected tool exchange
   // is removed before retry because replaying that identical invalid chain cannot work.
   // The limit is consecutive failures; only a resolved SDK response resets the counter.
   const consecutiveFailureLimit = runtimeRequestConsecutiveFailureLimit();
@@ -3495,23 +3493,8 @@ async function executeRuntimeStep(input: {
     const retryState = retryingAfterFailure && lastRetryState?.messages.length ? lastRetryState : undefined;
     try {
       if (retryingAfterFailure) {
-        if (!retryState) {
-          await onDebug?.({
-            phase: 'ai:runtime:retry-skipped',
-            stepIndex,
-            message: 'AI request failed, but no preserved model messages exist; not rebuilding messages for retry.',
-            details: {
-              error: infrastructureError(lastError),
-              consecutiveFailures: consecutiveRequestFailures,
-              consecutiveFailureLimit,
-              execution: executionIdentity,
-              retryDecision: lastRetryDecision,
-              ...(lastRetryRecovery ? { requestRecovery: lastRetryRecovery } : {}),
-            },
-          });
-          ensureActive();
-          break;
-        }
+        // Preparation can fail before a request snapshot exists. Retry preparation
+        // in that case; otherwise retain the checkpoint and completed tool results.
         ensureActive();
         await onDebug?.({
           phase: 'ai:runtime:retry',
