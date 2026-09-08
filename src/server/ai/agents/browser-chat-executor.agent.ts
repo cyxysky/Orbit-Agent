@@ -2314,10 +2314,12 @@ async function executeRuntimeStep(input: {
     // signal: its timeout is retryable, while a user cancellation is terminal.
     const runtimeRequestTimeoutMs = aiRuntimeRequestTimeoutMs();
     const streamTimeouts = aiStreamTimeouts(runtimeRequestTimeoutMs);
-    const retryLabel = executionIdentity.attemptNumber > 1
-      ? lastError instanceof AiFirstChunkTimeoutError ? '（首包超时后重试）' : '（重试）'
-      : '';
-    const attemptLabel = `第 ${executionIdentity.attemptNumber}/${runtimeRequestConsecutiveFailureLimit()} 次请求${retryLabel}`;
+    const attemptLabel = () => {
+      const retryLabel = executionIdentity.attemptNumber > 1
+        ? lastError instanceof AiFirstChunkTimeoutError ? '（首包超时后重试）' : '（重试）'
+        : '';
+      return `第 ${executionIdentity.attemptNumber}/${runtimeRequestConsecutiveFailureLimit()} 次请求${retryLabel}`;
+    };
     const requestWatchdog = createAiRequestWatchdog(abortSignal, runtimeRequestTimeoutMs);
     const onAttemptDebug: ExecutionDebug | undefined = onDebug
       ? (event) => onDebug({
@@ -2990,7 +2992,7 @@ async function executeRuntimeStep(input: {
         await onAttemptDebug?.({
           phase: 'ai:runtime:receiving',
           stepIndex,
-          message: `正在接收 AI 响应（${kind}） · ${attemptLabel}`,
+          message: `正在接收 AI 响应（${kind}） · ${attemptLabel()}`,
           details: { elapsedMs, receivedChunks, kind, agentStepIndex: retryAgentStepOffset + toolExecutionGate.stepNumber + 1 },
         });
       };
@@ -3039,6 +3041,16 @@ async function executeRuntimeStep(input: {
       const prepareAgentStep = async ({ stepNumber, responseMessages }: { stepNumber: number; responseMessages: ModelMessage[] }) => {
         requestWatchdog.touch();
         ensureActive();
+        if (stepNumber > 0) {
+          // Advancing the SDK loop proves the preceding request and its tool
+          // checkpoint completed. A new request gets the full retry allowance.
+          consecutiveRequestFailures = 0;
+          attemptNumber = 1;
+          lastError = undefined;
+          retryDelayMs = 0;
+          Object.assign(executionIdentity, nextRequestExecutionIdentity());
+          await reportRequestAttempt(executionIdentity);
+        }
         rawResponseMessages = [...responseMessages];
         durableTurnMessages = [...attemptTranscriptBase, ...rawResponseMessages];
         await input.onTurnModelCheckpoint?.(durableTurnMessages);
@@ -3056,7 +3068,7 @@ async function executeRuntimeStep(input: {
         await onAttemptDebug?.({
           phase: 'ai:runtime:request',
           stepIndex,
-          message: `等待 AI 首包（${streamTimeouts.firstChunkMs / 1000} 秒超时） · ${attemptLabel} · 模型步骤 ${agentStepLabel(retryAgentStepOffset + stepNumber)}`,
+          message: `等待 AI 首包（${streamTimeouts.firstChunkMs / 1000} 秒超时） · ${attemptLabel()} · 模型步骤 ${agentStepLabel(retryAgentStepOffset + stepNumber)}`,
           details: aiRequestLogDetails(aiRequest, {
             provider: getModelSettings().provider,
             model: getModelSettings().model,
@@ -3237,7 +3249,7 @@ async function executeRuntimeStep(input: {
               await onAttemptDebug?.({
                 phase: 'ai:runtime:response-headers',
                 stepIndex,
-                message: `已建立响应流，等待 AI 首包 · ${attemptLabel}`,
+                message: `已建立响应流，等待 AI 首包 · ${attemptLabel()}`,
                 details: { elapsedMs: Date.now() - (stepStartedAt.get(toolExecutionGate.stepNumber) || Date.now()) },
               });
               return {
@@ -3481,15 +3493,44 @@ async function executeRuntimeStep(input: {
   let lastRetryRecovery: Record<string, unknown> | undefined;
   let retryDelayMs = 0;
   let attemptNumber = 0;
+  let requestSequence = 0;
+
+  function nextRequestExecutionIdentity() {
+    // Request IDs stay unique even when the per-request retry count resets.
+    return {
+      ...runtimeExecutionIdentity(input.turnId || input.runId, stepIndex, ++requestSequence),
+      attemptNumber,
+    };
+  }
+
+  async function reportRequestAttempt(executionIdentity: RuntimeExecutionIdentity) {
+    await onDebug?.({
+      phase: 'ai:runtime:attempt',
+      stepIndex,
+      message: `开始第 ${attemptNumber}/${consecutiveFailureLimit} 次 AI 请求${attemptNumber > 1 ? '（重试）' : ''}。最大 ${consecutiveFailureLimit} 次（首次请求 + ${Math.max(0, consecutiveFailureLimit - 1)} 次重试）。`,
+      details: {
+        attemptNumber,
+        attemptLimit: consecutiveFailureLimit,
+        execution: { ...executionIdentity },
+        isRetry: attemptNumber > 1,
+      },
+    });
+    structuredLog({
+      event: 'ai.runtime.request.attempt_started',
+      operationId: executionIdentity.turnId,
+      attemptId: executionIdentity.attemptId,
+      attemptNumber,
+      attemptLimit: consecutiveFailureLimit,
+      isRetry: attemptNumber > 1,
+      provider: getModelSettings().provider,
+      model: getModelSettings().model,
+    });
+  }
 
   while (true) {
     ensureActive();
-    attemptNumber += 1;
-    const executionIdentity = runtimeExecutionIdentity(
-      input.turnId || input.runId,
-      stepIndex,
-      attemptNumber,
-    );
+    attemptNumber = consecutiveRequestFailures + 1;
+    const executionIdentity = nextRequestExecutionIdentity();
     const retryState = retryingAfterFailure && lastRetryState?.messages.length ? lastRetryState : undefined;
     try {
       if (retryingAfterFailure) {
@@ -3505,7 +3546,7 @@ async function executeRuntimeStep(input: {
             consecutiveFailures: consecutiveRequestFailures,
             consecutiveFailureLimit,
             delayMs: retryDelayMs,
-            execution: executionIdentity,
+            execution: { ...executionIdentity },
             retryDecision: lastRetryDecision,
             ...(lastRetryRecovery ? { requestRecovery: lastRetryRecovery } : {}),
             reusePreparedMessages: Boolean(retryState),
@@ -3519,27 +3560,7 @@ async function executeRuntimeStep(input: {
         ensureActive();
       }
       ensureActive();
-      await onDebug?.({
-        phase: 'ai:runtime:attempt',
-        stepIndex,
-        message: `开始第 ${attemptNumber}/${consecutiveFailureLimit} 次 AI 请求${attemptNumber > 1 ? '（重试）' : ''}。最大 ${consecutiveFailureLimit} 次（首次请求 + ${Math.max(0, consecutiveFailureLimit - 1)} 次重试）。`,
-        details: {
-          attemptNumber,
-          attemptLimit: consecutiveFailureLimit,
-          execution: executionIdentity,
-          isRetry: attemptNumber > 1,
-        },
-      });
-      structuredLog({
-        event: 'ai.runtime.request.attempt_started',
-        operationId: executionIdentity.turnId,
-        attemptId: executionIdentity.attemptId,
-        attemptNumber,
-        attemptLimit: consecutiveFailureLimit,
-        isRetry: attemptNumber > 1,
-        provider: getModelSettings().provider,
-        model: getModelSettings().model,
-      });
+      await reportRequestAttempt(executionIdentity);
       const result = await runAgent(retryState, executionIdentity);
       const requestOutcomeMessage = result.responseFinished
         ? result.responseStatus === 'passed'
@@ -3553,7 +3574,7 @@ async function executeRuntimeStep(input: {
         details: {
           attemptNumber,
           attemptLimit: consecutiveFailureLimit,
-          execution: executionIdentity,
+          execution: { ...executionIdentity },
           finishReason: result.finishReason,
           responseFinished: result.responseFinished,
           responseStatus: result.responseStatus,
@@ -3623,7 +3644,7 @@ async function executeRuntimeStep(input: {
           nextAttemptNumber: willRetry ? attemptNumber + 1 : undefined,
           willRetry,
           finalFailure: !willRetry,
-          execution: executionIdentity,
+          execution: { ...executionIdentity },
           retryDecision: lastRetryDecision,
           ...(lastRetryRecovery ? { requestRecovery: lastRetryRecovery } : {}),
           ...(missingToolCallId ? {

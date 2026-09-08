@@ -3858,6 +3858,8 @@ html .browser-chat-sidebar .browser-chat-sidebar-footer .browser-chat-theme-togg
 }
 
 .browser-chat-message-scroll-shell {
+  container-name: chat-message-scroll;
+  container-type: inline-size;
   flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
@@ -3932,6 +3934,14 @@ html .browser-chat-sidebar .browser-chat-sidebar-footer .browser-chat-theme-togg
 }
 
 @media (max-width: 820px) {
+  .browser-chat-turn-navigator {
+    display: none;
+  }
+}
+
+/* The navigator needs its own gutter beside the 880px message column.
+ * Use the pane width so opening a side panel cannot put it over the timeline. */
+@container chat-message-scroll (max-width: 1040px) {
   .browser-chat-turn-navigator {
     display: none;
   }
