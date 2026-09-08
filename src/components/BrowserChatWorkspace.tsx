@@ -8106,6 +8106,8 @@ export function BrowserChatWorkspace({
   const [selectedSessionIds, setSelectedSessionIds] = useState<string[]>([]);
   const [historyFilter, setHistoryFilter] = useState('');
   const [mobileHistoryOpen, setMobileHistoryOpen] = useState(false);
+  const mobileHistoryAnchorRef = useRef<HTMLDivElement | null>(null);
+  const mobileHistoryPanelRef = useRef<HTMLDivElement | null>(null);
   const [generatingAutomationMessageId, setGeneratingAutomationMessageId] = useState<string | null>(null);
   const [generatingSkillMessageId, setGeneratingSkillMessageId] = useState<string | null>(null);
   const [messageGenerationDialog, setMessageGenerationDialog] = useState<BrowserChatMessageGenerationDialog | null>(null);
@@ -9573,6 +9575,39 @@ export function BrowserChatWorkspace({
 
   useEscapeDismiss(mobileHistoryOpen, () => setMobileHistoryOpen(false));
 
+  useLayoutEffect(() => {
+    if (!mobileHistoryOpen) return;
+    const anchor = mobileHistoryAnchorRef.current;
+    const panel = mobileHistoryPanelRef.current;
+    if (!anchor || !panel) return;
+
+    const viewport = window.visualViewport;
+    const updatePosition = () => {
+      const rect = anchor.getBoundingClientRect();
+      const top = rect.bottom + 8;
+      const viewportBottom = viewport ? viewport.offsetTop + viewport.height : window.innerHeight;
+      panel.style.setProperty('--history-panel-top', `${top}px`);
+      panel.style.setProperty('--history-panel-left', `${rect.left}px`);
+      panel.style.setProperty('--history-panel-width', `${rect.width}px`);
+      panel.style.setProperty('--history-panel-height', `${Math.max(0, Math.min(640, viewportBottom - top - 12))}px`);
+    };
+
+    updatePosition();
+    const observer = new ResizeObserver(updatePosition);
+    observer.observe(anchor);
+    window.addEventListener('resize', updatePosition);
+    window.addEventListener('scroll', updatePosition, true);
+    viewport?.addEventListener('resize', updatePosition);
+    viewport?.addEventListener('scroll', updatePosition);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', updatePosition);
+      window.removeEventListener('scroll', updatePosition, true);
+      viewport?.removeEventListener('resize', updatePosition);
+      viewport?.removeEventListener('scroll', updatePosition);
+    };
+  }, [mobileHistoryOpen]);
+
   useEffect(() => {
     const compactLayout = window.matchMedia('(max-width: 1024px)');
     const closeOutsideCompactLayout = () => {
@@ -9585,7 +9620,7 @@ export function BrowserChatWorkspace({
   function renderSidebarDetail() {
     return (
       <section className="browser-chat-sidebar-section browser-chat-recent-section workspace-sidebar-archive browser-chat-conversation-history">
-        <div className="browser-chat-mobile-history-bar">
+        <div className="browser-chat-mobile-history-bar" ref={mobileHistoryAnchorRef}>
           <button
             aria-controls="browser-chat-mobile-history-panel"
             aria-expanded={mobileHistoryOpen}
@@ -9625,6 +9660,7 @@ export function BrowserChatWorkspace({
           aria-modal={mobileHistoryOpen ? 'true' : undefined}
           className={`browser-chat-recent-panel${mobileHistoryOpen ? ' is-mobile-open' : ''}`}
           id="browser-chat-mobile-history-panel"
+          ref={mobileHistoryPanelRef}
           role={mobileHistoryOpen ? 'dialog' : undefined}
         >
           <WorkspaceSidebarArchiveHeader

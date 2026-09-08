@@ -75,17 +75,16 @@
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr);
     position: fixed;
-    inset: auto 0 0;
-    width: min(100%, 640px);
-    height: min(78dvh, 640px);
-    margin-inline: auto;
+    inset: var(--history-panel-top) auto auto var(--history-panel-left);
+    width: var(--history-panel-width);
+    height: max(0px, calc(var(--history-panel-height) - env(safe-area-inset-bottom)));
+    margin: 0;
     padding: 14px 14px max(14px, env(safe-area-inset-bottom));
     border: 1px solid var(--sidebar-border);
-    border-bottom: 0;
-    border-radius: 22px 22px 0 0;
+    border-radius: 20px;
     background: var(--sidebar);
     color: var(--sidebar-foreground);
-    box-shadow: 0 -12px 48px #0003;
+    box-shadow: 0 16px 48px #0003;
     overflow: hidden;
     z-index: 2147481001;
   }
