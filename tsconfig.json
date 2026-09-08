@@ -107,21 +107,6 @@
       "@webpilot/capability-code-sandbox/mcp": [
         "./packages/capability-code-sandbox/src/mcp.ts"
       ],
-      "@webpilot/capability-research": [
-        "./packages/capability-research/src/index.ts"
-      ],
-      "@webpilot/capability-research/node": [
-        "./packages/capability-research/src/node.ts"
-      ],
-      "@webpilot/capability-research/runtime-skill": [
-        "./packages/capability-research/src/runtime-skill.ts"
-      ],
-      "@webpilot/capability-research/settings": [
-        "./packages/capability-research/src/settings.ts"
-      ],
-      "@webpilot/capability-research/mcp": [
-        "./packages/capability-research/src/mcp.ts"
-      ],
       "@webpilot/capability-connectors": [
         "./packages/capability-connectors/src/index.ts"
       ],

@@ -6,13 +6,16 @@ import { createMcpStreamableHttpConnector } from '@webpilot/capability-connector
 import type { AgentConnector } from '@webpilot/capability-connectors';
 import type { AgentDataSource } from '@webpilot/capability-data';
 import { createTypeOrmAgentDataSource } from '@webpilot/capability-data/typeorm';
-import type { ResearchOperations, ResearchSource } from '@webpilot/capability-research';
 import {
   createConnectorCommunicationChannel,
   createJsonWebhookChannel,
-  discoverWeComAiBotConversation,
+  createWeComMessageArguments,
+  validateWeComMessageContent,
 } from '@webpilot/capability-communication/node';
-import type { CommunicationChannel, CommunicationDraft } from '@webpilot/capability-communication';
+import type { CommunicationChannel, CommunicationDraft, CommunicationMediaOperations, CommunicationReceipt } from '@webpilot/capability-communication';
+import { CommunicationDeliveryError } from '@webpilot/capability-communication';
+import { getWeComConnection, weComConnectionStatus } from './wecom-connections';
+import { listCommunicationConversations } from '@/server/storage/communication-conversation-store';
 import type {
   ExternalIntegrationCategory,
   ExternalIntegrationConfiguration,
@@ -56,31 +59,32 @@ export type ExternalIntegrationPublicSummary = {
   updatedAt: string;
 };
 
+export type ExternalIntegrationTestTarget = { kind: 'user' | 'group'; id: string; name?: string; lastMessageTime?: string };
+
 export type ExternalIntegrationTestResult =
+  | { kind: 'available-targets'; targets: ExternalIntegrationTestTarget[] }
   | { kind: 'operations'; operationCount: number; operations: string[] }
   | { kind: 'delivered'; deliveryCount: number }
   | { kind: 'target-discovered'; target: { kind: 'user' | 'group'; id: string }; targetBinding: string }
-  | { kind: 'data-source'; tableCount: number; tables: string[] }
-  | { kind: 'search-results'; resultCount: number; results: string[] };
+  | { kind: 'data-source'; tableCount: number; tables: string[] };
 
 export type ExternalIntegrationTestProgress = {
   stage: 'connecting' | 'connected' | 'authenticated' | 'verifying';
 };
 
-type ResearchSearch = NonNullable<ResearchOperations['search']>;
 
 type ExternalIntegrationDriver = ExternalIntegrationDriverDescriptor & {
   normalize(configuration: ExternalIntegrationConfiguration): ExternalIntegrationConfiguration;
   summarize(configuration: ExternalIntegrationConfiguration): string;
   createConnector?(integration: ResolvedExternalIntegration, timeoutMs: number): AgentConnector;
-  createChannel?(integration: ResolvedExternalIntegration, timeoutMs: number): CommunicationChannel;
+  createChannel?(integration: ResolvedExternalIntegration, timeoutMs: number, readArtifact?: CommunicationMediaOperations['readArtifact']): CommunicationChannel;
   createDataSource?(integration: ResolvedExternalIntegration, timeoutMs: number): Promise<AgentDataSource>;
-  createResearchSearch?(integration: ResolvedExternalIntegration, timeoutMs: number): ResearchSearch;
   test(
     integration: ResolvedExternalIntegration,
     timeoutMs: number,
     abortSignal?: AbortSignal,
     onProgress?: (progress: ExternalIntegrationTestProgress) => void,
+    selectedTarget?: Pick<ExternalIntegrationTestTarget, 'kind' | 'id'>,
   ): Promise<ExternalIntegrationTestResult>;
 };
 
@@ -93,18 +97,6 @@ function httpEndpoint(value: string, label: string) {
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error(`${label}仅支持 HTTP 或 HTTPS。`);
   if (url.username || url.password) throw new Error(`${label}不能包含用户名或密码。`);
-  return url.href;
-}
-
-function websocketEndpoint(value: string) {
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    throw new Error('请输入有效的 WebSocket 长连接地址。');
-  }
-  if (url.protocol !== 'wss:' && url.protocol !== 'ws:') throw new Error('长连接地址仅支持 WSS 或 WS。');
-  if (url.username || url.password) throw new Error('长连接地址不能包含用户名或密码。');
   return url.href;
 }
 
@@ -145,60 +137,6 @@ function requiredText(value: string | undefined, label: string, maximum = 500) {
   if (!normalized) throw new Error(`请输入${label}。`);
   if (normalized.length > maximum) throw new Error(`${label}过长。`);
   return normalized;
-}
-
-function researchAuthentication(configuration: ExternalIntegrationConfiguration): ExternalIntegrationConfiguration {
-  const authentication = configuration.authentication || 'none';
-  if (authentication === 'none') return { authentication };
-  if (authentication === 'bearer') {
-    return {
-      authentication,
-      token: requiredText(configuration.token, '访问令牌', 20_000),
-    };
-  }
-  if (authentication === 'api-key') {
-    const apiKeyHeader = requiredText(configuration.apiKeyHeader, 'API Key 请求头名称', 100).toLowerCase();
-    if (!/^[!#$%&'*+.^_`|~0-9a-z-]+$/.test(apiKeyHeader)) throw new Error('API Key 请求头名称无效。');
-    if (apiKeyHeader === 'content-type' || apiKeyHeader === 'accept' || apiKeyHeader === 'content-length' || apiKeyHeader === 'host') {
-      throw new Error('该请求头名称不能用于 API Key。');
-    }
-    return {
-      authentication,
-      apiKeyHeader,
-      apiKey: requiredText(configuration.apiKey, 'API Key', 20_000),
-    };
-  }
-  throw new Error('不支持所选认证方式。');
-}
-
-function researchHeaders(configuration: ExternalIntegrationConfiguration): Record<string, string> {
-  if (configuration.authentication === 'bearer') return { authorization: `Bearer ${configuration.token}` };
-  if (configuration.authentication === 'api-key') return { [configuration.apiKeyHeader]: configuration.apiKey };
-  return {};
-}
-
-function normalizedResearchSources(payload: unknown, provider: string, limit: number): ResearchSource[] {
-  const values = Array.isArray(payload)
-    ? payload
-    : payload && typeof payload === 'object' && Array.isArray((payload as Record<string, unknown>).results)
-      ? (payload as { results: unknown[] }).results
-      : [];
-  return values.slice(0, limit).flatMap((item, index): ResearchSource[] => {
-    if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
-    const record = item as Record<string, unknown>;
-    const url = typeof record.url === 'string' ? record.url.trim() : '';
-    if (!url) return [];
-    return [{
-      sourceId: typeof record.sourceId === 'string' && record.sourceId.trim()
-        ? record.sourceId.trim()
-        : `source_${createHash('sha256').update(url).digest('hex').slice(0, 16)}`,
-      url,
-      title: typeof record.title === 'string' && record.title.trim() ? record.title.trim() : `Search result ${index + 1}`,
-      snippet: typeof record.snippet === 'string' ? record.snippet : undefined,
-      provider,
-      retrievedAt: new Date().toISOString(),
-    }];
-  });
 }
 
 function resultRecord(value: unknown) {
@@ -250,15 +188,18 @@ function verifyWeComMessageSendResult(result: unknown) {
       const errcode = Number(record.errcode);
       if (Number.isFinite(errcode) && errcode !== 0) {
         const detail = String(record.errmsg || record.message || '未知错误');
-        if (errcode === 40073 || /chat[_\s-]?id/i.test(detail)) {
-          throw new Error(`企业微信拒绝了已识别的会话标识（errcode ${errcode}）：${detail}。请确认“消息 MCP 地址”与 Bot ID、Secret 来自同一个机器人，并在该机器人的“消息”权限页完成授权后重新复制 MCP 地址，再重新连接验证。`);
+        if (/media[_\s-]?id/i.test(detail)) {
+          throw new CommunicationDeliveryError(`企业微信拒绝了媒体标识（errcode ${errcode}）：${detail}。请核对上传接口与发送接口是否属于同一协议和机器人，不能依据 ID 外观断定其真假。`, 'not-sent');
         }
-        throw new Error(`企业微信拒绝发送（errcode ${errcode}）：${detail}`);
+        if (/chat[_\s-]?id|openid/i.test(detail)) {
+          throw new CommunicationDeliveryError(`企业微信拒绝了所选会话（errcode ${errcode}）：${detail}。请确认消息 MCP 地址已获得发送权限，刷新接收会话列表后重新选择。`, 'not-sent');
+        }
+        throw new CommunicationDeliveryError(`企业微信拒绝发送（errcode ${errcode}）：${detail}`, 'not-sent');
       }
       if (errcode === 0) accepted = true;
     }
     if (record.ok === false || record.success === false || record.accepted === false) {
-      throw new Error(`企业微信拒绝发送：${String(record.errmsg || record.message || record.error || '未知错误')}`);
+      throw new CommunicationDeliveryError(`企业微信拒绝发送：${String(record.errmsg || record.message || record.error || '未知错误')}`, 'not-sent');
     }
     if (record.ok === true || record.success === true || record.accepted === true) accepted = true;
     if (['msgid', 'message_id', 'messageId', 'delivery_id', 'deliveryId'].some((key) => {
@@ -310,7 +251,8 @@ function weComRecentSessions(result: unknown) {
           : undefined;
       if (!session || !id || !kind) return [];
       const name = typeof session.chat_name === 'string' ? session.chat_name.trim() : '';
-      return [{ kind, id, ...(name ? { name } : {}) }];
+      const lastMessageTime = typeof session.last_msg_time === 'string' ? session.last_msg_time.trim() : '';
+      return [{ kind, id, ...(name ? { name } : {}), ...(lastMessageTime ? { lastMessageTime } : {}) }];
     });
   }
   throw new Error('企业微信最近会话接口没有返回 sessions 列表。');
@@ -328,21 +270,20 @@ async function resolveWeComTargets(
   }
   return targets.map((target) => {
     const expectedKind = target.kind === 'group' ? 'group' : 'user';
-    const session = sessions.find((item) => item.kind === expectedKind && item.id === target.id);
-    if (!session) {
-      throw new Error(`当前企业微信最近会话列表中没有这个${expectedKind === 'group' ? '群聊' : '单聊'}。请重新给机器人发送一条消息后再试。`);
+    const matches = sessions.filter((item) => item.kind === expectedKind && item.id === target.id);
+    if (matches.length !== 1) {
+      throw new Error('接收会话已不在当前可发送列表中，或存在多个匹配。请刷新会话列表并重新选择。');
     }
-    return session;
+    return matches[0];
   });
 }
 
 function weComTargetBinding(input: {
-  botId: string;
   endpoint: string;
   target: { kind: 'user' | 'group'; id: string };
 }) {
   return createHash('sha256')
-    .update(`${input.endpoint}\0${input.botId}\0${input.target.kind}\0${input.target.id}`)
+    .update(`${input.endpoint}\0${input.target.kind}\0${input.target.id}`)
     .digest('hex');
 }
 
@@ -351,18 +292,102 @@ function verifiedWeComTarget(configuration: ExternalIntegrationConfiguration) {
   if (!id) return undefined;
   const kind = configuration.defaultTargetKind === 'group' ? 'group' as const : 'user' as const;
   const expectedBinding = weComTargetBinding({
-    botId: configuration.botId,
     endpoint: configuration.endpoint,
     target: { kind, id },
   });
   return configuration.defaultTargetBinding === expectedBinding ? { kind, id } : undefined;
 }
 
+async function weComBotTargets(integration: ResolvedExternalIntegration) {
+  const conversations = await listCommunicationConversations(integration.id, integration.configuration.botId);
+  return [...new Map(conversations.map(({ target }) => [`${target.kind}:${target.id}`, {
+    ...target, transport: 'wecom-websocket', name: `${target.kind === 'group' ? '群聊' : '单聊'} · ${target.id}（可上传附件）`,
+  }])).values()];
+}
+
+function createWeComWebSocketChannel(integration: ResolvedExternalIntegration, readArtifact?: CommunicationMediaOperations['readArtifact']): CommunicationChannel {
+  return {
+    id: integration.id, name: integration.name, driverId: 'wecom-aibot-websocket',
+    capabilities: {
+      targetKinds: ['user', 'group'], contentFormats: ['text', 'markdown', 'image', 'file', 'voice', 'video'],
+      mediaSources: readArtifact ? ['artifactId', 'mediaId'] : ['mediaId'],
+      requiresExplicitTargets: true,
+      mediaConfigurationHint: '媒体通过同一机器人长连接上传和发送；mediaId 仅接受该机器人的长连接上传结果，不接受 MCP 媒体标识。',
+    },
+    validateContent: validateWeComMessageContent,
+    listTargets: () => weComBotTargets(integration),
+    async health() {
+      try { await getWeComConnection(integration).ready(); return { status: 'healthy' }; }
+      catch { return { status: 'unhealthy', message: '机器人长连接不可用。' }; }
+    },
+    async send(draft, context) {
+      let attempted = false;
+      let accepted = false;
+      try {
+        validateWeComMessageContent(draft.content);
+        const requested = draft.targets;
+        const available = await weComBotTargets(integration);
+        const targets = [...new Map(requested.map(target => [`${target.kind}:${target.id}`, target])).values()];
+        if (!targets.length) throw new Error('请从渠道 availableTargets 选择支持上传附件的接收对象。');
+        if (targets.some(target => !available.some(item => item.kind === target.kind && item.id === target.id))) {
+          throw new Error('接收对象不在此机器人的长连接会话记录中。请让接收者给机器人发消息，再从 availableTargets 选择支持上传附件的会话。');
+        }
+        const bot = getWeComConnection(integration);
+        const uploads: Array<{ artifactId?: string; mediaId: string; transport: string }> = [];
+        const args = await createWeComMessageArguments({
+          content: draft.content, target: targets[0], context,
+          media: readArtifact ? {
+            readArtifact,
+            async upload(file, format, execution) {
+              const mediaId = await bot.upload(file, format, execution);
+              uploads.push({ artifactId: 'artifactId' in draft.content ? draft.content.artifactId : undefined, mediaId, transport: 'aibot_upload_media_init/chunk/finish' });
+              return mediaId;
+            },
+          } : undefined,
+        }).catch((error: unknown) => {
+          const result = resultRecord(error);
+          const detail = error instanceof Error ? error.message : String(result?.errmsg || '读取或上传失败');
+          throw new Error(`企业微信准备消息失败${result?.errcode === undefined ? '' : `（errcode ${result.errcode}）`}：${detail}。尚未调用发送接口。`);
+        });
+        const deliveries = [];
+        for (const target of targets) {
+          context.abortSignal?.throwIfAborted();
+          try {
+            attempted = true;
+            const result = 'body' in draft.content
+              ? await bot.sendText(target.id, (args.markdown as { content: string }).content)
+              : await bot.sendMedia(target.id, draft.content.format,
+                (args[draft.content.format] as { media_id: string }).media_id,
+                args[draft.content.format] as { title?: string; description?: string });
+            accepted = true;
+            deliveries.push({ target, result });
+          } catch (error) {
+            const result = resultRecord(error);
+            const detail = error instanceof Error ? error.message : String(result?.errmsg || '发送失败');
+            throw new CommunicationDeliveryError(`企业微信长连接发送失败${result?.errcode === undefined ? '' : `（errcode ${result.errcode}）`}：${detail}。${uploads.length ? '文件已通过官方长连接上传并取得 media_id；失败发生在发送阶段。' : ''}`,
+              error instanceof CommunicationDeliveryError ? error.outcome : 'unknown', { cause: error });
+          }
+        }
+        return {
+          channelId: integration.id, acceptedAt: new Date().toISOString(),
+          deliveryIds: deliveries.map(({ result }) => result.headers?.req_id).filter((id): id is string => Boolean(id)),
+          details: { transport: 'wecom-websocket', uploads, deliveries },
+        };
+      } catch (error) {
+        throw new CommunicationDeliveryError(error instanceof Error ? error.message : String(error),
+          accepted ? 'unknown' : !attempted || (error instanceof CommunicationDeliveryError && error.outcome === 'not-sent') ? 'not-sent' : 'unknown',
+          { cause: error });
+      }
+    },
+  };
+}
+
 function createWeComAiBotChannel(
   integration: ResolvedExternalIntegration,
   timeoutMs: number,
   existingConnector?: AgentConnector,
-) {
+  readArtifact?: CommunicationMediaOperations['readArtifact'],
+): CommunicationChannel {
   const connector = existingConnector || createMcpStreamableHttpConnector({
     id: integration.id,
     name: integration.name,
@@ -370,7 +395,7 @@ function createWeComAiBotChannel(
     timeoutMs,
   });
   const defaultTarget = verifiedWeComTarget(integration.configuration);
-  return createConnectorCommunicationChannel({
+  const remote = createConnectorCommunicationChannel({
     id: integration.id,
     name: integration.name,
     driverId: 'wecom-aibot-mcp',
@@ -379,28 +404,66 @@ function createWeComAiBotChannel(
     requiredOperationIds: [weComSessionsOperationId],
     capabilities: {
       targetKinds: ['user', 'group'],
-      contentFormats: ['text', 'markdown'],
+      contentFormats: ['text', 'markdown', 'image', 'file', 'voice', 'video'],
+      mediaSources: ['mediaId'],
+      mediaConfigurationHint: '在此渠道配置同一机器人的 Bot ID 和 Secret，即可通过官方长连接上传媒体；无需 HTTP 上传地址。',
     },
+    validateContent: validateWeComMessageContent,
     defaultTargets: defaultTarget ? [defaultTarget] : [],
     resolveTargets(targets, _draft, context) {
       return resolveWeComTargets(connector, targets, context);
     },
-    mapArguments(draft, target) {
-      const title = draft.content.title?.trim();
-      const content = title ? `### ${title}\n\n${draft.content.body}` : draft.content.body;
-      if (Buffer.byteLength(content, 'utf8') > 20_480) {
-        throw new Error('企业微信 Markdown 消息不能超过 20480 字节。');
-      }
-      return {
-        chat_id: target.id,
-        msg_type: 'markdown',
-        markdown: { content },
-      };
+    mapArguments(draft, target, context) {
+      return createWeComMessageArguments({ content: draft.content, target, context });
     },
     verifyResult(result) {
       verifyWeComMessageSendResult(result);
     },
   });
+  const native = integration.configuration.botId && integration.configuration.botSecret
+    ? createWeComWebSocketChannel(integration, readArtifact) : undefined;
+  return {
+    ...remote,
+    capabilities: {
+      ...remote.capabilities,
+      mediaSources: native?.capabilities.mediaSources || remote.capabilities.mediaSources,
+      mediaConfigurationHint: '从企微拉取的会话使用消息 MCP 发送。上传 artifactId 请选择 availableTargets 中支持上传附件的会话；复制其 transport 和 id。收到消息后的附件回复通过机器人长连接发送。',
+    },
+    async listTargets() {
+      const result = await connector.call(weComSessionsOperationId, {}, { invocationId: `wecom-sessions-${randomUUID()}` });
+      const targets = weComRecentSessions(result).map(target => ({ ...target, transport: 'wecom-mcp' }));
+      return [...targets, ...(native ? await weComBotTargets(integration) : [])];
+    },
+    async send(draft, context) {
+      const targets: CommunicationDraft['targets'] = draft.targets.length ? draft.targets : defaultTarget ? [defaultTarget] : [];
+      const groups = new Map<string, CommunicationDraft['targets']>();
+      for (const target of targets) {
+        const transport = target.transport || 'wecom-mcp';
+        if (transport !== 'wecom-mcp' && (transport !== 'wecom-websocket' || !native)) {
+          throw new CommunicationDeliveryError('接收对象的发送方式不可用，请重新读取 availableTargets。', 'not-sent');
+        }
+        const group = groups.get(transport) || [];
+        group.push(target); groups.set(transport, group);
+      }
+      if (!groups.size) throw new CommunicationDeliveryError('请先选择接收会话。', 'not-sent');
+      if (groups.has('wecom-mcp') && 'artifactId' in draft.content && draft.content.artifactId) {
+        throw new CommunicationDeliveryError('此接收会话通过消息 MCP 发送，不能使用长连接上传的附件。请从 availableTargets 选择支持上传附件的会话；若尚未出现，请先向机器人发送消息。', 'not-sent');
+      }
+      const receipts: CommunicationReceipt[] = [];
+      try {
+        for (const [transport, group] of groups) {
+          receipts.push(await (transport === 'wecom-websocket' ? native! : remote).send({ ...draft, targets: group }, context));
+        }
+      } catch (error) {
+        if (!receipts.length) throw error;
+        throw new CommunicationDeliveryError(error instanceof Error ? error.message : String(error), 'unknown', { cause: error });
+      }
+      return {
+        channelId: integration.id, acceptedAt: new Date().toISOString(),
+        deliveryIds: receipts.flatMap(receipt => receipt.deliveryIds), details: { receipts },
+      };
+    },
+  };
 }
 
 function connectorDriver(): ExternalIntegrationDriver {
@@ -624,86 +687,6 @@ function postgresDataDriver(): ExternalIntegrationDriver {
   };
 }
 
-function jsonResearchDriver(): ExternalIntegrationDriver {
-  return {
-    id: 'json-search-api',
-    category: 'research',
-    label: 'JSON 搜索 API',
-    description: '连接接受标准搜索请求并返回 URL、标题和摘要列表的 HTTP API。',
-    testLabel: '发送测试搜索',
-    fields: [
-      {
-        key: 'endpoint',
-        label: '搜索服务地址',
-        description: '系统会以 POST 发送 query、limit、domains 和 recencyDays，并读取数组或 results 数组。',
-        control: 'url',
-        placeholder: 'https://search.example.com/api/search',
-        required: true,
-        secret: true,
-      },
-      {
-        key: 'authentication',
-        label: '认证方式',
-        control: 'select',
-        defaultValue: 'none',
-        options: [
-          { label: '无需认证', value: 'none' },
-          { label: 'Bearer Token', value: 'bearer' },
-          { label: 'API Key 请求头', value: 'api-key' },
-        ],
-      },
-      { key: 'token', label: '访问令牌', control: 'password', placeholder: '输入访问令牌', required: true, secret: true, visibleWhen: { field: 'authentication', value: 'bearer' } },
-      { key: 'apiKeyHeader', label: 'API Key 请求头名称', control: 'text', placeholder: 'x-api-key', defaultValue: 'x-api-key', required: true, visibleWhen: { field: 'authentication', value: 'api-key' } },
-      { key: 'apiKey', label: 'API Key', control: 'password', placeholder: '输入 API Key', required: true, secret: true, visibleWhen: { field: 'authentication', value: 'api-key' } },
-    ],
-    normalize(configuration) {
-      return {
-        endpoint: httpEndpoint(configuration.endpoint, '搜索服务地址'),
-        ...researchAuthentication(configuration),
-      };
-    },
-    summarize(configuration) {
-      return endpointPreview(configuration.endpoint);
-    },
-    createResearchSearch(integration, timeoutMs) {
-      return async (input, execution) => {
-        const timeout = AbortSignal.timeout(timeoutMs);
-        const signal = execution.abortSignal ? AbortSignal.any([execution.abortSignal, timeout]) : timeout;
-        const response = await fetch(integration.configuration.endpoint, {
-          method: 'POST',
-          signal,
-          headers: {
-            'content-type': 'application/json',
-            accept: 'application/json',
-            ...researchHeaders(integration.configuration),
-          },
-          body: JSON.stringify(input),
-        });
-        const text = await response.text();
-        if (!response.ok) throw new Error(`搜索服务返回 HTTP ${response.status}：${text.slice(0, 1_000)}`);
-        let payload: unknown;
-        try {
-          payload = JSON.parse(text);
-        } catch {
-          throw new Error('搜索服务没有返回有效的 JSON。');
-        }
-        return normalizedResearchSources(payload, integration.name, input.limit);
-      };
-    },
-    async test(integration, timeoutMs, abortSignal) {
-      const results = await this.createResearchSearch!(integration, timeoutMs)(
-        { query: 'Orbit', limit: 3 },
-        { invocationId: `settings-test-${randomUUID()}`, abortSignal },
-      );
-      return {
-        kind: 'search-results',
-        resultCount: results.length,
-        results: results.slice(0, 5).map((result) => result.title || result.url),
-      };
-    },
-  };
-}
-
 function canonicalWebhookDriver(): ExternalIntegrationDriver {
   return {
     id: 'canonical-http-webhook',
@@ -762,184 +745,95 @@ function weComAiBotDriver(): ExternalIntegrationDriver {
     id: 'wecom-aibot-mcp',
     category: 'communication',
     label: '企业微信智能机器人',
-    description: '通过企业微信消息 MCP 发送消息；Bot ID 和 Secret 仅用于自动识别接收会话。',
-    testLabel: '连接并验证会话',
-    testHint: '点击后先等待“连接已就绪”，再到企业微信给机器人发送一条消息；系统会通过消息 MCP 回发测试消息，收到后才会保存该会话。群聊中需要 @机器人。',
+    description: '从企业微信读取最近会话并发送消息。配置 Bot ID 和 Secret 后，还可接收消息、运行 Agent 并回复附件。',
+    testLabel: '读取接收会话',
+    testHint: '每次从企业微信拉取最近最多 20 个会话。请先给机器人发送消息，群聊中需要 @机器人，再读取并选择接收对象。',
     fields: [
       {
-        key: 'endpoint',
-        label: '企业微信消息 MCP 地址',
+        key: 'endpoint', label: '企业微信消息 MCP 地址',
         description: '复制机器人“消息”权限页面中的 StreamableHttp URL。地址内含 API Key，将加密保存。',
-        control: 'url',
-        placeholder: 'https://qyapi.weixin.qq.com/mcp/v2/bot/msg?apikey=...',
-        required: true,
-        secret: true,
-      },
-      { key: 'botId', label: 'Bot ID', control: 'text', placeholder: '企业微信后台显示的 Bot ID', required: true },
-      {
-        key: 'secret',
-        label: 'Secret',
-        description: '仅在识别会话时建立临时长连接；真正发送消息不使用长连接。',
-        control: 'password',
-        placeholder: '输入机器人 Secret',
-        required: true,
-        secret: true,
+        control: 'url', placeholder: 'https://qyapi.weixin.qq.com/mcp/v2/bot/msg?apikey=...', required: true, secret: true,
       },
       {
-        key: 'defaultTargetKind',
-        label: '已识别会话类型',
-        control: 'select',
-        hidden: true,
-        defaultValue: 'user',
-        options: [{ label: '单聊', value: 'user' }, { label: '群聊', value: 'group' }],
+        key: 'botId', label: 'Bot ID', control: 'text',
+        description: '填写同一智能机器人的 Bot ID。与 Secret 一起用于接收消息及官方媒体上传。',
       },
+      { key: 'botSecret', label: 'Secret', control: 'password', secret: true, description: '机器人的长连接 Secret，将加密保存。无需额外配置媒体上传地址。' },
+      { key: 'receiveMessages', label: '接收消息并运行 Agent', control: 'select', defaultValue: 'false',
+        options: [{ label: '关闭', value: 'false' }, { label: '开启', value: 'true' }],
+        description: '单聊直接发送，群聊中 @机器人。支持 /start、/delete、/list、/select id；对话归属保存此配置的网页账号，以完全模式运行，无需逐次确认工具操作。' },
+      { key: 'ownerUserId', label: '对话所属账号', control: 'text', hidden: true },
       {
-        key: 'defaultTarget',
-        label: '接收会话识别',
-        description: '无需自己查 userid。点击“连接并识别会话”，再给机器人发送一条消息即可自动填入。',
-        control: 'text',
-        placeholder: '等待自动识别',
-        secret: true,
-        hidden: true,
+        key: 'defaultTargetKind', label: '已验证会话类型', control: 'select', hidden: true,
+        defaultValue: 'user', options: [{ label: '单聊', value: 'user' }, { label: '群聊', value: 'group' }],
       },
-      {
-        key: 'defaultTargetBinding',
-        label: '已验证会话绑定',
-        control: 'text',
-        secret: true,
-        hidden: true,
-      },
-      {
-        key: 'wsUrl',
-        label: '长连接地址（可选）',
-        description: '标准企业无需填写；私有部署企业可填写管理后台提供的地址。',
-        control: 'url',
-        placeholder: 'wss://openws.work.weixin.qq.com',
-        hidden: true,
-      },
+      { key: 'defaultTarget', label: '接收会话', control: 'text', secret: true, hidden: true },
+      { key: 'defaultTargetBinding', label: '已验证会话绑定', control: 'text', secret: true, hidden: true },
     ],
     normalize(configuration) {
       const endpoint = configuration.endpoint?.trim();
-      const botId = configuration.botId?.trim();
-      const secret = configuration.secret?.trim();
       if (!endpoint) throw new Error('请输入企业微信消息 MCP 地址。');
-      if (!botId) throw new Error('请输入 Bot ID。');
-      if (!secret) throw new Error('请输入机器人 Secret。');
-      if (botId.length > 500 || secret.length > 20_000) throw new Error('企业微信机器人凭据过长。');
-      const wsUrl = configuration.wsUrl?.trim();
       const defaultTarget = configuration.defaultTarget?.trim();
       const defaultTargetKind = configuration.defaultTargetKind || 'user';
-      if (defaultTargetKind !== 'user' && defaultTargetKind !== 'group') throw new Error('已识别会话类型无效。');
-      if (defaultTarget && defaultTarget.length > 500) throw new Error('已识别接收会话过长。');
+      if (defaultTargetKind !== 'user' && defaultTargetKind !== 'group') throw new Error('已验证会话类型无效。');
+      if (defaultTarget && defaultTarget.length > 500) throw new Error('接收会话标识过长。');
       const normalizedEndpoint = httpEndpoint(endpoint, '企业微信消息 MCP 地址');
+      const botId = configuration.botId?.trim();
+      const botSecret = configuration.botSecret?.trim();
+      if (Boolean(botId) !== Boolean(botSecret)) throw new Error('Bot ID 和 Secret 必须一起配置。');
+      const receiveMessages = configuration.receiveMessages === 'true';
+      if (receiveMessages && !botId) throw new Error('开启接收消息需要配置 Bot ID 和 Secret。');
       const expectedTargetBinding = defaultTarget
-        ? weComTargetBinding({
-          botId,
-          endpoint: normalizedEndpoint,
-          target: { kind: defaultTargetKind, id: defaultTarget },
-        })
+        ? weComTargetBinding({ endpoint: normalizedEndpoint, target: { kind: defaultTargetKind, id: defaultTarget } })
         : '';
-      const targetIsVerified = Boolean(expectedTargetBinding)
-        && configuration.defaultTargetBinding === expectedTargetBinding;
+      const targetIsVerified = Boolean(expectedTargetBinding) && configuration.defaultTargetBinding === expectedTargetBinding;
       return {
         endpoint: normalizedEndpoint,
-        botId,
-        secret,
+        ...(botId && botSecret ? { botId, botSecret } : {}),
+        receiveMessages: String(receiveMessages),
+        ...(configuration.ownerUserId ? { ownerUserId: configuration.ownerUserId } : {}),
         defaultTargetKind,
-        ...(targetIsVerified ? {
-          defaultTarget,
-          defaultTargetBinding: expectedTargetBinding,
-        } : {}),
-        ...(wsUrl ? { wsUrl: websocketEndpoint(wsUrl) } : {}),
+        ...(targetIsVerified ? { defaultTarget, defaultTargetBinding: expectedTargetBinding } : {}),
       };
     },
     summarize(configuration) {
       const target = verifiedWeComTarget(configuration);
-      const status = target
-        ? `已验证${target.kind === 'group' ? '群聊' : '单聊'}`
-        : '待识别接收会话';
-      return `${status} · ${endpointPreview(configuration.endpoint)}`;
+      const status = target ? (target.kind === 'group' ? '已验证群聊' : '已验证单聊') : '待选择接收会话';
+      return status + ' · ' + endpointPreview(configuration.endpoint);
     },
-    createChannel(integration, timeoutMs) {
-      return createWeComAiBotChannel(integration, timeoutMs);
+    createChannel(integration, timeoutMs, readArtifact) {
+      return createWeComAiBotChannel(integration, timeoutMs, undefined, readArtifact);
     },
-    async test(integration, timeoutMs, abortSignal, onProgress) {
-      const testController = new AbortController();
-      const testSignal = abortSignal
-        ? AbortSignal.any([abortSignal, testController.signal])
-        : testController.signal;
+    async test(integration, timeoutMs, abortSignal, onProgress, selectedTarget) {
+      const activeIntegration = { ...integration, enabled: true };
       const connector = createMcpStreamableHttpConnector({
-        id: integration.id,
-        name: integration.name,
-        url: integration.configuration.endpoint,
-        timeoutMs,
+        id: integration.id, name: integration.name, url: integration.configuration.endpoint, timeoutMs,
       });
-      const validateMcp = async () => {
-        try {
-          const operations = await connector.listOperations({
-            invocationId: `settings-test-${randomUUID()}`,
-            abortSignal: testSignal,
-          });
-          if (!operations.some((operation) => operation.id === weComMessageOperationId)) {
-            throw new Error(`这个 MCP 地址没有提供 ${weComMessageOperationId} 发送能力。`);
-          }
-        } finally {
-          await connector.dispose?.();
-        }
-      };
+      const context = { invocationId: 'settings-test-' + randomUUID(), abortSignal };
       try {
-        const [, target] = await Promise.all([
-          validateMcp(),
-          discoverWeComAiBotConversation({
-            botId: integration.configuration.botId,
-            secret: integration.configuration.secret,
-            wsUrl: integration.configuration.wsUrl,
-            timeoutMs: 45_000,
-            abortSignal: testSignal,
-            onStatus(status) {
-              onProgress?.({ stage: status });
-            },
-          }),
-        ]);
-        onProgress?.({ stage: 'verifying' });
-        const verifiedIntegration: ResolvedExternalIntegration = {
-          ...integration,
-          configuration: {
-            ...integration.configuration,
-            defaultTargetKind: target.kind,
-            defaultTarget: target.id,
-          },
-        };
-        const channel = createWeComAiBotChannel(verifiedIntegration, timeoutMs);
-        try {
-          await channel.send({
-            id: randomUUID(),
-            channelId: integration.id,
-            targets: [target],
-            content: {
-              format: 'text',
-              body: 'Orbit 企业微信发送渠道已连接成功。',
-            },
-            metadata: { type: 'configuration-test' },
-            createdAt: new Date().toISOString(),
-          }, {
-            invocationId: `settings-test-send-${randomUUID()}`,
-            abortSignal: testSignal,
-          });
-        } finally {
-          await channel.dispose?.();
+        const operations = await connector.listOperations(context);
+        const required = [weComSessionsOperationId, weComMessageOperationId];
+        const missing = required.filter(id => !operations.some(operation => operation.id === id));
+        if (missing.length) throw new Error('这个 MCP 地址缺少必要能力：' + missing.join('、'));
+        if (!selectedTarget) {
+          const targets = weComRecentSessions(await connector.call(weComSessionsOperationId, {}, context));
+          if (!targets.length) throw new Error('当前没有可发送的接收会话。请先给机器人发送消息，群聊中需要 @机器人，然后重新读取。');
+          return { kind: 'available-targets', targets };
         }
+        onProgress?.({ stage: 'verifying' });
+        // The shared channel refreshes sessions and resolves the explicitly chosen target before sending.
+        const channel = createWeComAiBotChannel(activeIntegration, timeoutMs, connector);
+        await channel.send({
+          id: randomUUID(), channelId: integration.id, targets: [selectedTarget],
+          content: { format: 'text', body: 'Orbit 企业微信发送渠道已连接成功。' },
+          metadata: { type: 'configuration-test' }, createdAt: new Date().toISOString(),
+        }, context);
         return {
-          kind: 'target-discovered',
-          target,
-          targetBinding: weComTargetBinding({
-            botId: integration.configuration.botId,
-            endpoint: integration.configuration.endpoint,
-            target,
-          }),
+          kind: 'target-discovered', target: selectedTarget,
+          targetBinding: weComTargetBinding({ endpoint: integration.configuration.endpoint, target: selectedTarget }),
         };
       } finally {
-        testController.abort();
+        await connector.dispose?.();
       }
     },
   };
@@ -951,7 +845,6 @@ const drivers = [
   weComAiBotDriver(),
   sqliteDataDriver(),
   postgresDataDriver(),
-  jsonResearchDriver(),
 ] as const;
 const driversById = new Map(drivers.map((driver) => [driver.id, driver]));
 
@@ -1004,12 +897,13 @@ export function resolveExternalIntegrationConfiguration(input: {
 
 export function publicExternalIntegrationSummary(integration: ResolvedExternalIntegration): ExternalIntegrationPublicSummary {
   const driver = externalIntegrationDriver(integration.driverId, integration.category);
+  const bot = integration.driverId === 'wecom-aibot-mcp' ? weComConnectionStatus(integration.configuration.botId) : undefined;
   return {
     id: integration.id,
     category: integration.category,
     driverId: integration.driverId,
     name: integration.name,
-    detailPreview: driver.summarize(integration.configuration),
+    detailPreview: driver.summarize(integration.configuration) + (bot ? ` · ${bot.error || (bot.connected ? '机器人已连接' : '机器人连接中')}${bot.lastMessageError ? ` · ${bot.lastMessageError}` : ''}` : ''),
     configuredFields: driver.fields.filter((field) => Boolean(integration.configuration[field.key])).map((field) => field.key),
     publicConfiguration: Object.fromEntries(driver.fields
       .filter((field) => !field.secret && integration.configuration[field.key])
@@ -1025,10 +919,10 @@ export function createExternalIntegrationConnector(integration: ResolvedExternal
   return driver.createConnector(integration, timeoutMs);
 }
 
-export function createExternalCommunicationChannel(integration: ResolvedExternalIntegration, timeoutMs: number) {
+export function createExternalCommunicationChannel(integration: ResolvedExternalIntegration, timeoutMs: number, readArtifact?: CommunicationMediaOperations['readArtifact']) {
   const driver = externalIntegrationDriver(integration.driverId, 'communication');
   if (!driver.createChannel) throw new Error(`驱动 ${driver.id} 不能创建通信渠道。`);
-  return driver.createChannel(integration, timeoutMs);
+  return driver.createChannel(integration, timeoutMs, readArtifact);
 }
 
 export function createExternalDataSource(integration: ResolvedExternalIntegration, timeoutMs: number) {
@@ -1037,17 +931,12 @@ export function createExternalDataSource(integration: ResolvedExternalIntegratio
   return driver.createDataSource(integration, timeoutMs);
 }
 
-export function createExternalResearchSearch(integration: ResolvedExternalIntegration, timeoutMs: number) {
-  const driver = externalIntegrationDriver(integration.driverId, 'research');
-  if (!driver.createResearchSearch) throw new Error(`驱动 ${driver.id} 不能创建研究搜索服务。`);
-  return driver.createResearchSearch(integration, timeoutMs);
-}
-
 export async function testExternalIntegration(
   integration: ResolvedExternalIntegration,
   timeoutMs: number,
   abortSignal?: AbortSignal,
   onProgress?: (progress: ExternalIntegrationTestProgress) => void,
+  selectedTarget?: Pick<ExternalIntegrationTestTarget, 'kind' | 'id'>,
 ) {
-  return externalIntegrationDriver(integration.driverId, integration.category).test(integration, timeoutMs, abortSignal, onProgress);
+  return externalIntegrationDriver(integration.driverId, integration.category).test(integration, timeoutMs, abortSignal, onProgress, selectedTarget);
 }

@@ -38,11 +38,8 @@
     "@webpilot/capability-adapter-mcp": "0.1.0",
     "@webpilot/capability-connectors": "0.1.0",
     "@webpilot/capability-sdk": "0.1.0",
-    "ws": "^8.21.0",
+    "@wecom/aibot-node-sdk": "^1.0.7",
     "zod": "^4.4.3"
-  },
-  "devDependencies": {
-    "@types/ws": "^8.18.1"
   },
   "engines": {
     "node": ">=22.16"

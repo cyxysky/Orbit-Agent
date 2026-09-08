@@ -6,12 +6,13 @@ import {
   CircleCheck,
   Database,
   FolderOpen,
-  Globe2,
   Loader2,
   PencilLine,
   Plus,
   Send,
   Trash2,
+  UserRound,
+  UsersRound,
   X,
 } from 'lucide-react';
 import { AppInput } from '@/components/ui/app-input';
@@ -22,7 +23,7 @@ import { useI18n } from '@/i18n/I18nProvider';
 import { readApiJson } from '@/lib/api-client';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 
-type IntegrationCategory = 'connector' | 'communication' | 'data' | 'research';
+type IntegrationCategory = 'connector' | 'communication' | 'data';
 
 type IntegrationFieldDescriptor = {
   key: string;
@@ -71,8 +72,11 @@ type IntegrationDraft = {
   enabled: boolean;
 };
 
+type IntegrationTestTarget = { kind: 'user' | 'group'; id: string; name?: string; lastMessageTime?: string };
+
 type IntegrationTestResult = {
-  kind: 'operations' | 'delivered' | 'target-discovered' | 'data-source' | 'search-results';
+  kind: 'operations' | 'delivered' | 'target-discovered' | 'data-source' | 'available-targets';
+  targets?: IntegrationTestTarget[];
   operationCount?: number;
   operations?: string[];
   deliveryCount?: number;
@@ -80,8 +84,6 @@ type IntegrationTestResult = {
   targetBinding?: string;
   tableCount?: number;
   tables?: string[];
-  resultCount?: number;
-  results?: string[];
 };
 
 type IntegrationTestStreamEvent =
@@ -129,23 +131,12 @@ const panelDefinitions: Record<IntegrationCategory, {
     editLabel: '编辑数据源',
     deleteTitle: '删除数据源',
   },
-  research: {
-    addLabel: '添加搜索服务',
-    description: '配置 Agent 在研究任务中使用的搜索 API；公开网页抓取无需额外配置。',
-    emptyTitle: '尚未配置搜索服务',
-    emptyDescription: '添加符合标准请求与响应格式的 JSON 搜索 API，并先执行一次测试搜索。',
-    namePlaceholder: '例如：公司搜索服务',
-    typeLabel: '服务类型',
-    editLabel: '编辑搜索服务',
-    deleteTitle: '删除搜索服务',
-  },
 };
 
 function integrationIcon(category: IntegrationCategory, size: number) {
   if (category === 'connector') return <Cable size={size} />;
   if (category === 'communication') return <Send size={size} />;
-  if (category === 'data') return <Database size={size} />;
-  return <Globe2 size={size} />;
+  return <Database size={size} />;
 }
 
 function defaultConfiguration(driver: IntegrationDriverDescriptor | undefined) {
@@ -221,7 +212,7 @@ export function ExternalIntegrationSettings({
   const [updatingId, setUpdatingId] = useState('');
   const [error, setError] = useState('');
   const [editorError, setEditorError] = useState('');
-  const [testResult, setTestResult] = useState<{ message: string; operations?: string[] } | null>(null);
+  const [testResult, setTestResult] = useState<{ message: string; operations?: string[]; targets?: IntegrationTestTarget[] } | null>(null);
   const testAbortRef = useRef<AbortController | null>(null);
   const [hasFilePicker, setHasFilePicker] = useState(false);
   const headers = useMemo<Record<string, string>>(() => {
@@ -393,7 +384,7 @@ export function ExternalIntegrationSettings({
     }
   }
 
-  async function test() {
+  async function test(selectedTarget?: Pick<IntegrationTestTarget, 'kind' | 'id'>) {
     if (!editor) return;
     if (testing) {
       stopTest();
@@ -423,9 +414,14 @@ export function ExternalIntegrationSettings({
           name: requested.name,
           configuration: requested.configuration,
           clearFields: requested.clearFields,
+          selectedTarget,
         }),
       });
       const result = await readIntegrationTestResult(response, t('测试外部集成失败'), setTestStage);
+      if (result.kind === 'available-targets') {
+        setTestResult({ message: t('选择接收会话并发送测试消息'), targets: result.targets });
+        return;
+      }
       if (result?.kind === 'target-discovered' && result.target) {
         setEditor((current) => current ? {
           ...current,
@@ -447,10 +443,8 @@ export function ExternalIntegrationSettings({
             ? t('已识别并验证{type}会话；测试消息已由企业微信接受，点击保存后即可发送。', { type: t(result.target?.kind === 'group' ? '群聊' : '单聊') })
             : result?.kind === 'data-source'
               ? t('连接成功，读取到 {count} 张数据表。', { count: result.tableCount || 0 })
-              : result?.kind === 'search-results'
-                ? t('搜索服务可用，测试返回 {count} 条结果。', { count: result.resultCount || 0 })
-                : t('测试消息已被渠道接受。'),
-        operations: result?.operations || result?.tables || result?.results,
+              : t('测试消息已被渠道接受。'),
+        operations: result?.operations || result?.tables,
       });
     } catch (testError) {
       if (!testController.signal.aborted) {
@@ -689,24 +683,8 @@ export function ExternalIntegrationSettings({
               <div className={`external-integration-test-hint wide${testing ? ' is-waiting' : ''}`} role={testing ? 'status' : undefined}>
                 <Send aria-hidden="true" size={14} />
                 <div>
-                  <strong>{t(testing
-                    ? testStage === 'verifying'
-                      ? '已识别会话，正在回发测试消息'
-                      : testStage === 'authenticated'
-                      ? '连接已就绪，请现在发送消息'
-                      : testStage === 'connected'
-                        ? '网络已连接，正在认证机器人'
-                        : '正在连接企业微信机器人'
-                    : '自动识别接收会话')}</strong>
-                  <span>{t(testing
-                    ? testStage === 'verifying'
-                      ? '正在通过企业微信消息 MCP 校验该会话是否可以接收消息。'
-                      : testStage === 'authenticated'
-                      ? '请现在到企业微信给机器人发送一条消息；群聊中需要 @机器人。'
-                      : testStage === 'connected'
-                        ? '已连接企业微信，正在校验 Bot ID 和 Secret。'
-                        : activeDriver.testHint
-                    : activeDriver.testHint)}</span>
+                  <strong>{t(testing ? testStage === 'verifying' ? '正在向所选会话发送测试消息' : '正在读取接收会话' : '选择接收会话')}</strong>
+                  <span>{t(testing && testStage === 'verifying' ? '发送前会重新校验所选会话，发送成功后才能保存该会话。' : activeDriver.testHint)}</span>
                 </div>
               </div>
             ) : null}
@@ -717,6 +695,31 @@ export function ExternalIntegrationSettings({
                   <strong>{testResult.message}</strong>
                   {testResult.operations?.length ? <span>{testResult.operations.join('、')}</span> : null}
                 </div>
+                {testResult.targets?.length ? (
+                  <ul className="external-integration-target-list">
+                    {testResult.targets.map((target, index) => (
+                      <li key={`${target.kind}:${target.id}:${index}`}>
+                        <button type="button" className="external-integration-target-option"
+                          disabled={saving || testing} onClick={() => void test({ kind: target.kind, id: target.id })}>
+                          <span className="external-integration-target-icon" aria-hidden="true">
+                            {target.kind === 'group' ? <UsersRound size={18} /> : <UserRound size={18} />}
+                          </span>
+                          <span className="external-integration-target-copy">
+                            <strong title={target.name || target.id}>{target.name || t(target.kind === 'group' ? '未命名群聊' : '单聊')}</strong>
+                            <span className="external-integration-target-meta">
+                              <span>{t(target.kind === 'group' ? '群聊' : '单聊')}</span>
+                              {target.lastMessageTime ? <time>{target.lastMessageTime}</time> : null}
+                            </span>
+                          </span>
+                          <span className="external-integration-target-action">
+                            <Send aria-hidden="true" size={14} />
+                            <span>{t('发送测试消息')}</span>
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
               </div>
             ) : null}
             {editorError ? <p className="external-integration-modal-error wide" role="alert">{t(editorError)}</p> : null}

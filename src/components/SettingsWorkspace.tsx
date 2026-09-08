@@ -6,7 +6,6 @@ import {
   Brain,
   Braces,
   Bug,
-  Cable,
   Gauge,
   KeyRound,
   Loader2,
@@ -43,7 +42,6 @@ function SettingsTabIcon({ tab }: { tab: SettingsTab }) {
   if (tab === 'sensitive-data') return <ShieldCheck size={15} />;
   if (tab === 'runtime') return <Gauge size={15} />;
   if (tab === 'capabilities') return <Wrench size={15} />;
-  if (tab === 'integrations') return <Cable size={15} />;
   if (tab === 'skills') return <Braces size={15} />;
   if (tab === 'memory') return <Brain size={15} />;
   if (tab === 'accounts') return <KeyRound size={15} />;

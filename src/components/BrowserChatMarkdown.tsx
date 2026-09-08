@@ -12,9 +12,10 @@ import {
   useMemo,
   useRef,
 } from 'react';
-import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown';
 import { resolveBrowserChatArtifactReference, type BrowserChatArtifactSummary } from '@/lib/browser-chat-artifacts';
 import { BrowserChatCodeBlock } from '@/components/BrowserChatCodeBlock';
+import { PixelImage } from '@/components/ui/pixel-image';
 import rehypeKatex from 'rehype-katex';
 import rehypeRaw from 'rehype-raw';
 import rehypeSanitize from 'rehype-sanitize';
@@ -279,6 +280,37 @@ export const BrowserChatSessionIdContext = createContext<string | undefined>(und
 export const BrowserChatMarkdownArtifactsContext = createContext<readonly BrowserChatArtifactSummary[]>([]);
 export const BrowserChatAutomationRunIdContext = createContext<string | undefined>(undefined);
 
+// Keep renderer identities stable while a streamed response grows.
+const markdownComponents: Components = {
+  img: ({ src, alt, title }) => typeof src === 'string' && src ? (
+    <PixelImage src={src} alt={alt || ''} title={title} loading="lazy" />
+  ) : <span>{alt || '图片暂不可用'}</span>,
+  pre: ({ children }) => {
+    const code = Children.toArray(children)[0];
+    if (!isValidElement<{ className?: string; children?: ReactNode }>(code)) return <pre>{children}</pre>;
+    const language = /language-([^\s]+)/.exec(code.props.className || '')?.[1] || '';
+    return <BrowserChatCodeBlock code={String(code.props.children || '')} language={language} />;
+  },
+  a: ({ href, onClick, ...props }) => (
+    <a
+      {...props}
+      href={href}
+      onClick={(event) => {
+        onClick?.(event);
+        handleBrowserChatMarkdownLinkClick(event, href);
+      }}
+      target="_blank"
+      rel="noopener noreferrer"
+    />
+  ),
+  table: ({ children }) => <BrowserChatMarkdownTable>{children}</BrowserChatMarkdownTable>,
+  thead: ({ children }) => <thead className="table__header">{children}</thead>,
+  tbody: ({ children }) => <tbody className="table__body">{children}</tbody>,
+  tr: ({ children }) => <tr className="table__row">{children}</tr>,
+  th: ({ children, style }) => <th className="table__column" style={style}>{children}</th>,
+  td: ({ children, style }) => <td className="table__cell" style={style}>{children}</td>,
+};
+
 export const BrowserChatMarkdown = memo(function BrowserChatMarkdown({ markdown }: { markdown: string }) {
   const artifacts = useContext(BrowserChatMarkdownArtifactsContext);
   const normalizedMarkdown = useMemo(() => normalizeBrowserChatMarkdown(markdown), [markdown]);
@@ -288,35 +320,7 @@ export const BrowserChatMarkdown = memo(function BrowserChatMarkdown({ markdown 
           urlTransform={(url, key) => defaultUrlTransform(resolveBrowserChatArtifactReference(url, artifacts, key === 'src'))}
           rehypePlugins={[rehypeRaw, [rehypeSanitize, browserChatHtmlSchema], rehypeBrowserChatSvgReferences, rehypeKatex]}
           remarkPlugins={[remarkGfm, remarkMath, remarkBrowserChatCjkStrong]}
-          components={{
-            img: ({ src, alt, title }) => typeof src === 'string' && src ? (
-              <img src={src} alt={alt || ''} title={title} loading="lazy" />
-            ) : <span>{alt || '图片暂不可用'}</span>,
-            pre: ({ children }) => {
-              const code = Children.toArray(children)[0];
-              if (!isValidElement<{ className?: string; children?: ReactNode }>(code)) return <pre>{children}</pre>;
-              const language = /language-([^\s]+)/.exec(code.props.className || '')?.[1] || '';
-              return <BrowserChatCodeBlock code={String(code.props.children || '')} language={language} />;
-            },
-            a: ({ href, onClick, ...props }) => (
-              <a
-                {...props}
-                href={href}
-                onClick={(event) => {
-                  onClick?.(event);
-                  handleBrowserChatMarkdownLinkClick(event, href);
-                }}
-                target="_blank"
-                rel="noopener noreferrer"
-              />
-            ),
-            table: ({ children }) => <BrowserChatMarkdownTable>{children}</BrowserChatMarkdownTable>,
-            thead: ({ children }) => <thead className="table__header">{children}</thead>,
-            tbody: ({ children }) => <tbody className="table__body">{children}</tbody>,
-            tr: ({ children }) => <tr className="table__row">{children}</tr>,
-            th: ({ children, style }) => <th className="table__column" style={style}>{children}</th>,
-            td: ({ children, style }) => <td className="table__cell" style={style}>{children}</td>,
-          }}
+          components={markdownComponents}
         >
           {normalizedMarkdown}
         </ReactMarkdown>

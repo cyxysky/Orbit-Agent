@@ -134,7 +134,7 @@ function toolParts(message: ModelMessage) {
 
 export function deriveRuntimeTaskState(messages: ModelMessage[], previous?: RuntimeTaskState): RuntimeTaskState {
   const instructionRefs = [...(previous?.instructionRefs || [])];
-  const evidence = new Map((previous?.evidence || []).map((item) => [item.toolCallId, item]));
+  const evidence = new Map((previous?.evidence || []).filter((item) => item.tool !== contextReadToolName).map((item) => [item.toolCallId, item]));
   const pending = new Set(previous?.pendingToolCallIds || []);
   for (const message of messages) {
     const ref = runtimeContextMessageRef(message);
@@ -144,6 +144,9 @@ export function deriveRuntimeTaskState(messages: ModelMessage[], previous?: Runt
     }
     for (const part of toolParts(message)) {
       pending.delete(part.toolCallId);
+      // Reading a receipt is not a new external observation. Indexing the read
+      // itself sends the agent through references to references indefinitely.
+      if (part.toolName === contextReadToolName) continue;
       const outer = structuredOutput('value' in part.output ? part.output.value : undefined);
       // Request previews are not new tool observations; retain the original evidence receipt.
       if (outer?.archived === true && typeof outer.contextRef === 'string') continue;
@@ -202,7 +205,7 @@ function projectToolMessage(message: ModelMessage, ref: string, shared: Map<stri
     const serialized = JSON.stringify(value);
     const exactSource = actual?.readKind === 'source' || (typeof raw === 'string' && raw.includes('Exact source below:'));
     const failure = envelope?.ok === false || actual?.ok === false || part.output.type.startsWith('error');
-    if (!exactSource && !failure && part.toolName !== 'skill' && estimateRuntimeTextTokens(serialized) > materialBudget) {
+    if (!exactSource && !failure && part.toolName !== 'skill' && part.toolName !== contextReadToolName && estimateRuntimeTextTokens(serialized) > materialBudget) {
       const metadata = Object.fromEntries(Object.entries(actual || {}).filter(([key, item]) =>
         /^(ok|kind|documentId|artifactId|path|sourceDigest|catalogDigest|status|readKind|query|delivery)$/.test(key)
         && ['boolean', 'string', 'number'].includes(typeof item)));
@@ -315,10 +318,15 @@ export function assembleRuntimeContext(input: {
     ref: runtimeContextMessageRef(entry.message), kind: 'skill', pointer: '', readWith: 'skill',
     identity: { skillId: entry.block.id, title: entry.block.title, version: entry.block.version, digest: entry.block.digest, bodyPresent: false },
   }));
-  const stateMessage: ModelMessage = { role: 'user', content: `${runtimeTaskStateMarker}\nObservations only. A tool success is not task completion; pending calls have unknown outcomes. Read missing evidence with contextRead and check current source/page before mutation.\n${JSON.stringify({ version: 1,
-    instructionRefs: taskState.instructionRefs.filter((ref) => !covered.has(ref)), evidence: taskState.evidence, pendingToolCallIds: taskState.pendingToolCallIds })}` };
-  const assemble = () => [...summaryMessages, ...entries.filter((entry) => entry.selected).flatMap((entry) => entry.messages), stateMessage,
+  const stateMessage: ModelMessage = { role: 'user', content: '' };
+  const assemble = () => {
+    const inlineEvidence = new Set(entries.filter((entry) => entry.selected).flatMap((entry) => entry.messages.flatMap((message) =>
+    toolParts(message).filter((part) => !('value' in part.output && structuredOutput(part.output.value)?.archived === true)).map((part) => part.toolCallId))));
+    stateMessage.content = `${runtimeTaskStateMarker}\nObservations only, not a list of unread work. Evidence marked inContext is already included above: use its result directly. Use contextRead only for a specific missing detail, never to reread a completed retrieval or recursively inspect retrieval receipts. Current results supersede historical ones. A tool success is not task completion; pending calls have unknown outcomes. Check current source/page before mutation when the task requires it.\n${JSON.stringify({ version: 1,
+    instructionRefs: taskState.instructionRefs.filter((ref) => !covered.has(ref)), evidence: taskState.evidence.map((item) => ({ ...item, inContext: inlineEvidence.has(item.toolCallId) })), pendingToolCallIds: taskState.pendingToolCallIds })}`;
+    return [...summaryMessages, ...entries.filter((entry) => entry.selected).flatMap((entry) => entry.messages), stateMessage,
     ...[...materialMap.values()].slice(-32).map(runtimeMaterialReceipt), ...knowledgeReferences(), ...knowledge.filter((entry) => entry.selected).map((entry) => entry.message)];
+  };
   const before = input.baseTokens + estimate(input.messages) + knowledge.reduce((sum, entry) => sum + (entry.block.resourceOnly ? 0 : entry.tokens), 0);
   let messages = assemble();
   let estimated = input.baseTokens + estimate(messages);

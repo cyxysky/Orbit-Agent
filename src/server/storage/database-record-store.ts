@@ -484,8 +484,21 @@ export function writeBrowserChatSessionDelta<
 export async function readReferencedUploadPaths(userId?: string) {
   const prefix = userId ? `uploads/${userId}/` : 'uploads/';
   const rows = await queryDatabase<JsonRow>('SELECT record_json FROM browser_chat_message WHERE record_json LIKE ?', [`%${prefix}%`]);
+  // Received files can wait for a separate text message before entering chat history.
+  // Keep them under the same quota/retention rules without deleting referenced inputs.
+  const pending = await queryDatabase<JsonRow>(`SELECT m.record_json FROM communication_inbound m
+    JOIN communication_conversation c ON c.id = m.conversation_id
+    WHERE m.status IN ('received', 'waiting', 'running', 'replying')${userId ? ' AND c.user_id = ?' : ''}`,
+  userId ? [userId] : []);
+  const sessions = pending.length ? new Set((await queryDatabase<{ id: string }>(
+    `SELECT id FROM browser_chat_session WHERE status <> 'closed'${userId ? ' AND user_id = ?' : ''}`, userId ? [userId] : [],
+  )).map(session => session.id)) : new Set<string>();
+  const retainedPending = pending.filter(row => {
+    const item = parseDatabaseJson<{ sessionId?: string }>(row.record_json, {});
+    return item.sessionId && sessions.has(item.sessionId);
+  });
   const paths = new Set<string>();
-  for (const row of rows) {
+  for (const row of [...rows, ...retainedPending]) {
     const message = parseDatabaseJson<{ attachments?: Array<{ path?: unknown }> }>(row.record_json, {});
     for (const attachment of message.attachments || []) {
       const candidate = typeof attachment.path === 'string' ? attachment.path.replace(/\\/g, '/').trim() : '';

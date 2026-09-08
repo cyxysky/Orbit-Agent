@@ -15,6 +15,8 @@ export type BrowserChatAttachment = {
   sourceUrl?: string;
 };
 
+export const browserChatAttachmentLimit = 8;
+
 export function normalizeBrowserChatUploadPath(value: unknown, userId?: unknown) {
   const raw = typeof value === 'string' ? value.trim().replace(/\\/g, '/') : '';
   if (!raw || raw.startsWith('/') || raw.includes('..') || !raw.startsWith('uploads/')) return undefined;
@@ -27,7 +29,7 @@ export function normalizeBrowserChatUploadPath(value: unknown, userId?: unknown)
 export function normalizeBrowserChatAttachments(value: unknown, userId?: unknown): BrowserChatAttachment[] {
   if (!Array.isArray(value)) return [];
   const attachments: BrowserChatAttachment[] = [];
-  for (const item of value.slice(0, 8)) {
+  for (const item of value.slice(0, browserChatAttachmentLimit)) {
     if (!item || typeof item !== 'object') continue;
     const record = item as Record<string, unknown>;
     const rawType = typeof record.type === 'string' && record.type.trim() ? record.type.trim().slice(0, 160) : 'application/octet-stream';

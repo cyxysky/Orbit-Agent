@@ -70,7 +70,8 @@ function readProviderSettings(value: unknown): Partial<Record<ModelProvider, Mod
     const configuredCapabilities = Object.fromEntries(Object.entries(rawCapabilities).flatMap(([modelId, capability]) => {
       if (!capability || typeof capability !== 'object' || Array.isArray(capability)) return [];
       const imageInput = (capability as Record<string, unknown>).imageInput;
-      return typeof imageInput === 'boolean' ? [[modelId, { imageInput }]] : [];
+      const maxContextTokens = z.number().int().positive().optional().parse((capability as Record<string, unknown>).maxContextTokens);
+      return typeof imageInput === 'boolean' ? [[modelId, { imageInput, maxContextTokens }]] : [];
     }));
     result[definition.value] = {
       selectedModel: typeof item.selectedModel === 'string' ? item.selectedModel : undefined,

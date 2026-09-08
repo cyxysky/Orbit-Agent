@@ -11,7 +11,6 @@ import { dataCapabilityManifest } from '@webpilot/capability-data';
 import { gitCapabilityManifest } from '@webpilot/capability-git';
 import { knowledgeCapabilityManifest } from '@webpilot/capability-knowledge';
 import { mediaCapabilityManifest } from '@webpilot/capability-media';
-import { researchCapabilityManifest } from '@webpilot/capability-research';
 import { workflowCapabilityManifest } from '@webpilot/capability-workflow';
 import { subagentRuntimeSkill } from './subagent-runtime-skill';
 
@@ -26,7 +25,6 @@ const fileRuntimeSkill = manifestRuntimeSkill(fileCapabilityManifest);
 const chartCapabilityRuntimeSkill = manifestRuntimeSkill(chartCapabilityManifest);
 const infrastructureRuntimeSkills = [
   codeSandboxCapabilityManifest,
-  researchCapabilityManifest,
   connectorsCapabilityManifest,
   knowledgeCapabilityManifest,
   dataCapabilityManifest,

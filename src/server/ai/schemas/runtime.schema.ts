@@ -267,6 +267,7 @@ export type ModelProviderSettings = {
   models?: string[];
   modelCapabilities?: Record<string, {
     imageInput: boolean;
+    maxContextTokens?: number;
   }>;
   apiKey?: string;
   hasApiKey?: boolean;

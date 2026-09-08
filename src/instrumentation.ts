@@ -1,14 +1,16 @@
 type SchedulerBootstrapState = {
   attempts: number;
   started: boolean;
+  route?: string;
   timer?: ReturnType<typeof setTimeout>;
 };
 
 const schedulerBootstrapGlobal = globalThis as typeof globalThis & {
   __webpilotSchedulerBootstrap?: SchedulerBootstrapState;
+  __webpilotCommunicationBootstrap?: SchedulerBootstrapState;
 };
 
-function schedulerBootstrapUrl() {
+function schedulerBootstrapUrl(route = '/api/automation/scheduler') {
   const configuredOrigin = String(process.env.WEBPILOT_INTERNAL_ORIGIN || '').trim();
   const port = Number(process.env.PORT || 3000);
   const origin = configuredOrigin || `http://127.0.0.1:${Number.isInteger(port) && port > 0 ? port : 3000}`;
@@ -18,14 +20,14 @@ function schedulerBootstrapUrl() {
     || '',
   ).trim().replace(/^\/+|\/+$/g, '');
   const basePath = rawBasePath ? `/${rawBasePath}` : '';
-  return new URL(`${basePath}/api/automation/scheduler`, origin);
+  return new URL(`${basePath}${route}`, origin);
 }
 
 function scheduleBootstrapAttempt(state: SchedulerBootstrapState, delay: number) {
   if (state.started || state.timer) return;
   state.timer = setTimeout(() => {
     state.timer = undefined;
-    void fetch(schedulerBootstrapUrl(), {
+    void fetch(schedulerBootstrapUrl(state.route), {
       method: 'POST',
       cache: 'no-store',
       headers: {
@@ -37,7 +39,7 @@ function scheduleBootstrapAttempt(state: SchedulerBootstrapState, delay: number)
     }).catch((error: unknown) => {
       state.attempts += 1;
       if (state.attempts === 5 || state.attempts % 30 === 0) {
-        console.warn('[automation-bootstrap] Scheduler API is not ready yet.', error);
+        console.warn('[runtime-bootstrap] Runtime API is not ready yet.', state.route || '/api/automation/scheduler', error);
       }
       scheduleBootstrapAttempt(state, Math.min(10_000, 250 * (state.attempts + 1)));
     });
@@ -47,6 +49,12 @@ function scheduleBootstrapAttempt(state: SchedulerBootstrapState, delay: number)
 
 export function register() {
   if (process.env.NEXT_RUNTIME !== 'nodejs') return;
+  if (process.env.WEBPILOT_SERVER_ROLE !== 'ui') {
+    const communication = schedulerBootstrapGlobal.__webpilotCommunicationBootstrap ??= {
+      attempts: 0, started: false, route: '/api/communication/runtime',
+    };
+    scheduleBootstrapAttempt(communication, 0);
+  }
   // In development the schedules API starts this loop on first use. Avoid
   // adding the scheduler entry to Webpack's shared cold-compilation queue while
   // the requested UI route is still compiling.

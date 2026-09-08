@@ -1,12 +1,13 @@
+export { createWeComBotConnection, normalizeWeComInboundMessage, WECOM_BOT_RUNTIME_REVISION, type WeComBotConnection, type WeComInboundMessage, type WeComInboundAttachment } from './wecom-bot.js';
 import { randomUUID } from 'node:crypto';
 import { createCapabilityDocumentDatabase } from '@webpilot/capability-sdk/node';
 import path from 'node:path';
 import type { AgentConnector } from '@webpilot/capability-connectors';
 import type { CapabilityExecutionContext, CapabilityRunContext } from '@webpilot/capability-sdk';
-import type WebSocket from 'ws';
-import type { RawData } from 'ws';
+export { createWeComMessageArguments, validateWeComMessageContent } from './wecom.js';
 import {
   createCommunicationCapability,
+  CommunicationDeliveryError,
   type CommunicationChannel,
   type CommunicationChannelCapabilities,
   type CommunicationDraft,
@@ -16,9 +17,6 @@ import {
 
 const allTargetKinds = ['user', 'group', 'department', 'email', 'address'] as const;
 const allContentFormats = ['text', 'markdown'] as const;
-const requireFromRuntime = process.getBuiltinModule('node:module')
-  .createRequire(path.join(process.cwd(), 'package.json'));
-const WebSocketClient = requireFromRuntime('ws') as typeof WebSocket;
 
 function responseBody(text: string) {
   if (!text) return undefined;
@@ -77,7 +75,7 @@ export function createJsonWebhookChannel(input: {
       } else {
         const record = recordValue(body);
         if (record?.ok === false || record?.accepted === false) {
-          throw new Error(String(record.message || record.error || 'Webhook rejected the message.'));
+          throw new CommunicationDeliveryError(String(record.message || record.error || 'Webhook rejected the message.'), 'not-sent');
         }
       }
       const record = recordValue(body);
@@ -172,13 +170,14 @@ export function createConnectorCommunicationChannel(input: {
   operationId: string;
   requiredOperationIds?: readonly string[];
   capabilities: Omit<CommunicationChannelCapabilities, 'requiresExplicitTargets'>;
+  validateContent?: CommunicationChannel['validateContent'];
   defaultTargets?: readonly CommunicationTarget[];
   resolveTargets?: (
     targets: readonly CommunicationTarget[],
     draft: CommunicationDraft,
     context: CapabilityExecutionContext,
   ) => readonly CommunicationTarget[] | Promise<readonly CommunicationTarget[]>;
-  mapArguments(draft: CommunicationDraft, target: CommunicationTarget): Record<string, unknown>;
+  mapArguments(draft: CommunicationDraft, target: CommunicationTarget, context: CapabilityExecutionContext): Record<string, unknown> | Promise<Record<string, unknown>>;
   verifyResult?: (result: unknown, target: CommunicationTarget) => void | Promise<void>;
   resolveDeliveryId?: (result: unknown, target: CommunicationTarget) => string | undefined;
 }): CommunicationChannel {
@@ -187,35 +186,50 @@ export function createConnectorCommunicationChannel(input: {
     id: input.id,
     name: input.name || input.id,
     driverId: input.driverId,
+    validateContent: input.validateContent,
     capabilities: {
       ...input.capabilities,
       requiresExplicitTargets: defaultTargets.length === 0,
     },
     async send(draft, context) {
-      const sourceTargets = draft.targets.length ? draft.targets : defaultTargets;
-      const requestedTargets = [...new Map(sourceTargets.map((target) => [`${target.kind}:${target.id}`, target])).values()];
-      const resolvedTargets = input.resolveTargets
-        ? await input.resolveTargets(requestedTargets, draft, context)
-        : requestedTargets;
-      const targets = [...new Map(resolvedTargets.map((target) => [`${target.kind}:${target.id}`, target])).values()];
-      if (!targets.length) throw new Error(`Channel ${input.id} requires a message target.`);
-      const deliveryIds: string[] = [];
-      const deliveries: Array<{ target: CommunicationTarget; result: unknown }> = [];
-      for (const target of targets) {
-        const result = await input.connector.call(input.operationId, input.mapArguments(draft, target), context);
-        const resultError = connectorResultError(result);
-        if (resultError) throw new Error(resultError);
-        await input.verifyResult?.(result, target);
-        const deliveryId = input.resolveDeliveryId?.(result, target) || deliveryIdFromResult(result);
-        if (deliveryId) deliveryIds.push(deliveryId);
-        deliveries.push({ target, result });
+      let attempted = false;
+      let accepted = false;
+      try {
+        input.validateContent?.(draft.content);
+        const sourceTargets = draft.targets.length ? draft.targets : defaultTargets;
+        const requestedTargets = [...new Map(sourceTargets.map((target) => [`${target.kind}:${target.id}`, target])).values()];
+        const resolvedTargets = input.resolveTargets
+          ? await input.resolveTargets(requestedTargets, draft, context)
+          : requestedTargets;
+        const targets = [...new Map(resolvedTargets.map((target) => [JSON.stringify([target.transport, target.kind, target.id]), target])).values()];
+        if (!targets.length) throw new Error(`Channel ${input.id} requires a message target.`);
+        const deliveryIds: string[] = [];
+        const deliveries: Array<{ target: CommunicationTarget; result: unknown }> = [];
+        for (const target of targets) {
+          context.abortSignal?.throwIfAborted();
+          const args = await input.mapArguments(draft, target, context);
+          context.abortSignal?.throwIfAborted();
+          attempted = true;
+          const result = await input.connector.call(input.operationId, args, context);
+          await input.verifyResult?.(result, target);
+          const resultError = connectorResultError(result);
+          if (resultError) throw new Error(resultError);
+          accepted = true;
+          const deliveryId = input.resolveDeliveryId?.(result, target) || deliveryIdFromResult(result);
+          if (deliveryId) deliveryIds.push(deliveryId);
+          deliveries.push({ target, result });
+        }
+        return {
+          channelId: input.id,
+          deliveryIds,
+          acceptedAt: new Date().toISOString(),
+          details: { operationId: input.operationId, deliveries },
+        };
+      } catch (error) {
+        throw new CommunicationDeliveryError(error instanceof Error ? error.message : String(error),
+          accepted ? 'unknown' : !attempted || (error instanceof CommunicationDeliveryError && error.outcome === 'not-sent') ? 'not-sent' : 'unknown',
+          { cause: error });
       }
-      return {
-        channelId: input.id,
-        deliveryIds,
-        acceptedAt: new Date().toISOString(),
-        details: { operationId: input.operationId, deliveries },
-      };
     },
     async health() {
       try {
@@ -234,147 +248,6 @@ export function createConnectorCommunicationChannel(input: {
       await input.connector.dispose?.();
     },
   };
-}
-
-export function discoverWeComAiBotConversation(input: {
-  botId: string;
-  secret: string;
-  wsUrl?: string;
-  timeoutMs?: number;
-  abortSignal?: AbortSignal;
-  onStatus?: (status: 'connecting' | 'connected' | 'authenticated') => void;
-}): Promise<{ kind: 'user' | 'group'; id: string }> {
-  const messageTimeoutMs = input.timeoutMs || 45_000;
-  const phaseTimeoutMs = Math.min(messageTimeoutMs, 15_000);
-  const socket = new WebSocketClient(input.wsUrl || 'wss://openws.work.weixin.qq.com');
-  const authRequestId = `aibot_subscribe_${Date.now()}_${randomUUID().replaceAll('-', '').slice(0, 8)}`;
-  return new Promise<{ kind: 'user' | 'group'; id: string }>((resolve, reject) => {
-    let settled = false;
-    let authenticated = false;
-    let phaseTimer: ReturnType<typeof setTimeout> | undefined;
-    const reportStatus = (status: 'connecting' | 'connected' | 'authenticated') => {
-      try {
-        input.onStatus?.(status);
-      } catch {
-        // Status reporting must not interrupt authentication or message capture.
-      }
-    };
-    const waitForPhase = (timeoutMs: number, message: string) => {
-      clearTimeout(phaseTimer);
-      phaseTimer = setTimeout(() => fail(new Error(message)), timeoutMs);
-    };
-    const cleanup = () => {
-      clearTimeout(phaseTimer);
-      input.abortSignal?.removeEventListener('abort', handleAbort);
-      socket.off('open', handleConnected);
-      socket.off('message', handleSocketMessage);
-      socket.off('error', handleSocketError);
-      socket.off('close', handleDisconnected);
-      if (socket.readyState === WebSocketClient.OPEN) socket.close();
-      else if (socket.readyState === WebSocketClient.CONNECTING) socket.terminate();
-    };
-    const succeed = (target: { kind: 'user' | 'group'; id: string }) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolve(target);
-    };
-    const fail = (error: Error) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(error);
-    };
-    const captureTarget = (body: unknown) => {
-      const message = recordValue(body);
-      if (!message) return;
-      const messageBotId = typeof message.aibotid === 'string' ? message.aibotid.trim() : '';
-      if (messageBotId && messageBotId !== input.botId) return;
-      const chatId = typeof message.chatid === 'string' ? message.chatid.trim() : '';
-      if (message.chattype === 'group' && chatId) {
-        succeed({ kind: 'group', id: chatId });
-        return;
-      }
-      const sender = recordValue(message.from);
-      const userId = typeof sender?.userid === 'string' ? sender.userid.trim() : '';
-      if (message.chattype === 'single' && userId) succeed({ kind: 'user', id: userId });
-    };
-    const handleConnected = () => {
-      reportStatus('connected');
-      waitForPhase(
-        phaseTimeoutMs,
-        'WebSocket 已连接，但机器人认证超时。请核对 Bot ID 和 Secret 是否属于同一个企业微信智能机器人，并确认该机器人仍处于启用状态。',
-      );
-      try {
-        socket.send(JSON.stringify({
-          cmd: 'aibot_subscribe',
-          headers: { req_id: authRequestId },
-          body: { bot_id: input.botId, secret: input.secret },
-        }));
-      } catch (error) {
-        fail(error instanceof Error ? error : new Error(String(error)));
-      }
-    };
-    const handleAuthenticated = () => {
-      authenticated = true;
-      reportStatus('authenticated');
-      waitForPhase(
-        messageTimeoutMs,
-        '机器人认证成功，但没有收到企业微信消息。单聊请直接发送消息，群聊请先 @机器人再发送。',
-      );
-    };
-    const handleSocketMessage = (data: RawData) => {
-      try {
-        const text = Array.isArray(data)
-          ? Buffer.concat(data).toString('utf8')
-          : data instanceof ArrayBuffer
-            ? Buffer.from(data).toString('utf8')
-            : Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString('utf8');
-        const frame = recordValue(JSON.parse(text.replace(/[\x00-\x08\x0B-\x0D\x0E-\x1F]/g, '')));
-        if (!frame) return;
-        const headers = recordValue(frame.headers);
-        const requestId = typeof headers?.req_id === 'string' ? headers.req_id : '';
-        if (requestId === authRequestId || requestId.startsWith('aibot_subscribe_')) {
-          if (Number(frame.errcode) !== 0) {
-            const detail = typeof frame.errmsg === 'string' ? frame.errmsg : '未知错误';
-            fail(new Error(`企业微信机器人认证失败：${detail}（错误码 ${String(frame.errcode ?? '')}）`));
-            return;
-          }
-          handleAuthenticated();
-          return;
-        }
-        if (frame.cmd === 'aibot_msg_callback') {
-          captureTarget(frame.body);
-        }
-      } catch (error) {
-        fail(error instanceof Error ? error : new Error(String(error)));
-      }
-    };
-    const handleSocketError = (error: Error) => fail(new Error(`企业微信 WebSocket 连接失败：${error.message}`));
-    const handleDisconnected = (code: number, reason: Buffer) => {
-      const detail = reason.toString('utf8') || `错误码 ${code}`;
-      fail(new Error(authenticated
-        ? `企业微信长连接已断开。${detail}`
-        : `WebSocket 已连接，但机器人认证前连接已断开。${detail}`));
-    };
-    const handleAbort = () => fail(input.abortSignal?.reason instanceof Error
-      ? input.abortSignal.reason
-      : new Error('企业微信会话识别已取消。'));
-    reportStatus('connecting');
-    waitForPhase(
-      phaseTimeoutMs,
-      '无法建立企业微信 WebSocket 连接。请检查当前网络、防火墙或代理是否允许访问 wss://openws.work.weixin.qq.com。',
-    );
-    socket.once('open', handleConnected);
-    socket.on('message', handleSocketMessage);
-    socket.once('error', handleSocketError);
-    socket.once('close', handleDisconnected);
-    if (input.abortSignal?.aborted) {
-      handleAbort();
-      return;
-    }
-    input.abortSignal?.addEventListener('abort', handleAbort, { once: true });
-  });
 }
 
 export function createFileCommunicationDraftStore(input: { directory: string }): CommunicationDraftStore {
@@ -397,7 +270,7 @@ export function createFileCommunicationDraftStore(input: { directory: string }):
       return store.transaction(() => {
         const draft = store.get(id);
         if (!draft) throw new Error(`Unknown draft: ${id}.`);
-        const claimed = !draft.delivery;
+        const claimed = !draft.delivery || draft.delivery.status === 'failed';
         if (claimed) {
           draft.delivery = { status: 'sending', updatedAt: new Date().toISOString() };
           store.save(draft);

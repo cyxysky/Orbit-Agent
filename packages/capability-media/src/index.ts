@@ -8,7 +8,7 @@ export * from './settings.js';
 export * from './generation.js';
 
 export const mediaCapabilityToolNames = Object.freeze({ media: 'media' } as const);
-export type MediaArtifact = { artifactId: string; mediaType?: string; downloadUrl?: string; fileName?: string; description?: string };
+export type MediaArtifact = { artifactId: string; mediaType?: string; url?: string; downloadUrl?: string; fileName?: string; description?: string };
 export interface MediaOperations extends MediaGenerationOperations {
   inspect(sourceRef: string, context: CapabilityExecutionContext): Promise<unknown>;
   extractFrames?(input: { sourceRef: string; intervalSeconds?: number; maxFrames: number }, context: CapabilityExecutionContext): Promise<MediaArtifact[]>;
@@ -86,10 +86,7 @@ export function createMediaTool(operations: MediaOperations, configuration: Capa
           };
           data = await generate(request, context);
         }
-        const artifacts = Array.isArray(data) ? data.filter((item): item is MediaArtifact => Boolean(item) && typeof item === 'object' && 'artifactId' in item) : [];
-        return { ok: true, summary: `Media ${input.action} completed.`, data,
-          content: artifacts.map((artifact) => ({ type: 'artifact' as const, artifactId: artifact.artifactId, mediaType: artifact.mediaType, downloadUrl: artifact.downloadUrl })),
-        };
+        return { ok: true, summary: `Media ${input.action} completed.`, data };
       } catch (error) {
         return { ok: false, error: { code: context.abortSignal?.aborted ? 'media-operation-aborted' : 'media-operation-failed', message: error instanceof Error ? error.message : String(error), retryable: false } };
       }

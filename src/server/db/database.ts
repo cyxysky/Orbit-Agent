@@ -1,3 +1,4 @@
+import { CommunicationConversations1788832800000 } from './migrations/1788832800000-communication-conversations';
 import 'reflect-metadata';
 
 import { mkdir } from 'node:fs/promises';
@@ -74,7 +75,7 @@ function dataSourceOptions(): DataSourceOptions {
     synchronize: false,
     migrationsRun: true,
     migrationsTableName: 'typeorm_migration',
-    migrations: [InitialBackendSchema1788307200000, BrowserChatContextRecords1788566400000, RuntimeReadIndexes1788652800000],
+    migrations: [InitialBackendSchema1788307200000, BrowserChatContextRecords1788566400000, RuntimeReadIndexes1788652800000, CommunicationConversations1788832800000],
     logging: booleanEnv('DATABASE_LOGGING'),
   };
   if (driver === 'postgres') {

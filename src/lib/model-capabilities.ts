@@ -2,6 +2,7 @@ import type { ModelProvider, ModelProviderSettings } from '@/server/ai/schemas/r
 
 export type ModelCapabilities = {
   imageInput: boolean;
+  maxContextTokens?: number;
 };
 
 const imageModelIdPattern = /(?:^|[\/_-])(vision|vl|multimodal|pixtral)(?:$|[\/_-])|(?:^|[\/_-])(?:gpt-(?:4o|4\.1|5)|claude-(?:3|4)|gemini|grok-(?:2-vision|4))(?:$|[\/_-])/i;
@@ -26,10 +27,14 @@ export function modelCapabilities(
   model: string,
 ): ModelCapabilities {
   const configured = settings?.modelCapabilities?.[model];
+  const maxContextTokens = configured?.maxContextTokens;
   return {
     imageInput: typeof configured?.imageInput === 'boolean'
       ? configured.imageInput
       : defaultModelCapabilities(provider, model).imageInput,
+    ...(typeof maxContextTokens === 'number' && Number.isSafeInteger(maxContextTokens) && maxContextTokens > 0
+      ? { maxContextTokens }
+      : {}),
   };
 }
 
@@ -40,10 +45,6 @@ export function normalizedModelCapabilities(
 ): Record<string, ModelCapabilities> {
   return Object.fromEntries(models.map((model) => [
     model,
-    {
-      imageInput: typeof configured?.[model]?.imageInput === 'boolean'
-        ? configured[model].imageInput
-        : defaultModelCapabilities(provider, model).imageInput,
-    },
+    modelCapabilities({ model, modelCapabilities: configured }, provider, model),
   ]));
 }

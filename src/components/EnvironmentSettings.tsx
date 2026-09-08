@@ -33,10 +33,13 @@ import { ManagementDataTable } from '@/components/ManagementDataTable';
 import { ModelBrandIcon } from '@/components/ModelBrandIcon';
 import { AppInput } from '@/components/ui/app-input';
 import { AppModal } from '@/components/ui/app-modal';
+import { ModelCapabilitiesModal } from '@/components/ModelCapabilitiesModal';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 import {
   defaultModelCapabilities,
+  modelCapabilities,
   normalizedModelCapabilities,
+  type ModelCapabilities,
 } from '@/lib/model-capabilities';
 import {
   environmentSettingsTabs,
@@ -220,7 +223,6 @@ const settingsSectionIcons: Record<string, LucideIcon> = {
   'integration:connector': Plug,
   'integration:communication': MessagesSquare,
   'integration:data': Database,
-  'integration:research': Search,
   'sensitive:test': ScanSearch,
   'sensitive:evaluation': ClipboardCheck,
   '实时预览': PlayCircle,
@@ -242,10 +244,6 @@ const settingsSectionIcons: Record<string, LucideIcon> = {
   '知识库': BookOpen,
   '媒体': ImageIcon,
   '图表': ChartNoAxesCombined,
-  '连接器高级设置': Plug,
-  '通信高级设置': MessagesSquare,
-  '数据高级设置': Database,
-  '研究高级设置': Search,
   '脱敏策略': ShieldCheck,
   '脱敏模型': Brain,
   '推理服务': Server,
@@ -254,9 +252,13 @@ const settingsSectionIcons: Record<string, LucideIcon> = {
 };
 
 const customRuntimeSettingKeys = new Set(['AGENT_COMMUNICATION_ALLOW_SEND', 'AGENT_DATA_ALLOW_WRITES']);
+const integrationSettingsSections: Record<string, string> = {
+  '连接器': 'integration:connector',
+  '通信': 'integration:communication',
+  '数据': 'integration:data',
+};
 const browserRuntimeGroups = new Set(['浏览器 Agent']);
-const capabilityRuntimeGroups = new Set(['代码沙箱', '计算机', '文件能力', 'Git', '知识库', '媒体', '数据与文件']);
-const integrationAdvancedGroups = new Set(['连接器（高级）', '通信（高级）', '数据（高级）', '研究（高级）']);
+const capabilityRuntimeGroups = new Set(['代码沙箱', '计算机', '文件能力', 'Git', '知识库', '媒体', '数据与文件', ...Object.keys(integrationSettingsSections)]);
 
 function SettingsSecondaryNav({
   activeId,
@@ -380,7 +382,6 @@ function groupVisibleEnvSettings(tab: SettingsTab, settings: VisibleEnvSetting[]
 
 function normalizeSettingsGroupTitle(tab: SettingsTab, title: string) {
   if (tab === 'runtime' && title === '工作流程（高级）') return '工作流程';
-  if (tab === 'integrations') return title.replace(/（高级）$/, '高级设置');
   return title;
 }
 
@@ -392,16 +393,13 @@ function envSettingDisplayTab(setting: VisibleEnvSetting): SettingsTab {
   if (sourceTab === 'runtime' && group === '个性化记忆') return 'memory';
   if (sourceTab === 'debug' && group === '浏览器调试') return 'browser';
   if (sourceTab === 'debug' && group === '工作流程（高级）') return 'runtime';
-  if (sourceTab === 'debug' && integrationAdvancedGroups.has(group)) return 'integrations';
-  if (customRuntimeSettingKeys.has(setting.item.key)) return 'integrations';
   return sourceTab || 'runtime';
 }
 
 function envSettingSectionId(setting: VisibleEnvSetting) {
-  if (setting.item.key === 'AGENT_COMMUNICATION_ALLOW_SEND') return 'integration:communication';
-  if (setting.item.key === 'AGENT_DATA_ALLOW_WRITES') return 'integration:data';
   const tab = envSettingDisplayTab(setting);
-  return normalizeSettingsGroupTitle(tab, runtimeSettingGroup(tab, setting.item.key, setting.definition?.group));
+  const group = normalizeSettingsGroupTitle(tab, runtimeSettingGroup(tab, setting.item.key, setting.definition?.group));
+  return integrationSettingsSections[group] || group;
 }
 
 function envSettingIsContextuallyVisible(setting: VisibleEnvSetting, values: Map<string, string>) {
@@ -723,6 +721,7 @@ export function EnvironmentSettings({
   const [modelConfig, setModelConfig] = useState<ModelConfig>(() => createModelConfig(initialData?.modelConfig));
   const [modelDraft, setModelDraft] = useState<ModelConfig>(() => createModelConfig(initialData?.modelConfig));
   const [modelKind, setModelKind] = useState<'language' | MediaModelKind>('language');
+  const [modelCapabilitiesEditor, setModelCapabilitiesEditor] = useState<{ provider: ModelProvider; model: string } | null>(null);
   const [selectedModelProvider, setSelectedModelProvider] = useState<ModelProvider>(() => (
     createModelConfig(initialData?.modelConfig).provider
   ));
@@ -1244,14 +1243,23 @@ export function EnvironmentSettings({
     setActiveProviderModels(nextRows, nextDefault, nextCapabilities);
   }
 
-  function setActiveModelImageInput(model: string, imageInput: boolean) {
-    if (!model.trim()) return;
-    updateActiveProviderSettings({
-      modelCapabilities: {
-        ...(activeProviderSettings.modelCapabilities || {}),
-        [model]: { imageInput },
-      },
+  function saveModelCapabilities(capabilities: ModelCapabilities) {
+    if (!modelCapabilitiesEditor) return;
+    const { provider, model } = modelCapabilitiesEditor;
+    setModelDraft((current) => {
+      const settings = providerSettings(current, provider);
+      return {
+        ...current,
+        providers: {
+          ...current.providers,
+          [provider]: {
+            ...settings,
+            modelCapabilities: { ...settings.modelCapabilities, [model]: capabilities },
+          },
+        },
+      };
     });
+    setModelCapabilitiesEditor(null);
   }
 
   async function saveModel() {
@@ -2476,13 +2484,12 @@ export function EnvironmentSettings({
   ));
   const visibleEnvGroups = groupVisibleEnvSettings(activeTab, visibleEnvItems);
   const settingsSecondaryItems: SettingsSecondaryNavItem[] = [
-    ...(activeTab === 'integrations' ? [
+    ...(activeTab === 'capabilities' ? [
       { id: 'integration:connector', label: t('连接器') },
       { id: 'integration:communication', label: t('通信') },
       { id: 'integration:data', label: t('数据') },
-      { id: 'integration:research', label: t('研究') },
     ] : []),
-    ...visibleEnvGroups.map((group) => ({
+    ...visibleEnvGroups.filter((group) => !integrationSettingsSections[group.title]).map((group) => ({
       id: group.title,
       label: t(group.title),
       meta: String(group.items.length),
@@ -2497,13 +2504,14 @@ export function EnvironmentSettings({
     ? requestedSettingsSection!
     : settingsSecondaryItems[0]?.id || '';
   const activeEnvGroup = visibleEnvGroups.find((group) => group.title === activeSettingsSection);
+  const activeIntegrationSettings = visibleEnvItems.filter((setting) => envSettingSectionId(setting) === activeSettingsSection);
   const communicationSendSetting = items
     .map((item, index) => ({ item, index }))
     .find(({ item }) => item.key === 'AGENT_COMMUNICATION_ALLOW_SEND');
   const dataWriteSetting = items
     .map((item, index) => ({ item, index }))
     .find(({ item }) => item.key === 'AGENT_DATA_ALLOW_WRITES');
-  const activeTabUsesEnvSave = ['runtime', 'browser', 'capabilities', 'integrations', 'sensitive-data', 'memory', 'debug'].includes(activeTab);
+  const activeTabUsesEnvSave = ['runtime', 'browser', 'capabilities', 'sensitive-data', 'memory', 'debug'].includes(activeTab);
   const normalizedSettingsSearch = settingsSearch.trim().toLocaleLowerCase();
   const settingsSearchResults = normalizedSettingsSearch ? [
     ...environmentSettingsTabs.map((tab) => ({
@@ -2551,6 +2559,15 @@ export function EnvironmentSettings({
 
   return (
     <main className={embedded ? 'settings-workspace embedded' : 'settings-workspace'}>
+      {modelCapabilitiesEditor ? (
+        <ModelCapabilitiesModal
+          key={`${modelCapabilitiesEditor.provider}/${modelCapabilitiesEditor.model}`}
+          model={modelCapabilitiesEditor.model}
+          capabilities={modelCapabilities(modelDraft.providers[modelCapabilitiesEditor.provider], modelCapabilitiesEditor.provider, modelCapabilitiesEditor.model)}
+          onClose={() => setModelCapabilitiesEditor(null)}
+          onSave={saveModelCapabilities}
+        />
+      ) : null}
       {embedded ? null : (
         <header className="settings-header">
           <Link className="ghost-link" href="/browser-chat">
@@ -2837,14 +2854,14 @@ export function EnvironmentSettings({
                 onRemove={(index) => activeMediaSettings ? updateMediaModels(activeMediaSettings.models.filter((_, i) => i !== index)) : removeActiveProviderModel(index)}
                 modelSuffix={modelKind === 'language' ? (model) => (
                   <button
-                    aria-label={t('图片输入')}
-                    aria-pressed={activeProviderSettings.modelCapabilities?.[model]?.imageInput === true}
-                    className={`settings-model-capability-button${activeProviderSettings.modelCapabilities?.[model]?.imageInput === true ? ' on' : ''}`}
+                    aria-label={t('编辑模型')}
+                    aria-haspopup="dialog"
+                    className="settings-model-capability-button"
                     disabled={!activeProviderEnabled || !model.trim()}
-                    onClick={() => setActiveModelImageInput(model, activeProviderSettings.modelCapabilities?.[model]?.imageInput !== true)}
-                    title={t(activeProviderSettings.modelCapabilities?.[model]?.imageInput === true ? '支持图片输入' : '不支持图片输入')}
+                    onClick={() => setModelCapabilitiesEditor({ provider: activeProvider, model: model.trim() })}
+                    title={t('编辑模型')}
                     type="button"
-                  ><ImageIcon aria-hidden="true" size={16} strokeWidth={1.9} /></button>
+                  ><PencilLine aria-hidden="true" size={16} strokeWidth={1.9} /></button>
                 ) : undefined}
                 connection={modelKind === 'language' ? <>
                 {activeProviderOption.baseUrlLabel ? (
@@ -2984,6 +3001,7 @@ export function EnvironmentSettings({
                     <section className="settings-detail-panel">
                       <header className="settings-detail-panel-head"><h3>{t('连接器')}</h3><span>{t('配置第三方服务入口和授权信息。')}</span></header>
                       <ExternalIntegrationSettings accessToken={adminSettingsAccessToken} category="connector" />
+                      {renderEnvSettingList(activeIntegrationSettings)}
                     </section>
                   ) : null}
                   {activeSettingsSection === 'integration:communication' ? (
@@ -3001,6 +3019,7 @@ export function EnvironmentSettings({
                           },
                         }}
                       />
+                      {renderEnvSettingList(activeIntegrationSettings)}
                     </section>
                   ) : null}
                   {activeSettingsSection === 'integration:data' ? (
@@ -3018,15 +3037,9 @@ export function EnvironmentSettings({
                           },
                         }}
                       />
+                      {renderEnvSettingList(activeIntegrationSettings)}
                     </section>
                   ) : null}
-                  {activeSettingsSection === 'integration:research' ? (
-                    <section className="settings-detail-panel">
-                      <header className="settings-detail-panel-head"><h3>{t('研究')}</h3><span>{t('配置搜索与研究数据来源。')}</span></header>
-                      <ExternalIntegrationSettings accessToken={adminSettingsAccessToken} category="research" />
-                    </section>
-                  ) : null}
-
                   {activeEnvGroup ? (
                     <section className="settings-detail-panel">
                       <header className="settings-detail-panel-head">

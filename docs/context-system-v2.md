@@ -83,7 +83,7 @@ contextRead 支持 JSON Pointer、字符分页、搜索和散列；预览或分�
 
 | 设置 | 默认值 | 用途 |
 | --- | ---: | --- |
-| AI_CONTEXT_COMPRESSION_TRIGGER_TOKENS | 200000 | 触发值，不高于安全输入预算 |
+| AI_CONTEXT_COMPRESSION_TRIGGER_RATIO | 0.85 | 相对于当前模型最大上下文的触发比例；实际触发量为模型上下文上限乘以此比例，不高于安全输入预算 |
 | AI_CONTEXT_COMPRESSION_TARGET_RATIO | 0.25 | 相对触发值的软目标比例 |
 | AI_CONTEXT_SKILL_INLINE_TOKENS | 2000 | 小 Skill 正文阈值，可设 0 |
 | AI_CONTEXT_MODEL_PROFILES | 模型默认配置 | 窗口、输出预留、图片估算 |

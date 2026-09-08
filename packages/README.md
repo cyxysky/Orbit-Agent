@@ -29,7 +29,6 @@ policy enforcement, result handling, and disposal.
 | `@webpilot/capability-chart` | ECharts API, persistence, React rendering and MCP server |
 | `@webpilot/capability-file` | File/Office workspace, workers, validation, preview and MCP server |
 | `@webpilot/capability-code-sandbox` | Bounded JavaScript/Python execution with replaceable sandbox backends |
-| `@webpilot/capability-research` | Provenance-preserving public search and document fetching |
 | `@webpilot/capability-connectors` | MCP Streamable HTTP, OpenAPI and custom external connectors |
 | `@webpilot/capability-knowledge` | Durable document ingestion and knowledge retrieval |
 | `@webpilot/capability-data` | Structured source discovery and bounded SQL querying |

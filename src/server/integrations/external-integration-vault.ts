@@ -6,7 +6,7 @@ import {
 } from '@/server/credentials/credential-master-key';
 import { readRuntimeMeta, writeRuntimeMeta } from '@/server/storage/database-record-store';
 
-export type ExternalIntegrationCategory = 'connector' | 'communication' | 'data' | 'research';
+export type ExternalIntegrationCategory = 'connector' | 'communication' | 'data';
 export type ExternalIntegrationConfiguration = Record<string, string>;
 
 export type ResolvedExternalIntegration = {
@@ -33,7 +33,7 @@ type StoredExternalIntegration = {
 const externalIntegrationStoreKey = 'external-integrations.v2';
 const storedIntegrationSchema = z.object({
   id: z.string().uuid(),
-  category: z.enum(['connector', 'communication', 'data', 'research']),
+  category: z.enum(['connector', 'communication', 'data']),
   driverId: z.string().regex(/^[a-z0-9][a-z0-9-]{1,99}$/),
   name: z.string().min(1).max(200),
   configurationEnvelope: z.string().min(1),

@@ -20,11 +20,16 @@ const provider = createMediaCapability({
 `mediaBackend` represents the host-selected OCR, transcription, inspection, or
 generation implementation. Register the provider with `mountCapabilities()`,
 expose the resolved `media` tool through the consuming TypeScript Agent
-framework, inject the package Skill, and preserve returned image/artifact
-content. See the complete
+framework, inject the package Skill, and preserve artifact metadata in the returned
+`data` field. See the complete
 [TypeScript Agent framework integration guide](../capability-sdk/FRAMEWORK_INTEGRATION.md).
 
 ## Media generation
+
+Artifact-producing actions return each file once in `data`, without duplicating
+the file list in `content`. A host-published artifact includes its `artifactId`,
+file name, media type, inline `url`, and `downloadUrl`. Use `url` for image embeds
+and `downloadUrl` for downloads; copy application-relative URLs without adding a host.
 
 `./models` exports the shared configuration schema and protocol driver catalog. Each
 model has its own `kind`, stable `id`, protocol `driver`, provider `model` id,

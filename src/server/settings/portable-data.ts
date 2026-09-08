@@ -76,6 +76,7 @@ const modelProviderSettingsSchema = z.object({
   models: z.array(z.string().trim().min(1).max(1_000)).max(500).optional(),
   modelCapabilities: z.record(z.string().trim().min(1).max(1_000), z.object({
     imageInput: z.boolean(),
+    maxContextTokens: z.number().int().positive().optional(),
   }).strict()).optional(),
   apiKey: z.string().max(10_000).optional(),
   baseURL: z.string().trim().max(4_000).optional(),

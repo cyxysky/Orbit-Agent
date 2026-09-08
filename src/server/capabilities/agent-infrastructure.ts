@@ -7,9 +7,6 @@ import type { CapabilityProvider, CapabilityRunContext } from '@webpilot/capabil
 import { createCodeSandboxCapability } from '@webpilot/capability-code-sandbox';
 import { createNodeProcessCodeSandbox } from '@webpilot/capability-code-sandbox/node';
 import { createHttpCodeSandboxExecutor } from '@webpilot/capability-code-sandbox/remote';
-import { createResearchCapability } from '@webpilot/capability-research';
-import { createNodeResearchOperations } from '@webpilot/capability-research/node';
-import type { ResearchSource } from '@webpilot/capability-research';
 import { createNodeConnectorsCapability } from '@webpilot/capability-connectors/node';
 import type { AgentConnector } from '@webpilot/capability-connectors';
 import { createNodeKnowledgeCapability } from '@webpilot/capability-knowledge/node';
@@ -27,13 +24,13 @@ import { createNodeWorkflowCapability } from '@webpilot/capability-workflow/node
 import type { BrowserCodeAttachmentBinding } from '@webpilot/capability-browser/node';
 import { artifactApiUrl } from '@/lib/artifacts';
 import { artifactPath, artifactsRoot, codeSandboxRoot } from '@/server/storage/paths';
+import { communicationArtifactReader } from '@/server/storage/artifact-access';
 import { resolveExternalIntegrations } from '@/server/integrations/external-integration-vault';
 import { withCodeSandboxArtifacts } from './code-sandbox-artifacts';
 import {
   createExternalCommunicationChannel,
   createExternalDataSource,
   createExternalIntegrationConnector,
-  createExternalResearchSearch,
 } from '@/server/integrations/external-integration-drivers';
 
 function safeSegment(value: unknown, fallback: string) {
@@ -68,29 +65,7 @@ async function configuredConnectors(context: CapabilityRunContext): Promise<Agen
 async function configuredCommunicationChannels(context: CapabilityRunContext): Promise<CommunicationChannel[]> {
   const timeoutMs = Number(context.configuration.AGENT_COMMUNICATION_TIMEOUT_MS) || 30_000;
   return (await resolveExternalIntegrations('communication'))
-    .map((record) => createExternalCommunicationChannel(record, timeoutMs));
-}
-
-async function configuredResearchSearch(context: CapabilityRunContext) {
-  const timeoutMs = Number(context.configuration.AGENT_RESEARCH_TIMEOUT_MS) || 20_000;
-  const searches = (await resolveExternalIntegrations('research'))
-    .map((record) => createExternalResearchSearch(record, timeoutMs));
-  if (!searches.length) return undefined;
-  return async (
-    input: { query: string; limit: number; domains?: string[]; recencyDays?: number },
-    execution: { invocationId: string; abortSignal?: AbortSignal },
-  ): Promise<ResearchSource[]> => {
-    const settled = await Promise.allSettled(searches.map((search) => search(input, execution)));
-    const successful = settled.flatMap((result) => result.status === 'fulfilled' ? result.value : []);
-    if (!successful.length && settled.every((result) => result.status === 'rejected')) {
-      throw new AggregateError(
-        settled.flatMap((result) => result.status === 'rejected' ? [result.reason] : []),
-        '所有研究搜索服务均请求失败。',
-      );
-    }
-    const unique = new Map(successful.map((source) => [source.url, source]));
-    return [...unique.values()].slice(0, input.limit);
-  };
+    .map((record) => createExternalCommunicationChannel(record, timeoutMs, communicationArtifactReader(context.userId)));
 }
 
 async function configuredDataSources(): Promise<AgentDataSource[]> {
@@ -148,7 +123,8 @@ export async function createConfiguredMediaOperations(input: { context: Capabili
       const destination = path.join(directory, fileName);
       await writeFile(destination, file.data, { signal: context.abortSignal });
       const artifactId = path.relative(root, destination).split(path.sep).join('/');
-      return { artifactId, fileName, mediaType: file.mediaType, downloadUrl: `${artifactApiUrl(destination, { artifactsRoot: root })}?download=1`, description: `Generated ${file.kind}` };
+      const url = artifactApiUrl(destination, { artifactsRoot: root });
+      return { artifactId, fileName, mediaType: file.mediaType, url, downloadUrl: `${url}?download=1`, description: `Generated ${file.kind}` };
     },
   });
   const processing: MediaOperations = ffmpegStaticPath ? createFfmpegMediaOperations({
@@ -162,7 +138,8 @@ export async function createConfiguredMediaOperations(input: { context: Capabili
       const artifactId = `media_${randomUUID()}${extension}`;
       const destination = path.join(directory, artifactId);
       await copyFile(filePath, destination);
-      return { artifactId: path.relative(root, destination).split(path.sep).join('/'), fileName: artifactId, mediaType: extension === '.jpg' || extension === '.jpeg' ? 'image/jpeg' : extension === '.png' ? 'image/png' : undefined, downloadUrl: `${artifactApiUrl(destination, { artifactsRoot: root })}?download=1` };
+      const url = artifactApiUrl(destination, { artifactsRoot: root });
+      return { artifactId: path.relative(root, destination).split(path.sep).join('/'), fileName: artifactId, mediaType: extension === '.jpg' || extension === '.jpeg' ? 'image/jpeg' : extension === '.png' ? 'image/png' : undefined, url, downloadUrl: `${url}?download=1` };
     },
   }) : { inspect: async () => { throw new Error('FFmpeg runtime is unavailable.'); } };
   return { ...processing, ...generation };
@@ -173,7 +150,6 @@ export function createAgentInfrastructureProviders(input: {
 } = {}): CapabilityProvider[] {
   return [
     createAgentCodeSandboxCapability(),
-    createResearchCapability({ createOperations: async (context) => createNodeResearchOperations({ search: await configuredResearchSearch(context), timeoutMs: Number(context.configuration.AGENT_RESEARCH_TIMEOUT_MS) || 20_000 }) }),
     createNodeConnectorsCapability({ connectors: configuredConnectors }),
     createNodeKnowledgeCapability({ directory: (context) => artifactPath('agent-infrastructure', 'knowledge', safeSegment(context.userId, 'shared')) }),
     createDataCapability({ createRegistry: async () => createDataSourceRegistry(await configuredDataSources()) }),
@@ -192,7 +168,6 @@ export function createAgentInfrastructureProviders(input: {
 
 export const agentInfrastructureToolNames = Object.freeze([
   'codeSandbox',
-  'research',
   'connectors',
   'knowledge',
   'data',

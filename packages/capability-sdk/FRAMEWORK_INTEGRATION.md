@@ -229,7 +229,6 @@ custom Agent loop, a dedicated framework adapter, AI SDK, or MCP.
 | `capability-chart` | `createNodeChartCapability()` from `/node` |
 | `capability-file` | `createNodeFileCapability()` from `/node` |
 | `capability-code-sandbox` | `createNodeCodeSandboxCapability()` from `/node` |
-| `capability-research` | `createNodeResearchCapability()` from `/node` |
 | `capability-connectors` | `createNodeConnectorsCapability()` from `/node` |
 | `capability-knowledge` | `createNodeKnowledgeCapability()` from `/node` |
 | `capability-data` | `createTypeOrmDataCapability()` from `/typeorm` |

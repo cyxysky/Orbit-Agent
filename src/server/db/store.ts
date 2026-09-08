@@ -23,6 +23,7 @@ import type {
   SkillRecord,
 } from '@/server/ai/schemas/runtime.schema';
 import { normalizedModelCapabilities } from '@/lib/model-capabilities';
+import { configureRuntimeModelContexts } from '@/server/ai/agents/runtime-context-budget';
 import {
   DEFAULT_SENSITIVE_DATA_EVALUATION_CASES,
   normalizeSensitiveDataEvaluationCases,
@@ -191,6 +192,7 @@ function updateInitialEnv(values: Record<string, string | undefined>) {
 
 function applyModelConfig(config?: ModelConfigRecord) {
   const normalized = normalizeStoredModelConfig(config);
+  configureRuntimeModelContexts(normalized?.providers);
   if (!normalized) {
     process.env.AI_MODEL_PROVIDER_ENABLED = 'false';
     delete process.env.AI_PROVIDER;

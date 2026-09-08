@@ -14,20 +14,38 @@ export type BrowserChatArtifactSummary = {
   url?: string;
 };
 
-/** Resolve model attachment aliases only against artifacts actually delivered in this message. */
+export function browserChatArtifactIdFromUrl(value: string) {
+  try {
+    const url = new URL(value, 'http://artifact.invalid');
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return undefined;
+    const marker = '/api/artifacts/';
+    const start = url.pathname.indexOf(marker);
+    if (start < 0) return undefined;
+    return url.pathname.slice(start + marker.length).split('/').map(decodeURIComponent).join('/');
+  } catch {
+    return undefined;
+  }
+}
+
+/** Resolve links against delivered artifacts, including URLs whose origin was invented by the model. */
 export function resolveBrowserChatArtifactReference(
   value: string,
   artifacts: readonly BrowserChatArtifactSummary[],
   image = false,
 ) {
-  if (!/^attachment:\/\//i.test(value)) return value;
+  const alias = /^attachment:\/\//i.test(value);
   let reference: string;
-  try { reference = decodeURIComponent(value.slice('attachment://'.length)); } catch { return ''; }
+  try {
+    reference = alias ? decodeURIComponent(value.slice('attachment://'.length)) : browserChatArtifactIdFromUrl(value) || '';
+  } catch { return ''; }
+  if (!reference) return value;
   const matches = artifacts.filter((artifact) => (
-    artifact.fileName === reference || artifact.id === reference
+    (alias && artifact.fileName === reference) || artifact.id === reference
     || artifact.id === `file:${reference}` || artifact.path === reference
+    || browserChatArtifactIdFromUrl(artifact.url || '') === reference
+    || browserChatArtifactIdFromUrl(artifact.downloadUrl || '') === reference
   ));
-  if (matches.length !== 1) return '';
+  if (matches.length !== 1) return alias ? '' : value;
   const artifact = matches[0];
   const url = image ? artifact.url || artifact.downloadUrl : artifact.downloadUrl || artifact.url;
   return image ? (url || '').replace(/([?&])download=1(&|$)/, '$1').replace(/[?&]$/, '') : url || '';

@@ -17,18 +17,45 @@ export * from './settings.js';
 export const communicationCapabilityToolNames = Object.freeze({ communication: 'communication' } as const);
 
 export type CommunicationTargetKind = 'user' | 'group' | 'department' | 'email' | 'address';
-export type CommunicationContentFormat = 'text' | 'markdown';
+export type CommunicationMediaFormat = 'image' | 'file' | 'voice' | 'video';
+export type CommunicationContentFormat = 'text' | 'markdown' | CommunicationMediaFormat;
 
 export type CommunicationTarget = {
   kind: CommunicationTargetKind;
   id: string;
   name?: string;
+  transport?: string;
 };
 
-export type CommunicationContent = {
-  format: CommunicationContentFormat;
+export type CommunicationTextContent = {
+  format: 'text' | 'markdown';
   title?: string;
   body: string;
+};
+
+export type CommunicationMediaContent = {
+  format: CommunicationMediaFormat;
+  artifactId?: string;
+  mediaId?: string;
+  title?: string;
+  description?: string;
+};
+
+export type CommunicationContent = CommunicationTextContent | CommunicationMediaContent;
+
+// Drivers distinguish a confirmed non-delivery from a lost/ambiguous receipt.
+// Only the former can safely release the draft for another send attempt.
+export class CommunicationDeliveryError extends Error {
+  constructor(message: string, readonly outcome: 'not-sent' | 'unknown', options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'CommunicationDeliveryError';
+  }
+}
+
+export type CommunicationMediaFile = { fileName: string; mediaType: string; data: Uint8Array };
+export type CommunicationMediaOperations = {
+  readArtifact(artifactId: string, context: CapabilityExecutionContext): Promise<CommunicationMediaFile>;
+  upload(file: CommunicationMediaFile, format: CommunicationMediaFormat, context: CapabilityExecutionContext): Promise<string>;
 };
 
 export type CommunicationDraft = {
@@ -39,7 +66,7 @@ export type CommunicationDraft = {
   metadata?: Record<string, unknown>;
   createdAt: string;
   delivery?: {
-    status: 'sending' | 'sent' | 'unknown';
+    status: 'sending' | 'sent' | 'failed' | 'unknown';
     updatedAt: string;
     receipt?: CommunicationReceipt;
     error?: string;
@@ -56,6 +83,8 @@ export type CommunicationReceipt = {
 export type CommunicationChannelCapabilities = {
   targetKinds: readonly CommunicationTargetKind[];
   contentFormats: readonly CommunicationContentFormat[];
+  mediaSources?: readonly ('artifactId' | 'mediaId')[];
+  mediaConfigurationHint?: string;
   requiresExplicitTargets: boolean;
 };
 
@@ -64,6 +93,8 @@ export interface CommunicationChannel {
   name: string;
   driverId: string;
   capabilities: CommunicationChannelCapabilities;
+  validateContent?(content: CommunicationContent): void;
+  listTargets?(): Promise<CommunicationTarget[]>;
   send(draft: CommunicationDraft, context: CapabilityExecutionContext): Promise<CommunicationReceipt>;
   health?(): Promise<CapabilityHealth>;
   dispose?(): Promise<void>;
@@ -91,7 +122,7 @@ export function createMemoryCommunicationDraftStore(): CommunicationDraftStore {
     async claimDelivery(id) {
       const draft = drafts.get(id);
       if (!draft) throw new Error(`Unknown draft: ${id}.`);
-      const claimed = !draft.delivery;
+      const claimed = !draft.delivery || draft.delivery.status === 'failed';
       if (claimed) draft.delivery = { status: 'sending', updatedAt: new Date().toISOString() };
       return { claimed, draft: structuredClone(draft) };
     },
@@ -107,13 +138,26 @@ const targetParser = z.object({
   kind: z.enum(['user', 'group', 'department', 'email', 'address']),
   id: z.string().trim().min(1).max(500),
   name: z.string().trim().min(1).max(500).optional(),
+  transport: z.string().trim().min(1).max(100).optional().describe('Copy the transport from availableTargets when the channel provides one.'),
 }).strict();
 
-const contentParser = z.object({
+const textContentParser = z.object({
   format: z.enum(['text', 'markdown']),
   title: z.string().trim().max(1_000).optional(),
   body: z.string().min(1).max(200_000),
 }).strict();
+
+const mediaContentParser = z.object({
+  format: z.enum(['image', 'file', 'voice', 'video']),
+  artifactId: z.string().trim().min(1).max(2_000).optional().describe('Artifact ID returned by the file or media tool. The host uploads its bytes only after send approval.'),
+  mediaId: z.string().trim().min(1).max(2_000).optional().describe('An existing media ID returned by this channel provider, never a URL or a fabricated value.'),
+  title: z.string().trim().max(1_000).optional(),
+  description: z.string().trim().max(4_000).optional(),
+}).strict().refine(content => Boolean(content.artifactId) !== Boolean(content.mediaId), {
+  message: 'Media content requires exactly one of artifactId or mediaId.',
+});
+
+const contentParser = z.union([textContentParser, mediaContentParser]);
 
 const parser = z.object({
   action: z.enum(['channels', 'draft', 'readDraft', 'send']),
@@ -162,6 +206,13 @@ function channelDraftError(channel: CommunicationChannel, input: CommunicationTo
   if (input.content && !channel.capabilities.contentFormats.includes(input.content.format)) {
     return `Channel ${channel.id} does not support ${input.content.format} content.`;
   }
+  if (input.content && !('body' in input.content)) {
+    const source = input.content.artifactId ? 'artifactId' : 'mediaId';
+    if (channel.capabilities.mediaSources && !channel.capabilities.mediaSources.includes(source)) {
+      return `Channel ${channel.id} does not support ${source}. ${channel.capabilities.mediaConfigurationHint || 'Configure channel media upload support.'} Never replace media with Markdown or invent a mediaId.`;
+    }
+  }
+  if (input.content) channel.validateContent?.(input.content);
   return '';
 }
 
@@ -186,7 +237,10 @@ export function createCommunicationTool(
           return {
             ok: true,
             summary: 'Configured communication channels.',
-            data: channels.map(({ id, name, driverId, capabilities }) => ({ id, name, driverId, capabilities })),
+            data: await Promise.all(channels.map(async (channel) => ({
+              id: channel.id, name: channel.name, driverId: channel.driverId, capabilities: channel.capabilities,
+              ...(channel.listTargets ? { availableTargets: await channel.listTargets() } : {}),
+            }))),
           };
         }
         if (input.action === 'draft') {
@@ -220,6 +274,8 @@ export function createCommunicationTool(
         if (!channel) {
           return { ok: false, error: { code: 'communication-channel-not-found', message: `Unknown channel: ${draft.channelId}.` } };
         }
+        const validationError = channelDraftError(channel, { ...input, targets: draft.targets, content: draft.content });
+        if (validationError) return { ok: false, error: { code: 'communication-draft-invalid', message: validationError } };
         context.abortSignal?.throwIfAborted();
         if (!drafts.claimDelivery || !drafts.finishDelivery) throw new Error('The draft store must support atomic delivery tracking before sending.');
         const claim = await drafts.claimDelivery(draft.id);
@@ -235,15 +291,19 @@ export function createCommunicationTool(
           receipt = await channel.send(claim.draft, { ...context, metadata: { ...context.metadata, idempotencyKey: draft.id } });
           await drafts.finishDelivery(draft.id, { status: 'sent', updatedAt: new Date().toISOString(), receipt });
         } catch (error) {
-          // A timeout cannot prove that the remote side did not accept the message.
-          await drafts.finishDelivery(draft.id, { status: 'unknown', updatedAt: new Date().toISOString(), error: error instanceof Error ? error.message : String(error) });
+          const status = error instanceof CommunicationDeliveryError && error.outcome === 'not-sent' ? 'failed' : 'unknown';
+          await drafts.finishDelivery(draft.id, { status, updatedAt: new Date().toISOString(), error: error instanceof Error ? error.message : String(error) });
           throw error;
         }
         return { ok: true, summary: `Message accepted by ${channel.name}.`, data: receipt };
       } catch (error) {
         return {
           ok: false,
-          error: { code: 'communication-operation-failed', message: error instanceof Error ? error.message : String(error) },
+          error: {
+            code: error instanceof CommunicationDeliveryError && error.outcome === 'not-sent' ? 'communication-not-sent' : 'communication-operation-failed',
+            message: error instanceof Error ? error.message : String(error),
+            retryable: error instanceof CommunicationDeliveryError && error.outcome === 'not-sent',
+          },
         };
       }
     },

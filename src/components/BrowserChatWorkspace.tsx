@@ -1,5 +1,7 @@
 'use client';
 
+import { Dock, DockIcon } from '@/components/ui/dock';
+
 import { parseMediaModelSelection } from '@/lib/model-selection';
 
 import { createContext, memo, type CSSProperties, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject, type WheelEvent as ReactWheelEvent, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -1030,7 +1032,6 @@ function browserChatToolLabel(name: string, input: unknown, t: (value: string) =
     memory: '记忆管理',
     media: '媒体',
     reportDefect: '报告缺陷',
-    research: '研究检索',
     skill: '读取 Skill',
     subagent: '子 Agent',
     readSubagent: '读取子 Agent',
@@ -1124,7 +1125,6 @@ function BrowserChatToolIcon({ input, name }: { input?: unknown; name: string })
   if (name === 'browserCode') return <Braces size={13} />;
   if (name === 'contextCompression') return <Brain size={13} />;
   if (name === 'codeSandbox') return <SquareTerminal size={13} />;
-  if (name === 'research') return <Search size={13} />;
   if (name === 'connectors') return <Cable size={13} />;
   if (name === 'knowledge') return <BookOpen size={13} />;
   if (name === 'data') return <Database size={13} />;
@@ -3277,35 +3277,6 @@ const BrowserChatToolConfirmationActions = memo(function BrowserChatToolConfirma
   );
 });
 
-const BrowserChatPendingToolConfirmationCard = memo(function BrowserChatPendingToolConfirmationCard({
-  pending,
-  resolvingConfirmationAction,
-  resolvingConfirmationId,
-  onResolveToolConfirmation,
-}: {
-  pending: BrowserChatToolConfirmation;
-  resolvingConfirmationAction?: BrowserChatToolConfirmationAction | null;
-  resolvingConfirmationId?: string | null;
-  onResolveToolConfirmation?: (confirmationId: string, action: BrowserChatToolConfirmationAction) => void | Promise<void>;
-}) {
-  const { t } = useI18n();
-  const label = browserChatToolLabel(pending.toolName, undefined, t);
-  return (
-    <section className="browser-chat-tool-call browser-chat-pending-tool-confirmation">
-      {pending.reason ? <p className="browser-chat-tool-reason">{pending.reason}</p> : null}
-      <div className="browser-chat-tool-card is-waiting">
-        <BrowserChatToolCardContent label={label} meta={t('等待用户确认')} name={pending.toolName} />
-      </div>
-      <BrowserChatToolConfirmationActions
-        pending={pending}
-        resolvingConfirmationAction={resolvingConfirmationAction}
-        resolvingConfirmationId={resolvingConfirmationId}
-        onResolveToolConfirmation={onResolveToolConfirmation}
-      />
-    </section>
-  );
-});
-
 const BrowserChatSubagentToolDisclosure = memo(function BrowserChatSubagentToolDisclosure({
   batchId,
   cardContent,
@@ -4560,22 +4531,9 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
       }));
     })
   ));
-  const timelineContainsPendingConfirmation = hasPendingConfirmation && timelineSteps.some((step) => (
-    (step.tools || []).some((tool) => Boolean(pendingConfirmationForTool({
-      pending: pendingToolConfirmation,
-      stepIndex: step.index,
-      toolName: tool.name,
-      toolInput: tool.input,
-      toolOk: tool.ok,
-    })))
-  ));
   const showPendingTimelineFallback = hasPendingConfirmation
     && !hasSubagentPendingConfirmation
     && !aiCyclesContainPendingConfirmation;
-  const showStandalonePendingConfirmation = hasPendingConfirmation
-    && !hasSubagentPendingConfirmation
-    && !aiCyclesContainPendingConfirmation
-    && !timelineContainsPendingConfirmation;
   const splitTimelineEntries = unrepresentedTimelineEntries.map(({ step, visibleToolIndexes }) => {
     const currentToolIndexes: number[] = [];
     const historicalToolIndexes: number[] = [];
@@ -4679,7 +4637,6 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
   const aiCycleCommonProps: BrowserChatAiCycleCommonProps = {
     logs,
     onLoadSubagentRecords: () => { void loadHistoricalProcessRecords(); },
-    onResolveToolConfirmation,
     onResumeHumanVerification,
     onSelectTool: selectTool,
     pendingToolConfirmation,
@@ -4734,7 +4691,6 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
                   <BrowserChatStepToolCards
                     logs={logs}
                     onLoadSubagentRecords={() => { void loadHistoricalProcessRecords(); }}
-                    onResolveToolConfirmation={onResolveToolConfirmation}
                     onResumeHumanVerification={onResumeHumanVerification}
                     onSelectTool={selectTool}
                     onlyPendingConfirmation={showPendingTimelineFallback}
@@ -4751,14 +4707,6 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
               ))}
             </div>
           ) : null}
-          {showStandalonePendingConfirmation && pendingToolConfirmation ? (
-            <BrowserChatPendingToolConfirmationCard
-              pending={pendingToolConfirmation}
-              resolvingConfirmationAction={resolvingConfirmationAction}
-              resolvingConfirmationId={resolvingConfirmationId}
-              onResolveToolConfirmation={onResolveToolConfirmation}
-            />
-          ) : null}
           {running && !hasPendingConfirmation ? (
             <BeautifulLoadingState
               className={`browser-chat-agent-thinking${hasHistoricalAiOutput || shouldShowStepTimeline ? ' is-continuation' : ''}`}
@@ -4769,6 +4717,15 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
             />
           ) : null}
         </BrowserChatProcessDisclosure>
+      ) : null}
+      {pendingToolConfirmation ? (
+        <BrowserChatToolConfirmationActions
+          key={pendingToolConfirmation.id}
+          pending={pendingToolConfirmation}
+          resolvingConfirmationAction={resolvingConfirmationAction}
+          resolvingConfirmationId={resolvingConfirmationId}
+          onResolveToolConfirmation={onResolveToolConfirmation}
+        />
       ) : null}
       {manualVerificationPaused ? (
         <BrowserChatManualVerificationCard
@@ -10185,20 +10142,17 @@ export function BrowserChatWorkspace({
           loading={Boolean(loadingSessionId)}
           loadingMoreSkills={loadingMoreSkills}
           managementActions={(
-            <div aria-label={t('快捷管理')} className="browser-chat-management-shortcuts" role="group">
-              <button aria-label={t('Skills 管理')} className="glass chip skill" onClick={() => setManagementTab('skills')} title={t('Skills 管理')} type="button">
-                <Braces aria-hidden="true" size={14} />
-                <span>{t('技能')}</span>
-              </button>
-              <button aria-label={t('个性化记忆')} className="glass chip memory" onClick={() => setManagementTab('memory')} title={t('个性化记忆')} type="button">
-                <Brain aria-hidden="true" size={14} />
-                <span>{t('记忆')}</span>
-              </button>
-              <button aria-label={t('登录账号')} className="glass chip account" onClick={() => setManagementTab('accounts')} title={t('登录账号')} type="button">
-                <UserRound aria-hidden="true" size={14} />
-                <span>{t('账号')}</span>
-              </button>
-            </div>
+            <Dock aria-label={t('快捷管理')} className="browser-chat-management-dock" role="group" iconSize={30} disableMagnification direction="bottom">
+              <DockIcon>
+                <IconAction label={t('技能')} onClick={() => setManagementTab('skills')}><Braces aria-hidden="true" /></IconAction>
+              </DockIcon>
+              <DockIcon>
+                <IconAction label={t('记忆')} onClick={() => setManagementTab('memory')}><Brain aria-hidden="true" /></IconAction>
+              </DockIcon>
+              <DockIcon>
+                <IconAction label={t('账号')} onClick={() => setManagementTab('accounts')}><UserRound aria-hidden="true" /></IconAction>
+              </DockIcon>
+            </Dock>
           )}
           modelSelection={modelSelection}
           modelSelectionTitle={modelSelectionDiagnostic}

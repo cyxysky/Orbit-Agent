@@ -98,6 +98,7 @@ const formats: FileFormatDefinition[] = [
   { extension: '.webm', kind: 'video', mimeType: 'video/webm', canRead: false },
   { extension: '.mov', kind: 'video', mimeType: 'video/quicktime', canRead: false },
   { extension: '.mp3', kind: 'audio', mimeType: 'audio/mpeg', mimeAliases: ['audio/mp3'], canRead: false },
+  { extension: '.amr', kind: 'audio', mimeType: 'audio/amr', canRead: false },
   { extension: '.wav', kind: 'audio', mimeType: 'audio/wav', mimeAliases: ['audio/x-wav'], canRead: false },
   { extension: '.ogg', kind: 'audio', mimeType: 'audio/ogg', canRead: false },
   { extension: '.opus', kind: 'audio', mimeType: 'audio/ogg', mimeAliases: ['audio/opus'], canRead: false },

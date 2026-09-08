@@ -9,7 +9,6 @@ const packages = [
   '@webpilot/capability-chart',
   '@webpilot/capability-file',
   '@webpilot/capability-code-sandbox',
-  '@webpilot/capability-research',
   '@webpilot/capability-connectors',
   '@webpilot/capability-knowledge',
   '@webpilot/capability-data',

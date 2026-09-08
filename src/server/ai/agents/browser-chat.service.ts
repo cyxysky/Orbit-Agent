@@ -397,6 +397,7 @@ type BrowserChatRuntimeState = {
 };
 
 export type BrowserChatUIStreamUpdate = {
+  pendingToolConfirmation?: BrowserChatToolConfirmation;
   message?: BrowserChatMessage;
   outputCycles: BrowserChatAiOutputCycle[];
   steps: StepExecutionResult[];
@@ -2142,6 +2143,7 @@ function publishBrowserChatUIStreamUpdate(sessionId: string) {
   for (const listener of listeners) {
     try {
       listener({
+        pendingToolConfirmation: session.pendingToolConfirmation,
         message,
         outputCycles: records.outputCycles,
         steps: session.steps,
@@ -2175,6 +2177,7 @@ export function subscribeBrowserChatUIStream(
           ))
       : [];
     listener({
+      pendingToolConfirmation: currentSession?.pendingToolConfirmation,
       message,
       outputCycles,
       steps: message
@@ -3383,6 +3386,7 @@ async function ensureStartedNow(
 }
 
 export async function createBrowserChatSession(input: {
+  selectRuntime?: boolean;
   targetUrl?: string;
   safetyMode?: BrowserChatSafetyMode;
   modelProvider?: unknown;
@@ -3422,13 +3426,15 @@ export async function createBrowserChatSession(input: {
   session.browserGroupId = `session:${session.id}`;
   const userKey = browserChatUserRuntimeKey(session.userId);
   const previouslySelectedSessionId = selectedSessionIds.get(userKey);
-  selectedSessionIds.set(userKey, session.id);
+  if (input.selectRuntime !== false) selectedSessionIds.set(userKey, session.id);
   sessions.set(session.id, session);
   cancelBrowserChatSessionEviction(session.id);
-  if (previouslySelectedSessionId && previouslySelectedSessionId !== session.id) {
+  if (input.selectRuntime !== false && previouslySelectedSessionId && previouslySelectedSessionId !== session.id) {
     scheduleBrowserChatSessionEviction(previouslySelectedSessionId);
   }
-  persistAndNotify(session.id);
+  if (!(await persistAndNotify(session.id))) throw new Error('Failed to persist the new browser chat session.');
+  const pendingWrite = pendingDatabaseWrites.get(session.id);
+  if (pendingWrite && !(await pendingWrite)) throw new Error('Failed to persist the new browser chat session.');
   return clientSnapshot(session);
 }
 

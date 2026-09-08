@@ -492,7 +492,7 @@ function internalRequestAuthorized(request, pathname) {
     const expected = String(process.env.WEBPILOT_INTERNAL_SHUTDOWN_TOKEN || '');
     return Boolean(expected) && request.headers['x-webpilot-shutdown-token'] === expected;
   }
-  if (pathname === '/api/automation/scheduler') {
+  if (pathname === '/api/automation/scheduler' || pathname === '/api/communication/runtime') {
     const expected = String(process.env.WEBPILOT_INTERNAL_REQUEST_TOKEN || '');
     return Boolean(expected) && request.headers['x-webpilot-internal-token'] === expected;
   }
@@ -568,7 +568,8 @@ async function main() {
   const dev = process.argv.includes('--dev');
   const runtimeChildMode = process.argv.includes('--runtime-child');
   configureNextDevelopmentRuntime(dev);
-  process.env.WEBPILOT_SERVER_ROLE = runtimeChildMode ? 'runtime' : 'ui';
+  // Only a dedicated UI process may skip the background runtime loops.
+  process.env.WEBPILOT_SERVER_ROLE = splitRuntimeEnabled(dev, runtimeChildMode) ? 'ui' : 'runtime';
   const hostname = String(process.env.HOSTNAME || '127.0.0.1');
   const port = Math.max(1, Math.floor(Number(process.env.PORT || 3000)));
   const appDir = path.resolve(process.env.WEBPILOT_APP_DIR || process.cwd());
@@ -595,6 +596,8 @@ async function main() {
   const apiRuntimeSupervisor = splitRuntimeEnabled(dev, runtimeChildMode)
     ? createApiRuntimeSupervisor({ appDir, dev, externalPort: port })
     : undefined;
+  process.env.WEBPILOT_SERVER_ROLE = apiRuntimeSupervisor ? 'ui' : 'runtime';
+  updateInitialEnv({ WEBPILOT_SERVER_ROLE: process.env.WEBPILOT_SERVER_ROLE });
 
   // Load the complete build-time configuration before loading Next itself.
   // This applies to the packaged runtime regardless of whether the build uses
@@ -721,7 +724,7 @@ async function main() {
   });
 
   server.listen(port, hostname, () => {
-    const role = runtimeChildMode ? 'API runtime' : 'UI';
+    const role = runtimeChildMode ? 'API runtime' : apiRuntimeSupervisor ? 'UI' : 'UI + API runtime';
     console.log(`[webpilot-server] ${role} ready on http://${hostname}:${port}${basePath || '/'}`);
   });
 
