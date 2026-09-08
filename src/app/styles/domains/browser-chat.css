@@ -7,3 +7,5 @@
 @import "./embedded-browser.css";
 @import "./onboarding.css";
 @import "../browser-chat-debug.css";
+/* Apply compact chat geometry after the shared desktop layers. */
+@import "./chat-responsive.css";

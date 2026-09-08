@@ -9574,12 +9574,12 @@ export function BrowserChatWorkspace({
   useEscapeDismiss(mobileHistoryOpen, () => setMobileHistoryOpen(false));
 
   useEffect(() => {
-    const phoneLayout = window.matchMedia('(max-width: 680px)');
-    const closeOutsidePhoneLayout = () => {
-      if (!phoneLayout.matches) setMobileHistoryOpen(false);
+    const compactLayout = window.matchMedia('(max-width: 1024px)');
+    const closeOutsideCompactLayout = () => {
+      if (!compactLayout.matches) setMobileHistoryOpen(false);
     };
-    phoneLayout.addEventListener('change', closeOutsidePhoneLayout);
-    return () => phoneLayout.removeEventListener('change', closeOutsidePhoneLayout);
+    compactLayout.addEventListener('change', closeOutsideCompactLayout);
+    return () => compactLayout.removeEventListener('change', closeOutsideCompactLayout);
   }, []);
 
   function renderSidebarDetail() {
