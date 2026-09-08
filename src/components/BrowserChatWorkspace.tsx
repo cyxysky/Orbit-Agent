@@ -9806,8 +9806,9 @@ export function BrowserChatWorkspace({
                           {deletingSessionIds.has(item.id) ? <Loader2 className="spin" size={10} /> : <X size={11} />}
                         </button>
                       )}
-                      collapsedIcon={<MessageSquare size={17} />}
-                      cornerStatus={running ? <Loader2 className="spin" size={8} /> : undefined}
+                      collapsedIcon={running
+                        ? <Loader2 className="spin" size={17} />
+                        : <MessageSquare size={17} />}
                       disabled={Boolean(loadingSessionId && loadingSessionId !== item.id)}
                       expandedAction={(
                         <WorkspaceOverflowMenu

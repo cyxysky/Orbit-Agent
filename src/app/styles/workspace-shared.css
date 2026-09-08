@@ -400,10 +400,6 @@
   justify-content: center;
 }
 
-.workspace-sidebar-archive-row-corner-status {
-  display: none;
-}
-
 .workspace-sidebar-archive-row-action {
   grid-column: -2 / -1;
   grid-row: 1;
@@ -2299,30 +2295,6 @@
     height: 17px;
     stroke-width: 1.9;
     width: 17px;
-  }
-
-  .browser-chat-layout.sidebar-collapsed .workspace-sidebar-archive-row-corner-status {
-    align-items: flex-start;
-    background: transparent;
-    color: #fff;
-    display: inline-flex;
-    height: 18px;
-    justify-content: flex-end;
-    pointer-events: none;
-    position: absolute;
-    right: 0;
-    top: 0;
-    width: 18px;
-    z-index: 4;
-  }
-
-  .browser-chat-layout.sidebar-collapsed .workspace-sidebar-archive-row-corner-status > svg {
-    height: 8px;
-    position: absolute;
-    right: 1.5px;
-    stroke-width: 2.5;
-    top: 1.5px;
-    width: 8px;
   }
 
   .browser-chat-layout.sidebar-collapsed .workspace-sidebar-archive-row.active .workspace-sidebar-archive-row-icon {
