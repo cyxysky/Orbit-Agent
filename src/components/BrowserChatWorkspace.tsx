@@ -4679,11 +4679,6 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
               />
             )
           ))}
-          {running && hasFinalResponse && !finalTextAnchoredToToolCycle ? (
-            <div className={`browser-chat-answer${textStreaming ? ' is-streaming' : ''}`}>
-              <BrowserChatOrderedResponse fallbackText={hideManualVerificationStatusText ? '' : displayFinalText} parts={displayResponseParts} />
-            </div>
-          ) : null}
           {currentTimelineEntries.length ? (
             <div className="browser-chat-tool-stack browser-chat-current-tool-stack">
               {currentTimelineEntries.map(({ step, visibleToolIndexes }) => (
@@ -4733,8 +4728,9 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
           resuming={resumingHumanVerification}
         />
       ) : null}
-      {!running && hasFinalResponse && (message.status === 'passed' || !finalTextAnchoredToToolCycle) ? (
-        <div className="browser-chat-answer">
+      {/* Keep the answer mounted as the turn finishes so images and charts retain their state. */}
+      {hasFinalResponse && ((!running && message.status === 'passed') || !finalTextAnchoredToToolCycle) ? (
+        <div className={`browser-chat-answer${textStreaming ? ' is-streaming' : ''}`}>
           <BrowserChatOrderedResponse fallbackText={hideManualVerificationStatusText ? '' : displayFinalText} parts={displayResponseParts} />
         </div>
       ) : null}
