@@ -842,6 +842,16 @@
   width: min(100%, var(--browser-chat-content-width));
 }
 
+/* The scroll shell reaches the pane edges; its content keeps the composer gutter. */
+.browser-chat-chat-pane:not(.embedded-chat) .browser-chat-message-list-content {
+  box-sizing: border-box;
+  padding-inline: 0;
+  width: min(
+    calc(100% - var(--browser-chat-pane-inline-padding) - var(--browser-chat-pane-inline-padding)),
+    var(--browser-chat-content-width)
+  );
+}
+
 .browser-chat-message {
   box-sizing: border-box;
   contain-intrinsic-size: auto 160px;
