@@ -1409,6 +1409,7 @@
 .browser-chat-management-shortcuts svg { flex: 0 0 auto; }
 
 .browser-chat-compose-actions > .browser-chat-management-dock {
+  border: none;
   margin-left: auto;
   margin-right: 8px;
 }
