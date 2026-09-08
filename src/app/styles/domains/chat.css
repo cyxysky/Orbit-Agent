@@ -192,31 +192,6 @@
   position: relative;
 }
 
-.browser-chat-conversation-share {
-  align-items: center;
-  background: transparent;
-  border: 0;
-  border-radius: 8px;
-  color: var(--foreground);
-  cursor: pointer;
-  display: inline-flex;
-  font: inherit;
-  font-size: 13px;
-  gap: 6px;
-  height: 32px;
-  padding: 0 8px;
-  transition: background-color 140ms ease, color 140ms ease;
-}
-
-.browser-chat-conversation-share:hover,
-.browser-chat-conversation-share.is-copied {
-  background: color-mix(in srgb, var(--foreground) 6%, transparent);
-}
-
-.browser-chat-conversation-share.is-copied {
-  color: var(--accent-strong);
-}
-
 .browser-chat-conversation-direct-action {
   align-items: center;
   background: transparent;

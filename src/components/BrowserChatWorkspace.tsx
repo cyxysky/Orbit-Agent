@@ -52,7 +52,6 @@ import {
   Bug,
   Cable,
   ChartNoAxesCombined,
-  Check,
   CircleAlert,
   CircleHelp,
   Clock3,
@@ -98,7 +97,6 @@ import {
   Search,
   ScrollText,
   SendHorizontal,
-  Share2,
   Settings,
   ShieldCheck,
   SlidersHorizontal,
@@ -8152,8 +8150,6 @@ export function BrowserChatWorkspace({
   const [conversationTitleDraft, setConversationTitleDraft] = useState('');
   const [savingConversationTitle, setSavingConversationTitle] = useState(false);
   const cancelConversationTitleSaveRef = useRef(false);
-  const [shareLinkCopied, setShareLinkCopied] = useState(false);
-  const shareLinkFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const uiChatTransport = useMemo(() => new DefaultChatTransport<BrowserChatUIMessage>({
     api: browserChatApiUrl('/api/browser-chat/unbound/message'),
     prepareSendMessagesRequest: ({ body, messages: requestMessages }) => {
@@ -8743,12 +8739,7 @@ export function BrowserChatWorkspace({
   useEffect(() => {
     setEditingConversationTitle(false);
     setConversationTitleDraft('');
-    setShareLinkCopied(false);
   }, [session?.id]);
-
-  useEffect(() => () => {
-    if (shareLinkFeedbackTimerRef.current) clearTimeout(shareLinkFeedbackTimerRef.current);
-  }, []);
 
   useEffect(() => () => {
     releaseSessionRuntime(activeSessionIdRef.current);
@@ -9947,36 +9938,6 @@ export function BrowserChatWorkspace({
     }
   }
 
-  async function shareConversationLink() {
-    if (!session) return;
-    const href = new URL(
-      browserChatSessionNavigationHref(window.location.href, session.id),
-      window.location.origin,
-    ).toString();
-    try {
-      try {
-        await navigator.clipboard.writeText(href);
-      } catch {
-        const textarea = document.createElement('textarea');
-        textarea.value = href;
-        textarea.setAttribute('readonly', '');
-        textarea.style.position = 'fixed';
-        textarea.style.opacity = '0';
-        document.body.appendChild(textarea);
-        textarea.select();
-        const copied = document.execCommand('copy');
-        textarea.remove();
-        if (!copied) throw new Error('复制对话链接失败');
-      }
-    } catch (shareError) {
-      setError(shareError instanceof Error ? shareError.message : '复制对话链接失败');
-      return;
-    }
-    setShareLinkCopied(true);
-    if (shareLinkFeedbackTimerRef.current) clearTimeout(shareLinkFeedbackTimerRef.current);
-    shareLinkFeedbackTimerRef.current = setTimeout(() => setShareLinkCopied(false), 1800);
-  }
-
   const renderChatPaneHeader = () => session && hasMessages ? (
     <header className="browser-chat-conversation-header">
       <div className="browser-chat-conversation-title-area" data-editing={editingConversationTitle || undefined}>
@@ -10018,16 +9979,6 @@ export function BrowserChatWorkspace({
         </form>
       </div>
       <div className="browser-chat-conversation-header-actions">
-        <button
-          aria-label={shareLinkCopied ? t('对话链接已复制') : t('分享对话')}
-          className={`browser-chat-conversation-share${shareLinkCopied ? ' is-copied' : ''}`}
-          onClick={() => void shareConversationLink()}
-          title={t('复制对话链接')}
-          type="button"
-        >
-          {shareLinkCopied ? <Check aria-hidden="true" size={15} /> : <Share2 aria-hidden="true" size={15} />}
-          <span>{shareLinkCopied ? t('已复制链接') : t('分享')}</span>
-        </button>
         {webPreviewRuntime ? (
           <button
             aria-label={t('打开实时界面')}
