@@ -11,7 +11,7 @@ import type {
   PageDomObservationPayload,
   PageInteractiveCandidate,
   WindowWithAiDomRuntime,
-} from './browser-session.js';
+} from './browser-session.ts';
 
 export const AI_DOM_RUNTIME_VERSION = 29;
 

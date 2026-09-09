@@ -19,14 +19,13 @@ export const environmentSettingsTabs: EnvironmentSettingsTab[] = [
   { id: 'browser', label: '浏览器', description: '实例、预览和浏览器 Agent' },
   { id: 'capabilities', label: '工具能力', description: '代码、文件、桌面、连接器、通信和数据' },
   { id: 'sensitive-data', label: '安全与隐私', description: '敏感数据过滤、检测和评测' },
-  { id: 'debug', label: '系统与高级', description: '调试与追踪' },
 ];
 
 export const environmentSettingsTabGroups: EnvironmentSettingsTabGroup[] = [
   { id: 'interface', label: '界面', tabs: ['general'] },
   { id: 'ai', label: 'AI 与运行', tabs: ['model', 'runtime'] },
   { id: 'tools', label: '工具与连接', tabs: ['browser', 'capabilities'] },
-  { id: 'system', label: '安全与系统', tabs: ['sensitive-data', 'debug'] },
+  { id: 'system', label: '安全与系统', tabs: ['sensitive-data'] },
 ];
 
 const administratorOnlySettingsTabs = new Set<SettingsTab>([
@@ -35,7 +34,6 @@ const administratorOnlySettingsTabs = new Set<SettingsTab>([
   'browser',
   'capabilities',
   'sensitive-data',
-  'debug',
 ]);
 
 export function environmentSettingsTab(tab: SettingsTab) {

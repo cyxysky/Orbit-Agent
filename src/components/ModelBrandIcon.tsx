@@ -1,7 +1,7 @@
 'use client';
 
 import { Bot } from 'lucide-react';
-import type { StaticImageData } from 'next/image';
+import Image, { type StaticImageData } from 'next/image';
 import type { ModelProvider } from '@/server/ai/schemas/runtime.schema';
 import { useI18n } from '@/i18n/I18nProvider';
 
@@ -140,8 +140,8 @@ export function ModelBrandIcon({ model, provider }: { model: string; provider: M
   if (!brand) return <Bot aria-label={t('AI 模型')} size={16} />;
   return (
     <span aria-label={brand.label} className="model-brand-icon-images" role="img">
-      <img alt="" className="model-brand-icon-light" src={brand.light.src} />
-      <img alt="" className="model-brand-icon-dark" src={brand.dark.src} />
+      <Image alt="" className="model-brand-icon-light" src={brand.light} width={17} height={17} unoptimized />
+      <Image alt="" className="model-brand-icon-dark" src={brand.dark} width={17} height={17} unoptimized />
     </span>
   );
 }

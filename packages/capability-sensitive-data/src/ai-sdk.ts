@@ -1,6 +1,6 @@
 import type { LanguageModelV4CallOptions, LanguageModelV4Prompt } from '@ai-sdk/provider';
-import type { SensitiveDataFilterConfig } from './config.js';
-import type { SensitiveDataRedactor } from './client.js';
+import type { SensitiveDataFilterConfig } from './config.ts';
+import type { SensitiveDataRedactor } from './client.ts';
 
 type TextTransform = (value: string) => string;
 

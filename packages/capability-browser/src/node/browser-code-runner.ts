@@ -10,8 +10,8 @@ import {
   readEditableText,
   resolveEditableTextSelection,
   type BrowserTextSelectionSpec,
-} from './editable-text-selection.js';
-import type { BrowserPageObservation } from './browser-page-observation.js';
+} from './editable-text-selection.ts';
+import type { BrowserPageObservation } from './browser-page-observation.ts';
 
 export type BrowserCodeConnection = {
   protocol: 'playwright' | 'cdp';
@@ -561,14 +561,17 @@ function browserCodeKernelMain() {
   });
 
   const jsonSafe = (value: unknown, maxOutputChars?: number) => {
-    const seen = new WeakSet<object>();
-    const serialized = JSON.stringify(value, (_key, item) => {
+    const ancestors: object[] = [];
+    const serialized = JSON.stringify(value, function (this: object, _key, item) {
       if (typeof item === 'bigint') return String(item);
       if (typeof item === 'function' || typeof item === 'symbol') return undefined;
       if (item instanceof Error) return { name: item.name, message: item.message };
       if (item && typeof item === 'object') {
-        if (seen.has(item)) return '[Circular]';
-        seen.add(item);
+        // Shared references in sibling branches are valid JSON values. Only
+        // an object already on the current ancestor path forms a cycle.
+        while (ancestors.length && ancestors[ancestors.length - 1] !== this) ancestors.pop();
+        if (ancestors.includes(item)) return '[Circular]';
+        ancestors.push(item);
       }
       return item;
     });

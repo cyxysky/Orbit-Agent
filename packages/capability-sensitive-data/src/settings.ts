@@ -2,7 +2,7 @@ import type { CapabilitySettingDefinition } from '@webpilot/capability-sdk';
 import {
   defaultGlinerOpenLabelModel,
   defaultLiquidPiiModel,
-} from './config.js';
+} from './config.ts';
 
 const booleanOptions = [
   { label: '开启', value: 'true' },

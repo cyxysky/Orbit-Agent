@@ -2,8 +2,8 @@ import { createHash } from 'node:crypto';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { resolveLibreOfficeExecutable } from '../libreoffice.js';
-import { resolveUnoProgramWorker } from './uno.js';
+import { resolveLibreOfficeExecutable } from '../libreoffice.ts';
+import { resolveUnoProgramWorker } from './uno.ts';
 
 async function fileStamp(filePath: string) {
   const value = await stat(filePath).catch(() => undefined);

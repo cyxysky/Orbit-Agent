@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-export { runCapabilityProcess, type CapabilityProcessOptions } from './process.js';
+export { runCapabilityProcess, type CapabilityProcessOptions } from './process.ts';
 
 /** Local persistent stores own their connection. Never point this at an application database. */
 export function createCapabilityDocumentDatabase<T extends { id: string; updatedAt?: string; createdAt?: string }>(input: {

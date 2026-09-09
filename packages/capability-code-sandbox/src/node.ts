@@ -1,8 +1,8 @@
 import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { createCodeSandboxCapability, type CodeSandboxExecutor, type CodeSandboxExecutionResult } from './index.js';
-import { runBoundedProcess } from './process-runner.js';
+import { createCodeSandboxCapability, type CodeSandboxExecutor, type CodeSandboxExecutionResult } from './index.ts';
+import { runBoundedProcess } from './process-runner.ts';
 import type { CapabilityRunContext } from '@webpilot/capability-sdk';
 import { collectFiles, stageFiles } from '../runtime/files.cjs';
 

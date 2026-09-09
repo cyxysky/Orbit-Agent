@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { OfficeDesignBrief, OfficeDocumentDraft, OfficeVisualQaDeckChecks } from './office/types.js';
+import type { OfficeDesignBrief, OfficeDocumentDraft, OfficeVisualQaDeckChecks } from './office/types.ts';
 
 const sentence = z.string().trim().min(1).max(320);
 

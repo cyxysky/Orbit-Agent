@@ -1,5 +1,5 @@
-import { normalizeThreeChartOption } from './three-core.js';
-export * from './three-core.js';
+import { normalizeThreeChartOption } from './three-core.ts';
+export * from './three-core.ts';
 
 export type EChartsMapRegistration = {
   geoJson: Record<string, unknown> | string;

@@ -31,9 +31,9 @@ function parseActualObject(actual: string) {
 
 export function classifyRuntimeToolFailure(
   name: string,
-  result: Pick<BrowserActionResult, 'actual'>,
+  result: Pick<BrowserActionResult, 'actual' | 'summary'>,
 ): RuntimeToolFailureCategory {
-  const actual = result.actual || '';
+  const actual = result.summary || result.actual || '';
   if (name === 'skill' || /requiredSkillId|hidden built-in Skill|runtime Skill .* not loaded/i.test(actual)) {
     return 'skill-gate';
   }
@@ -94,9 +94,10 @@ function appendFailureCategory(actual: string, category: string) {
 export function withToolFailureGuidance(name: string, result: BrowserActionResult): BrowserActionResult {
   if (result.ok) return result;
   const failureCategory = result.failureCategory?.trim() || classifyRuntimeToolFailure(name, result);
+  if (result.data !== undefined) return { ...result, failureCategory };
   return {
     ...result,
-    actual: appendFailureCategory(result.actual, failureCategory),
+    actual: appendFailureCategory(result.actual || '', failureCategory),
     failureCategory,
   };
 }

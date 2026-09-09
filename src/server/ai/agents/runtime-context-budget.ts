@@ -3,11 +3,13 @@ import type { ModelConfigRecord } from '@/server/ai/schemas/runtime.schema';
 export type RuntimeContextModel = {
   provider?: string;
   model?: string;
+  maxContextTokens?: number;
 };
 
-type ContextProfileOverride = { windowTokens?: number; outputReserveTokens?: number; imageTokens?: number };
-
-let configuredModelWindows = new Map<string, number>();
+// Next route bundles and hot reloads must share the same applied model config.
+const contextState = ((globalThis as typeof globalThis & {
+  __webPilotModelContextWindows?: { windows: Map<string, number> };
+}).__webPilotModelContextWindows ??= { windows: new Map<string, number>() });
 
 export function configureRuntimeModelContexts(providers: ModelConfigRecord['providers'] = {}) {
   const windows = new Map<string, number>();
@@ -19,7 +21,7 @@ export function configureRuntimeModelContexts(providers: ModelConfigRecord['prov
       }
     }
   }
-  configuredModelWindows = windows;
+  contextState.windows = windows;
 }
 
 function positive(value: unknown, fallback: number) {
@@ -34,17 +36,12 @@ function ratio(value: unknown, fallback: number) {
 
 /** Profiles describe input budgeting only; they never inject output parameters into a request. */
 export function runtimeContextProfile(input: RuntimeContextModel = {}) {
-  let profiles: Record<string, ContextProfileOverride> = {};
-  try { profiles = JSON.parse(process.env.AI_CONTEXT_MODEL_PROFILES || '{}'); } catch { /* validated below through defaults */ }
-  const model = String(input.model || '').trim().toLowerCase();
+  const model = String(input.model || '').trim();
   const key = `${input.provider || ''}/${model}`;
-  const override = profiles?.[key] || profiles?.[model];
-  const configuredWindow = configuredModelWindows.get(`${input.provider || ''}/${String(input.model || '').trim()}`);
-  const minimaxM3 = /(?:^|\/)minimax-m3(?:$|[-._])/i.test(model);
-  const legacyGlm = /(^|[\/:._-])glm(?:[\/:._-]|$)/i.test(model);
-  const legacyWindow = positive(process.env.AI_CONTEXT_WINDOW_TOKENS || process.env.AI_MODEL_CONTEXT_TOKENS, 128000);
-  const windowTokens = configuredWindow ?? positive(override?.windowTokens, minimaxM3 ? 1_000_000
-    : legacyGlm ? positive(process.env.AI_GLM_CONTEXT_WINDOW_TOKENS, 1_000_000) : legacyWindow);
+  const configuredWindow = input.maxContextTokens !== undefined
+    ? positive(input.maxContextTokens, 0) || undefined
+    : contextState.windows.get(key);
+  const windowTokens = configuredWindow ?? positive(process.env.AI_CONTEXT_WINDOW_TOKENS, 256000);
   const prefix = input.provider?.startsWith('openai-compatible')
     ? input.provider.toUpperCase().replaceAll('-', '_') : input.provider?.toUpperCase().replaceAll('-', '_');
   let requestedOutput = 0;
@@ -52,8 +49,7 @@ export function runtimeContextProfile(input: RuntimeContextModel = {}) {
     const extra = JSON.parse(process.env[`${prefix}_EXTRA_REQUEST_PARAMETERS`] || '{}');
     requestedOutput = positive(extra.max_completion_tokens ?? extra.max_tokens, 0);
   } catch { /* Provider request validation owns malformed request parameters. */ }
-  const requestedReserveTokens = Math.max(requestedOutput, positive(override?.outputReserveTokens,
-    requestedOutput || (minimaxM3 ? 131072 : Math.min(16384, Math.floor(windowTokens * 0.1)))));
+  const requestedReserveTokens = requestedOutput || Math.min(16384, Math.floor(windowTokens * 0.1));
   const safetyTokens = Math.min(Math.max(1024, Math.floor(windowTokens * 0.05)), Math.floor(windowTokens * 0.1));
   const outputReserveTokens = Math.min(requestedReserveTokens, windowTokens - safetyTokens - 1);
   const inputBudgetTokens = Math.max(1, Math.min(Math.floor(windowTokens * 0.85), windowTokens - outputReserveTokens - safetyTokens));
@@ -62,10 +58,10 @@ export function runtimeContextProfile(input: RuntimeContextModel = {}) {
   const compressionTargetRatio = ratio(process.env.AI_CONTEXT_COMPRESSION_TARGET_RATIO, 0.25);
   return {
     key, windowTokens, outputReserveTokens, inputBudgetTokens,
-    compressionTriggerTokens, compressionTargetTokens: Math.max(1, Math.floor(compressionTriggerTokens * compressionTargetRatio)),
-    imageTokens: positive(override?.imageTokens, positive(process.env.AI_IMAGE_CONTEXT_ESTIMATE_TOKENS, 1200)),
+    compressionTriggerTokens, compressionTargetTokens: Math.max(1, Math.min(Math.floor(windowTokens * compressionTargetRatio), Math.floor(compressionTriggerTokens * 0.9))),
+    imageTokens: positive(process.env.AI_IMAGE_CONTEXT_ESTIMATE_TOKENS, 1200),
     protocol: 'preserve-provider-reasoning-and-signatures' as const,
-    source: configuredWindow !== undefined ? 'model-capabilities' : override ? 'configured-model-profile' : minimaxM3 ? 'minimax-m3-profile' : legacyGlm ? 'legacy-glm-profile' : 'configured-or-conservative-fallback',
+    source: configuredWindow !== undefined ? 'model-capabilities' : 'default-context-window',
   };
 }
 
@@ -76,14 +72,6 @@ export function runtimeContextWindowTokens(input: RuntimeContextModel = {}) {
 export function runtimeContextCompressionThresholdRatio(input: RuntimeContextModel = {}) {
   const profile = runtimeContextProfile(input);
   return profile.compressionTriggerTokens / profile.windowTokens;
-}
-
-export function runtimeContextCompressionTargetFloorRatio() {
-  return 0.1;
-}
-
-export function runtimeContextCompressionTargetCeilingRatio() {
-  return 0.2;
 }
 
 export function estimateRuntimeTextTokens(text: string) {
@@ -99,6 +87,10 @@ export function estimateRuntimeTextTokens(text: string) {
 export type RuntimeMessageContextEstimate = {
   imageCount: number;
   imageTokens: number;
+  textCharacters: number;
+  serializedCharacters: number;
+  valueTextTokens: number;
+  serializedTextTokens: number;
   textTokens: number;
   totalTokens: number;
 };
@@ -110,44 +102,50 @@ function runtimeImageContextEstimateTokens() {
 
 export function estimateRuntimeMessageContext(messages: unknown): RuntimeMessageContextEstimate {
   const text: string[] = [];
-  const visited = new WeakSet<object>();
+  const ancestors = new WeakSet<object>();
   let imageCount = 0;
 
-  const walk = (value: unknown, key = '') => {
+  const walk = (value: unknown): unknown => {
     if (typeof value === 'string') {
-      if (key === 'data' || key === 'image' || value.startsWith('data:image/')) return;
       text.push(value);
-      return;
+      return value;
     }
-    if (!value || typeof value !== 'object' || visited.has(value)) return;
-    visited.add(value);
-    if (Array.isArray(value)) {
-      value.forEach((item) => walk(item));
-      return;
-    }
-    const record = value as Record<string, unknown>;
-    const mediaType = typeof record.mediaType === 'string'
-      ? record.mediaType
-      : typeof record.type === 'string'
-        ? record.type
-        : '';
-    const isImage = record.type === 'image'
-      || mediaType.startsWith('image/')
-      || (record.image !== undefined && typeof record.image !== 'string');
-    if (isImage) imageCount += 1;
-    for (const [childKey, child] of Object.entries(record)) {
-      if (isImage && (childKey === 'data' || childKey === 'image')) continue;
-      walk(child, childKey);
+    if (typeof value === 'bigint') return walk(String(value));
+    if (!value || typeof value !== 'object') return value;
+    if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) return '[Binary data]';
+    if (ancestors.has(value)) return '[Circular]';
+    ancestors.add(value);
+    try {
+      if (Array.isArray(value)) return value.map(walk);
+      const record = value as Record<string, unknown>;
+      const mediaType = typeof record.mediaType === 'string' ? record.mediaType : '';
+      const isImage = record.type === 'image' || mediaType.startsWith('image/');
+      const isFile = record.type === 'file';
+      if (isImage) imageCount += 1;
+      const output: Record<string, unknown> = {};
+      for (const [key, child] of Object.entries(record)) {
+        // Only media parts own binary data. Tool payloads named data are text.
+        if ((isImage || isFile) && (key === 'data' || key === 'image')) continue;
+        output[key] = walk(child);
+      }
+      return output;
+    } finally {
+      ancestors.delete(value);
     }
   };
 
-  walk(messages);
-  const messageOverhead = Array.isArray(messages) ? messages.length * 4 : 0;
-  const textTokens = estimateRuntimeTextTokens(text.join('\n')) + messageOverhead;
+  const serialized = JSON.stringify(walk(messages)) || '';
+  const valueTextTokens = estimateRuntimeTextTokens(text.join('\n'));
+  const serializedTextTokens = estimateRuntimeTextTokens(serialized);
+  const textTokens = Math.max(valueTextTokens, serializedTextTokens);
   const imageTokens = imageCount * runtimeImageContextEstimateTokens();
   return {
     imageCount,
     imageTokens,
+    textCharacters: text.reduce((sum, value) => sum + value.length, 0),
+    serializedCharacters: serialized.length,
+    valueTextTokens,
+    serializedTextTokens,
     textTokens,
     totalTokens: textTokens + imageTokens,
   };

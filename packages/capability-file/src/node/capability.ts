@@ -5,9 +5,9 @@ import type {
 } from '@webpilot/capability-sdk';
 import { realpath } from 'node:fs/promises';
 import path from 'node:path';
-import { nodeArtifactRelativePath, sanitizeNodeArtifactFileName } from './artifacts.js';
-import { readFileAttachment } from './read.js';
-import { fileFormatForName } from '../formats.js';
+import { nodeArtifactRelativePath, sanitizeNodeArtifactFileName } from './artifacts.ts';
+import { readFileAttachment } from './read.ts';
+import { fileFormatForName } from '../formats.ts';
 import {
   createFileCapability,
   type FileArtifactOperationResult,
@@ -16,12 +16,12 @@ import {
   type FileReadInput,
   type FileToolInput,
   type FileVisualToolInput,
-} from '../index.js';
+} from '../index.ts';
 import {
   createNodeFileWorkspace,
   type FileGenerationProgress,
   type NodeFileWorkspaceHost,
-} from './workspace.js';
+} from './workspace.ts';
 
 type ContextValue<T> = T | ((context: CapabilityRunContext) => T | Promise<T>);
 
@@ -192,6 +192,10 @@ export async function createNodeFileOperations(
         ...input, includeVisuals: input.includeVisuals === true,
       }, context, runContext), 'file-read-content-failed');
     },
+    write: async (input: FileToolInput, context) => fileOperationToCapabilityResult(
+      await workspace.writeTextFileArtifact({ fileName: input.fileName, content: input.content, runId, abortSignal: context.abortSignal }),
+      'file-write-failed',
+    ),
     download: async (input: FileToolInput, context) => fileOperationToCapabilityResult(
       await workspace.downloadFileArtifact({
         runId,

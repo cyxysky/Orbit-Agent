@@ -1,4 +1,4 @@
-export * from './index.js';
+export * from './index.ts';
 export {
   TypeOrmCapabilityConfigStore,
   createTypeOrmCapabilityConfigurationEntitySchema,

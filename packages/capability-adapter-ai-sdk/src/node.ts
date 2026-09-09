@@ -1,2 +1,2 @@
-export * from './index.js';
+export * from './index.ts';
 export { JsonFileCapabilityConfigStore } from '@webpilot/capability-host/node';

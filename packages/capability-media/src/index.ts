@@ -1,11 +1,11 @@
 import { z } from 'zod';
 import { defineCapabilityInput, defineCapabilityTool, normalizeBoundedInteger, type CapabilityExecutionContext, type CapabilityHealth, type CapabilityManifest, type CapabilityProvider, type CapabilityRunContext } from '@webpilot/capability-sdk';
-import { mediaRuntimeSkill } from './runtime-skill.js';
-import { mediaCapabilitySettings } from './settings.js';
-import type { MediaGenerationInput, MediaGenerationOperations } from './generation.js';
-export * from './runtime-skill.js';
-export * from './settings.js';
-export * from './generation.js';
+import { mediaRuntimeSkill } from './runtime-skill.ts';
+import { mediaCapabilitySettings } from './settings.ts';
+import type { MediaGenerationInput, MediaGenerationOperations } from './generation.ts';
+export * from './runtime-skill.ts';
+export * from './settings.ts';
+export * from './generation.ts';
 
 export const mediaCapabilityToolNames = Object.freeze({ media: 'media' } as const);
 export type MediaArtifact = { artifactId: string; mediaType?: string; url?: string; downloadUrl?: string; fileName?: string; description?: string };

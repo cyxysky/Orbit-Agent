@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import {
   defaultLiquidPiiModel,
   normalizedGlinerModelName,
-} from './config.js';
+} from './config.ts';
 
 export type GlinerRuntimeMode = 'auto' | 'local' | 'external';
 

@@ -3,10 +3,10 @@ import { test } from 'node:test';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { ChartRevisionConflict, normalizeChartOption, normalizeThreeChartOption, parseChartRecord, echartsToThree, threeChartBounds } from './core.js';
-import { createChart, createChartTool, updateChart } from './index.js';
-import { createFileSystemChartStore, validateEChartsOption } from './node.js';
-import { chartDataTables, replaceTableRows, tableColumns, tableCsv } from './editor-core.js';
+import { ChartRevisionConflict, normalizeChartOption, normalizeThreeChartOption, parseChartRecord, echartsToThree, threeChartBounds } from './core.ts';
+import { createChart, createChartTool, updateChart } from './index.ts';
+import { createFileSystemChartStore, validateEChartsOption } from './node.ts';
+import { chartDataTables, replaceTableRows, tableColumns, tableCsv } from './editor-core.ts';
 
 const option = { xAxis: { type: 'category', data: ['A', 'B'] }, yAxis: {}, series: [{ type: 'bar', itemStyle: { color: '#2563eb' }, data: [4, -2] }] };
 async function removeTestDirectory(directory: string) {

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { Transform, type Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { CapabilityTaskQueue, raceWithAbort } from '@webpilot/capability-sdk';
-import { createNodeArtifactPayload, sanitizeNodeArtifactFileName, type NodeArtifactUrlResolver } from './artifacts.js';
+import { createNodeArtifactPayload, sanitizeNodeArtifactFileName, type NodeArtifactUrlResolver } from './artifacts.ts';
 
 export type NodeBrowserDownloadInput = {
   runId: string;

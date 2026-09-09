@@ -1,5 +1,5 @@
 import type { CapabilityExecutionContext } from '@webpilot/capability-sdk';
-import type { CommunicationContent, CommunicationMediaOperations, CommunicationTarget } from './index.js';
+import type { CommunicationContent, CommunicationMediaOperations, CommunicationTarget } from './index.ts';
 
 function requireByteLimit(value: string | undefined, maximum: number, label: string) {
   if (value && Buffer.byteLength(value, 'utf8') > maximum) {

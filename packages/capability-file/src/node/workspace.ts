@@ -1,13 +1,13 @@
-import { recordOfficeVisualQaProgress, verifyCurrentUnoRenderedArtifact } from './workspace-visual-qa.js';
-export { verifyCurrentUnoRenderedArtifact, recordOfficeVisualQaProgress } from './workspace-visual-qa.js';
-import { officeValidationRepairHints, semanticGenerationPlan } from './workspace-result.js';
-export { officeValidationRepairHints, formatFileArtifactResult } from './workspace-result.js';
-import { loadDraft, saveDraft, saveWorkingDraft, withDraftLock, requireDocumentId, DOCUMENT_ID_PATTERN, artifactDir, sanitizeFileName, draftProgramPath } from './workspace-draft-store.js';
+import { recordOfficeVisualQaProgress, verifyCurrentUnoRenderedArtifact } from './workspace-visual-qa.ts';
+export { verifyCurrentUnoRenderedArtifact, recordOfficeVisualQaProgress } from './workspace-visual-qa.ts';
+import { officeValidationRepairHints, semanticGenerationPlan } from './workspace-result.ts';
+export { officeValidationRepairHints, formatFileArtifactResult } from './workspace-result.ts';
+import { loadDraft, saveDraft, saveWorkingDraft, withDraftLock, requireDocumentId, DOCUMENT_ID_PATTERN, artifactDir, sanitizeFileName, draftProgramPath } from './workspace-draft-store.ts';
 
-import { currentNodeFileWorkspaceHost, resolveNodeFileWorkspaceHost, type ResolvedNodeFileWorkspaceHost, type NodeFileWorkspaceHost, nodeFileWorkspaceHost } from './workspace-host.js';
-export { type NodeFileWorkspaceHost, disposeDefaultNodeFileWorkspace } from './workspace-host.js';
-import { sourceUnitsForDraft, applyUnoDraftPatchHunks, applyUnoDraftReplacements, synchronizeSourceUnits, isolateSourceUnit, replaceSourceUnit, draftSourceLineCount, normalizedDraftSource, type ParsedSourceUnit, sourceDigest, type UnoDraftPatchResult, normalizedSourceUnitPath } from './workspace-source-editor.js';
-export { sourceUnitsForDraft, applyUnoDraftPatch, type UnoDraftPatchHunkFailure, type UnoDraftPatchResult, applyUnoDraftPatchHunks, applyUnoDraftReplacements } from './workspace-source-editor.js';
+import { currentNodeFileWorkspaceHost, resolveNodeFileWorkspaceHost, type ResolvedNodeFileWorkspaceHost, type NodeFileWorkspaceHost, nodeFileWorkspaceHost } from './workspace-host.ts';
+export { type NodeFileWorkspaceHost, disposeDefaultNodeFileWorkspace } from './workspace-host.ts';
+import { sourceUnitsForDraft, applyUnoDraftPatchHunks, applyUnoDraftReplacements, synchronizeSourceUnits, isolateSourceUnit, replaceSourceUnit, draftSourceLineCount, normalizedDraftSource, type ParsedSourceUnit, sourceDigest, type UnoDraftPatchResult, normalizedSourceUnitPath } from './workspace-source-editor.ts';
+export { sourceUnitsForDraft, applyUnoDraftPatch, type UnoDraftPatchHunkFailure, type UnoDraftPatchResult, applyUnoDraftPatchHunks, applyUnoDraftReplacements } from './workspace-source-editor.ts';
 
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream, type Dirent } from 'node:fs';
@@ -16,21 +16,22 @@ import path from 'node:path';
 
 import sharp from 'sharp';
 
-import type { FileArtifactOperationResult, FileAttachmentBinding } from '../types.js';
-import { generateFileToPaths } from './generate.js';
-import { type NodeFileConvertInput, type NodeFileConvertExecutionOptions } from './convert.js';
-import { type NodeFileDownloadInput, type NodeFileDownloadExecutionOptions } from './download.js';
+import type { FileArtifactOperationResult, FileAttachmentBinding } from '../types.ts';
+import { generateFileToPaths } from './generate.ts';
+import { writeTextFileArtifact, type NodeFileWriteInput } from './write.ts';
+import { type NodeFileConvertInput, type NodeFileConvertExecutionOptions } from './convert.ts';
+import { type NodeFileDownloadInput, type NodeFileDownloadExecutionOptions } from './download.ts';
 
-import { inspectUnoApi, isUnoBridgeStartupError, isUnoStylePropertyInfoError, isUnoWorkerInternalError } from './office/uno.js';
-import { validateOfficeArtifact, type OfficeElementMapEntry } from './office/validation.js';
-import { validateOfficeRendererMatrix } from './office/render-validation.js';
-import { analyzeOfficeProgram, diagnoseOfficeProgramRuntimeError, type OfficeProgramDiagnostic } from './office/program-analysis.js';
-import type { OfficeDocumentDraft, OfficeDocumentKind, OfficeSemanticDocumentInput } from '../office/types.js';
-import { registerOfficePreview, type FilePreviewResult } from './office/preview.js';
-import { officeGenerationRuntimeFingerprint } from './office/runtime-fingerprint.js';
-import { beginOfficeValidation, currentUnoWorkerDigest, officeValidationEvidence } from './office/validation-evidence.js';
-import { compileOfficeSemanticDocument } from './office/semantic.js';
-import { officeDesignBriefSchema, officeDesignGuidance } from '../design-guidance.js';
+import { inspectUnoApi, isUnoBridgeStartupError, isUnoStylePropertyInfoError, isUnoWorkerInternalError } from './office/uno.ts';
+import { validateOfficeArtifact, type OfficeElementMapEntry } from './office/validation.ts';
+import { validateOfficeRendererMatrix } from './office/render-validation.ts';
+import { analyzeOfficeProgram, diagnoseOfficeProgramRuntimeError, type OfficeProgramDiagnostic } from './office/program-analysis.ts';
+import type { OfficeDocumentDraft, OfficeDocumentKind, OfficeSemanticDocumentInput } from '../office/types.ts';
+import { registerOfficePreview, type FilePreviewResult } from './office/preview.ts';
+import { officeGenerationRuntimeFingerprint } from './office/runtime-fingerprint.ts';
+import { beginOfficeValidation, currentUnoWorkerDigest, officeValidationEvidence } from './office/validation-evidence.ts';
+import { compileOfficeSemanticDocument } from './office/semantic.ts';
+import { officeDesignBriefSchema, officeDesignGuidance } from '../design-guidance.ts';
 
 function officeOperationWasInterrupted(error: unknown, abortSignal?: AbortSignal) {
   if (abortSignal?.aborted) return true;
@@ -2479,6 +2480,7 @@ export function createNodeFileWorkspace(options: NodeFileWorkspaceHost) {
   const host = resolveNodeFileWorkspaceHost(options);
   return Object.freeze({
     artifactsRoot: host.artifactsRoot,
+    writeTextFileArtifact: (input: NodeFileWriteInput) => writeTextFileArtifact(host, input),
     syncDocumentAssets: bindNodeFileWorkspaceOperation(host, syncDocumentAssets),
     downloadFileArtifact: bindNodeFileWorkspaceResultOperation(host, downloadFileArtifact, 'file-download-failed'),
     convertFileArtifact: bindNodeFileWorkspaceResultOperation(host, convertFileArtifact, 'file-convert-failed'),

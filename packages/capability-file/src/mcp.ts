@@ -5,8 +5,8 @@ import {
   type CapabilityMcpServerOptions,
 } from '@webpilot/capability-adapter-mcp';
 import type { CapabilityProvider } from '@webpilot/capability-sdk';
-import { createNodeFileCapability, type NodeFileCapabilityOptions } from './node/capability.js';
-import { disposeUnoRuntime } from './node/office/uno.js';
+import { createNodeFileCapability, type NodeFileCapabilityOptions } from './node/capability.ts';
+import { disposeUnoRuntime } from './node/office/uno.ts';
 
 export type FileMcpOptions = NodeFileCapabilityOptions & {
   context?: CapabilityMcpServerOptions['context'];

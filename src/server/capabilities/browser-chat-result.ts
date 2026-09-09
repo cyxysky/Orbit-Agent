@@ -1,4 +1,5 @@
 import type { CapabilityResult } from '@webpilot/capability-sdk';
+import { browserOperationSummary } from '@webpilot/capability-browser';
 import type { BrowserActionResult } from '@webpilot/capability-browser/node';
 
 type BrowserActionResultEnvelope = {
@@ -26,14 +27,14 @@ export function browserActionResultToCapabilityResult(
       ok: false,
       error: {
         code: result.failureCategory || 'browser-action-failed',
-        message: result.actual,
+        message: browserOperationSummary(result),
         details: envelope,
       },
     };
   }
   return {
     ok: true,
-    summary: result.actual,
+    summary: browserOperationSummary(result),
     data: envelope,
   };
 }

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import path from 'node:path';
-import { serveChartMcpStdio } from '../mcp.js';
+import { serveChartMcpStdio } from '../mcp.ts';
 
 const artifactsRoot = path.resolve(
   process.env.CAPABILITY_CHART_ARTIFACTS_DIR

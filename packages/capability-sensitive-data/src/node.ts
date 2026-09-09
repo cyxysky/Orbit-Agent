@@ -1,10 +1,10 @@
-import { createAiSdkSensitiveDataFilter } from './ai-sdk.js';
-import { createSensitiveDataRedactor } from './client.js';
-import { prepareGlinerService } from './local-runtime.js';
+import { createAiSdkSensitiveDataFilter } from './ai-sdk.ts';
+import { createSensitiveDataRedactor } from './client.ts';
+import { prepareGlinerService } from './local-runtime.ts';
 
-export * from './client.js';
-export * from './config.js';
-export * from './local-runtime.js';
+export * from './client.ts';
+export * from './config.ts';
+export * from './local-runtime.ts';
 
 let lastFailOpenWarningAt = 0;
 
@@ -17,7 +17,7 @@ function warnFailOpen(error: unknown) {
 }
 
 export function createNodeSensitiveDataFilter(options: {
-  getConfig: () => import('./config.js').SensitiveDataFilterConfig;
+  getConfig: () => import('./config.ts').SensitiveDataFilterConfig;
   onFailOpen?: (error: unknown) => void;
 }) {
   const redact = createSensitiveDataRedactor({

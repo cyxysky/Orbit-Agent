@@ -23,7 +23,6 @@ import { useI18n } from '@/i18n/I18nProvider';
 import { ThemeColorControl } from '@/components/ThemeColorControl';
 import { LiquidGlassLoader } from '@/components/LiquidGlassLoader';
 import { languageOptions } from '@/i18n/language';
-import { startGlobalLoading, stopGlobalLoading } from '@/lib/global-loading';
 import { waitForMinimumLoading } from '@/lib/minimum-loading';
 import type { ModelConfigRecord, ModelProvider, ModelProviderSettings, RuntimeEnvRecord } from '@/server/ai/schemas/runtime.schema';
 import { readApiJson } from '@/lib/api-client';
@@ -365,7 +364,6 @@ function runtimeSettingGroup(tab: SettingsTab, key: string, configuredGroup?: st
     if (/^AI_(?:CONTEXT|GLM_CONTEXT|IMAGE_CONTEXT|VISUAL_)/.test(key)) return '上下文管理';
     return 'Agent 运行时';
   }
-  if (tab === 'debug') return key.startsWith('CODEX_') ? 'Codex CLI' : '调试与追踪';
   return '配置';
 }
 
@@ -391,8 +389,6 @@ function envSettingDisplayTab(setting: VisibleEnvSetting): SettingsTab {
   if (sourceTab === 'runtime' && browserRuntimeGroups.has(group)) return 'browser';
   if (sourceTab === 'runtime' && capabilityRuntimeGroups.has(group)) return 'capabilities';
   if (sourceTab === 'runtime' && group === '个性化记忆') return 'memory';
-  if (sourceTab === 'debug' && group === '浏览器调试') return 'browser';
-  if (sourceTab === 'debug' && group === '工作流程（高级）') return 'runtime';
   return sourceTab || 'runtime';
 }
 
@@ -1410,7 +1406,6 @@ export function EnvironmentSettings({
     if (!account) return;
     setDeletingLoginAccountId(account.id);
     setDeleteLoginAccountError('');
-    startGlobalLoading(t('正在删除登录账号'));
     try {
       const response = await fetch(withWebPilotBasePath(`/api/login-accounts/${encodeURIComponent(account.id)}`), { method: 'DELETE' });
       await readApiJson(response, t('删除登录账号失败'));
@@ -1420,7 +1415,6 @@ export function EnvironmentSettings({
       setDeleteLoginAccountError(error instanceof Error ? t(error.message) : t('删除登录账号失败'));
     } finally {
       setDeletingLoginAccountId('');
-      stopGlobalLoading();
     }
   }
 
@@ -1450,7 +1444,6 @@ export function EnvironmentSettings({
       return;
     }
     setSavingPersonalMemory(true);
-    startGlobalLoading(t(personalMemoryDraft.id ? '正在保存记忆' : '正在新增记忆'));
     try {
       const response = await fetch(personalMemoryDraftApiPath(personalMemoryDraft), {
         method: personalMemoryDraft.id ? 'PATCH' : 'POST',
@@ -1463,7 +1456,6 @@ export function EnvironmentSettings({
       resetPersonalMemoryDraft();
     } finally {
       setSavingPersonalMemory(false);
-      stopGlobalLoading();
     }
   }
 
@@ -1500,7 +1492,6 @@ export function EnvironmentSettings({
     if (!item) return;
     setDeletingPersonalMemoryId(item.id);
     setDeletePersonalMemoryError('');
-    startGlobalLoading(t('正在删除记忆'));
     try {
       const response = await fetch(personalMemoryItemApiPath(item), { method: 'DELETE' });
       await readApiJson(response, t('删除个性化记忆失败'));
@@ -1511,7 +1502,6 @@ export function EnvironmentSettings({
       setDeletePersonalMemoryError(error instanceof Error ? t(error.message) : t('删除个性化记忆失败'));
     } finally {
       setDeletingPersonalMemoryId('');
-      stopGlobalLoading();
     }
   }
 
@@ -2511,7 +2501,7 @@ export function EnvironmentSettings({
   const dataWriteSetting = items
     .map((item, index) => ({ item, index }))
     .find(({ item }) => item.key === 'AGENT_DATA_ALLOW_WRITES');
-  const activeTabUsesEnvSave = ['runtime', 'browser', 'capabilities', 'sensitive-data', 'memory', 'debug'].includes(activeTab);
+  const activeTabUsesEnvSave = ['runtime', 'browser', 'capabilities', 'sensitive-data', 'memory'].includes(activeTab);
   const normalizedSettingsSearch = settingsSearch.trim().toLocaleLowerCase();
   const settingsSearchResults = normalizedSettingsSearch ? [
     ...environmentSettingsTabs.map((tab) => ({

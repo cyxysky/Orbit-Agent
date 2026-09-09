@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { runCapabilityProcess } from '@webpilot/capability-sdk/node';
-import { createGitCapability, type GitOperations } from './index.js';
+import { createGitCapability, type GitOperations } from './index.ts';
 import type { CapabilityExecutionContext, CapabilityRunContext } from '@webpilot/capability-sdk';
 
 function gitCommand(repository: string, args: string[], context: CapabilityExecutionContext, maximum: number, timeoutMs: number, stdin?: string) {

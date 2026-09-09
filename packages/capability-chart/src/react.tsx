@@ -1,13 +1,13 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { echartsMapDefinition, echartsToThree, normalizeChartOption, normalizeChartUpdate, type ChartRecord } from './core.js';
-import { ChartDataEditor } from './data-editor.js';
-import { chartDataTables, tableCsv } from './editor-core.js';
-import type { ChartSurface } from './three-renderer.js';
-import { chartStyles } from './styles.js';
-import { ChartIcon } from './icons.js';
-import { defaultChartTranslate, type ChartTranslate } from './i18n.js';
+import { echartsMapDefinition, echartsToThree, normalizeChartOption, normalizeChartUpdate, type ChartRecord } from './core.ts';
+import { ChartDataEditor } from './data-editor.tsx';
+import { chartDataTables, tableCsv } from './editor-core.ts';
+import type { ChartSurface } from './three-renderer.ts';
+import { chartStyles } from './styles.ts';
+import { ChartIcon } from './icons.tsx';
+import { defaultChartTranslate, type ChartTranslate } from './i18n.ts';
 
 export type ChartRendererClassNames = { root?: string; canvas?: string; surface?: string; error?: string };
 
@@ -98,7 +98,7 @@ export function ChartRenderer({ chart, classNames = {}, onSave, onReload, transl
     setError(''); setReady(false);
     void (async () => {
       if (isThree) {
-        const { createThreeChart } = await import('./three-renderer.js');
+        const { createThreeChart } = await import('./three-renderer.ts');
         if (disposed) return;
         instance = createThreeChart(surface, threeOption!, (message) => { if (!disposed) setError(message); }, t);
       } else {

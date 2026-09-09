@@ -3,9 +3,9 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { createConnection, createServer } from 'node:net';
 import type { Browser, BrowserContext, BrowserContextOptions, BrowserServer, BrowserType, LaunchOptions } from 'playwright';
-import { boundedPositiveIntegerEnv, cdpEndpointForPort, cdpPortFromEndpoint, clearManagedBrowserProfileCaches, type BrowserRuntimeEnvironment } from './browser-session-runtime.js';
-import { type BrowserCodeConnection } from './browser-code-runner.js';
-import { unknownErrorMessage } from './browser-session-diagnostics.js';
+import { boundedPositiveIntegerEnv, cdpEndpointForPort, cdpPortFromEndpoint, clearManagedBrowserProfileCaches, type BrowserRuntimeEnvironment } from './browser-session-runtime.ts';
+import { type BrowserCodeConnection } from './browser-code-runner.ts';
+import { unknownErrorMessage } from './browser-session-diagnostics.ts';
 
 export type BrowserOwnership = 'launched' | 'connected' | 'persistent' | 'shared';
 

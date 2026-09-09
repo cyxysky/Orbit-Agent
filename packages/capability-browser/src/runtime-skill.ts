@@ -1,4 +1,5 @@
 import type { CapabilitySkill } from '@webpilot/capability-sdk';
+export { browserInteractiveQaSkill } from './interactive-qa-guidance.ts';
 
 export const browserCodeRuntimeSkillId = 'system-browser-code-runtime';
 
@@ -45,7 +46,7 @@ State reads optionally accept scope (active/all), exact frame path (main for the
 
 Code results may include executionState and downloads. executionState distinguishes attempted actions from completed Playwright calls and marks timeout/abort/crash outcomes unknown after execution starts. Refresh live state before retrying; never replay a submission solely because the cell timed out. kernelReset also reports timeout/aborted/crashed and means previous JavaScript bindings are gone. downloads contains persisted artifact IDs when the host supplies a receiver; pass those artifact IDs to file readContent/convert instead of fetching the export URL again.
 
-The outer browser action=code result is \`{ ok, actual, failureCategory?, dependencyFailures?, referenceImagePaths? }\`. \`actual\` is JSON text containing \`{ ok, result, error, aborted, elapsedMs, finalPage, verification?, domChanges?, images, imageErrors }\`. Parse the tool result semantically: \`domChanges\` is only the incremental journal caused by that cell, not a full snapshot; \`dependencyFailures\` is a once-only queue of recent request failures and HTTP 408/429/5xx observations. Failed results preserve the complete error and failure classification without generated recovery prose.
+The outer browser action=code result is \`{ ok, summary, data, failureCategory?, dependencyFailures?, referenceImagePaths? }\`. \`summary\` is a short description; \`data\` is the single structured payload containing \`{ ok, result, error, aborted, elapsedMs, executionState, downloads, finalPage, verification?, domChanges?, images, imageErrors }\`. Read \`data\` directly without JSON parsing. \`domChanges\` is only the incremental journal caused by that cell, not a full snapshot; \`dependencyFailures\` is a once-only queue of recent request failures and HTTP 408/429/5xx observations. Failed results preserve the complete error and failure classification without generated recovery prose.
 
 ## Cell syntax and result contract
 
@@ -437,6 +438,10 @@ nodeRepl.write({ filled: true, origin: new URL(page.url()).origin });
 - Policy violation: use the documented safe API. Never bypass Playwright with DOM \`.click()\`, \`dispatchEvent('click')\`, or scripted DOM mutation.
 
 Use \`force: true\` only when fresh evidence proves one exact rendered target and an intentional overlay/backdrop is the sole blocker. It is forbidden for ambiguous, hidden, detached, disabled, or unobserved targets.
+
+## Optional interactive review reference
+
+For UI debugging, responsive layout review or browser/Electron acceptance tasks, read skill action=read with skillId=system-browser-interactive-qa. It covers persistent-session iteration and functional/visual evidence through this host's APIs. Routine browsing and single business operations do not require it.
 
 ## Completion contract
 

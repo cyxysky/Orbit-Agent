@@ -1,6 +1,7 @@
 'use client';
 
-import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Check, ChevronDown, ChevronUp, Copy, Loader2, X } from 'lucide-react';
 import { useI18n } from '@/i18n/I18nProvider';
 import { readApiJson } from '@/lib/api-client';
@@ -76,6 +77,9 @@ export function BrowserChatRuntimeStateControl({
 }) {
   const { language, t } = useI18n();
   const anchorRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const panelRef = useRef<HTMLElement | null>(null);
+  const [panelStyle, setPanelStyle] = useState<CSSProperties>();
   const copyFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [snapshot, setSnapshot] = useState<{
     defects: BrowserChatDefectReport[];
@@ -166,7 +170,7 @@ export function BrowserChatRuntimeStateControl({
   useEffect(() => {
     if (!open) return undefined;
     const dismissOnPointerDown = (event: PointerEvent) => {
-      if (!anchorRef.current?.contains(event.target as Node)) setOpen(false);
+      if (!anchorRef.current?.contains(event.target as Node) && !panelRef.current?.contains(event.target as Node)) setOpen(false);
     };
     const dismissOnEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setOpen(false);
@@ -176,6 +180,47 @@ export function BrowserChatRuntimeStateControl({
     return () => {
       document.removeEventListener('pointerdown', dismissOnPointerDown, true);
       document.removeEventListener('keydown', dismissOnEscape);
+    };
+  }, [open]);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const placePanel = () => {
+      const trigger = triggerRef.current;
+      if (!trigger) return;
+      const rect = trigger.getBoundingClientRect();
+      const viewport = window.visualViewport;
+      const leftEdge = (viewport?.offsetLeft || 0) + 12;
+      const topEdge = (viewport?.offsetTop || 0) + 12;
+      const rightEdge = leftEdge + (viewport?.width || window.innerWidth) - 24;
+      const bottomEdge = topEdge + (viewport?.height || window.innerHeight) - 24;
+      const width = Math.max(0, Math.min(680, rightEdge - leftEdge));
+      const below = Math.max(0, bottomEdge - rect.bottom - 10);
+      const above = Math.max(0, rect.top - topEdge - 10);
+      const openBelow = below >= Math.min(320, bottomEdge - topEdge) || below >= above;
+      const maxHeight = Math.min(540, openBelow ? below : above);
+      const nextStyle = {
+        left: Math.max(leftEdge, Math.min(rect.right - width, rightEdge - width)),
+        top: Math.max(topEdge, Math.min(bottomEdge - maxHeight, openBelow ? rect.bottom + 10 : rect.top - 10 - maxHeight)),
+        width,
+        maxHeight,
+      };
+      setPanelStyle((current) => current?.left === nextStyle.left && current.top === nextStyle.top
+        && current.width === nextStyle.width && current.maxHeight === nextStyle.maxHeight ? current : nextStyle);
+    };
+    placePanel();
+    const observer = new ResizeObserver(placePanel);
+    if (anchorRef.current) observer.observe(anchorRef.current);
+    window.addEventListener('resize', placePanel);
+    window.addEventListener('scroll', placePanel, true);
+    window.visualViewport?.addEventListener('resize', placePanel);
+    window.visualViewport?.addEventListener('scroll', placePanel);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', placePanel);
+      window.removeEventListener('scroll', placePanel, true);
+      window.visualViewport?.removeEventListener('resize', placePanel);
+      window.visualViewport?.removeEventListener('scroll', placePanel);
     };
   }, [open]);
 
@@ -228,6 +273,7 @@ export function BrowserChatRuntimeStateControl({
             aria-expanded={open}
             aria-label={t('查看模型运行记录，共 {count} 项', { count: recordCount })}
             className={`browser-chat-runtime-state-bubble${open ? ' is-open' : ''}`}
+            ref={triggerRef}
             onClick={togglePanel}
             title={t('模型运行记录：{variables} 个变量，{defects} 个缺陷', {
               variables: items.length,
@@ -240,8 +286,9 @@ export function BrowserChatRuntimeStateControl({
               <path d="M8 10.4h8" />
             </svg>
           </button>
-          {open ? (
-            <section aria-label={t('模型运行记录')} className="browser-chat-runtime-state-card" id={panelId}>
+          {open ? createPortal(
+            <section aria-label={t('模型运行记录')} className="browser-chat-runtime-state-card" id={panelId}
+              ref={panelRef} style={panelStyle || { visibility: 'hidden' }}>
               <header>
                 <div className="browser-chat-runtime-state-card-heading">
                   <div className="browser-chat-runtime-state-card-title">
@@ -401,7 +448,7 @@ export function BrowserChatRuntimeStateControl({
                   ) : <div className="browser-chat-runtime-state-empty">{t('模型尚未报告缺陷')}</div>}
                 </div>
               )}
-            </section>
+            </section>, document.body,
           ) : null}
         </>
       ) : null}

@@ -4,7 +4,7 @@
   "description": "Framework-neutral structured data capability with TypeORM-backed SQL sources.",
   "type": "module",
   "sideEffects": false,
-  "files": ["dist", "README.md"],
+  "files": ["dist", "README*.md", "MCP*.md"],
   "exports": {
     ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
     "./typeorm": { "types": "./dist/typeorm.d.ts", "import": "./dist/typeorm.js" },

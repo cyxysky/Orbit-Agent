@@ -16,6 +16,7 @@ import {
   resolveUnoProgramWorker,
 } from '@webpilot/capability-file/node';
 import type { BrowserActionResult } from '@webpilot/capability-browser/node';
+import { browserOperationSummary } from '@webpilot/capability-browser';
 import type { FileGenerationProgress } from '@webpilot/capability-file/node/workspace';
 import {
   browserActionResultToCapabilityResult,
@@ -48,6 +49,10 @@ function createBrowserChatFileOperations(
 ): FileCapabilityRuntimeOperations {
   const workspace = createWebPilotFileWorkspace(configuration);
   const file = {
+    write: async (input: FileToolInput, context: CapabilityExecutionContext) => fileOperationToCapabilityResult(
+      await workspace.writeTextFileArtifact({ fileName: input.fileName, content: input.content, runId, abortSignal: context.abortSignal }),
+      'file-write-failed',
+    ),
     list: async () => fileOperationToCapabilityResult(
       await workspace.listOfficeDrafts({ runId }),
       'file-list-failed',
@@ -211,7 +216,7 @@ function createBrowserChatFileOperations(
       runId,
       artifactId: input.artifactId,
       action: input.action,
-      result,
+      result: { ...result, actual: result.actual ?? browserOperationSummary(result) },
     }), 'file-visual-report-failed');
   };
 

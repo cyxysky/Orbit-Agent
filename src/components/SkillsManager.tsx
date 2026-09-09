@@ -10,7 +10,6 @@ import { LiquidGlassLoader } from '@/components/LiquidGlassLoader';
 import { ManagementDataTable } from '@/components/ManagementDataTable';
 import { useI18n } from '@/i18n/I18nProvider';
 import { readApiJson } from '@/lib/api-client';
-import { startGlobalLoading, stopGlobalLoading } from '@/lib/global-loading';
 import { waitForMinimumLoading } from '@/lib/minimum-loading';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 import type { SkillRecord } from '@/server/ai/schemas/runtime.schema';
@@ -193,7 +192,6 @@ export function SkillsManager({
 
     const skillId = editingSkillId;
     setSaving(true);
-    startGlobalLoading(t('正在保存 Skill'));
     try {
       const response = await fetch(skillsApiUrl(skillId ? `/api/skills/${skillId}` : '/api/skills'), {
         method: skillId ? 'PUT' : 'POST',
@@ -214,7 +212,6 @@ export function SkillsManager({
       window.alert(error instanceof Error ? error.message : t('保存 Skill 失败'));
     } finally {
       setSaving(false);
-      stopGlobalLoading();
     }
   }
 
@@ -222,7 +219,6 @@ export function SkillsManager({
     if (!deleteTarget) return;
     const target = deleteTarget;
     setDeletingSkillId(target.id);
-    startGlobalLoading(t('正在删除 Skill'));
     try {
       const response = await fetch(skillsApiUrl(`/api/skills/${target.id}`), { method: 'DELETE' });
       await readApiJson<unknown>(response, t('删除 Skill 失败'));
@@ -235,7 +231,6 @@ export function SkillsManager({
       window.alert(error instanceof Error ? error.message : t('删除 Skill 失败'));
     } finally {
       setDeletingSkillId(null);
-      stopGlobalLoading();
     }
   }
 

@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import type { Page } from 'playwright';
 import { raceWithAbort } from '@webpilot/capability-sdk';
-import type { BrowserActionResult, BrowserStateSnapshot } from './browser-session.js';
-import type { BrowserPageObservation } from './browser-page-observation.js';
+import type { BrowserActionResult, BrowserStateSnapshot } from './browser-session.ts';
+import type { BrowserPageObservation } from './browser-page-observation.ts';
 
 export type BrowserStateReadOptions = {
   abortSignal?: AbortSignal;
@@ -113,7 +113,7 @@ export class BrowserStateReader {
         payload.activePage = { url: source.activePage.url.slice(0, 100), title: source.activePage.title.slice(0, 60) };
         actual = serialize();
       }
-      return { ok: true, actual, data: payload, summary: `Read browser state characters ${offset}-${offset + length} of ${source.pageState.length}.` };
+      return { ok: true, data: payload, summary: `Read browser state characters ${offset}-${offset + length} of ${source.pageState.length}.` };
     } catch (error) {
       return { ok: false, actual: error instanceof Error ? error.message : String(error), failureCategory: options.abortSignal?.aborted ? 'aborted' : 'browser-state-failed' };
     }

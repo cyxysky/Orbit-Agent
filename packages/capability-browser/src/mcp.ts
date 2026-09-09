@@ -14,11 +14,12 @@ import {
   type CapabilityRunContext,
 } from '@webpilot/capability-sdk';
 import { z } from 'zod';
+import { browserOperationSummary } from './index.ts';
 import {
   BrowserSession,
   type BrowserActionResult,
   type BrowserSessionOptions,
-} from './node/browser-session.js';
+} from './node/browser-session.ts';
 
 const browserSessionId = z.string().uuid();
 const openParser = z.object({
@@ -70,12 +71,12 @@ function browserResult(
     result: result.data ?? result.actual,
   };
   return result.ok
-    ? { ok: true, summary: result.summary || result.actual, data }
+    ? { ok: true, summary: browserOperationSummary(result), data }
     : {
         ok: false,
         error: {
           code: result.failureCategory || 'browser-operation-failed',
-          message: result.actual,
+          message: browserOperationSummary(result),
           details: data,
         },
       };

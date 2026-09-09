@@ -1,9 +1,9 @@
 import type { CapabilityManifest } from '@webpilot/capability-sdk';
-import { sensitiveDataCapabilitySettings } from './settings.js';
+import { sensitiveDataCapabilitySettings } from './settings.ts';
 
-export * from './client.js';
-export * from './config.js';
-export * from './settings.js';
+export * from './client.ts';
+export * from './config.ts';
+export * from './settings.ts';
 
 export const sensitiveDataCapabilityManifest = Object.freeze({
   schemaVersion: 1,

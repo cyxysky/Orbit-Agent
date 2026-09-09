@@ -1,7 +1,7 @@
-import { disposeOnce } from './execution.js';
-export { CapabilityTaskQueue, type CapabilityTaskOptions } from './task-queue.js';
-export { readBoundedResponseText } from './http.js';
-export { createCapabilityExecutor, disposeOnce, type CapabilityExecutionPolicyOptions } from './execution.js';
+import { disposeOnce } from './execution.ts';
+export { CapabilityTaskQueue, type CapabilityTaskOptions } from './task-queue.ts';
+export { readBoundedResponseText } from './http.ts';
+export { createCapabilityExecutor, disposeOnce, type CapabilityExecutionPolicyOptions } from './execution.ts';
 export type JsonSchema = Readonly<Record<string, unknown>>;
 
 export type CapabilityInputSchema<TInput> = {

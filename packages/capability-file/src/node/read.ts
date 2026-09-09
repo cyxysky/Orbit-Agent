@@ -1,15 +1,15 @@
 import { createHash } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import sharp from 'sharp';
-import { fileFormatForName, normalizedFileExtension } from '../formats.js';
-import type { FileVisualToolInput } from '../types.js';
+import { fileFormatForName, normalizedFileExtension } from '../formats.ts';
+import type { FileVisualToolInput } from '../types.ts';
 import type {
   OfficeVisualQaDeckChecks,
   OfficeVisualQaPageChecks,
-} from '../office/types.js';
-import { inspectDocxTemplateBuffer } from './office/docx-template.js';
-import { renderFilePreview } from './office/preview.js';
-import { extractFileTextInWorker, type FileTextSelection } from './text-extraction.js';
+} from '../office/types.ts';
+import { inspectDocxTemplateBuffer } from './office/docx-template.ts';
+import { renderFilePreview } from './office/preview.ts';
+import { extractFileTextInWorker, type FileTextSelection } from './text-extraction.ts';
 
 export type FileReadableAttachment = {
   id: string;

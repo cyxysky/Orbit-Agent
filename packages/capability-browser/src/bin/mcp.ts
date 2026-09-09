@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { serveBrowserMcpStdio } from '../mcp.js';
-import { installBrowserSessionShutdownHooks } from '../node/browser-session-lifecycle.js';
+import { serveBrowserMcpStdio } from '../mcp.ts';
+import { installBrowserSessionShutdownHooks } from '../node/browser-session-lifecycle.ts';
 
 installBrowserSessionShutdownHooks();
 

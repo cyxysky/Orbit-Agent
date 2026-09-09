@@ -6,8 +6,8 @@ import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import type { OfficeDocumentKind } from '../../office/types.js';
-import { resolveLibreOfficeExecutable, resolveLibreOfficePythonExecutable } from '../libreoffice.js';
+import type { OfficeDocumentKind } from '../../office/types.ts';
+import { resolveLibreOfficeExecutable, resolveLibreOfficePythonExecutable } from '../libreoffice.ts';
 
 const WORKER_IDLE_TIMEOUT_MS = Math.max(60_000, Number(process.env.OFFICE_WORKER_IDLE_TIMEOUT_MS) || 120_000);
 const WORKER_HARD_TIMEOUT_MS = Math.max(WORKER_IDLE_TIMEOUT_MS, Number(process.env.OFFICE_WORKER_HARD_TIMEOUT_MS) || 30 * 60_000);

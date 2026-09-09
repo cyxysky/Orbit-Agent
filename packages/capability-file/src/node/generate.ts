@@ -1,15 +1,15 @@
 import path from 'node:path';
 import { stat } from 'node:fs/promises';
-import { fileFormatForExtension, generatedFileExtensions, normalizedFileExtension } from '../formats.js';
+import { fileFormatForExtension, generatedFileExtensions, normalizedFileExtension } from '../formats.ts';
 import type {
   OfficeCellValue,
   OfficeDocumentSpec,
   OfficeSemanticBlockInput,
   OfficeSemanticDocumentInput,
-} from '../office/types.js';
-import { generateOfficeJsProgramDocument } from './office/javascript.js';
-import { compileOfficeSemanticDocument } from './office/semantic.js';
-import { generateUnoProgramDocument } from './office/uno.js';
+} from '../office/types.ts';
+import { generateOfficeJsProgramDocument } from './office/javascript.ts';
+import { compileOfficeSemanticDocument } from './office/semantic.ts';
+import { generateUnoProgramDocument } from './office/uno.ts';
 
 export type GeneratedFileCell = OfficeCellValue;
 export type GeneratedFileInput = OfficeSemanticDocumentInput

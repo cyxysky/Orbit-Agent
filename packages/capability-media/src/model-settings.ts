@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { mediaModelDrivers, mediaModelSchema, type MediaModelKind, type MediaModelConfiguration } from './models.js';
+import { mediaModelDrivers, mediaModelSchema, type MediaModelKind, type MediaModelConfiguration } from './models.ts';
 
 export const mediaModelTypeDefinitions = [
   { id: 'image', label: '图片生成' },

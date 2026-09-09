@@ -9,10 +9,10 @@ import { PDFParse } from 'pdf-parse';
 import { chromium } from 'playwright';
 import sharp from 'sharp';
 import * as XLSX from 'xlsx';
-import { fileFormatForName, officePreviewExtensions, readableFileExtensions } from '../../formats.js';
-import { convertOfficeFile } from '../libreoffice.js';
-import { inspectRenderedPage, type OfficeArtifactIssue } from './validation.js';
-import { officeRenderEnvironmentFingerprint } from './runtime-fingerprint.js';
+import { fileFormatForName, officePreviewExtensions, readableFileExtensions } from '../../formats.ts';
+import { convertOfficeFile } from '../libreoffice.ts';
+import { inspectRenderedPage, type OfficeArtifactIssue } from './validation.ts';
+import { officeRenderEnvironmentFingerprint } from './runtime-fingerprint.ts';
 
 export type FilePreviewResult = {
   imagePaths: string[];

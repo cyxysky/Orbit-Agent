@@ -1,9 +1,9 @@
 import { z } from 'zod';
 import { defineCapabilityInput, defineCapabilityTool, normalizeBoundedInteger, type CapabilityExecutionContext, type CapabilityHealth, type CapabilityManifest, type CapabilityProvider, type CapabilityRunContext } from '@webpilot/capability-sdk';
-import { connectorsRuntimeSkill } from './runtime-skill.js';
-import { connectorsCapabilitySettings } from './settings.js';
-export * from './runtime-skill.js';
-export * from './settings.js';
+import { connectorsRuntimeSkill } from './runtime-skill.ts';
+import { connectorsCapabilitySettings } from './settings.ts';
+export * from './runtime-skill.ts';
+export * from './settings.ts';
 
 export const connectorsCapabilityToolNames = Object.freeze({ connectors: 'connectors' } as const);
 export type ConnectorOperation = { id: string; title?: string; description?: string; inputSchema?: Readonly<Record<string, unknown>>; readOnly?: boolean };

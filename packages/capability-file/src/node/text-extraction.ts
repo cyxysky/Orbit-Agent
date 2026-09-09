@@ -1,1 +1,1 @@
-﻿export * from './text-extraction-pool.js';
+﻿export * from './text-extraction-pool.ts';

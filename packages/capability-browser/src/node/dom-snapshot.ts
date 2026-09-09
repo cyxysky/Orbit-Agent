@@ -1,12 +1,12 @@
 import type { CDPSession, Page } from 'playwright';
-import type { CapturedSnapshotNode } from './ax-snapshot.js';
+import type { CapturedSnapshotNode } from './ax-snapshot.ts';
 import {
   flattenCdpFrameTree,
   type CapturedSnapshotFrame,
   type CdpAxNode,
   type CdpAxValue,
   type CdpFrameTree,
-} from './snapshot-shared.js';
+} from './snapshot-shared.ts';
 
 type StringIndex = number;
 type RareStringData = { index?: number[]; value?: number[] };

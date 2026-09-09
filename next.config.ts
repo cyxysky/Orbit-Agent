@@ -63,6 +63,13 @@ export default function nextConfig(phase: string): NextConfig {
     turbopack: {
       root: projectRoot,
     },
+    // Retain recently visited development routes across normal navigation and
+    // editing pauses. The defaults evict inactive entries after just one minute.
+    // Keep this bounded because UI and API routes share the development process.
+    onDemandEntries: {
+      maxInactiveAge: 5 * 60 * 1000,
+      pagesBufferLength: 10,
+    },
     experimental: {
       // Keep the Webpack fallback/build path at a lower peak, and avoid eagerly
       // loading every route into the long-lived server process.
@@ -96,19 +103,6 @@ export default function nextConfig(phase: string): NextConfig {
           level: 'verbose',
         };
       }
-      if (capabilitySource === 'workspace') {
-        // Capability packages keep explicit .js specifiers for their published
-        // ESM output. During local development those specifiers point at the
-        // TypeScript workspace sources, so Webpack must resolve the source
-        // extension before falling back to the emitted extension.
-        config.resolve.extensionAlias = {
-          ...(config.resolve.extensionAlias || {}),
-          '.js': ['.ts', '.tsx', '.js'],
-          '.jsx': ['.tsx', '.jsx'],
-          '.mjs': ['.mts', '.mjs'],
-          '.cjs': ['.cts', '.cjs'],
-        };
-      }
       if (dev && config.cache && typeof config.cache === 'object' && config.cache.type === 'filesystem') {
         // The browser-chat UI produces very large persistent cache packs. Copy
         // deserialized slices into right-sized buffers so a small cached value
@@ -128,6 +122,40 @@ export default function nextConfig(phase: string): NextConfig {
       return config;
     },
     serverExternalPackages: [
+      // These published Node libraries do not need application transpilation.
+      // Native loading also keeps optional provider, chart, and document trees
+      // out of route compilation until execution actually requests them.
+      // Browser imports still go through Next's client compiler.
+      'ai',
+      '@ai-sdk/alibaba',
+      '@ai-sdk/amazon-bedrock',
+      '@ai-sdk/anthropic',
+      '@ai-sdk/azure',
+      '@ai-sdk/cerebras',
+      '@ai-sdk/cohere',
+      '@ai-sdk/deepinfra',
+      '@ai-sdk/deepseek',
+      '@ai-sdk/fireworks',
+      '@ai-sdk/gateway',
+      '@ai-sdk/google',
+      '@ai-sdk/groq',
+      '@ai-sdk/huggingface',
+      '@ai-sdk/mistral',
+      '@ai-sdk/openai',
+      '@ai-sdk/openai-compatible',
+      '@ai-sdk/otel',
+      '@ai-sdk/perplexity',
+      '@ai-sdk/provider',
+      '@ai-sdk/togetherai',
+      '@ai-sdk/vercel',
+      '@ai-sdk/xai',
+      'echarts',
+      'mammoth',
+      'jszip',
+      'docx',
+      'exceljs',
+      'pptxgenjs',
+      'xlsx',
       'ws',
       'typeorm',
       'better-sqlite3',

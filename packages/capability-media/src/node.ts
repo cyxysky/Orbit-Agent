@@ -2,7 +2,7 @@ import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { runCapabilityProcess } from '@webpilot/capability-sdk/node';
-import { createMediaCapability, type MediaArtifact, type MediaOperations } from './index.js';
+import { createMediaCapability, type MediaArtifact, type MediaOperations } from './index.ts';
 import type { CapabilityExecutionContext, CapabilityRunContext } from '@webpilot/capability-sdk';
 
 function run(executable: string, args: string[], timeoutMs: number, context: CapabilityExecutionContext) {

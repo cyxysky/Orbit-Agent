@@ -9,11 +9,11 @@ import {
   type CapabilityProvider,
   type CapabilityRunContext,
 } from '@webpilot/capability-sdk';
-import { computerRuntimeSkill } from './runtime-skill.js';
-import { computerCapabilitySettings } from './settings.js';
+import { computerRuntimeSkill } from './runtime-skill.ts';
+import { computerCapabilitySettings } from './settings.ts';
 
-export * from './runtime-skill.js';
-export * from './settings.js';
+export * from './runtime-skill.ts';
+export * from './settings.ts';
 
 export const computerCapabilityToolNames = Object.freeze({ computer: 'computer' } as const);
 

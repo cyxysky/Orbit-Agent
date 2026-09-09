@@ -3,8 +3,8 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import ts from 'typescript';
-import { resolveLibreOfficePythonExecutable } from '../libreoffice.js';
-import { isUnoStylePropertyInfoError, isUnoWorkerInternalError, resolveUnoProgramWorker } from './uno.js';
+import { resolveLibreOfficePythonExecutable } from '../libreoffice.ts';
+import { isUnoStylePropertyInfoError, isUnoWorkerInternalError, resolveUnoProgramWorker } from './uno.ts';
 
 export type OfficeProgramDiagnostic = {
   callColumn?: number;

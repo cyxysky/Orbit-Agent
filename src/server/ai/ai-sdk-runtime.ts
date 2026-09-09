@@ -63,7 +63,10 @@ export function createAiRequestWatchdog(parentSignal?: AbortSignal, timeoutMs = 
   let firstChunkDeadline: number | undefined;
   let firstChunkTimeoutMs: number | undefined;
   let timeoutReject: ((reason: unknown) => void) | undefined;
-  const abortFromParent = () => controller.abort(parentSignal?.reason);
+  const abortFromParent = () => {
+    controller.abort(parentSignal?.reason);
+    timeoutReject?.(parentSignal?.reason instanceof Error ? parentSignal.reason : new Error('AI request aborted.'));
+  };
   if (parentSignal) {
     if (parentSignal.aborted) abortFromParent();
     else parentSignal.addEventListener('abort', abortFromParent, { once: true });

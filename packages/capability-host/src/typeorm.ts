@@ -12,7 +12,7 @@ import {
   capabilityConfigScopeKey,
   type CapabilityConfigScope,
   type CapabilityConfigStore,
-} from './index.js';
+} from './index.ts';
 
 export type TypeOrmCapabilityConfigurationRecord = {
   scopeKey: string;

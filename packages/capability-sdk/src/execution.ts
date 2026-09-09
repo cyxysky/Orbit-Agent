@@ -1,4 +1,4 @@
-import type { CapabilityExecutionContext, CapabilityProgressEvent, ResolvedCapabilityTool } from './index.js';
+import type { CapabilityExecutionContext, CapabilityProgressEvent, ResolvedCapabilityTool } from './index.ts';
 
 export type CapabilityExecutionPolicyOptions = {
   authorize?(permissions: readonly string[], tool: ResolvedCapabilityTool, context: CapabilityExecutionContext): void | Promise<void>;

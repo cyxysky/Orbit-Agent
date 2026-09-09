@@ -608,15 +608,19 @@ async function main() {
   // process-level NODE_PATH initialization.
   const next = requireRuntimeDependency(appDir, 'next');
 
+  const developmentWebpack = dev && process.argv.includes('--webpack');
+  if (dev) {
+    console.info(`[webpilot-server] Development compiler: ${developmentWebpack ? 'Webpack' : 'Turbopack'}`);
+  }
   const application = next({
     dev,
     dir: appDir,
     hostname,
     port,
-    // Turbopack 16.3 can lose an incremental HMR graph cell during long-lived
-    // sessions and then panic on every subscription retry. Use Next's stable
-    // Webpack development path for both the UI and isolated API runtime.
-    webpack: dev,
+    // Use Next's incremental development compiler by default. Keep Webpack an
+    // explicit diagnostic choice: npm run dev -- --webpack.
+    turbopack: dev && !developmentWebpack,
+    webpack: developmentWebpack,
     ...(compiledConfig ? { conf: compiledConfig } : {}),
   });
   const handle = application.getRequestHandler();

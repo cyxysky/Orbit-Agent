@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { normalizeThreeChartOption, threeChartBounds } from './three-core.js';
-import { defaultChartTranslate, type ChartTranslate } from './i18n.js';
+import { normalizeThreeChartOption, threeChartBounds } from './three-core.ts';
+import { defaultChartTranslate, type ChartTranslate } from './i18n.ts';
 
 export type ChartSurface = { dispose(): void; resize(): void; png(): Promise<string>; svg?(): string; reset?(): void };
 const palette = ['#2563eb', '#0d9488', '#f59e0b', '#a855f7', '#e11d48', '#0284c7'];

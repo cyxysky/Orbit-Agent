@@ -8,7 +8,7 @@ import {
   capabilityConfigScopeKey,
   type CapabilityConfigScope,
   type CapabilityConfigStore,
-} from './index.js';
+} from './index.ts';
 
 type JsonConfigFile = {
   version: 1;

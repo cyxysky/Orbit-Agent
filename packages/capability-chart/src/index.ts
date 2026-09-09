@@ -19,12 +19,12 @@ import {
   type ChartOptionValidator,
   type ChartRecord,
   type CreateChartRecordInput,
-} from './core.js';
-import { chartCapabilitySettings } from './settings.js';
-import { chartCapabilityRuntimeSkill } from './runtime-skill.js';
-export * from './core.js';
-export * from './runtime-skill.js';
-export * from './settings.js';
+} from './core.ts';
+import { chartCapabilitySettings } from './settings.ts';
+import { chartCapabilityRuntimeSkill } from './runtime-skill.ts';
+export * from './core.ts';
+export * from './runtime-skill.ts';
+export * from './settings.ts';
 
 export const chartCapabilityToolNames = Object.freeze({
   chart: 'chart',

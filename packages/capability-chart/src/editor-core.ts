@@ -1,4 +1,4 @@
-import { defaultChartTranslate, type ChartTranslate } from './i18n.js';
+import { defaultChartTranslate, type ChartTranslate } from './i18n.ts';
 
 export type DataTable = { id: string; label: string; path: Array<string | number>; rows: unknown[]; rowLabels?: string[]; columnLabels?: string[] };
 export type DataColumn = { key: string | number | null; label: string };

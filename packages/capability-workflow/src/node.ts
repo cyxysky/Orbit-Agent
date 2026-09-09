@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { createCapabilityDocumentDatabase } from '@webpilot/capability-sdk/node';
-import { createWorkflowCapability, validateDag, type AgentWorkflow, type WorkflowStepStatus, type WorkflowStore } from './index.js';
+import { createWorkflowCapability, validateDag, type AgentWorkflow, type WorkflowStepStatus, type WorkflowStore } from './index.ts';
 import type { CapabilityRunContext } from '@webpilot/capability-sdk';
 
 const transitions: Record<WorkflowStepStatus, readonly WorkflowStepStatus[]> = {

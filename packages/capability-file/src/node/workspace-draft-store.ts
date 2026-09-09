@@ -1,12 +1,12 @@
 import { CapabilityTaskQueue } from '@webpilot/capability-sdk';
-import { currentNodeFileWorkspaceHost } from './workspace-host.js';
-import { synchronizeSourceUnits, sourceDigest } from './workspace-source-editor.js';
+import { currentNodeFileWorkspaceHost } from './workspace-host.ts';
+import { synchronizeSourceUnits, sourceDigest } from './workspace-source-editor.ts';
 import { randomUUID } from 'node:crypto';
 import { access, mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { raceWithAbort } from '@webpilot/capability-sdk';
-import { sanitizeNodeArtifactFileName } from './artifacts.js';
-import type { OfficeDocumentDraft } from '../office/types.js';
+import { sanitizeNodeArtifactFileName } from './artifacts.ts';
+import type { OfficeDocumentDraft } from '../office/types.ts';
 
 export const DOCUMENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/;
 

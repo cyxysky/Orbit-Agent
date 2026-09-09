@@ -6,9 +6,9 @@ import {
   type CdpAxProperty,
   type CdpAxValue,
   type CdpFrameTree,
-} from './snapshot-shared.js';
+} from './snapshot-shared.ts';
 
-export type { CapturedSnapshotFrame } from './snapshot-shared.js';
+export type { CapturedSnapshotFrame } from './snapshot-shared.ts';
 
 export type SnapshotView = 'actionable' | 'full' | 'text';
 

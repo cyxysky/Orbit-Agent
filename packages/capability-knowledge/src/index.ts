@@ -1,8 +1,8 @@
 import { z } from 'zod';
 import { defineCapabilityInput, defineCapabilityTool, normalizeBoundedInteger, type CapabilityHealth, type CapabilityManifest, type CapabilityProvider, type CapabilityRunContext } from '@webpilot/capability-sdk';
-import { knowledgeRuntimeSkill } from './runtime-skill.js';
-import { knowledgeCapabilitySettings } from './settings.js';
-export * from './runtime-skill.js'; export * from './settings.js';
+import { knowledgeRuntimeSkill } from './runtime-skill.ts';
+import { knowledgeCapabilitySettings } from './settings.ts';
+export * from './runtime-skill.ts'; export * from './settings.ts';
 
 export const knowledgeCapabilityToolNames = Object.freeze({ knowledge: 'knowledge' } as const);
 export type KnowledgeDocument = { id: string; title: string; source?: string; content: string; metadata?: Record<string, unknown>; createdAt: string; updatedAt: string };

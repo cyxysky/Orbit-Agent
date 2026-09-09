@@ -1,4 +1,4 @@
-import { CodeSandboxRunnerError, createCodeSandboxCapability, type CodeSandboxExecutor, type CodeSandboxExecution, type CodeSandboxExecutionResult } from './index.js';
+import { CodeSandboxRunnerError, createCodeSandboxCapability, type CodeSandboxExecutor, type CodeSandboxExecution, type CodeSandboxExecutionResult } from './index.ts';
 import type { CapabilityRunContext } from '@webpilot/capability-sdk';
 
 type RemoteResult = CodeSandboxExecutionResult & { error?: string };

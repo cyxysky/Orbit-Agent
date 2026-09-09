@@ -1,243 +1,275 @@
 # TypeScript Agent framework integration
 
-Orbit Capability packages are framework-neutral. AI SDK and MCP are optional
-adapters, not requirements. Any TypeScript Agent framework can consume a
-Capability package when it can expose named tools with JSON Schema inputs and
-invoke asynchronous TypeScript functions.
+[English](FRAMEWORK_INTEGRATION.md) | [简体中文](FRAMEWORK_INTEGRATION.zh-CN.md) | [日本語](FRAMEWORK_INTEGRATION.ja.md)
 
-The integration boundary is:
+Define portable Capability contracts and shared execution/lifecycle primitives.
 
-```text
-CapabilityProvider
-  -> mountCapabilities()
-  -> CapabilityRunSnapshot.tools
-  -> framework-native tool objects
-  -> Agent loop
-```
+This README is a complete integration entrypoint. Follow steps 1–4 for any TypeScript Agent framework, or use the AI SDK/MCP routes below. All named source files are created in **your consuming project**, not inside this package.
 
-The Agent framework owns the model, messages, loop, approvals, persistence, and
-UI. Capability packages own their manifests, settings, Skills, input validation,
-execution, results, health checks, and disposal.
+## 1. Install and prepare
 
-## 1. Create providers
-
-Install the framework-neutral host, SDK, and the concrete Capability packages
-the application needs:
+Use Node.js >=22.16 and ESM TypeScript. These examples match the 0.1.0 workspace contracts. Install matching Capability versions from your configured npm registry. If a version is unpublished, obtain the matching release tarballs/workspace packages from the maintainer; a registry 404 is not a runtime failure. Do not mix unrelated releases. For a new project:
 
 ```sh
-npm install @webpilot/capability-sdk @webpilot/capability-host \
-  @webpilot/capability-browser @webpilot/capability-file
+npm init -y
+npm pkg set type=module
+npm install @webpilot/capability-sdk @webpilot/capability-host
+npm install -D typescript tsx @types/node
 ```
 
-Each concrete package exports a `CapabilityProvider` factory. Node-specific
-packages normally expose their ready-to-run factory from `/node`:
+This example implements a new capability without inheriting a class. Implement `CapabilityProvider.manifest` and `createRuntime(context)`; expose tools with JSON Schema plus an authoritative `parse`, and return `CapabilityResult`. Use `CapabilityRegistry.register/resolve` directly for minimal assembly, or host's `mountCapabilities` for normalized configuration and Skills.
+
+SDK includes real runtime code, not only interfaces: the registry detects duplicate capability/tool/Skill IDs, tracks active invocations and owns disposal; `createCapabilityExecutor` enforces serial groups and calls host policies. Use one executor per mounted runtime, not one per tool call. Node-only process/persistence helpers live at `/node`. SDK does not depend on AI SDK, MCP, React or application code. A new ordinary capability should follow these contracts; sensitive-data is separately documented model middleware.
+
+## 2. Create the provider
+
+Save as `provider.ts`. This file creates the provider and exports the first valid call, explicit configuration overrides and host cleanup.
 
 ```ts
-import type { CapabilityProvider } from '@webpilot/capability-sdk';
-import { BrowserSession, createNodeBrowserCapability } from '@webpilot/capability-browser/node';
-import { createNodeFileCapability } from '@webpilot/capability-file/node';
-
-const browserSession = new BrowserSession({ headless: true, isolated: true });
-
-const providers: CapabilityProvider[] = [
-  createNodeBrowserCapability({
-    createOptions: (context) => ({
-      session: browserSession,
-      runId: context.runId,
-      ensureStarted: () => browserSession.start(),
-      disposeSession: true,
-    }),
-  }),
-  createNodeFileCapability({
-    workspace: { artifactsRoot: './artifacts' },
-    visualInputAvailable: false,
-  }),
-];
-```
-
-Use the root `create*Capability()` factory instead when the application supplies
-its own database, browser, storage, network, media, or execution backend.
-
-## 2. Mount one runtime snapshot
-
-Mount providers before constructing the framework's Agent. A mounted runtime is
-an immutable tool and Skill snapshot for one run or host-selected session:
-
-```ts
-import { EnvironmentCapabilityConfigStore, mountCapabilities } from '@webpilot/capability-host';
-
-const capabilities = await mountCapabilities({
-  providers,
-  context: {
-    runId: crypto.randomUUID(),
-    userId: currentUser.id,
-    abortSignal: request.signal,
+import { createCapabilityRuntime, defineCapabilityInput, defineCapabilityTool,
+  type CapabilityProvider } from '@webpilot/capability-sdk';
+const provider: CapabilityProvider = {
+  manifest: { schemaVersion: 1, id: 'example.greeting', name: 'Greeting', version: '1.0.0',
+    skills: [{ id: 'example.greeting/usage', title: 'Greeting',
+      summary: 'Greet a named person.', content: 'Call greet with a non-empty name.' }] },
+  async createRuntime() {
+    return createCapabilityRuntime({ tools: {
+      greet: defineCapabilityTool({
+        name: 'greet', description: 'Return a greeting for a named person.',
+        input: defineCapabilityInput<{ name: string }>({
+          type: 'object', properties: { name: { type: 'string', minLength: 1 } },
+          required: ['name'], additionalProperties: false,
+        }, (value) => {
+          if (!value || typeof value !== 'object' || Array.isArray(value)
+            || !('name' in value) || typeof value.name !== 'string' || !value.name.trim()
+            || Object.keys(value).some(key => key !== 'name')) {
+            throw new Error('Expected { name: non-empty string }');
+          }
+          return { name: value.name.trim() };
+        }),
+        async execute({ name }) {
+          return { ok: true, summary: `Hello, ${name}!`, data: { name } };
+        },
+      }),
+    } });
   },
-  configStore: new EnvironmentCapabilityConfigStore(process.env),
-  enabledCapabilityIds: new Set([
-    'com.webpilot.browser',
-    'com.webpilot.file',
-  ]),
-});
+};
+
+export const providers = [provider];
+export const configurations = {};
+export const exampleCall = {
+  "name": "greet",
+  "input": {
+    "name": "Ada"
+  }
+};
+export async function cleanup() {  }
 ```
 
-Use `configScope` for tenant, user, workspace, or profile-specific settings.
-Use `allowedToolNames` when an Agent should see only part of the mounted tool
-set. Always call `capabilities.dispose()` when the run or owning session ends.
+## 3. Mount, validate and execute
 
-## 3. Convert tools to the framework's tool type
-
-Every entry in `capabilities.tools` contains the same portable information:
-
-| Capability field | Agent framework field |
-| --- | --- |
-| `publicName` | tool name |
-| `tool.description` | model-facing tool description |
-| `tool.input.jsonSchema` | input schema |
-| `tool.inputExamples` | input examples, when supported |
-| `tool.input.parse()` | authoritative runtime validation |
-| `tool.execute()` | asynchronous tool implementation |
-| `tool.policy` | permissions, concurrency, and prerequisites |
-
-The following minimal adapter shape can be translated to the native tool type
-of any TypeScript Agent framework:
+Save as `integration.ts`. There is one shared executor per run, preserving serial concurrency groups. Parsing, cancellation, policy hooks and cleanup are part of the integration, not optional model behavior.
 
 ```ts
 import { randomUUID } from 'node:crypto';
-import type { CapabilityRunSnapshot } from '@webpilot/capability-sdk';
+import { mountCapabilities, EnvironmentCapabilityConfigStore } from '@webpilot/capability-host';
+import { createCapabilityExecutor, disposeOnce,
+  type CapabilityExecutionPolicyOptions } from '@webpilot/capability-sdk';
+import { providers, configurations, cleanup } from './provider.js';
 
-type FrameworkToolCall = {
-  id?: string;
-  abortSignal?: AbortSignal;
-  metadata?: Readonly<Record<string, unknown>>;
-  onProgress?: (event: {
-    phase: string;
-    message: string;
-    current?: number;
-    total?: number;
-    data?: unknown;
-  }) => void | Promise<void>;
-};
-
-export function toFrameworkTools(snapshot: CapabilityRunSnapshot) {
-  return Object.values(snapshot.tools).map((resolved) => ({
+export async function openCapabilities(options: {
+  policy: CapabilityExecutionPolicyOptions;
+  signal?: AbortSignal;
+  beforeInvoke?: (name: string, input: unknown) => void | Promise<void>;
+}) {
+  const mounted = await mountCapabilities({
+    providers, configurations,
+    context: { runId: randomUUID(), abortSignal: options.signal },
+    configStore: new EnvironmentCapabilityConfigStore(process.env),
+  }).catch(async error => { await cleanup(); throw error; });
+  const execute = createCapabilityExecutor(options.policy);
+  const tools = Object.values(mounted.tools).map(resolved => ({
     name: resolved.publicName,
     description: resolved.tool.description,
     inputSchema: resolved.tool.input.jsonSchema,
     inputExamples: resolved.tool.inputExamples,
-    execute: async (rawInput: unknown, call: FrameworkToolCall = {}) => {
-      const input = resolved.tool.input.parse(rawInput);
-      return resolved.tool.execute(input, {
-        invocationId: call.id || randomUUID(),
-        abortSignal: call.abortSignal,
-        metadata: call.metadata,
-        reportProgress: call.onProgress,
-      });
+    async execute(rawInput: unknown, call: { id?: string; signal?: AbortSignal } = {}) {
+      const signals = [mounted.abortSignal, call.signal].filter(
+        (value): value is AbortSignal => Boolean(value));
+      const context = { invocationId: call.id || randomUUID(),
+        abortSignal: signals.length ? AbortSignal.any(signals) : undefined };
+      try {
+        const input = resolved.tool.input.parse(rawInput);
+        await options.beforeInvoke?.(resolved.publicName, input);
+        return await execute(resolved, context,
+          execution => resolved.tool.execute(input, execution));
+      } catch (error) {
+        context.abortSignal?.throwIfAborted();
+        return { ok: false as const, error: {
+          code: 'host-tool-invocation-failed',
+          message: error instanceof Error ? error.message : String(error),
+        } };
+      }
     },
   }));
+  return {
+    tools,
+    instructions: mounted.skillCatalog.instructions('eager'),
+    snapshot: mounted,
+    dispose: disposeOnce(async () => {
+      try { await mounted.dispose(); } finally { await cleanup(); }
+    }),
+  };
 }
 ```
 
-Do not replace `tool.input.parse()` with the Agent framework's validation. The
-framework schema guides the model; the Capability parser remains the execution
-boundary.
-
-Production adapters must enforce `tool.policy` before calling `tool.execute()`:
-
-- authorize every item in `policy.permissions`;
-- serialize calls in the same `concurrencyGroup` when `concurrency` is `serial`;
-- satisfy `policy.prerequisite` before execution;
-- propagate cancellation and progress events;
-- retain the complete structured `CapabilityResult` for logs and recovery.
-
-If the framework accepts only text tool results, serialize the complete result
-instead of returning only `summary`. `data`, `content`, `error.code`,
-`error.retryable`, and `error.details` contain information required by hosts,
-artifact renderers, and subsequent Agent steps.
-
-## 4. Inject Capability Skills
-
-README files explain integration to developers and coding Agents. Runtime
-Agents should receive package-owned `CapabilitySkill` content from the mounted
-Skill catalog.
-
-For eager loading, append the generated instructions to the framework's system
-or Agent instructions before the first model call:
+Save as `policy.ts`. This explicitly configured single-user example grants its selected providers. In a shared Agent, connect these hooks to your existing authenticated permission and action approval logic. Prerequisites declared by a tool need a `policy.prerequisite` handler; it must verify the named condition or throw.
 
 ```ts
-const capabilityInstructions = capabilities.skillCatalog.instructions('eager');
-const systemInstructions = [applicationInstructions, capabilityInstructions]
-  .filter(Boolean)
-  .join('\n\n');
+import type { CapabilityExecutionPolicyOptions } from '@webpilot/capability-sdk';
+import { providers } from './provider.js';
+
+// This sample host grants the permissions of its explicitly configured providers.
+// Replace this set with your authenticated user's grants in a shared service.
+const grants = new Set(providers.flatMap(provider => [...(provider.manifest.permissions || [])]));
+export const policy: CapabilityExecutionPolicyOptions = {
+  authorize(permissions) {
+    for (const permission of permissions) {
+      if (!grants.has(permission)) throw new Error(`Permission denied: ${permission}`);
+    }
+  },
+  reportProgress(event) { console.error(event.phase, event.message); },
+};
+
+// Put your existing action/draft approval check here, before calling the tool.
+// No additional action-level approval is configured by this single-user example.
+export async function beforeInvoke(_name: string, _input: unknown): Promise<void> {}
 ```
 
-For lazy loading:
-
-1. expose a framework-native `skill` tool;
-2. validate the requested id against `capabilities.skillCatalog.skills`;
-3. return `capabilities.skillCatalog.get(skillId)`;
-4. record loaded Skill ids for the current run;
-5. enforce required Skill activation before exposing or executing related
-   tools.
-
-Capability packages publish Skill content but do not decide when an Agent has
-read it. That lifecycle belongs to the consuming framework integration.
-
-## 5. Run the Agent and dispose resources
-
-The complete host lifecycle is:
+Save as `first-call.ts`, then run `npx tsx first-call.ts`. No model/API key is needed for this first call; the provider-specific prerequisites above still apply.
 
 ```ts
-const capabilities = await mountCapabilities(options);
-
+import { openCapabilities } from './integration.js';
+import { exampleCall } from './provider.js';
+import { policy, beforeInvoke } from './policy.js';
+const runtime = await openCapabilities({ policy, beforeInvoke });
 try {
-  const tools = toFrameworkTools(capabilities);
-  const instructions = capabilities.skillCatalog.instructions('eager');
+  const tool = runtime.tools.find(tool => tool.name === exampleCall.name);
+  if (!tool) throw new Error(`Tool not mounted: ${exampleCall.name}`);
+  const result = await tool.execute(exampleCall.input);
+  console.log(JSON.stringify(result, null, 2));
+  if (!result.ok) process.exitCode = 1;
+} finally { await runtime.dispose(); }
+```
 
-  const agent = createAgentWithYourFramework({ tools, instructions });
-  return await agent.run(userInput);
+## 4. Attach to your Agent
+
+Map the returned objects to your framework's native tool registration. These are real fields, not a dependency on a hypothetical `createAgent` API:
+
+| This integration | Your Agent |
+| --- | --- |
+| `runtime.tools[].name` | Tool name |
+| `.description` | Model-visible description |
+| `.inputSchema` | JSON Schema / native schema converter |
+| `.execute(input, { id, signal })` | Tool callback; pass the model call ID and cancellation |
+| `runtime.instructions` | Append to the system/Agent instructions before the first model call |
+| `runtime.dispose()` | Await after the entire run/session finishes |
+
+On each model step: send the tools and instructions → receive a tool call → parse its JSON arguments once if the framework supplies a string → find the tool by its exact name → await `execute` → append the **complete result** as a tool-result message associated with that same call ID → call the model again. Stop when the model returns a final answer or your step/cancellation limit is reached. Keep the mounted runtime alive through this loop.
+
+Preserve `ok`, `data`, `content`, and `error` (including code/retryable/details), not just summary. For text-only results use `JSON.stringify(result)`. For vision, map image bytes to your model's native image parts; a stored path or JSON serialization is not an image input. Use artifact URLs without inventing IDs or URLs. Lazy Skill loading needs an explicit Skill reader and host-owned loaded-state/availability rules; the eager example avoids that additional integration.
+
+The next section is a complete concrete Agent implementation using AI SDK. For other frameworks only the native tool/model/message mapping changes; the capability execution boundary above stays the same.
+
+## AI SDK: complete model-driven Agent
+
+```sh
+npm install @webpilot/capability-adapter-ai-sdk "ai@>=7 <8" @ai-sdk/openai-compatible
+```
+
+Use a chat-completions-compatible provider that supports tools. Set `AGENT_MODEL_BASE_URL` (including its API prefix), `AGENT_MODEL_ID`, and optionally `AGENT_MODEL_API_KEY` in the process environment. Save as `agent.ts` alongside `provider.ts` and `policy.ts`, then run `npx tsx agent.ts "your task"`. This is an alternative to first-call.ts, not a second mount inside it. The initial prompt only asks for tool descriptions; supply your intended task to execute operations.
+
+```ts
+import { randomUUID } from 'node:crypto';
+import { ToolLoopAgent, stepCountIs } from 'ai';
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
+import { mountAISDKCapabilities, EnvironmentCapabilityConfigStore } from '@webpilot/capability-adapter-ai-sdk';
+import { providers, configurations, cleanup } from './provider.js';
+import { policy, beforeInvoke } from './policy.js';
+
+const baseURL = process.env.AGENT_MODEL_BASE_URL;
+const modelId = process.env.AGENT_MODEL_ID;
+if (!baseURL || !modelId) throw new Error('Set AGENT_MODEL_BASE_URL and AGENT_MODEL_ID');
+const modelProvider = createOpenAICompatible({ name: 'agent-provider', baseURL,
+  apiKey: process.env.AGENT_MODEL_API_KEY });
+const abort = new AbortController();
+const cancel = () => abort.abort(new Error('Agent interrupted'));
+process.once('SIGINT', cancel);
+let runtime: Awaited<ReturnType<typeof mountAISDKCapabilities>> | undefined;
+try {
+  runtime = await mountAISDKCapabilities({
+    providers, configurations,
+    context: { runId: randomUUID(), abortSignal: abort.signal },
+    configStore: new EnvironmentCapabilityConfigStore(process.env),
+    skills: { mode: 'eager' },
+    adapter: { policy, async execute(call) {
+      await beforeInvoke(call.resolvedTool.publicName, call.input);
+      return call.invoke();
+    } },
+  });
+  const agent = new ToolLoopAgent({ model: modelProvider.chatModel(modelId),
+    ...runtime.agentOptions, stopWhen: stepCountIs(10) });
+  const result = await agent.generate({
+    prompt: process.argv[2] || 'Describe the available tools and their intended usage.',
+    abortSignal: abort.signal,
+  });
+  console.log(result.text);
 } finally {
-  await capabilities.dispose();
+  process.removeListener('SIGINT', cancel);
+  try { await runtime?.dispose(); } finally { await cleanup(); }
 }
 ```
 
-The model never registers packages. The host creates and mounts providers; the
-model reads the supplied tool descriptions and Skills, produces valid tool
-input, observes the complete result, and continues its Agent loop.
+## MCP: stdio, HTTP server and client
 
-## 6. Adding a dedicated framework adapter
+Use the self-contained [MCP tutorial](MCP.md) shipped with this package. It includes dependency installation, a stdio process, a listening stateful HTTP server, client discovery/calls, a model-driven client Agent, cancellation, authentication boundaries and shutdown. Reuse provider.ts and policy.ts above. A remote client needs only the MCP URL and client dependencies; it does not import this capability.
 
-A reusable adapter for another TypeScript Agent framework should be a separate
-package named `@webpilot/capability-adapter-<framework>`. It should depend on
-`@webpilot/capability-sdk` and `@webpilot/capability-host` and only implement:
+Do not expose a server-local file URL as a remote download. Follow this package's artifact/storage requirements above. The MCP server owns the execution environment; the caller's local files, browser and desktop are not automatically available there.
 
-- tool-schema conversion;
-- execution-context conversion;
-- Skill injection or lazy Skill-tool registration;
-- result/content conversion;
-- cancellation, progress, policy, and disposal integration.
+## Configuration and lifecycle
 
-Framework adapters must not contain Browser, File, Data, or other business
-Capability logic. The same `CapabilityProvider` must remain usable through a
-custom Agent loop, a dedicated framework adapter, AI SDK, or MCP.
+Settings belong to `provider.manifest.configuration.settings`. Inspect each definition for key, defaultValue, control, secret, range/options and applyMode; generate your settings UI from these definitions. Values are strings. Environment values are read only when you supply EnvironmentCapabilityConfigStore; explicit configurations[capabilityId] override stored/environment values. Configuration is injected when mounting. Use a stable user/workspace scope for durable state and remount when applicable settings change. Await disposal, including after model failure/cancellation.
 
-## Provider factory reference
+The following table lists literal defaults from the package settings; dynamic definitions remain available through the manifest. `runtime` means remount for the new run; `startup` also requires restarting the owning driver/service.
 
-| Package | Ready-to-register provider factory |
-| --- | --- |
-| `capability-browser` | `createNodeBrowserCapability()` from `/node` |
-| `capability-chart` | `createNodeChartCapability()` from `/node` |
-| `capability-file` | `createNodeFileCapability()` from `/node` |
-| `capability-code-sandbox` | `createNodeCodeSandboxCapability()` from `/node` |
-| `capability-connectors` | `createNodeConnectorsCapability()` from `/node` |
-| `capability-knowledge` | `createNodeKnowledgeCapability()` from `/node` |
-| `capability-data` | `createTypeOrmDataCapability()` from `/typeorm` |
-| `capability-media` | `createMediaCapability()` with host-supplied operations |
-| `capability-communication` | `createNodeCommunicationCapability()` from `/node` |
-| `capability-git` | `createNodeGitCapability()` from `/node` |
-| `capability-computer` | `createNodeComputerCapability()` from `/node` |
-| `capability-workflow` | `createNodeWorkflowCapability()` from `/node` |
+## Troubleshooting and completion criteria
 
-`capability-sensitive-data` is provider-call middleware rather than an Agent
-tool. Wrap the final model provider boundary with its framework-neutral client,
-or use `/ai-sdk` only when the consuming application is built on AI SDK.
+- Module not found: check published exports, aligned versions and Node/ESM setup; install the selected entrypoint's optional peers.
+- Tool missing: inspect `runtime.tools`, enabled capability IDs and allowed names; do not guess names from folder names.
+- Validation failure: use the actual inputSchema and parser error, not a copied schema from a different entrypoint.
+- Disabled/unavailable operation: check normalized settings, selected backend, installed binaries and supplied host callbacks.
+- Skill not followed: append eager instructions before the model call, or implement the lazy reader and availability policy.
+- A timeout is not proof that a side effect did not happen. Inspect stored/live state before retrying.
+- Integration is complete when the first call returns `ok: true`, the Agent receives the same tool schema and full result, required artifacts/images are usable by the caller, and the owning runtime closes without leaked resources.
+
+## Published entrypoints
+
+- `@webpilot/capability-sdk/node`
+- `@webpilot/capability-sdk`
+
+## Concrete package providers
+
+Replace provider.ts with the implementation from the selected package README. Keep integration.ts and its lifecycle unchanged.
+
+- [capability-file](../capability-file/README.md)
+- [capability-browser](../capability-browser/README.md)
+- [capability-chart](../capability-chart/README.md)
+- [capability-knowledge](../capability-knowledge/README.md)
+- [capability-workflow](../capability-workflow/README.md)
+- [capability-git](../capability-git/README.md)
+- [capability-connectors](../capability-connectors/README.md)
+- [capability-communication](../capability-communication/README.md)
+- [capability-computer](../capability-computer/README.md)
+- [capability-data](../capability-data/README.md)
+- [capability-media](../capability-media/README.md)
+- [capability-code-sandbox](../capability-code-sandbox/README.md)

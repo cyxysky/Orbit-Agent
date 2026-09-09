@@ -7,7 +7,9 @@
   "files": [
     "dist",
     "runtime",
-    "README.md"
+    "README*.md", "MCP*.md",
+    "THIRD_PARTY_NOTICES.md",
+    "licenses"
   ],
   "exports": {
     ".": {

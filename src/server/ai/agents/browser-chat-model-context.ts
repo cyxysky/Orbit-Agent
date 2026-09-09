@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto';
 import { modelMessageSchema, type ModelMessage } from 'ai';
-import type { RuntimeContextManifest, RuntimeTaskState } from './runtime-context-assembler';
+import type { RuntimeContextManifest } from './runtime-context-assembler';
 import type { RuntimeKnowledgeState } from './runtime-knowledge-context';
-import { browserChatInterruptedTurnContextMarker } from './browser-chat-reply-text';
+import { stripBrowserChatContextMarkers } from '../../../lib/browser-chat-visible-text';
+import { withoutRuntimePromptCacheMetadata } from './runtime-prompt-cache';
+import { parseContextSummary } from './runtime-semantic-summary';
 import { completeRuntimeModelToolChain } from './runtime-context-compression';
 
 export type BrowserChatModelContextCompression = {
@@ -12,8 +14,7 @@ export type BrowserChatModelContextCompression = {
   estimatedTokensBefore: number;
   retainedMessageCount: number;
   summarizedMessageCount: number;
-  targetCeilingTokens: number;
-  targetFloorTokens: number;
+  targetTokens: number;
   thresholdTokens: number;
   windowTokens: number;
 };
@@ -24,19 +25,19 @@ export type BrowserChatModelContext = {
   records: Record<string, ModelMessage>;
   history: string[];
   active: string[];
-  taskState?: RuntimeTaskState;
   lastRequest?: RuntimeContextManifest;
+  backgroundRef?: string;
   knowledge?: RuntimeKnowledgeState;
   branches?: Record<string, {
     recordIds: string[];
     active: string[];
     history: string[];
-    taskState?: RuntimeTaskState;
     lastRequest?: RuntimeContextManifest;
+    backgroundRef?: string;
     continuationSummary?: string;
     knowledge?: RuntimeKnowledgeState;
   }>;
-  lastCompression?: BrowserChatModelContextCompression;
+  lastCompression?: Omit<BrowserChatModelContextCompression, 'continuationSummary'>;
   continuationSummary?: string;
 };
 
@@ -90,49 +91,22 @@ function modelMessageText(message: ModelMessage) {
   }).join('\n').trim();
 }
 
-function messagesContainText(messages: ModelMessage[], role: 'user' | 'assistant', text: string) {
-  const normalized = text.replace(/\s+/g, ' ').trim();
-  if (!normalized) return false;
-  return messages.slice(-16).some((message) => {
-    if (message.role !== role) return false;
-    const candidate = modelMessageText(message).replace(/\s+/g, ' ').trim();
-    return Boolean(candidate) && (candidate === normalized || candidate.includes(normalized) || normalized.includes(candidate));
-  });
+function currentTurnContains(messages: ModelMessage[], role: 'user' | 'assistant', text: string) {
+  const start = messages.findLastIndex((message) => message.role === 'user');
+  return messages.slice(Math.max(0, start)).some((message) => message.role === role && modelMessageText(message) === text.trim());
 }
-
-export function appendInterruptedBrowserChatTurn(
-  messages: ModelMessage[],
-  userContent: string,
-  assistantContent: string,
-) {
+export function appendInterruptedBrowserChatTurn(messages: ModelMessage[], userContent: string, assistantContent: string, inputAlreadyStored = true) {
   const next = [...messages];
-  const partial = assistantContent.trim();
-  const interruptionMarker = browserChatInterruptedTurnContextMarker;
-  if (!messagesContainText(next, 'user', userContent)) {
-    next.push({ role: 'user', content: userContent });
-  }
-  const partialAlreadyStored = partial && messagesContainText(next, 'assistant', partial);
-  if (!messagesContainText(next, 'assistant', interruptionMarker)) {
-    next.push({
-      role: 'assistant',
-      content: partialAlreadyStored ? interruptionMarker : [partial, interruptionMarker].filter(Boolean).join('\n\n'),
-    });
-  }
+  if (!inputAlreadyStored) next.push({ role: 'user', content: userContent });
+  const partial = stripBrowserChatContextMarkers(assistantContent).trim();
+  if (partial && !currentTurnContains(next, 'assistant', partial)) next.push({ role: 'assistant', content: partial });
+  // Interruption is session status, not model-authored text or a command to resume.
   return serializableBrowserChatModelMessages(next);
 }
-
-export function appendTerminalBrowserChatTurn(
-  messages: ModelMessage[],
-  userContent: string,
-  assistantContent: string,
-) {
+export function appendTerminalBrowserChatTurn(messages: ModelMessage[], userContent: string, assistantContent: string) {
   const next = [...messages];
-  if (!messagesContainText(next, 'user', userContent)) {
-    next.push({ role: 'user', content: userContent });
-  }
-  if (!messagesContainText(next, 'assistant', assistantContent)) {
-    next.push({ role: 'assistant', content: assistantContent });
-  }
+  if (!currentTurnContains(next, 'user', userContent)) next.push({ role: 'user', content: userContent });
+  if (assistantContent.trim() && !currentTurnContains(next, 'assistant', assistantContent)) next.push({ role: 'assistant', content: assistantContent });
   return serializableBrowserChatModelMessages(next);
 }
 
@@ -140,7 +114,13 @@ export function normalizeBrowserChatModelMessages(value: unknown): ModelMessage[
   if (!Array.isArray(value)) return [];
   return value.flatMap((message) => {
     const parsed = modelMessageSchema.safeParse(message);
-    return parsed.success ? [withoutPersistentBinaryParts(parsed.data)] : [];
+    if (!parsed.success) return [];
+    const normalized = withoutPersistentBinaryParts(parsed.data);
+    if (normalized.role === 'assistant' && typeof normalized.content === 'string') {
+      const content = stripBrowserChatContextMarkers(normalized.content).trim();
+      return content ? [{ ...normalized, content }] : [];
+    }
+    return [normalized];
   });
 }
 
@@ -155,25 +135,23 @@ export function normalizeBrowserChatModelContext(value: unknown): BrowserChatMod
     return id;
   });
   const history = record.transcript !== undefined
-    ? register(normalizeBrowserChatModelMessages(record.transcript))
+    ? register(withoutRuntimePromptCacheMetadata(normalizeBrowserChatModelMessages(record.transcript)))
     : (record.history || []).filter((id) => Boolean(records[id]));
   const active = record.activeMessages !== undefined
-    ? register(normalizeBrowserChatModelMessages(record.activeMessages))
-    : (record.active || history).filter((id) => Boolean(records[id]));
+    ? register(withoutRuntimePromptCacheMetadata(normalizeBrowserChatModelMessages(record.activeMessages)))
+    : register(withoutRuntimePromptCacheMetadata(normalizeBrowserChatModelMessages((record.active || history).map((id) => records[id]).filter(Boolean))));
   const compression = record.lastCompression;
-  const continuationSummary = typeof record.continuationSummary === 'string'
-    ? record.continuationSummary.trim()
-    : '';
+  const continuationSummary = parseContextSummary(record.continuationSummary) ? record.continuationSummary! : '';
   return {
     version: 2,
     records,
     history,
     active,
-    ...(record.taskState ? { taskState: record.taskState } : {}),
+    ...(record.backgroundRef ? { backgroundRef: record.backgroundRef } : {}),
     ...(record.lastRequest ? { lastRequest: record.lastRequest } : {}),
     ...(record.knowledge ? { knowledge: record.knowledge } : {}),
     ...(record.branches ? { branches: record.branches } : {}),
-    ...(compression && typeof compression === 'object' ? { lastCompression: compression } : {}),
+    ...(compression && typeof compression === 'object' ? { lastCompression: { compressedAt: compression.compressedAt, estimatedTokensBefore: compression.estimatedTokensBefore, estimatedTokensAfter: compression.estimatedTokensAfter, retainedMessageCount: compression.retainedMessageCount, summarizedMessageCount: compression.summarizedMessageCount, targetTokens: compression.targetTokens, thresholdTokens: compression.thresholdTokens, windowTokens: compression.windowTokens } } : {}),
     ...(continuationSummary ? { continuationSummary } : {}),
   };
 }

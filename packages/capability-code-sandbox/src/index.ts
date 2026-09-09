@@ -10,10 +10,10 @@ import {
   type CapabilityResult,
   type CapabilityRunContext,
 } from '@webpilot/capability-sdk';
-import { codeSandboxRuntimeSkill, codeSandboxRuntimeSkillId } from './runtime-skill.js';
-import { codeSandboxCapabilitySettings } from './settings.js';
-export * from './runtime-skill.js';
-export * from './settings.js';
+import { codeSandboxRuntimeSkill, codeSandboxRuntimeSkillId } from './runtime-skill.ts';
+import { codeSandboxCapabilitySettings } from './settings.ts';
+export * from './runtime-skill.ts';
+export * from './settings.ts';
 
 export const codeSandboxCapabilityToolNames = Object.freeze({ codeSandbox: 'codeSandbox' } as const);
 export type CodeSandboxLanguage = 'javascript' | 'python';

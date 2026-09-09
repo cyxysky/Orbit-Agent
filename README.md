@@ -40,6 +40,12 @@ npm install
 npm run dev
 ```
 
+Development uses Turbopack. The custom server prints the selected compiler at
+startup. For an explicit Webpack comparison, use `npm run dev -- --webpack`.
+Restart the development server after changing compiler configuration or updating
+Next.js. First-time route compilation and cached hot updates have different costs;
+compare both when checking development performance.
+
 Open `http://localhost:3000`. Local direct access uses user ID `1` by default; set `ORBIT_DEFAULT_USER_ID` in `.env.local` to switch the development identity. There is no application login or local account initialization. For Docker, create `.env` in the project root.
 
 The app uses DeepSeek by default:

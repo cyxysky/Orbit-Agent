@@ -1,6 +1,6 @@
 import type { CapabilityExecutionContext } from '@webpilot/capability-sdk';
-import type { MediaArtifact } from './index.js';
-import type { MediaModelKind } from './models.js';
+import type { MediaArtifact } from './index.ts';
+import type { MediaModelKind } from './models.ts';
 
 export type MediaGenerationInput = {
   prompt: string;

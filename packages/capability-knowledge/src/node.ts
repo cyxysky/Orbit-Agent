@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createCapabilityDocumentDatabase } from '@webpilot/capability-sdk/node';
-import { createKnowledgeCapability, type KnowledgeDocument, type KnowledgeSearchHit, type KnowledgeStore } from './index.js';
+import { createKnowledgeCapability, type KnowledgeDocument, type KnowledgeSearchHit, type KnowledgeStore } from './index.ts';
 import type { CapabilityRunContext } from '@webpilot/capability-sdk';
 
 function tokens(value: string) {

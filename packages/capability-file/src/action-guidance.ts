@@ -1,4 +1,4 @@
-import type { FileToolInput } from './types.js';
+import type { FileToolInput } from './types.ts';
 
 /** Shared by the model schema and direct execution; prevent silent misrouting. */
 export function fileActionInputIssues(input: FileToolInput) {
@@ -12,6 +12,17 @@ export function fileActionInputIssues(input: FileToolInput) {
   const forbid = (fields: string[], message: string) => {
     for (const field of fields) if (has(field)) issues.push({ field, message });
   };
+  if (action !== 'write' && input.content !== undefined) {
+    issues.push({ field: 'content', message: 'content is only supported by write. Use write + fileName + content to publish a text file directly.' });
+  }
+  if (action === 'write') {
+    requireField('fileName', 'write requires fileName including its output extension.');
+    if (typeof input.content !== 'string' || input.content.length > 1_000_000) {
+      issues.push({ field: 'content', message: 'write requires string content, at most 1,000,000 characters; an empty string is allowed.' });
+    }
+    forbid(['documentId', 'documentType', 'artifactId', 'attachmentId', 'sourceArtifactId', 'sourceAttachmentId', 'program', 'spec', 'patch', 'baseDigest', 'render', 'path', 'url', 'urlOrPath', 'operation', 'replaceExisting', 'fileType'],
+      'write publishes fileName + content as a new text artifact. It does not use an Office draft, execute a program, fetch a URL, or overwrite an existing artifact.');
+  }
   if (action !== 'readSource') forbid(['includeDiagnostics'], 'includeDiagnostics is only supported by readSource. It reads saved validation details, not file content or page images.');
   if (action !== 'edit') forbid(['replacements'], 'replacements is only supported by edit.');
   if (action !== 'plan') forbid(['design'], 'design is the initial plan brief, not an edit operation or a visual review. Preserve that brief when authoring and repairing the source.');

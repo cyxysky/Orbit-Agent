@@ -6,8 +6,8 @@
   "sideEffects": false,
   "files": [
     "dist",
-    "README.md",
-    "FRAMEWORK_INTEGRATION.md"
+    "README*.md", "MCP*.md",
+    "FRAMEWORK_INTEGRATION*.md"
   ],
   "exports": {
     "./node": {

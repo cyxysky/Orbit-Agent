@@ -11,7 +11,7 @@ import type {
   OfficeVisualQaDeckChecks,
   OfficeVisualQaIssue,
   OfficeVisualQaPageChecks,
-} from './office/types.js';
+} from './office/types.ts';
 
 export const fileActions = [
   'list',
@@ -20,6 +20,7 @@ export const fileActions = [
   /** Legacy transport alias; not advertised to models. */
   'read',
   'download',
+  'write',
   'convert',
   'plan',
   'generate',
@@ -51,6 +52,8 @@ export type FileToolInput = {
   documentId?: string;
   fileName?: string;
   fileType?: string;
+  /** Exact UTF-8 file contents for write, including whitespace and empty files. */
+  content?: string;
   documentType?: FileDocumentType;
   operation?: FileOperation;
   sourceAttachmentId?: string;

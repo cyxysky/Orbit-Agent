@@ -1,5 +1,5 @@
 import { normalizeBoundedInteger } from '@webpilot/capability-sdk';
-import type { BrowserRuntimeEnvironment } from './browser-session-runtime.js';
+import type { BrowserRuntimeEnvironment } from './browser-session-runtime.ts';
 
 function evenDimension(value: number, fallback: number) {
   const normalized = Number.isFinite(value) ? Math.max(2, Math.floor(value)) : fallback;

@@ -21,9 +21,10 @@ function manifestRuntimeSkill(manifest: { id: string; skills?: readonly Capabili
 }
 
 const browserRuntimeSkill = manifestRuntimeSkill(browserCapabilityManifest);
-const fileRuntimeSkill = manifestRuntimeSkill(fileCapabilityManifest);
-const chartCapabilityRuntimeSkill = manifestRuntimeSkill(chartCapabilityManifest);
-const infrastructureRuntimeSkills = [
+const capabilityRuntimeSkills = [
+  browserCapabilityManifest,
+  fileCapabilityManifest,
+  chartCapabilityManifest,
   codeSandboxCapabilityManifest,
   connectorsCapabilityManifest,
   knowledgeCapabilityManifest,
@@ -33,16 +34,16 @@ const infrastructureRuntimeSkills = [
   gitCapabilityManifest,
   computerCapabilityManifest,
   workflowCapabilityManifest,
-].map(manifestRuntimeSkill);
+].flatMap((manifest) => {
+  manifestRuntimeSkill(manifest);
+  return manifest.skills!;
+});
 
 // These capability tools are always visible to the model. Skill enforcement is
 // owned by the Agent runtime below, not by the capability packages themselves.
-const defaultVisibleCapabilityToolNames: ReadonlySet<string> = new Set([
-  browserRuntimeSkill,
-  fileRuntimeSkill,
-  chartCapabilityRuntimeSkill,
-  ...infrastructureRuntimeSkills,
-].flatMap((skill) => (skill.activation || []).map((activation) => activation.toolName)));
+const defaultVisibleCapabilityToolNames: ReadonlySet<string> = new Set(
+  capabilityRuntimeSkills.flatMap((skill) => (skill.activation || []).map((activation) => activation.toolName)),
+);
 
 type HiddenRuntimeSkillPolicy = {
   skillId: string;
@@ -56,11 +57,8 @@ function actionFromInput(input: unknown) {
 }
 
 const hiddenRuntimeSkills: Readonly<Record<string, CapabilitySkill>> = Object.freeze(Object.fromEntries([
-  browserRuntimeSkill,
-  fileRuntimeSkill,
+  ...capabilityRuntimeSkills,
   subagentRuntimeSkill,
-  chartCapabilityRuntimeSkill,
-  ...infrastructureRuntimeSkills,
 ].map((skill) => [skill.id, skill])));
 
 export const hiddenRuntimeSkillPolicies: Readonly<Record<string, HiddenRuntimeSkillPolicy>> = Object.freeze(
@@ -79,13 +77,7 @@ export function activeBrowserRuntimeSkillId() {
 }
 
 export function hiddenRuntimeSkillSummaries() {
-  return [
-    browserRuntimeSkill.summary,
-    fileRuntimeSkill.summary,
-    subagentRuntimeSkill.summary,
-    chartCapabilityRuntimeSkill.summary,
-    ...infrastructureRuntimeSkills.map((skill) => skill.summary),
-  ].join('\n');
+  return Object.values(hiddenRuntimeSkills).map((skill) => skill.summary).join('\n');
 }
 
 export function hiddenRuntimeSkillIds() {

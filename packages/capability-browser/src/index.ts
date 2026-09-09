@@ -10,13 +10,13 @@ import {
   type CapabilityRunContext,
   type CapabilityToolSet,
 } from '@webpilot/capability-sdk';
-import { browserCapabilitySettings } from './settings.js';
-import { browserRuntimeSkill } from './runtime-skill.js';
+import { browserCapabilitySettings } from './settings.ts';
+import { browserRuntimeSkill, browserInteractiveQaSkill } from './runtime-skill.ts';
 
-export * from './output-settings.js';
-export * from './runtime-skill.js';
-export * from './settings.js';
-export * from './session-group.js';
+export * from './output-settings.ts';
+export * from './runtime-skill.ts';
+export * from './settings.ts';
+export * from './session-group.ts';
 
 const reason = z.string().trim().min(1).max(300);
 const stateOptions = {
@@ -119,7 +119,7 @@ export const browserToolInput = defineCapabilityInput(
 
 export type BrowserOperationResult = {
   ok: boolean;
-  actual: string;
+  actual?: string;
   data?: unknown;
   summary?: string;
   failureCategory?: string;
@@ -133,6 +133,10 @@ export type BrowserOperationEnvelope = {
   result: BrowserOperationResult;
 };
 
+export function browserOperationSummary(result: Pick<BrowserOperationResult, 'ok' | 'actual' | 'summary'>): string {
+  return result.summary || result.actual || (result.ok ? 'Browser operation completed.' : 'Browser operation failed.');
+}
+
 export function browserOperationToCapabilityResult(
   result: BrowserOperationResult,
 ): CapabilityResult<BrowserOperationEnvelope> {
@@ -145,12 +149,12 @@ export function browserOperationToCapabilityResult(
       ok: false,
       error: {
         code: result.failureCategory || 'browser-operation-failed',
-        message: result.actual,
+        message: browserOperationSummary(result),
         details: envelope,
       },
     };
   }
-  return { ok: true, summary: result.summary || result.actual, data: envelope };
+  return { ok: true, summary: browserOperationSummary(result), data: envelope };
 }
 
 export function browserOperationFromCapabilityResult(
@@ -192,7 +196,7 @@ export const browserCapabilityManifest = Object.freeze({
   permissions: ['browser:launch', 'browser:cdp', 'network:access', 'artifact:write'],
   runtimeRequirements: { node: '>=22.16', playwright: '>=1.60' },
   configuration: { settings: browserCapabilitySettings },
-  skills: [browserRuntimeSkill],
+  skills: [browserRuntimeSkill, browserInteractiveQaSkill],
 } satisfies CapabilityManifest);
 
 export function createBrowserTools(operations: BrowserCapabilityOperations): CapabilityToolSet {

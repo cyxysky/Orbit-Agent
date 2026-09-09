@@ -1,4 +1,4 @@
-@import "tailwindcss";
+@import "tailwindcss" source(none);
 
 @import "@heroui/styles";
 
@@ -10,6 +10,14 @@
 
 @import "./file-preview.css";
 
+/* Only application and shared package source can supply UI utility classes.
+ * Do not watch documentation, scripts, or server routes as stylesheet inputs:
+ * editing those files would otherwise invalidate the global CSS in every page.
+ * Keep shared TypeScript helpers as well as JSX, since both can contain classes.
+ */
+@source "../../**/*.{ts,tsx,js,jsx,mdx}";
+@source not "../../server/**";
+@source "../../../packages/*/src/**/*.{ts,tsx,js,jsx}";
 
 /*
  * Canonical visual refinement layer.

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import type { OfficeDocumentDraft } from '../../office/types.js';
-import { resolveUnoProgramWorker } from './uno.js';
+import type { OfficeDocumentDraft } from '../../office/types.ts';
+import { resolveUnoProgramWorker } from './uno.ts';
 
 /** Code revision only; do not rescan every installed font on a source read. */
 export async function currentUnoWorkerDigest(): Promise<string | null> {

@@ -48,9 +48,12 @@ export type ModelSettingsOverride = {
   provider?: string;
   model?: string;
   supportsImageInput?: boolean;
+  maxContextTokens?: number;
 };
 
-const modelSettingsStorage = new AsyncLocalStorage<ModelSettingsOverride>();
+const modelSettingsStorage = ((globalThis as typeof globalThis & {
+  __webPilotModelSettingsStorage?: AsyncLocalStorage<ModelSettingsOverride>;
+}).__webPilotModelSettingsStorage ??= new AsyncLocalStorage<ModelSettingsOverride>());
 
 function resolveCodexCliPath(configuredPath: string | undefined, projectRoot: string) {
   const value = String(configuredPath || '').trim();
@@ -350,6 +353,7 @@ export function getModelSettings() {
     provider,
     model: override?.model || process.env.AI_MODEL || defaults[provider] || 'custom-model',
     supportsImageInput: override?.supportsImageInput === true,
+    maxContextTokens: override?.maxContextTokens,
   };
 }
 

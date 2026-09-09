@@ -1,10 +1,10 @@
 'use client';
 import { lazy, Suspense, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { cellText, cellValue, chartDataTables, parseCell, replaceTableRows, tableColumns } from './editor-core.js';
-import { ChartIcon } from './icons.js';
-import { defaultChartTranslate, type ChartTranslate } from './i18n.js';
+import { cellText, cellValue, chartDataTables, parseCell, replaceTableRows, tableColumns } from './editor-core.ts';
+import { ChartIcon } from './icons.tsx';
+import { defaultChartTranslate, type ChartTranslate } from './i18n.ts';
 
-const ChartJsonEditor = lazy(() => import('./json-editor.js').then((module) => ({ default: module.ChartJsonEditor })));
+const ChartJsonEditor = lazy(() => import('./json-editor.tsx').then((module) => ({ default: module.ChartJsonEditor })));
 
 export function ChartDataEditor({ option, title, saving, onSave, onCancel, onReload, translate: t = defaultChartTranslate }: {
   option: Record<string, unknown>; title?: string; saving: boolean;

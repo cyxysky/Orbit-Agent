@@ -4,7 +4,7 @@
   "description": "Framework-neutral image, video and speech generation, OCR, transcription and media inspection.",
   "type": "module",
   "sideEffects": false,
-  "files": ["dist", "README.md"],
+  "files": ["dist", "README*.md", "MCP*.md"],
   "exports": {
     ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
     "./node": { "types": "./dist/node.d.ts", "import": "./dist/node.js" },

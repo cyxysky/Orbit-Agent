@@ -1,13 +1,13 @@
 import { z } from 'zod';
 import { defineCapabilityInput } from '@webpilot/capability-sdk';
-import { normalizeFileToolInput } from './transport.js';
-import { fileActionInputIssues } from './action-guidance.js';
-import { officeDesignBriefSchema } from './design-guidance.js';
+import { normalizeFileToolInput } from './transport.ts';
+import { fileActionInputIssues } from './action-guidance.ts';
+import { officeDesignBriefSchema } from './design-guidance.ts';
 import {
   fileModelActions,
   fileVisualToolActions,
   type FileToolInput,
-} from './types.js';
+} from './types.ts';
 
 export const FILE_READ_MAX_CHARS = 40_000;
 
@@ -138,7 +138,9 @@ const fileToolShape = {
   documentId: z.string().max(96).optional()
     .describe('Draft identity for plan, readSource, generate, edit, render and API lookup. Copy from list/plan/render; never substitute artifactId, fileName, sourceFileName or a host path. New ids use 1-96 ASCII letters/numbers/dot/underscore/hyphen.'),
   fileName: z.string().max(180).optional()
-    .describe('For plan/download/convert: output name with extension. A name is not an artifactId or documentId. The bundled convert currently outputs PDF only; omit the name or use .pdf.'),
+    .describe('For write/plan/download/convert: output name with extension. A name is not an artifactId or documentId. The bundled convert currently outputs PDF only; omit the name or use .pdf.'),
+  content: z.string().max(1_000_000).optional()
+    .describe('For write only: exact UTF-8 text to save as a downloadable file (Markdown, HTML, code, configuration, CSV, etc.). Preserves whitespace and empty strings. No Markdown fences unless part of the requested file. Does not execute code or render Office documents.'),
   fileType: z.string().regex(/^[a-z0-9]{1,10}$/).optional()
     .describe('For download: expected extension without a dot.'),
   documentType: z.enum(['word', 'spreadsheet', 'presentation']).optional()
@@ -316,9 +318,9 @@ function validateVisualInput(input: FileToolInput, context: z.RefinementCtx) {
 function createFileToolSchema(visualInputAvailable: boolean) {
   const action = visualInputAvailable
     ? z.enum([...fileModelActions, ...fileVisualToolActions])
-      .describe('Required. readSource + documentId = editable code; readContent + artifactId/attachmentId = file text/data; visualIndex/visualRead/visualReport = rendered-page QA. generate/edit validate source; render publishes it.')
+      .describe('Required. write + fileName + content publishes text/code files immediately. readSource + documentId = editable Office generation code; readContent + artifactId/attachmentId = file text/data; visualIndex/visualRead/visualReport = rendered-page QA. generate/edit validate Office source; render publishes it.')
     : z.enum(fileModelActions)
-      .describe('Required. list, readSource (draft code), readContent (file text/data), download, convert, plan, generate, edit, unoApi, jsApi, render. Source and content reading use different identities.');
+      .describe('Required. write (publish exact text/code content), list, readSource (draft code), readContent (file text/data), download, convert, plan, generate, edit, unoApi, jsApi, render. Source and content reading use different identities.');
   const schema = z.object({
     action,
     ...fileToolShape,

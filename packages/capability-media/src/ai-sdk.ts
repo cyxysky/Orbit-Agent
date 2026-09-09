@@ -1,9 +1,9 @@
 import { createDownload, generateImage, generateSpeech, experimental_generateVideo as generateVideo, type ImageModel } from 'ai';
 import { z } from 'zod';
 import type { CapabilityExecutionContext } from '@webpilot/capability-sdk';
-import type { MediaArtifact } from './index.js';
-import type { MediaGenerationInput, MediaGenerationOperations } from './generation.js';
-import { mediaModelDriver, resolveMediaModel, type MediaModelConfig, type MediaModelConfiguration, type MediaModelKind } from './models.js';
+import type { MediaArtifact } from './index.ts';
+import type { MediaGenerationInput, MediaGenerationOperations } from './generation.ts';
+import { mediaModelDriver, resolveMediaModel, type MediaModelConfig, type MediaModelConfiguration, type MediaModelKind } from './models.ts';
 
 export type MediaGenerationFile = { data: Uint8Array; mediaType: string };
 export type AiSdkMediaOperationsOptions = {

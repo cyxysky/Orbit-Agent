@@ -1,4 +1,8 @@
 import type { CapabilitySkill } from '@webpilot/capability-sdk';
+import { fileDiagramReferenceRouting } from './diagram-guidance/index.ts';
+export { fileDiagramReferenceSkills } from './diagram-guidance/index.ts';
+import { fileAuthoringReferenceRouting } from './authoring-guidance.ts';
+export { fileAuthoringReferenceSkills } from './authoring-guidance.ts';
 
 /** Complete model-facing operating manual for the File Capability workflow. */
 export const fileArtifactRuntimeSkillId = 'system-file-artifact-runtime';
@@ -27,7 +31,15 @@ Content selection: readContent accepts sheet plus range (A1:D20) for spreadsheet
 
 Every file action uses this same Skill. Do not read a second visual-only Skill. If the Skill read fails, use the complete error and requiredSkillId to restore the missing Skill registration. If a file operation fails, first classify the latest error using the rules below; failureCategory names the failed operation, not its cause. Do not assume every failure requires a source edit. Keep the same documentId or artifactId; never create a replacement document merely to escape a failed step.
 
-The base file actions are list, readSource, readContent, download, convert, plan, generate, edit, render, jsApi, and unoApi. When the host initializes file with visual input enabled, the same tool additionally exposes visualIndex, visualRead, and visualReport.
+The base file actions are write, list, readSource, readContent, download, convert, plan, generate, edit, render, jsApi, and unoApi. When the host initializes file with visual input enabled, the same tool additionally exposes visualIndex, visualRead, and visualReport.
+
+## Text, code, and configuration files
+
+Use file action=write with fileName and content to publish Markdown, TXT, HTML, JavaScript, CSS, JSON, YAML, CSV, SVG, or any other text format. Supply the literal file contents, without surrounding chat code fences. Content is saved as UTF-8 exactly: indentation, line endings, leading/trailing whitespace and empty strings are preserved. The limit is 1,000,000 characters per file. Supply CSV/TSV as already serialized text. Code is saved, never executed.
+
+write returns a finished artifactId and downloadUrl immediately. No documentId, plan, Office API lookup, generate, render, or Office visual QA is needed. Use readContent + the returned artifactId to inspect the saved file. To revise it, write the complete revised contents to a new artifact; previously delivered files are immutable. Use the exact returned downloadUrl in the final answer. Known binary formats require their appropriate generator; renaming text to .pdf/.docx/.png does not create such a file.
+
+${fileAuthoringReferenceRouting}
 
 ## Host tool boundary and result shape
 
@@ -60,7 +72,8 @@ Do not guess returned identities. Copy \`documentId\`, \`artifactId\`, screensho
 | Import an existing Office file for editing | plan(operation=modify, sourceAttachmentId) | An editing workspace; later program opens the mounted original |
 | Fetch an existing asset | download + HTTP(S) URL or page-relative URL path + fileType | Saved asset and exact artifactId/asset name; not an OS file reader |
 | Export an existing Office file to PDF | convert + sourceArtifactId | PDF artifact; no source editing |
-| Author a new file | plan → generate → render | Plan chooses engine; generate validates code; render publishes |
+| Author a text/code/config file | write + fileName + content | Exact UTF-8 contents saved as a downloadable artifact |
+| Author an Office/PDF document | plan → generate → render | Plan chooses engine; generate validates code; render publishes |
 | Look up supported syntax/features | unoApi OR jsApi + documentId | Documentation, not execution; follow plan's engine |
 | Record visual evidence | visualReport + artifactId | QA records only; no automatic layout repair |
 
@@ -105,6 +118,7 @@ type SemanticDocumentSpec = {
   blocks: SemanticBlock[];
 };
 type FileInput =
+  | { action: "write"; reason?: string; fileName: string; content: string }
   | { action: "list"; reason?: string }
   | {
       action: "readSource";
@@ -234,6 +248,8 @@ For substantial new work, resolve up to three representative compositions (openi
 For charts, design around the question and data roles, not an API showcase: compare compatible units, label meaningful series/points, reserve space for actual title/axis/legend text, and remove redundant chrome without deleting meaning. A theme must govern chart typography and colors as well as surrounding text. Word uses content flow, headings, sidebars and figure relationships; Excel separates inputs/calculations/outputs and uses number formats and restrained emphasis. Do not decorate reports and spreadsheets as slide decks. Explicit all-feature demonstrations still retain every requested feature, preferably in a clearly organized appendix when appropriate.
 
 Repairs preserve the selected direction and user requirements. Reflow the affected composition before shrinking text; never meet a visual check by silently lowering required font sizes, deleting features, flattening editable content, or reverting the entire document to a default template. A saved brief is an intention, not proof of design quality.
+
+${fileDiagramReferenceRouting}
 
 ## Semantic create fast path
 

@@ -8,11 +8,11 @@ import {
   type CapabilityProvider,
   type CapabilityRunContext,
 } from '@webpilot/capability-sdk';
-import { communicationRuntimeSkill } from './runtime-skill.js';
-import { communicationCapabilitySettings } from './settings.js';
+import { communicationRuntimeSkill } from './runtime-skill.ts';
+import { communicationCapabilitySettings } from './settings.ts';
 
-export * from './runtime-skill.js';
-export * from './settings.js';
+export * from './runtime-skill.ts';
+export * from './settings.ts';
 
 export const communicationCapabilityToolNames = Object.freeze({ communication: 'communication' } as const);
 

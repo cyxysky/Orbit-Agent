@@ -2,10 +2,10 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { type CapabilityConfiguration } from '@webpilot/capability-sdk';
-import { createNodeFileConverter, type NodeFileConverter } from './convert.js';
-import { createNodeFileDownloader, type NodeFileDownloader } from './download.js';
-import { type NodeArtifactUrlResolver } from './artifacts.js';
-import { renderFilePreview, type FilePreviewResult } from './office/preview.js';
+import { createNodeFileConverter, type NodeFileConverter } from './convert.ts';
+import { createNodeFileDownloader, type NodeFileDownloader } from './download.ts';
+import { type NodeArtifactUrlResolver } from './artifacts.ts';
+import { renderFilePreview, type FilePreviewResult } from './office/preview.ts';
 
 export type NodeFileWorkspaceHost = {
   artifactsRoot: string;

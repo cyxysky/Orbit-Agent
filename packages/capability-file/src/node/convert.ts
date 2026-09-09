@@ -1,7 +1,7 @@
 import { mkdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { raceWithAbort, type CapabilityHealth } from '@webpilot/capability-sdk';
-import type { FileArtifactOperationResult } from '../types.js';
+import type { FileArtifactOperationResult } from '../types.ts';
 import {
   createNodeArtifactPayload,
   nodeArtifactRelativePath,
@@ -10,13 +10,13 @@ import {
   uniqueNodeArtifactPath,
   type NodeArtifactPayload,
   type NodeArtifactUrlResolver,
-} from './artifacts.js';
+} from './artifacts.ts';
 import {
   convertOfficeFile,
   resolveLibreOfficeExecutable,
   type LibreOfficeRuntimeOptions,
   type OfficeFileConversionInput,
-} from './libreoffice.js';
+} from './libreoffice.ts';
 
 const convertibleOfficeExtensions = new Set([
   '.doc', '.docx', '.odt',

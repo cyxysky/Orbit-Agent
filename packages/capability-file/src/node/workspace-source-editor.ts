@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { OfficeDocumentDraft } from '../office/types.js';
+import type { OfficeDocumentDraft } from '../office/types.ts';
 
 export function sourceDigest(source: string) {
   return createHash('sha256').update(source, 'utf8').digest('hex');

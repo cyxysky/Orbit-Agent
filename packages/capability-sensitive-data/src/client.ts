@@ -1,4 +1,4 @@
-import type { SensitiveDataFilterConfig } from './config.js';
+import type { SensitiveDataFilterConfig } from './config.ts';
 
 type GlinerRedactResponse = {
   texts: string[];

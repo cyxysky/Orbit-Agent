@@ -8,11 +8,11 @@ import {
   type CapabilityRunContext,
   type CapabilityToolSet,
 } from '@webpilot/capability-sdk';
-import { fileCapabilitySettings } from './settings.js';
-import { fileRuntimeSkill } from './runtime-skill.js';
-import { createFileToolInput } from './schema.js';
-import { fileActionInputIssues } from './action-guidance.js';
-import { normalizeFileToolInput } from './transport.js';
+import { fileCapabilitySettings } from './settings.ts';
+import { fileRuntimeSkill, fileDiagramReferenceSkills, fileAuthoringReferenceSkills } from './runtime-skill.ts';
+import { createFileToolInput } from './schema.ts';
+import { fileActionInputIssues } from './action-guidance.ts';
+import { normalizeFileToolInput } from './transport.ts';
 import {
   fileActions,
   fileVisualActions,
@@ -25,15 +25,15 @@ import {
   type FileVisualCapabilityOperations,
   type FileVisualToolAction,
   type FileVisualToolInput,
-} from './types.js';
+} from './types.ts';
 
-export * from './formats.js';
-export * from './office/types.js';
-export * from './runtime-skill.js';
-export * from './settings.js';
-export * from './schema.js';
-export * from './transport.js';
-export * from './types.js';
+export * from './formats.ts';
+export * from './office/types.ts';
+export * from './runtime-skill.ts';
+export * from './settings.ts';
+export * from './schema.ts';
+export * from './transport.ts';
+export * from './types.ts';
 
 export const fileCapabilityToolNames = Object.freeze({
   file: 'file',
@@ -56,7 +56,7 @@ export const fileCapabilityManifest: CapabilityManifest = {
     },
   },
   configuration: { settings: fileCapabilitySettings },
-  skills: [fileRuntimeSkill],
+  skills: [fileRuntimeSkill, ...fileDiagramReferenceSkills, ...fileAuthoringReferenceSkills],
 };
 
 function isFileAction(value: string | undefined): value is FileAction {
@@ -98,7 +98,7 @@ export async function executeFileAction(
       ok: false,
       error: {
         code: 'invalid-file-action',
-        message: 'file requires one action: list | readSource | readContent | download | convert | plan | generate | edit | unoApi | jsApi | render.',
+        message: 'file requires one action: list | readSource | readContent | write | download | convert | plan | generate | edit | unoApi | jsApi | render.',
       },
     };
   }
@@ -174,11 +174,13 @@ export function createFileTools(
       description: (visualInputAvailable
         ? 'File workflow: readSource(documentId) reads editable Python/JavaScript; readContent(artifactId OR attachmentId) reads file text/data, NOT source. To repair layout: readSource → edit → render → visualIndex/visualRead → visualReport. list discovers drafts; plan selects engine; generate creates source; download fetches assets; convert changes file format; unoApi/jsApi describe the planned engine. Never substitute IDs or infer behavior from reason.'
         : 'File workflow: readSource(documentId) reads editable Python/JavaScript; readContent(artifactId OR attachmentId) reads file text/data, NOT source. To repair: readSource → edit → render. list discovers drafts; plan selects engine; generate creates source; download fetches assets; convert changes file format; unoApi/jsApi describe the planned engine. No visual inspection is available; do not claim visual QA.')
-        + ' Design: original/high-design work starts with plan.design (bespoke audience, objective, distinct directions, selection and rhythm), then custom program composition. For fast conventional files, follow semanticGeneration.recommended, not available alone. Consistent visual rules do not mean identical page layouts.'
+        + ' For text/code/config files use write(fileName, content): publishes exact UTF-8 content immediately, including empty files, without plan, Office engines or rendering. Markdown, TXT, HTML, JS, CSS, JSON, YAML, CSV and custom text extensions use the same write action. Saved code is not executed.'
+        + ' Office design: original/high-design work starts with plan.design (bespoke audience, objective, distinct directions, selection and rhythm), then custom program composition. For fast conventional files, follow semanticGeneration.recommended, not available alone. Consistent visual rules do not mean identical page layouts.'
         + ' Edit is atomic: prefer exact replacements, uniquely matched on one pre-edit snapshot; any conflict saves nothing. Preserve indentation; never rely on fuzzy matching. After saved=true, inspect validation separately and use the returned patchBaseDigest. Only an identical request confirmed by a saved edit receipt is deduplicated. unoApi exact module IDs return only that module.'
         + ' Recovery: readSource/list return saved diagnostics, not a new execution. Check validationEvidence freshness. Do not infer bridge failure from NoneType or source correctness from a runtime blocker. Respect retryable/retryAfter; no unchanged retry loops.',
       input: createFileToolInput(visualInputAvailable),
       inputExamples: [
+        { action: 'write', fileName: 'notes.md', content: '# Notes\n\nMeeting notes.\n' },
         { action: 'list', reason: 'List current file drafts' },
         { action: 'readSource', reason: 'Locate code to patch, without reading the PPTX or attaching screenshots', documentId: 'travel-guide', startLine: 1, endLine: 80 },
         { action: 'readContent', reason: 'Inspect finished-file text/data, not the generator source', artifactId: 'exact-artifact-id-from-render', offset: 0, limit: 2000 },

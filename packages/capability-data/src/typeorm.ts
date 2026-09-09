@@ -1,9 +1,9 @@
 import type { DataSource, EntityMetadata } from 'typeorm';
-import { createDataCapability, createDataSourceRegistry, isReadOnlyStatement, type AgentDataSource, type DataQueryResult, type DataTable } from './index.js';
+import { createDataCapability, createDataSourceRegistry, isReadOnlyStatement, type AgentDataSource, type DataQueryResult, type DataTable } from './index.ts';
 import type { CapabilityExecutionContext, CapabilityRunContext } from '@webpilot/capability-sdk';
-import { boundedReadStatement, sqlTokens } from './sql.js';
-import { querySqliteFile } from './sqlite-query.js';
-import { cancelPostgresQuery, type PostgresCancelableClient } from './postgres-cancel.js';
+import { boundedReadStatement, sqlTokens } from './sql.ts';
+import { querySqliteFile } from './sqlite-query.ts';
+import { cancelPostgresQuery, type PostgresCancelableClient } from './postgres-cancel.ts';
 
 function tableFromMetadata(metadata: EntityMetadata): DataTable {
   return {

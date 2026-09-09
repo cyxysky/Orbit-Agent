@@ -1,6 +1,6 @@
 import { WSClient, type BaseMessage, type WsFrame } from '@wecom/aibot-node-sdk';
-import type { CommunicationMediaFormat, CommunicationMediaOperations } from './index.js';
-import { CommunicationDeliveryError } from './index.js';
+import type { CommunicationMediaFormat, CommunicationMediaOperations } from './index.ts';
+import { CommunicationDeliveryError } from './index.ts';
 
 export const WECOM_BOT_RUNTIME_REVISION = 5;
 

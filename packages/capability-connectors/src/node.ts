@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { readBoundedResponseText } from '@webpilot/capability-sdk';
-import { createConnectorRegistry, createConnectorsCapability, type AgentConnector, type ConnectorOperation } from './index.js';
+import { createConnectorRegistry, createConnectorsCapability, type AgentConnector, type ConnectorOperation } from './index.ts';
 import type { CapabilityExecutionContext, CapabilityRunContext } from '@webpilot/capability-sdk';
 
 type JsonRpcResponse = { id?: string | number; method?: string; result?: unknown; error?: { code?: number; message?: string; data?: unknown } };

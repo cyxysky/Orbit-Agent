@@ -7,7 +7,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createComputerCapability, type ComputerDriver } from './index.js';
+import { createComputerCapability, type ComputerDriver } from './index.ts';
 import type { CapabilityRunContext } from '@webpilot/capability-sdk';
 
 const COMPUTER_PATH = '/v1/computer';

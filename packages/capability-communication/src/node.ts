@@ -1,10 +1,10 @@
-export { createWeComBotConnection, normalizeWeComInboundMessage, WECOM_BOT_RUNTIME_REVISION, type WeComBotConnection, type WeComInboundMessage, type WeComInboundAttachment } from './wecom-bot.js';
+export { createWeComBotConnection, normalizeWeComInboundMessage, WECOM_BOT_RUNTIME_REVISION, type WeComBotConnection, type WeComInboundMessage, type WeComInboundAttachment } from './wecom-bot.ts';
 import { randomUUID } from 'node:crypto';
 import { createCapabilityDocumentDatabase } from '@webpilot/capability-sdk/node';
 import path from 'node:path';
 import type { AgentConnector } from '@webpilot/capability-connectors';
 import type { CapabilityExecutionContext, CapabilityRunContext } from '@webpilot/capability-sdk';
-export { createWeComMessageArguments, validateWeComMessageContent } from './wecom.js';
+export { createWeComMessageArguments, validateWeComMessageContent } from './wecom.ts';
 import {
   createCommunicationCapability,
   CommunicationDeliveryError,
@@ -13,7 +13,7 @@ import {
   type CommunicationDraft,
   type CommunicationDraftStore,
   type CommunicationTarget,
-} from './index.js';
+} from './index.ts';
 
 const allTargetKinds = ['user', 'group', 'department', 'email', 'address'] as const;
 const allContentFormats = ['text', 'markdown'] as const;

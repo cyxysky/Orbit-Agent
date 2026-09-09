@@ -11,7 +11,7 @@ import type {
   OfficeSemanticTemplate,
   OfficeThemeDefinition,
   OfficeThemePreset,
-} from '../../office/types.js';
+} from '../../office/types.ts';
 
 export const OFFICE_SEMANTIC_SCHEMA_VERSION = '1.0' as const;
 

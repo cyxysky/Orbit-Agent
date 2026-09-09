@@ -3,8 +3,8 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import type {
   ChartArtifactStore,
-} from './index.js';
-import { createChartCapability } from './index.js';
+} from './index.ts';
+import { createChartCapability } from './index.ts';
 import {
   echartsMapDefinition,
   parseChartRecord,
@@ -14,7 +14,7 @@ import {
   type ChartOptionValidationInput,
   type ChartRecord,
   type CreateChartRecordInput,
-} from './core.js';
+} from './core.ts';
 import type { CapabilityRunContext } from '@webpilot/capability-sdk';
 
 const chartIdPattern = /^chart_(\d{6})$/;

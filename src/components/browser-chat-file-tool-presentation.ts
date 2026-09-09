@@ -2,6 +2,7 @@ import { asRecord } from '@/lib/unknown-value';
 
 export type BrowserChatFileToolPresentationKey =
   | 'create-draft'
+  | 'write-file'
   | 'download-file'
   | 'edit-draft'
   | 'file-visual-index'
@@ -58,6 +59,7 @@ export function browserChatFileToolPresentation(
     jsApi: { key: 'js-api', label: '查询 JavaScript API' },
     visualReport: { key: 'file-visual-report', label: '提交视觉检查' },
     download: { key: 'download-file', label: '下载文件' },
+    write: { key: 'write-file', label: '生成文件' },
     edit: { key: 'edit-draft', label: '修改草稿' },
     generate: { key: 'create-draft', label: '创建草稿' },
     plan: { key: 'plan-document', label: '规划文档' },

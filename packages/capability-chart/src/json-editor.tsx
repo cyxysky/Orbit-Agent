@@ -9,7 +9,7 @@ import { HighlightStyle, indentUnit, syntaxHighlighting } from '@codemirror/lang
 import { json, jsonParseLinter } from '@codemirror/lang-json';
 import { linter, lintGutter } from '@codemirror/lint';
 import { tags } from '@lezer/highlight';
-import { defaultChartTranslate, type ChartTranslate } from './i18n.js';
+import { defaultChartTranslate, type ChartTranslate } from './i18n.ts';
 
 const jsonHighlight = HighlightStyle.define([
   { tag: tags.propertyName, color: '#6fc5f2' },

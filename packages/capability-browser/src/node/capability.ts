@@ -6,13 +6,13 @@ import {
   type BrowserCodeInput,
   type ReadBrowserStateInput,
   type WaitForHumanVerificationInput,
-} from '../index.js';
+} from '../index.ts';
 import {
   browserCodeHasImageOperation,
   type BrowserCodeAttachmentBinding,
   type BrowserCodeCredentialBinding,
-} from './browser-code-runner.js';
-import { BrowserSession } from './browser-session.js';
+} from './browser-code-runner.ts';
+import { BrowserSession } from './browser-session.ts';
 
 export const readBrowserStateCode = 'nodeRepl.write({ tabs: await browser.user.openTabs(), activePage: { url: page.url(), title: await page.title() }, pageState: await page.domSnapshot() })';
 

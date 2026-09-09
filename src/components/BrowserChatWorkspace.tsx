@@ -1153,6 +1153,7 @@ function BrowserChatToolIcon({ input, name }: { input?: unknown; name: string })
   if (filePresentation) {
     const icons: Record<BrowserChatFileToolPresentationKey, ReactNode> = {
       'create-draft': <FilePlus2 size={13} />,
+      'write-file': <FilePlus2 size={13} />,
       'download-file': <Download size={13} />,
       'edit-draft': <PencilLine size={13} />,
       'file-visual-index': <ScanSearch size={13} />,
@@ -9473,7 +9474,6 @@ export function BrowserChatWorkspace({
     else setGeneratingAutomationMessageId(firstMessageId);
     setMessageGenerationError('');
     setError('');
-    startGlobalLoading(t(isSkill ? '正在生成 Skill' : '正在生成自动化任务'));
     try {
       const endpoint = isSkill ? 'skills' : 'automation-cases';
       const response = await fetch(browserChatApiUrl(`/api/browser-chat/${sessionId}/${endpoint}`), {
@@ -9500,7 +9500,6 @@ export function BrowserChatWorkspace({
     } finally {
       setGeneratingSkillMessageId(null);
       setGeneratingAutomationMessageId(null);
-      stopGlobalLoading();
     }
   }
 

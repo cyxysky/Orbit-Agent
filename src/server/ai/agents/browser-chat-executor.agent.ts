@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { assembleRuntimeContext, createRuntimeContextReadTool, contextReadToolName, deriveRuntimeTaskState, runtimeContextMessageRef, RuntimeContextBudgetError, type RuntimeContextManifest, type RuntimeTaskState } from './runtime-context-assembler';
+import { assembleRuntimeContext, createRuntimeContextReadTool, contextReadToolName, runtimeContextMessageRef, RuntimeContextBudgetError, type RuntimeContextManifest } from './runtime-context-assembler';
 import { runtimeKnowledgeMessage, type RuntimeKnowledgeBlock } from './runtime-knowledge-context';
 import { generateText, hasToolCall, parsePartialJson, streamText, ToolLoopAgent, tool, type ModelMessage, type StopCondition, type ToolCallRepairFunction, type ToolSet } from 'ai';
 import { z } from 'zod';
@@ -40,8 +40,7 @@ import {
   hiddenRuntimeSkillIdsInModelContext,
   runtimeToolTypesWithLoadedSkills,
 } from './hidden-runtime-skills';
-import { summarizeSemanticRecords } from './runtime-semantic-summary';
-import { runtimeSummaryRecord } from './runtime-context-materials';
+import { parseContextSummary } from './runtime-semantic-summary';
 import { subagentRuntimeSkillId } from './subagent-runtime-skill';
 import { chartRuntimeSkillId } from '@webpilot/capability-chart/runtime-skill';
 import {
@@ -49,6 +48,7 @@ import {
   executeBrowserChatChart,
 } from '@/server/capabilities/browser-chat-chart';
 import { capabilityResultToBrowserActionResult } from '@/server/capabilities/browser-chat-result';
+import { browserOperationSummary } from '@webpilot/capability-browser';
 import { agentInfrastructureToolNames, createAgentInfrastructureProviders } from '@/server/capabilities/agent-infrastructure';
 import {
   createBrowserChatFileCapability,
@@ -67,9 +67,6 @@ import {
 import { repairFileArtifactDownloadLinks } from '@/server/capabilities/browser-chat-file-links';
 import { browserChatCodeRules } from './runtime-prompt-rules';
 import {
-  appendRuntimePromptCacheMetadata,
-  runtimeCurrentTimeMarker,
-  runtimeOperationalContextMarker,
   withoutRuntimePromptCacheMetadata,
 } from './runtime-prompt-cache';
 import { readScreenshotForAi } from './browser-chat-image-input';
@@ -115,13 +112,8 @@ import {
   type BrowserChatModelContextCompression,
 } from './browser-chat-model-context';
 import {
-  atomicRuntimeModelMessageBlocks,
   completeRuntimeModelToolChain,
-  ensureRuntimeContinuationSummaryMessage,
-  fallbackRuntimeContinuationSummary,
   omitRuntimeModelToolExchange,
-  sanitizeRuntimeContinuationSummary,
-  runtimeContinuationSummaryMarker,
 } from './runtime-context-compression';
 import {
   isEffectiveToolTraceFailure,
@@ -311,8 +303,8 @@ function toolContextFromAiRequest(aiRequest?: AiRequestSnapshot): AiToolContextS
 // 将调试数据转成可安全 JSON 序列化的结构，避免 Buffer/BigInt 破坏持久化。
 function jsonSafe(value: unknown) {
   if (value === undefined) return undefined;
-  const seen = new WeakSet<object>();
-  const serialized = JSON.stringify(value, (_key, item) => {
+  const ancestors: object[] = [];
+  const serialized = JSON.stringify(value, function (this: object, _key, item) {
     if (typeof item === 'bigint') return item.toString();
     if (typeof item === 'function' || typeof item === 'symbol') return undefined;
     if (item instanceof Error) {
@@ -326,8 +318,9 @@ function jsonSafe(value: unknown) {
     if (item instanceof ArrayBuffer) return `[ArrayBuffer ${item.byteLength} bytes]`;
     if (ArrayBuffer.isView(item)) return `[${item.constructor.name || 'TypedArray'} ${(item as ArrayBufferView).byteLength} bytes]`;
     if (item && typeof item === 'object') {
-      if (seen.has(item)) return '[Circular]';
-      seen.add(item);
+      while (ancestors.length && ancestors[ancestors.length - 1] !== this) ancestors.pop();
+      if (ancestors.includes(item)) return '[Circular]';
+      ancestors.push(item);
     }
     return item;
   });
@@ -482,9 +475,10 @@ function userFacingInfrastructureError(value?: string, context?: { error?: unkno
 function userFacingToolResult(name: string, result?: BrowserActionResult, _max = 360) {
   void _max;
   if (!result) return undefined;
-  if (!result.ok && providerToolSchemaError(result.actual)) return userFacingInfrastructureError(result.actual);
-  if (name === 'file') return formatFileArtifactResult(name, result.actual) ?? result.actual;
-  return result.actual;
+  const summary = browserOperationSummary(result);
+  if (!result.ok && providerToolSchemaError(summary)) return userFacingInfrastructureError(summary);
+  if (name === 'file') return formatFileArtifactResult(name, result.actual) ?? summary;
+  return summary;
 }
 
 function compactToolResultForModel(
@@ -712,10 +706,6 @@ function codexRuntimeObjectFromText(text: string): CodexRuntimeObject {
   return parsed.success ? parsed.data : candidate as CodexRuntimeObject;
 }
 
-function requirementOf(runtimeRecord: BrowserChatRuntimeRecord) {
-  return richTextToPlainText(runtimeRecord.description) || runtimeRecord.description;
-}
-
 function systemPromptOf(runtimeRecord: BrowserChatRuntimeRecord) {
   return richTextToPlainText(runtimeRecord.systemPrompt || '').trim();
 }
@@ -859,54 +849,8 @@ function concise(value?: string, max = 220) {
   return text.length > max ? `${text.slice(0, max)}...` : text;
 }
 
-function formatCurrentToolAttemptSummary(traces: ToolTrace[], limit = 5) {
-  const recent = traces.slice(-limit);
-  if (!recent.length) return '[none]';
-  return recent.map((trace, index) => {
-    const { reason } = splitToolInputAndReason(trace.input);
-    const fileResult = trace.result?.ok ? formatFileArtifactResult(trace.name, trace.result.actual) : undefined;
-    const status = !trace.result
-      ? 'running'
-      : trace.result.ok
-        ? fileResult ? `ok: ${sanitizeHistoricalToolText(fileResult, 260)}` : 'ok'
-        : `failed: ${sanitizeHistoricalToolText(trace.result.actual, 180)}`;
-    const screenshotNames = trace.name === 'browser'
-      && splitToolInputAndReason(trace.input).input.action === 'code'
-      ? browserCodeScreenshotFileNames((trace.screenshots || []).map((screenshot) => screenshot.path))
-      : [];
-    const shots = screenshotNames.length
-      ? `; screenshotFileNames=${JSON.stringify(screenshotNames)}`
-      : trace.screenshots?.length ? `; screenshots=${trace.screenshots.length}` : '';
-    const why = reason ? `; reason=${sanitizeHistoricalToolText(reason, 140)}` : '';
-    return `${index + 1}. ${trace.name}: ${status}${why}${shots}`;
-  }).join('\n');
-}
-
 function agentStepLabel(stepIndex: number) {
   return String(stepIndex + 1);
-}
-
-function continuationRuntimeStateFromTraces(traces: ToolTrace[]) {
-  const finished = traces.filter((trace) => trace.result);
-  const completed = finished
-    .filter((trace) => trace.result?.ok)
-    .slice(-12)
-    .map((trace) => summarizeTraceForContinuation(trace));
-  const blockers = finished
-    .filter((trace) => isEffectiveToolTraceFailure(trace))
-    .slice(-8)
-    .map((trace) => concise(trace.result?.actual || '', 220));
-  const last = finished.at(-1);
-  const lastResult = last ? concise(userFacingToolResult(last.name, last.result, 400) || last.result?.actual || '', 240) : '';
-  return {
-    completed,
-    findings: completed,
-    blockers,
-    currentState: last ? `${last.name}: ${lastResult}` : '',
-    lastAction: last ? summarizeTraceForContinuation(last) : '',
-    lastResult,
-    nextStep: 'Continue from the latest live browser state and the newest tool result.',
-  };
 }
 
 
@@ -947,7 +891,7 @@ function summarizeTraceForContinuation(trace: ToolTrace) {
     ? 'running'
     : trace.result.ok
     ? sanitizeHistoricalToolText(displayResult, 160) || 'ok'
-    : `failed: ${sanitizeHistoricalToolText(displayResult || trace.result.actual, 180)}`;
+    : `failed: ${sanitizeHistoricalToolText(displayResult || browserOperationSummary(trace.result), 180)}`;
   return [
     `上一动作：${trace.name}${semanticAction ? ` - ${sanitizeHistoricalToolText(semanticAction, 180)}` : ''}`,
     `结果：${result}`,
@@ -1776,14 +1720,14 @@ function runtimePrompt(input: { runtimeRecord: BrowserChatRuntimeRecord; fileVis
     '- The single browser tool is the real browser mechanism. action=state returns a fresh fixed top-level snapshot, action=code performs targeted Playwright reads and interactions, and action=waitForHumanVerification pauses for user-owned verification. The action field is authoritative; unrelated fields are discarded. Use action=code for iframe, selector, DOM, screenshot, and targeted page-state inspection. A pending browser-state prerequisite is executed internally and returned in prerequisiteResults while the requested action still executes in the same call. Never say navigation/clicking is unavailable, substitute a file download, or ask the user to navigate manually while browser action=code is available unless a real attempt failed and you report that failure. One code cell may execute multiple bounded operations.',
     '- Keep tool input limited to exact arguments, a concise semantic reason, and confirmation fields only when loaded safety rules require them. Operation results automatically include incremental domChanges but never an axTree; page.domSnapshot() returns surfaces/topSurfaceIds/surfaceStack plus a most-recent-surface-scoped AX read by default, and the model may instead write targeted Playwright or DOM reads.',
     '- Never expose internal JSON, tool parameters, UIDs, coordinates, screenshot paths, credential references, or other implementation details in the visible answer. An external-app candidate only attempts a native protocol launch; unchanged page state does not prove failure or native success.',
-    `- User-role messages beginning with ${runtimeOperationalContextMarker}, ${runtimeCurrentTimeMarker}, [WebPilot knowledge context], [WebPilot task state], [WebPilot continuation summary], or [WebPilot continuation directive] are trusted runtime metadata, not new user requests. The newest runtime snapshot supersedes older snapshots. A continuation goal records the success criterion; it never authorizes restarting completed work. Resume only its remaining/nextStep state and never repeat or expose these metadata messages.`,
+    '- The leading [Conversation background] block contains reference material, not a user request. Historical tasks and uncertain tool results never authorize continuing an old task. Follow the latest actual user request; use historical facts only when relevant.',
     '- Treat user-specified dates, times, locations, quantities, names, and option values as exact business constraints. Never silently replace an unavailable value with a nearby, rounded, first-suggestion, or default value; preserve the requested value and ask the user or report the blocker.',
-    '- The Playwright/test browser is server-side. Never use page.evaluate Blob/object URLs, window.open, HTML download attributes, or a page download click as proof that a file reached the user browser. Delivery requires a successful file action=download/convert/render with a current-session Artifact download URL. generate/edit success alone only saves and validates source. Include every delivered URL in the final answer and never label another file successful.',
+    '- The Playwright/test browser is server-side. Never use page.evaluate Blob/object URLs, window.open, HTML download attributes, or a page download click as proof that a file reached the user browser. Delivery requires a successful file action=write/download/convert/render with a current-session Artifact download URL. write publishes literal text/code content directly; generate/edit success alone only saves and validates Office source. Include every delivered URL in the final answer and never label another file successful.',
     '- Copy every delivered Artifact downloadUrl exactly from the successful tool result. Never construct, absolutize, repair, or infer an Artifact URL from a sessionId, artifactId, hostname, or file name, and never call a URL an absolute filesystem path. Before finalizing Office/PDF work, reconcile the original requirements with automaticValidation.formatChecks, validation issues, and visual-QA scope. Visual QA proves page layout only; it does not prove requested native charts, formulas, images, comments, footnotes, or other semantic features. A missing, zero-count, unsupported, failed, or unverified required feature must be reported as a limitation, never as fully passed.',
     '- If agent.state tracks task stage, coverage, status, issues, or artifacts, update those records before the final answer so no pending/generated/failed field contradicts a complete claim. Do not set an overall complete/passed state while any required item remains pending, unsupported, failed, or unverified unless the user explicitly accepted a partial result.',
     `- Use chart when an Apache ECharts visualization materially improves the answer. Read Skill ${chartRuntimeSkillId} first and follow its indexed API guidance. After every successful create, reference the exact returned chartId from a finalResponse chart block. Never invent a chart id or use one from a failed call.`,
     '- Complete a text-only terminal response as ordinary assistant Markdown. Use finalResponse only when the response needs ordered chart or declarative UI blocks, or must explicitly report failed/blocked status. In finalResponse, use markdown blocks for prose, chart blocks for generated ECharts artifacts, and ui blocks for declarative cards/layout. The UI renders blocks in the exact array order.',
-    '- Preserve Markdown block structure: put every list item on its own line, indent nested items under the parent content, and retain newlines and indentation in Markdown blocks. Never flatten child items into inline hyphens.',
+    '- Preserve Markdown block structure: separate heading markers (# through ######) from their content with a space, including numbered headings (### 1. Title). Put headings on their own lines. Put every list item on its own line, indent nested items under the parent content, and retain newlines and indentation in Markdown blocks. Never flatten child items into inline hyphens.',
     '- Defect reporting is a mandatory part of every interface or product testing task. As soon as live browser evidence reveals a real defect or reproducible product problem (including functional, data, interaction, visual/layout, or compatibility problems), proactively reproduce it, use browser action=code to emit a screenshot that visibly proves it, and call reportDefect in the immediately following model step with the exact screenshotFileNames returned by browser before continuing unrelated test cases. Never wait for the user to ask, defer reporting until the final answer, or merely describe the problem in test notes or the final report. Create one report for each unique confirmed problem. Investigate permission, configuration, version, requirement, and environment explanations first; report only an observed product problem, never speculation or expected behavior, and do not report duplicates. Recording a defect does not end the requested test unless its full scope is complete.',
     screenshotAvailable && input.fileVisualAvailable
       ? `- Read ${fileArtifactRuntimeSkillId} before file visual actions and follow its current-artifact review guidance with visualIndex, visualRead, and visualReport. Report the actual review coverage in the final response.`
@@ -1796,7 +1740,7 @@ function runtimePrompt(input: { runtimeRecord: BrowserChatRuntimeRecord; fileVis
     '- If progress stops or the target mismatches, inspect fresh evidence and change approach instead of repeating the same failed target.',
     `- Use subagent action=spawn only for independent parallel work and read ${subagentRuntimeSkillId} first. action=read stays ungated; collect one returned UUID per model step in the required order, then integrate results in the parent Agent.`,
     '- Use browser action=waitForHumanVerification only when an empty captcha/OTP/security check, unavailable user credential, QR scan, payment/identity confirmation, or personal-device action genuinely requires the user. If a detected captcha is already filled, submit and continue.',
-    '- To upload a user attachment to a web file input, do not call file merely for upload and never reconstruct the file. First place and verify the editor caret at the requested destination when placement matters, then call attachmentVault.setInputFiles(locator, attachmentId) with the exact current file-input locator and listed attachmentId. After the site inserts it, verify exactly one attachment remains at the requested destination. For existing remote files use file action=download; to create a new file use the plan → generate → render document flow.',
+    '- To upload a user attachment to a web file input, do not call file merely for upload and never reconstruct the file. First place and verify the editor caret at the requested destination when placement matters, then call attachmentVault.setInputFiles(locator, attachmentId) with the exact current file-input locator and listed attachmentId. After the site inserts it, verify exactly one attachment remains at the requested destination. For existing remote files use file action=download; to create text/code/config files use file action=write with fileName/content; for Office/PDF use plan → generate → render.',
     caseSystemPrompt ? `Loaded safety rules and Skills:\n${caseSystemPrompt}` : '',
     customPrompt,
     '',
@@ -1896,51 +1840,53 @@ export function sanitizeModelLogValue(
 ): unknown {
   if (value === null || value === undefined) return value;
   if (typeof value !== 'object') return value;
-  if (value instanceof Error) {
-    if (seen.has(value)) return '[Circular]';
-    seen.add(value);
-    const extraEntries = Object.entries(value).filter(([key]) => !['cause', 'message', 'name', 'stack'].includes(key));
-    return {
-      ...Object.fromEntries(extraEntries.map(([key, item]) => [
-        key,
-        sanitizeModelLogValue(item, imagePaths, state, seen),
-      ])),
-      name: value.name,
-      message: value.message,
-      stack: value.stack,
-      ...(value.cause === undefined ? {} : { cause: sanitizeModelLogValue(value.cause, imagePaths, state, seen) }),
-    };
-  }
   if (Buffer.isBuffer(value) || ArrayBuffer.isView(value) || value instanceof ArrayBuffer) {
     const imagePath = imagePaths[state.imageIndex++];
     return binaryLogDescriptor(value, imagePath);
   }
   if (seen.has(value)) return '[Circular]';
   seen.add(value);
-  if (Array.isArray(value)) {
-    return value.map((item) => sanitizeModelLogValue(item, imagePaths, state, seen));
-  }
-  const sourceRecord = value as Record<string, unknown>;
-  const sourceMediaType = typeof sourceRecord.mediaType === 'string' ? sourceRecord.mediaType : '';
-  const serializedFilePart = sourceRecord.type === 'file' && typeof sourceRecord.data === 'string' && sourceRecord.data.startsWith('data:');
-  const output: Record<string, unknown> = {};
-  for (const [key, item] of Object.entries(sourceRecord)) {
-    if (key === 'image') {
-      const imagePath = imagePaths[state.imageIndex++];
-      output[key] = binaryLogDescriptor(item, imagePath);
-    } else if (key === 'data' && serializedFilePart && typeof item === 'string') {
-      const commaIndex = item.indexOf(',');
-      const payloadCharacters = commaIndex >= 0 ? item.length - commaIndex - 1 : item.length;
-      output[key] = {
-        kind: 'serialized-file-data',
-        mediaType: sourceMediaType || item.slice(5, item.indexOf(';') > 5 ? item.indexOf(';') : item.indexOf(',')),
-        approximateBytes: Math.floor(payloadCharacters * 3 / 4),
+  try {
+    if (value instanceof Error) {
+      const extraEntries = Object.entries(value).filter(([key]) => !['cause', 'message', 'name', 'stack'].includes(key));
+      return {
+        ...Object.fromEntries(extraEntries.map(([key, item]) => [
+          key,
+          sanitizeModelLogValue(item, imagePaths, state, seen),
+        ])),
+        name: value.name,
+        message: value.message,
+        stack: value.stack,
+        ...(value.cause === undefined ? {} : { cause: sanitizeModelLogValue(value.cause, imagePaths, state, seen) }),
       };
-    } else {
-      output[key] = sanitizeModelLogValue(item, imagePaths, state, seen);
     }
+    if (Array.isArray(value)) {
+      return value.map((item) => sanitizeModelLogValue(item, imagePaths, state, seen));
+    }
+    const sourceRecord = value as Record<string, unknown>;
+    const sourceMediaType = typeof sourceRecord.mediaType === 'string' ? sourceRecord.mediaType : '';
+    const serializedFilePart = sourceRecord.type === 'file' && typeof sourceRecord.data === 'string' && sourceRecord.data.startsWith('data:');
+    const output: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(sourceRecord)) {
+      if (key === 'image') {
+        const imagePath = imagePaths[state.imageIndex++];
+        output[key] = binaryLogDescriptor(item, imagePath);
+      } else if (key === 'data' && serializedFilePart && typeof item === 'string') {
+        const commaIndex = item.indexOf(',');
+        const payloadCharacters = commaIndex >= 0 ? item.length - commaIndex - 1 : item.length;
+        output[key] = {
+          kind: 'serialized-file-data',
+          mediaType: sourceMediaType || item.slice(5, item.indexOf(';') > 5 ? item.indexOf(';') : item.indexOf(',')),
+          approximateBytes: Math.floor(payloadCharacters * 3 / 4),
+        };
+      } else {
+        output[key] = sanitizeModelLogValue(item, imagePaths, state, seen);
+      }
+    }
+    return output;
+  } finally {
+    seen.delete(value);
   }
-  return output;
 }
 
 function sanitizeModelMessagesForLog(system: string | undefined, messages: unknown, imagePaths: string[]) {
@@ -1960,36 +1906,19 @@ function sanitizeModelInputForStats(system: string | undefined, messages: unknow
 
 function modelMessagesTextAndImageStats(messages: unknown, tools?: RuntimeToolDefinitions) {
   const contextEstimate = estimateRuntimeMessageContext(messages);
-  let textCharacters = 0;
-  const countTextCharacters = (value: unknown) => {
-    if (typeof value === 'string') {
-      textCharacters += value.length;
-      return;
-    }
-    if (!value || typeof value !== 'object') return;
-    if (Array.isArray(value)) {
-      value.forEach(countTextCharacters);
-      return;
-    }
-    Object.values(value as Record<string, unknown>).forEach(countTextCharacters);
-  };
-  countTextCharacters(messages);
-  const serialized = JSON.stringify(messages) || '';
-  const estimatedValueTextTokens = contextEstimate.textTokens;
-  const estimatedSerializedTextTokens = estimateRuntimeTextTokens(serialized);
-  const estimatedTextTokens = Math.max(estimatedValueTextTokens, estimatedSerializedTextTokens);
+  const estimatedTextTokens = contextEstimate.textTokens;
   const estimatedImageTokens = contextEstimate.imageCount * imageTokenEstimatePerImage();
   const toolSchema = toolSchemaEstimateInput(tools);
   const serializedToolSchema = JSON.stringify(toolSchema) || '';
   const estimatedToolSchemaTokens = estimateRuntimeTextTokens(serializedToolSchema);
   return {
-    textCharacters,
-    serializedCharacters: serialized.length,
+    textCharacters: contextEstimate.textCharacters,
+    serializedCharacters: contextEstimate.serializedCharacters,
     imageCount: contextEstimate.imageCount,
     toolCount: toolSchema.length,
     toolSchemaCharacters: serializedToolSchema.length,
-    estimatedValueTextTokens,
-    estimatedSerializedTextTokens,
+    estimatedValueTextTokens: contextEstimate.valueTextTokens,
+    estimatedSerializedTextTokens: contextEstimate.serializedTextTokens,
     estimatedTextTokens,
     estimatedImageTokens,
     estimatedToolSchemaTokens,
@@ -2005,77 +1934,13 @@ function fullLogDetails(value: unknown) {
   };
 }
 
-function truncateModelLogStrings(value: unknown, maxCharacters = 6_000): unknown {
-  if (typeof value === 'string') {
-    return value.length <= maxCharacters
-      ? value
-      : `${value.slice(0, maxCharacters)}\n[... ${value.length - maxCharacters} characters omitted from log ...]`;
-  }
-  if (Array.isArray(value)) return value.map((item) => truncateModelLogStrings(item, maxCharacters));
-  if (!value || typeof value !== 'object') return value;
-  return Object.fromEntries(Object.entries(value as Record<string, unknown>)
-    .map(([key, item]) => [key, truncateModelLogStrings(item, maxCharacters)]));
+function aiRequestLogDetails(aiRequest: AiRequestSnapshot | undefined, request: unknown) {
+  return fullLogDetails({ aiInput: request, aiInputTokens: aiRequest?.options?.modelContextStats });
 }
 
-function boundedModelMessagesForRequestLog(value: unknown) {
-  if (!Array.isArray(value)) return { messages: value };
-  const maxCharacters = 64 * 1024;
-  const serialized = JSON.stringify(value) || '';
-  if (serialized.length <= maxCharacters) return { messages: value };
-
-  const compacted = value.map((message) => truncateModelLogStrings(message));
-  const retained: unknown[] = [];
-  let retainedCharacters = 0;
-  for (let index = compacted.length - 1; index >= 0; index -= 1) {
-    const message = compacted[index];
-    const messageCharacters = (JSON.stringify(message) || '').length;
-    if (retained.length && retainedCharacters + messageCharacters > maxCharacters - 12_000) break;
-    retained.unshift(message);
-    retainedCharacters += messageCharacters;
-  }
-  const first = compacted[0];
-  if (first && retained[0] !== first) {
-    const boundedFirst = truncateModelLogStrings(first, 8_000);
-    retained.unshift(boundedFirst);
-  }
-  const omittedMessageCount = Math.max(0, compacted.length - retained.length);
-  if (omittedMessageCount) {
-    retained.splice(first && retained[0] === first ? 1 : 0, 0, {
-      role: 'system',
-      content: `[${omittedMessageCount} earlier model input messages omitted from this log view]`,
-    });
-  }
-  return {
-    messages: retained,
-    truncation: {
-      originalCharacters: serialized.length,
-      originalMessageCount: value.length,
-      retainedMessageCount: retained.length - (omittedMessageCount ? 1 : 0),
-    },
-  };
-}
-
-function aiRequestLogDetails(aiRequest: AiRequestSnapshot | undefined, extra: Record<string, unknown> = {}, modelMessages?: unknown) {
-  const messages = modelMessages || aiRequest?.messages || [];
-  const loggedMessages = boundedModelMessagesForRequestLog(messages);
-  const preparedModelContextStats = aiRequest?.options?.modelContextStats;
-  return fullLogDetails({
-    aiInput: {
-      provider: aiRequest?.provider || extra.provider,
-      model: aiRequest?.model || extra.model,
-      tools: aiRequest?.tools,
-      options: {
-        ...(aiRequest?.options || {}),
-        ...extra,
-      },
-      system: aiRequest?.systemPrompt,
-      messages: loggedMessages.messages,
-      ...(loggedMessages.truncation ? { logTruncation: loggedMessages.truncation } : {}),
-    },
-    aiInputTokens: preparedModelContextStats && typeof preparedModelContextStats === 'object'
-      ? { ...preparedModelContextStats }
-      : modelMessagesTextAndImageStats(messages),
-  });
+function modelRequestBody(body: unknown, fallback: unknown) {
+  if (typeof body === 'string') { try { return JSON.parse(body); } catch { return body; } }
+  return body ?? fallback;
 }
 
 function compactAiResponseForLog(response: unknown) {
@@ -2139,7 +2004,7 @@ function deriveBrowserChatStepDecision(text: string, traces: ToolTrace[]): Runti
     return {
       action: readableActionFromTrace(last) || toolReason || 'Wait for human verification',
       expected: 'The user should complete captcha, login, security verification, or other manual work in the visible browser.',
-      actual: last.result?.actual || 'AI requested human intervention before continuing browser-chat work.',
+      actual: last.result ? browserOperationSummary(last.result) : 'AI requested human intervention before continuing browser-chat work.',
       status: 'blocked',
       note,
     };
@@ -2198,13 +2063,13 @@ async function executeRuntimeStep(input: {
   onToolTrace?: (trace: ToolTrace, progress?: ToolTraceProgress) => void | Promise<void>;
   onTextStream?: (update: BrowserChatTextStreamUpdate) => void | Promise<void>;
   contextRecords?: Record<string, ModelMessage>;
-  taskState?: RuntimeTaskState;
-  onContextCheckpoint?: (update: { records: Record<string, ModelMessage>; taskState: RuntimeTaskState; manifest?: RuntimeContextManifest }) => void | Promise<void>;
+  onContextCheckpoint?: (update: { records: Record<string, ModelMessage>; manifest?: RuntimeContextManifest }) => void | Promise<void>;
   onTurnModelCheckpoint?: (messages: ModelMessage[]) => void | Promise<void>;
   onActiveModelCheckpoint?: (messages: ModelMessage[]) => void | Promise<void>;
   onContextCompression?: (update: {
     activeMessages: ModelMessage[];
     contextCompression: BrowserChatModelContextCompression;
+    background?: ModelMessage;
   }) => void | Promise<void>;
   getRuntimeOperationalContext?: () => BrowserChatOperationalContext | Promise<BrowserChatOperationalContext>;
   browserStatePreflightComplete?: boolean;
@@ -2234,12 +2099,15 @@ async function executeRuntimeStep(input: {
     onTextStream,
   } = input;
   const contextRecords = { ...input.contextRecords };
-  let taskState = input.taskState;
   async function checkpointContext(messages: ModelMessage[], manifest?: RuntimeContextManifest) {
-    for (const message of serializableBrowserChatModelMessages(messages)) contextRecords[runtimeContextMessageRef(message)] = message;
-    if (!manifest) taskState = deriveRuntimeTaskState(messages, taskState);
-    taskState ||= deriveRuntimeTaskState([]);
-    await input.onContextCheckpoint?.({ records: contextRecords, taskState, manifest });
+    const records: Record<string, ModelMessage> = {};
+    for (const message of serializableBrowserChatModelMessages(messages)) {
+      const ref = runtimeContextMessageRef(message);
+      if (contextRecords[ref]) continue;
+      contextRecords[ref] = message;
+      records[ref] = message;
+    }
+    if (manifest || Object.keys(records).length) await input.onContextCheckpoint?.({ records, manifest });
   }
   const imageInputAvailable = modelSupportsImageInput();
   const markerEnabled = false;
@@ -2298,6 +2166,8 @@ async function executeRuntimeStep(input: {
   let lastAiRequest: AiRequestSnapshot | undefined;
   let lastRetryState: RuntimeRetryState | undefined;
   let consecutiveRequestFailures = 0;
+  let retryInputBudget: number | undefined;
+  let durableSummary = parseContextSummary(input.continuationSummary) ? input.continuationSummary! : '';
   const durableTraces: ToolTrace[] = [];
   let durableTurnMessages: ModelMessage[] = [];
 
@@ -2411,11 +2281,8 @@ async function executeRuntimeStep(input: {
         });
       }
     };
-    const durableContinuationSummary = sanitizeRuntimeContinuationSummary(input.continuationSummary || '');
-    const historyMessages = completeRuntimeModelToolChain(ensureRuntimeContinuationSummaryMessage(
-      [...(input.conversation || [])] as RuntimeModelMessage[],
-      durableContinuationSummary,
-    ));
+    const durableContinuationSummary = durableSummary;
+    const historyMessages = completeRuntimeModelToolChain(withoutRuntimePromptCacheMetadata([...(input.conversation || [])] as RuntimeModelMessage[]));
     const initialImagePaths = [...initialVisualPaths, ...initialUserReferenceImagePaths];
     const initialImages: Awaited<ReturnType<typeof readScreenshotForAi>>[] = [];
     for (const imagePath of initialImagePaths) {
@@ -2427,14 +2294,7 @@ async function executeRuntimeStep(input: {
       textFromUnknown(input.instruction)
       || textFromUnknown(runtimeRecord.description)
     ).trim();
-    const hasLatestUserMessage = Boolean(latestInstruction && initialMessages.some((message) => {
-      if (message.role !== 'user' || typeof message.content !== 'string') return false;
-      const content = textFromUnknown(message.content);
-      return content.trim() === latestInstruction || content.includes(latestInstruction);
-    }));
-    if (latestInstruction && (input.appendInstruction || !hasLatestUserMessage)) {
-      initialMessages.push({ role: 'user' as const, content: latestInstruction });
-    }
+    if (latestInstruction && input.appendInstruction) initialMessages.push({ role: 'user', content: latestInstruction });
     if (initialImages.length) {
       const latestUserIndex = initialMessages.map((message) => message.role).lastIndexOf('user');
       const fallbackText = latestInstruction || 'User uploaded reference image(s).';
@@ -2461,8 +2321,6 @@ async function executeRuntimeStep(input: {
       }
     }
     const turnInputMessages = initialMessages.slice(historyMessages.length);
-    taskState ||= deriveRuntimeTaskState([]);
-    taskState.instructionRefs = [...new Set([...taskState.instructionRefs, ...turnInputMessages.filter((message) => message.role === 'user').map(runtimeContextMessageRef)])];
     const attemptTranscriptBase = durableTurnMessages.length ? [...durableTurnMessages] : [...turnInputMessages];
     durableTurnMessages = [...attemptTranscriptBase];
     if (retryState?.messages.length) {
@@ -2495,31 +2353,10 @@ async function executeRuntimeStep(input: {
     let lastPreparedResponsePrefixLength = 0;
     let rawResponseMessages: ModelMessage[] = [];
     let latestContextCompression: BrowserChatModelContextCompression | undefined;
-    const originalGoal = requirementOf(runtimeRecord).trim();
-    const restoredContinuationMessage = initialMessages.find((message) => (
-      textFromUnknown(message.content).startsWith(runtimeContinuationSummaryMarker)
-    ));
-    let continuationSummaryText = durableContinuationSummary || (
-      restoredContinuationMessage
-        ? sanitizeRuntimeContinuationSummary(
-          textFromUnknown(restoredContinuationMessage.content).slice(runtimeContinuationSummaryMarker.length),
-        )
-        : ''
-    );
-
-    function currentContinuationRuntimeState() {
-      const state = continuationRuntimeStateFromTraces(traces);
-      const continuationInstruction = latestInstruction && latestInstruction !== originalGoal
-        ? latestInstruction
-        : '';
-      return continuationInstruction
-        ? {
-            ...state,
-            userConstraints: [continuationInstruction],
-            nextStep: continuationInstruction,
-          }
-        : state;
-    }
+    let continuationSummaryText = durableContinuationSummary;
+    const compactedSourceIndexes = new Set<number>();
+    const currentUserSourceIndex = initialMessages.findLastIndex((message) => message.role === 'user'
+      && !/^\[(?:Document visual QA|Attachment visual content|Explicit visual evidence)/.test(textFromUnknown(message.content)));
 
     function runtimeOperationalContextText(requiredSubagentDirective: string) {
       const sections = [
@@ -2536,44 +2373,31 @@ async function executeRuntimeStep(input: {
       ].join('\n\n');
     }
 
-    const summarizeContinuation = async (
-      assembled: ReturnType<typeof assembleRuntimeContext>,
-      maximumSummaryInputTokens: number,
-    ) => {
+    const generateContextSummary = async (content: string, maxOutputTokens: number) => {
       ensureActive();
-      const startedAt = Date.now();
-      const records = new Map(assembled.summaryRecords.map((record) => [record.ref, record]));
-      const groups = atomicRuntimeModelMessageBlocks(assembled.summaryMessages).map((block) => block.map((message) => records.get(runtimeContextMessageRef(message))!));
+      const timeoutMs = Math.min(runtimeRequestTimeoutMs, 60_000);
+      const watchdog = createAiRequestWatchdog(abortSignal, timeoutMs);
       try {
-        const result = await summarizeSemanticRecords({ groups, previousSummary: continuationSummaryText,
-          runtimeState: runtimeSummaryRecord({ role: 'user', content: JSON.stringify(currentContinuationRuntimeState()) }, 'runtime-state', []),
-          allowedRefs: new Set(Object.keys(contextRecords)), instructionRefs: new Set(assembled.taskState.instructionRefs),
-          maximumInputTokens: maximumSummaryInputTokens,
-          generate: async (content) => {
-            ensureActive();
-            const result = await generateText({ model: getModel(), messages: [{ role: 'user', content }],
-              temperature: 0.1, reasoning: aiReasoningEffort(), maxOutputTokens: 8192, maxRetries: 0,
-              abortSignal, timeout: runtimeRequestTimeoutMs, telemetry: aiTelemetry('browser-chat-continuation-summary') });
-            ensureActive();
-            return result.text || '';
-          },
-        });
-        return { ...result, elapsedMs: Date.now() - startedAt };
-      } catch (error) {
-        if (isBrowserChatAbortError(error, abortSignal)) throw browserChatAbortError(abortSignal);
-        return { summary: continuationSummaryText, summarizedRefs: [] as string[], elapsedMs: Date.now() - startedAt, incomplete: true, reason: 'Summary request failed; original instructions retained.' };
-      }
+        const result = await watchdog.run(generateText({ model: getModel(), messages: [{ role: 'user', content }],
+          temperature: 0.1, reasoning: 'low', maxOutputTokens, maxRetries: 0,
+          abortSignal: watchdog.abortSignal, timeout: timeoutMs, telemetry: aiTelemetry('browser-chat-context-summary') }));
+        ensureActive();
+        await onAttemptDebug?.({ phase: 'conversation:context:request', stepIndex, message: '上下文摘要模型输入',
+          details: fullLogDetails({ aiInput: modelRequestBody(result.request?.body,
+            { model: getModelSettings().model, messages: [{ role: 'user', content }], temperature: 0.1, reasoning: 'low', maxOutputTokens }) }) });
+        return result.text || '';
+      } finally { watchdog.dispose(); }
     };
 
     async function prepareStep(turnIndex: number, previousMessages?: RuntimeModelMessage[]) {
       ensureActive();
+      await onAttemptDebug?.({ phase: 'ai:runtime:prepare', stepIndex, message: '正在检查上下文与请求预算' });
       // Visibility is a property of the request, not a lifetime read receipt.
       if (codexMode) {
         for (const id of hiddenRuntimeSkillIdsReadFromTraces(traces)) loadedHiddenRuntimeSkillIds.add(id);
       } else {
         loadedHiddenRuntimeSkillIds.clear();
-        const unavailable = new Set([...(taskState?.archivedRefs || []), ...(taskState?.compactedRefs || [])]);
-        for (const id of hiddenRuntimeSkillIdsInModelContext((previousMessages || initialMessages).filter((message) => !unavailable.has(runtimeContextMessageRef(message))))) loadedHiddenRuntimeSkillIds.add(id);
+        for (const id of hiddenRuntimeSkillIdsInModelContext(withoutRuntimePromptCacheMetadata(previousMessages || initialMessages))) loadedHiddenRuntimeSkillIds.add(id);
       }
       if (input.getRuntimeOperationalContext) {
         try {
@@ -2612,8 +2436,7 @@ async function executeRuntimeStep(input: {
       const activeModelSettings = getModelSettings();
       const contextProfile = runtimeContextProfile(activeModelSettings);
       const windowTokens = contextProfile.windowTokens;
-      const thresholdRatio = contextProfile.inputBudgetTokens / windowTokens;
-      const thresholdTokens = contextProfile.inputBudgetTokens;
+      const thresholdTokens = Math.min(contextProfile.inputBudgetTokens, retryInputBudget ?? Infinity);
       const appendedMessages: RuntimeModelMessage[] = [];
       const appendedImagePaths: string[] = [];
       while (pendingObservationMessages.length) {
@@ -2663,109 +2486,102 @@ async function executeRuntimeStep(input: {
       }
       // Input is initialMessages + the SDK's explicit responseMessages, not the SDK's
       // already projected messages. No marker search, overlap matching or source-count inference.
-      const candidates = [...sourceMessages, ...appendedMessages];
+      const source = [...sourceMessages];
+      const visibleIndexes = source.map((_, index) => index).filter((index) => !compactedSourceIndexes.has(index));
+      const candidates = visibleIndexes.map((index) => source[index]);
       if (appendedMessages.length) messageImagePaths = [...messageImagePaths, ...appendedImagePaths];
-      await checkpointContext(candidates);
-      const operationalContext = runtimeOperationalContextText(requiredSubagentDirective);
+      await checkpointContext([...source, ...appendedMessages]);
       requestSystemPrompt = baseSystemPrompt;
-      const runtimeMetadata = appendRuntimePromptCacheMetadata({ messages: [], operationalContext, currentTimeLine: runtimeTimeLine });
-      const baseStats = modelMessagesTextAndImageStats(
-        sanitizeModelInputForStats(requestSystemPrompt, runtimeMetadata.metadataMessages, []),
-        stepTools,
-      );
-      const beforeStats = modelMessagesTextAndImageStats(
-        sanitizeModelInputForStats(requestSystemPrompt, [...candidates, ...runtimeMetadata.metadataMessages], messageImagePaths),
-        stepTools,
-      );
+      const operationalContext = runtimeOperationalContextText(requiredSubagentDirective);
+      const beforeStats = modelMessagesTextAndImageStats(sanitizeModelInputForStats(requestSystemPrompt, candidates, messageImagePaths), stepTools);
+      await onAttemptDebug?.({ phase: 'ai:runtime:prepare', stepIndex, message: '正在检查上下文与请求预算',
+        details: { modelContextStats: { ...beforeStats, windowTokens } } });
       await attachContextAfterToCompletedTools(toolContextFromStats(beforeStats));
-      const assemble = (summary: string, planning = false, forceCompaction = false) => assembleRuntimeContext({
-        messages: candidates, records: contextRecords, previousState: taskState,
-        inputBudgetTokens: thresholdTokens, baseTokens: baseStats.estimatedTotalTokens + 1024,
-        estimateMessages: (messages) => modelMessagesTextAndImageStats(sanitizeModelInputForStats('', messages, []), undefined).estimatedTotalTokens,
-        continuationSummary: summary, allowArchival: !codexMode,
-        knowledge: activeKnowledge,
-        compressionTriggerTokens: contextProfile.compressionTriggerTokens,
-        compressionTargetTokens: contextProfile.compressionTargetTokens,
-        planning, forceCompaction,
-      });
-      let assembled = assemble(continuationSummaryText, true);
-      let modelContextSegmentation: Record<string, unknown> | undefined;
-      const summarizedRefs = new Set(taskState?.summarizedRefs || []);
-      if (assembled.compacting) {
-        const summaryResult = await summarizeContinuation(
-          assembled, Math.max(0, Math.min(64000, thresholdTokens - 12000)),
-        );
-        for (const ref of summaryResult.summarizedRefs) summarizedRefs.add(ref);
-        taskState = { ...deriveRuntimeTaskState(candidates, taskState), summarizedRefs: [...summarizedRefs] };
-        continuationSummaryText = summaryResult.summary;
-        assembled = assemble(continuationSummaryText, false, true);
-        contextSegmentationTurns += 1;
-        latestContextCompression = {
-          compressedAt: new Date().toISOString(), continuationSummary: continuationSummaryText,
-          estimatedTokensBefore: beforeStats.estimatedTotalTokens, estimatedTokensAfter: assembled.manifest.estimatedTokensAfter,
-          retainedMessageCount: assembled.messages.length, summarizedMessageCount: assembled.archived.length,
-          targetCeilingTokens: contextProfile.compressionTargetTokens, targetFloorTokens: 0, thresholdTokens: contextProfile.compressionTriggerTokens, windowTokens,
-        };
-        modelContextSegmentation = { ...latestContextCompression, strategy: 'semantic-state-with-source-and-skill-references', manifestId: assembled.manifest.id,
-          summaryIncomplete: summaryResult.incomplete, summaryNote: summaryResult.reason };
-        const completedAt = Date.now();
-        await publishToolTrace({
-          id: 'context-compression:' + input.runId + ':' + stepIndex + ':' + contextSegmentationTurns,
-          name: 'contextCompression', input: modelContextSegmentation,
-          result: { ok: true, actual: 'Archived historical exchanges; original evidence remains available through contextRead.' },
-          startedAt: completedAt - summaryResult.elapsedMs, completedAt, elapsedMs: summaryResult.elapsedMs,
-          actionElapsedMs: summaryResult.elapsedMs, contextBefore: toolContextFromStats(beforeStats),
-          contextAfter: toolContextFromStats({ estimatedTotalTokens: assembled.manifest.estimatedTokensAfter }),
+      const startedAt = Date.now();
+      let assembled: Awaited<ReturnType<typeof assembleRuntimeContext>>;
+      try {
+        assembled = await assembleRuntimeContext({ messages: candidates,
+          currentUserIndex: visibleIndexes.indexOf(source.indexOf(initialMessages[currentUserSourceIndex])), continuationSummary: continuationSummaryText,
+          system: requestSystemPrompt, tools: toolSchemaEstimateInput(stepTools), operationalContext, currentTimeLine: runtimeTimeLine, observations: appendedMessages,
+          knowledge: activeKnowledge, inputBudgetTokens: thresholdTokens,
+          compressionTriggerTokens: Math.min(contextProfile.compressionTriggerTokens, thresholdTokens), compressionTargetTokens: Math.min(contextProfile.compressionTargetTokens, Math.floor(thresholdTokens * 0.5)),
+          generateSummary: generateContextSummary, abortSignal,
+          onCheckpoint: async (checkpoint) => {
+            ensureActive();
+            const stats = modelMessagesTextAndImageStats(sanitizeModelInputForStats(requestSystemPrompt, checkpoint.messages, messageImagePaths), stepTools);
+            const compression = { compressedAt: new Date().toISOString(), continuationSummary: checkpoint.continuationSummary,
+              estimatedTokensBefore: beforeStats.estimatedTotalTokens, estimatedTokensAfter: stats.estimatedTotalTokens,
+              retainedMessageCount: checkpoint.activeMessages.length, summarizedMessageCount: checkpoint.compressedMessages,
+              targetTokens: Math.min(contextProfile.compressionTargetTokens, Math.floor(thresholdTokens * 0.5)),
+              thresholdTokens: Math.min(contextProfile.compressionTriggerTokens, thresholdTokens), windowTokens };
+            await input.onContextCompression?.({ activeMessages: checkpoint.activeMessages, contextCompression: compression, background: checkpoint.messages[0] });
+            latestContextCompression = compression;
+            continuationSummaryText = checkpoint.continuationSummary;
+            durableSummary = continuationSummaryText;
+            lastPreparedMessages = [...checkpoint.activeMessages];
+            rememberRetryState({ messages: checkpoint.activeMessages, imagePaths: [...messageImagePaths], agentStepOffset: agentStepIndex - 1 });
+            checkpoint.removedIndexes.forEach((index) => compactedSourceIndexes.add(visibleIndexes[index]));
+          },
+          onProgress: async (progress) => {
+            ensureActive(); requestWatchdog.touch();
+            // Completion is published only after the durable checkpoint below succeeds.
+            if (progress.stage === 'complete') return;
+            await onAttemptDebug?.({ phase: progress.stage === 'start' ? 'ai:context-compression:start' : 'ai:context-compression:progress', stepIndex,
+              message: progress.stage === 'start' ? '正在压缩较早的对话记录' : `正在压缩上下文：已处理 ${progress.completedMessages}/${progress.totalMessages} 条记录`,
+              details: { ...progress, modelContextStats: { ...beforeStats, windowTokens } } });
+          },
         });
-        await input.onContextCompression?.({ activeMessages: assembled.messages, contextCompression: latestContextCompression });
-        await onAttemptDebug?.({ phase: 'ai:context-compression:done', stepIndex, message: 'Context rebuilt from semantic state, material locators and visible Skills.', details: modelContextSegmentation });
-      } else assembled = assemble(continuationSummaryText);
-      const messagesToSend = appendRuntimePromptCacheMetadata({
-        messages: assembled.messages, operationalContext, currentTimeLine: runtimeTimeLine,
-      }).messages;
+      } catch (error) {
+        if (isBrowserChatAbortError(error, abortSignal)) throw error;
+        await onAttemptDebug?.({ phase: 'ai:context-compression:error', stepIndex,
+          message: '上下文准备失败，原始记录已保留，本轮不会发送超限或未验证的输入。', details: { error: infrastructureError(error) } });
+        throw error;
+      }
+      const messagesToSend = assembled.messages;
       const requestMessages = messagesToSend;
       const attachedImagePaths = [...messageImagePaths];
       const modelMessagesForLog = sanitizeModelMessagesForLog(requestSystemPrompt, requestMessages, attachedImagePaths);
-      const finalStats = modelMessagesTextAndImageStats(
-        sanitizeModelInputForStats(requestSystemPrompt, requestMessages, attachedImagePaths),
-        stepTools,
-      );
+      const finalStats = modelMessagesTextAndImageStats(sanitizeModelInputForStats(requestSystemPrompt, requestMessages, attachedImagePaths), stepTools);
       if (finalStats.estimatedTotalTokens > thresholdTokens) throw new RuntimeContextBudgetError(finalStats.estimatedTotalTokens, thresholdTokens);
       if (!codexMode) {
         loadedHiddenRuntimeSkillIds.clear();
         for (const id of hiddenRuntimeSkillIdsInModelContext(messagesToSend)) loadedHiddenRuntimeSkillIds.add(id);
       }
-      assembled.manifest.estimatedTokensAfter = finalStats.estimatedTotalTokens;
-      await onKnowledgeSelected?.(assembled.manifest.knowledge || []);
-      // Include runtime metadata in the manifest and durable record store as well.
-      for (const message of runtimeMetadata.metadataMessages) assembled.manifest.entries.push({
-        ref: runtimeContextMessageRef(message), role: message.role, disposition: 'selected', reason: 'current runtime metadata',
-      });
+      await onKnowledgeSelected?.(assembled.manifest.knowledge);
       const systemRecord: ModelMessage = { role: 'system', content: requestSystemPrompt || '' };
       const schemaRecord: ModelMessage = { role: 'system', content: JSON.stringify(toolSchemaEstimateInput(stepTools)) };
       assembled.manifest.model = { provider: activeModelSettings.provider, model: activeModelSettings.model };
       assembled.manifest.systemRef = runtimeContextMessageRef(systemRecord);
       assembled.manifest.toolSchemaRef = runtimeContextMessageRef(schemaRecord);
-      await checkpointContext([systemRecord, schemaRecord]);
-      taskState = assembled.taskState;
-      lastPreparedMessages = [...messagesToSend];
-      await checkpointContext(messagesToSend, assembled.manifest);
-      await input.onActiveModelCheckpoint?.(withoutRuntimePromptCacheMetadata(messagesToSend));
+      assembled.manifest.estimatedTokensAfter = finalStats.estimatedTotalTokens;
+      const background = messagesToSend[0]?.role === 'user' && textFromUnknown(messagesToSend[0].content).startsWith('[Conversation background]') ? messagesToSend[0] : undefined;
+      if (background) assembled.manifest.backgroundRef = runtimeContextMessageRef(background);
+      await checkpointContext([systemRecord, schemaRecord, ...(background ? [background] : [])], assembled.manifest);
+      if (assembled.compressedMessages) {
+        latestContextCompression = { compressedAt: new Date().toISOString(), continuationSummary: assembled.continuationSummary,
+          estimatedTokensBefore: beforeStats.estimatedTotalTokens, estimatedTokensAfter: finalStats.estimatedTotalTokens,
+          retainedMessageCount: assembled.activeMessages.length, summarizedMessageCount: assembled.compressedMessages,
+          targetTokens: Math.min(contextProfile.compressionTargetTokens, Math.floor(thresholdTokens * 0.5)),
+          thresholdTokens: contextProfile.compressionTriggerTokens, windowTokens };
+        continuationSummaryText = assembled.continuationSummary;
+        durableSummary = continuationSummaryText;
+        assembled.removedIndexes.forEach((index) => compactedSourceIndexes.add(visibleIndexes[index]));
+        contextSegmentationTurns += 1;
+        await publishToolTrace({ id: 'context-compression:' + input.runId + ':' + stepIndex + ':' + contextSegmentationTurns,
+          name: 'contextCompression', input: { summarizedMessageCount: assembled.compressedMessages },
+          result: { ok: true, actual: 'Earlier dialogue summarized; original records remain available through contextRead.' },
+          startedAt, completedAt: Date.now(), elapsedMs: Date.now() - startedAt, actionElapsedMs: Date.now() - startedAt,
+          contextBefore: toolContextFromStats(beforeStats), contextAfter: toolContextFromStats(finalStats) });
+        await onAttemptDebug?.({ phase: 'ai:context-compression:complete', stepIndex, message: '上下文压缩完成',
+          details: { summarizedMessageCount: assembled.compressedMessages, modelContextStats: { ...finalStats, windowTokens } } });
+      }
+      lastPreparedMessages = [...assembled.activeMessages];
+      await input.onActiveModelCheckpoint?.(assembled.activeMessages);
       ensureActive();
-      rememberRetryState({ messages: [...messagesToSend], imagePaths: [...attachedImagePaths], agentStepOffset: agentStepIndex - 1 });
-      const nextAiRequest = createAiRequestSnapshot({
-        kind: 'runtime', stepIndex, prompt: '[modelMessages logged separately]', systemPrompt: requestSystemPrompt,
+      rememberRetryState({ messages: [...assembled.activeMessages], imagePaths: [...attachedImagePaths], agentStepOffset: agentStepIndex - 1 });
+      aiRequest = createAiRequestSnapshot({ kind: 'runtime', stepIndex, prompt: '', systemPrompt: requestSystemPrompt,
         screenshotPath: undefined, imagePaths: attachedImagePaths, imageAttached: attachedImagePaths.length > 0,
-        tools: stepAllowedToolTypes, options: {
-          agentLoop: true, agentStepIndex, visualContext: visualContext.snapshot(), imageCount: attachedImagePaths.length,
-          explicitPageState: true, modelSupportsImageInput: imageInputAvailable,
-          promptCachePrefixStrategy: 'stable-tools-system-and-conversation-prefix',
-          runtimeOperationalContextCharacters: runtimeMetadata.operationalContextCharacters,
-          modelContextStats: { ...finalStats, windowTokens, thresholdRatio, thresholdTokens },
-          contextProfile, contextManifest: assembled.manifest, modelContextSegmentation,
-        },
-      });
-      aiRequest = nextAiRequest;
+        tools: stepAllowedToolTypes, options: { modelContextStats: { ...finalStats, windowTokens } } });
       lastAiRequest = aiRequest;
       const hiddenSkillGateActive = stepAllowedToolTypes.length !== allowedToolTypes.length;
       const activeTools = browserStateGatePending || hiddenSkillGateActive
@@ -2790,15 +2606,10 @@ async function executeRuntimeStep(input: {
       const aiStartedAt = Date.now();
       const { system, messages, modelMessagesForLog, allowedTypes: stepAllowedToolTypes } = await prepareStep(0);
       ensureActive();
+      await reportRequestAttempt(executionIdentity);
       await onAttemptDebug?.({
-        phase: 'ai:runtime:request',
-        stepIndex,
-        message: 'AI request started; waiting for browser action decision.',
-        details: aiRequestLogDetails(aiRequest, {
-          provider: getModelSettings().provider,
-          model: getModelSettings().model,
-          codexObjectMode: true,
-        }, modelMessagesForLog),
+        phase: 'ai:runtime:dispatch', stepIndex, message: '正在等待模型响应',
+        details: { modelContextStats: aiRequest?.options?.modelContextStats },
       });
       const result = await requestWatchdog.run(generateText({
         model: getModel(),
@@ -2806,11 +2617,16 @@ async function executeRuntimeStep(input: {
         messages,
         temperature: 0.1,
         reasoning: aiReasoningEffort(),
+        maxOutputTokens: runtimeContextProfile(getModelSettings()).outputReserveTokens,
         maxRetries: 0,
         abortSignal: requestWatchdog.abortSignal,
         timeout: runtimeRequestTimeoutMs,
         telemetry: aiTelemetry('browser-chat-codex-runtime'),
       })).finally(() => requestWatchdog.dispose());
+      await onAttemptDebug?.({ phase: 'ai:runtime:request', stepIndex, message: '模型请求已发送',
+        details: aiRequestLogDetails(aiRequest, modelRequestBody(result.request?.body,
+          { model: getModelSettings().model, messages: modelMessagesForLog, temperature: 0.1,
+            reasoning: aiReasoningEffort(), maxOutputTokens: runtimeContextProfile(getModelSettings()).outputReserveTokens })) });
       const aiElapsedMs = elapsedSince(aiStartedAt);
       ensureActive();
       const object = alignCodexRuntimeObjectTool(
@@ -3049,7 +2865,6 @@ async function executeRuntimeStep(input: {
           lastError = undefined;
           retryDelayMs = 0;
           Object.assign(executionIdentity, nextRequestExecutionIdentity());
-          await reportRequestAttempt(executionIdentity);
         }
         rawResponseMessages = [...responseMessages];
         durableTurnMessages = [...attemptTranscriptBase, ...rawResponseMessages];
@@ -3057,6 +2872,7 @@ async function executeRuntimeStep(input: {
         lastPreparedResponsePrefixLength = responseMessages.length;
         const prepared = await prepareStep(stepNumber, [...initialMessages, ...responseMessages]);
         ensureActive();
+        await reportRequestAttempt(executionIdentity);
         stepModelMessagesForLog.set(stepNumber, prepared.modelMessagesForLog);
         toolExecutionGate.stepNumber = stepNumber;
         stepStartedAt.set(stepNumber, Date.now());
@@ -3066,18 +2882,9 @@ async function executeRuntimeStep(input: {
         lastReceiveProgressAt = 0;
         lastReceiveKind = '';
         await onAttemptDebug?.({
-          phase: 'ai:runtime:request',
-          stepIndex,
-          message: `等待 AI 首包（${streamTimeouts.firstChunkMs / 1000} 秒超时） · ${attemptLabel()} · 模型步骤 ${agentStepLabel(retryAgentStepOffset + stepNumber)}`,
-          details: aiRequestLogDetails(aiRequest, {
-            provider: getModelSettings().provider,
-            model: getModelSettings().model,
-            agentStepIndex: retryAgentStepOffset + stepNumber + 1,
-            nativeToolLoop: true,
-            toolLoopAgent: input.useToolLoopAgent === true,
-            reasoning: aiReasoningEffort() ?? 'provider-default',
-            firstChunkTimeoutMs: streamTimeouts.firstChunkMs,
-          }, prepared.modelMessagesForLog),
+          phase: 'ai:runtime:dispatch', stepIndex,
+          message: `等待 AI 首包（${streamTimeouts.firstChunkMs / 1000} 秒超时） · ${attemptLabel()}`,
+          details: { modelContextStats: aiRequest?.options?.modelContextStats },
         });
         // The SDK arms its first-content timer only after doStream resolves.
         // Cover provider initialization and the HTTP response-header wait too.
@@ -3245,6 +3052,11 @@ async function executeRuntimeStep(input: {
             doGenerate: runtimeModel.doGenerate.bind(runtimeModel),
             doStream: async (...args: Parameters<typeof runtimeModel.doStream>) => {
               const response = await runtimeModel.doStream(...args);
+              const messages = args[0].prompt;
+              const generation = Object.fromEntries(Object.entries(args[0]).filter(([key]) => !['prompt', 'abortSignal', 'headers'].includes(key)));
+              await onAttemptDebug?.({ phase: 'ai:runtime:request', stepIndex, message: '模型请求已发送',
+                details: aiRequestLogDetails(aiRequest, modelRequestBody(response.request?.body,
+                  { model: runtimeModel.modelId, messages, ...generation })) });
               if (requestWatchdog.abortSignal.aborted) throw requestWatchdog.abortSignal.reason;
               await onAttemptDebug?.({
                 phase: 'ai:runtime:response-headers',
@@ -3281,6 +3093,7 @@ async function executeRuntimeStep(input: {
         onStepEnd: onAgentStepEnd,
         temperature: 0.1,
         reasoning: aiReasoningEffort(),
+        maxOutputTokens: runtimeContextProfile(getModelSettings()).outputReserveTokens,
         maxRetries: 0,
         repairToolCall,
         onError: ({ error }: { error: unknown }) => {
@@ -3363,8 +3176,6 @@ async function executeRuntimeStep(input: {
         responseToolResultCount,
         resultSteps.reduce((count, step) => count + step.toolResults.length, 0),
       );
-      const modelSettings = getModelSettings();
-      const miniMaxRuntime = /minimax/i.test(`${modelSettings.provider} ${modelSettings.model}`);
       // Provider adapters may expose internal/reasoning-only text in
       // resultText even though nothing is displayable to the user. Treat that
       // the same as an empty response when deciding whether a completed tool
@@ -3374,17 +3185,8 @@ async function executeRuntimeStep(input: {
       const displayableResultText = containsPrivateToolProtocol(resultText || latestText)
         ? ''
         : normalizeBrowserChatFinalReplyText(resultText || latestText);
-      if (miniMaxRuntime && containsPrivateToolProtocol(resultText || latestText) && toolCallCount === 0) {
-        if (lastRetryState) {
-          lastRetryState.messages = [
-            ...lastRetryState.messages,
-            {
-              role: 'user',
-              content: '[Provider protocol correction] The previous response emitted a private textual tool protocol. Do not repeat or quote it. Use only the standard structured tool_calls interface supplied by this request, or return ordinary final text when no tool is needed.',
-            },
-          ];
-        }
-        const error = new Error('MiniMax emitted a private textual tool protocol instead of a standard structured tool call.');
+      if (containsPrivateToolProtocol(resultText || latestText) && toolCallCount === 0) {
+        const error = new Error('Provider emitted a private textual tool protocol instead of a standard structured tool call.');
         error.name = 'AI_PrivateToolProtocolError';
         Object.assign(error, { privateToolProtocolRetryable: true });
         throw error;
@@ -3440,57 +3242,11 @@ async function executeRuntimeStep(input: {
     }
   }
 
-  function compactInvalidParameterRetryState(state: RuntimeRetryState, recoveryAttempt: number) {
-    const goal = requirementOf(runtimeRecord).trim();
-    const previousSummary = state.messages.findLast((message) => (
-      textFromUnknown(message.content).startsWith(runtimeContinuationSummaryMarker)
-    ));
-    const summary = fallbackRuntimeContinuationSummary({
-      goal,
-      stepIndex,
-      agentStep: state.agentStepOffset + 1,
-      previousSummary: previousSummary
-        ? sanitizeRuntimeContinuationSummary(
-          textFromUnknown(previousSummary.content).slice(runtimeContinuationSummaryMarker.length),
-        )
-        : '',
-      recentToolAttempts: formatCurrentToolAttemptSummary(durableTraces, 8),
-      runtimeState: continuationRuntimeStateFromTraces(durableTraces),
-    });
-    const profile = runtimeContextProfile(getModelSettings());
-    const messageBudgetTokens = Math.floor(profile.inputBudgetTokens * (recoveryAttempt <= 1 ? 0.75 : 0.5));
-    const selected = assembleRuntimeContext({
-      messages: state.messages, records: contextRecords, previousState: taskState,
-      inputBudgetTokens: messageBudgetTokens, baseTokens: 0, continuationSummary: summary,
-    });
-    const messages = selected.messages;
-    const retainedImageCount = estimateRuntimeMessageContext(messages).imageCount;
-    return {
-      state: {
-        ...state,
-        messages,
-        imagePaths: retainedImageCount > 0 ? state.imagePaths.slice(-retainedImageCount) : [],
-      },
-      details: {
-        action: 'compacted prepared context after provider InvalidParameter response',
-        recoveryAttempt,
-        messageBudgetTokens,
-        messageCountBefore: state.messages.length,
-        messageCountAfter: messages.length,
-        retainedImageCount,
-      },
-    };
-  }
 
-  // Keep SDK retries disabled; the runtime retries request failures except exhausted
-  // provider quota, preserving prepared messages. A provider-rejected tool exchange
-  // is removed before retry because replaying that identical invalid chain cannot work.
-  // The limit is consecutive failures; only a resolved SDK response resets the counter.
   const consecutiveFailureLimit = runtimeRequestConsecutiveFailureLimit();
   let lastError: unknown;
   let retryingAfterFailure = false;
   let lastRetryDecision: RuntimeRetryDecision | undefined;
-  let lastRetryRecovery: Record<string, unknown> | undefined;
   let retryDelayMs = 0;
   let attemptNumber = 0;
   let requestSequence = 0;
@@ -3548,7 +3304,7 @@ async function executeRuntimeStep(input: {
             delayMs: retryDelayMs,
             execution: { ...executionIdentity },
             retryDecision: lastRetryDecision,
-            ...(lastRetryRecovery ? { requestRecovery: lastRetryRecovery } : {}),
+
             reusePreparedMessages: Boolean(retryState),
             messageCount: retryState?.messages.length,
             imageCount: retryState?.imagePaths.length,
@@ -3560,7 +3316,6 @@ async function executeRuntimeStep(input: {
         ensureActive();
       }
       ensureActive();
-      await reportRequestAttempt(executionIdentity);
       const result = await runAgent(retryState, executionIdentity);
       const requestOutcomeMessage = result.responseFinished
         ? result.responseStatus === 'passed'
@@ -3598,11 +3353,8 @@ async function executeRuntimeStep(input: {
       lastError = error;
       consecutiveRequestFailures += 1;
       lastRetryDecision = classifyRuntimeRetry(error, abortSignal);
-      lastRetryRecovery = undefined;
-      if (lastRetryDecision.recovery === 'compact-context' && lastRetryState?.messages.length) {
-        const compacted = compactInvalidParameterRetryState(lastRetryState, consecutiveRequestFailures);
-        lastRetryState = compacted.state;
-        lastRetryRecovery = compacted.details;
+      if (lastRetryDecision.recovery === 'compact-context') {
+        retryInputBudget = Math.max(1, Math.floor((retryInputBudget || runtimeContextProfile(getModelSettings()).inputBudgetTokens) * 0.75));
       }
       const missingToolCallId = runtimeMissingToolCallId(error);
       if (missingToolCallId && lastRetryState?.messages.length) {
@@ -3646,7 +3398,7 @@ async function executeRuntimeStep(input: {
           finalFailure: !willRetry,
           execution: { ...executionIdentity },
           retryDecision: lastRetryDecision,
-          ...(lastRetryRecovery ? { requestRecovery: lastRetryRecovery } : {}),
+
           ...(missingToolCallId ? {
             protocolRepair: {
               action: 'removed rejected tool call/result exchange from preserved context',
@@ -3688,7 +3440,7 @@ async function executeRuntimeStep(input: {
       consecutiveFailureLimit,
       decision: lastRetryDecision,
       retryDelayMs,
-      ...(lastRetryRecovery ? { requestRecovery: lastRetryRecovery } : {}),
+
     };
     throw lastError;
   }
@@ -3700,7 +3452,7 @@ async function executeRuntimeStep(input: {
     consecutiveFailureLimit,
     decision: lastRetryDecision,
     retryDelayMs,
-    ...(lastRetryRecovery ? { requestRecovery: lastRetryRecovery } : {}),
+
   };
   throw wrapped;
 }
@@ -3781,14 +3533,13 @@ export async function executeInteractiveBrowserTurn(input: {
     turnMessages: ModelMessage[];
   }) => void | Promise<void>;
   contextRecords?: Record<string, ModelMessage>;
-  taskState?: RuntimeTaskState;
-  onContextCheckpoint?: (update: { records: Record<string, ModelMessage>; taskState: RuntimeTaskState; manifest?: RuntimeContextManifest }) => void | Promise<void>;
+  onContextCheckpoint?: (update: { records: Record<string, ModelMessage>; manifest?: RuntimeContextManifest }) => void | Promise<void>;
   onActiveModelCheckpoint?: (messages: ModelMessage[]) => void | Promise<void>;
   onContextCompression?: (update: {
     activeMessages: ModelMessage[];
     contextCompression: BrowserChatModelContextCompression;
+    background?: ModelMessage;
   }) => void | Promise<void>;
-  onContinuationSummary?: (summary: string) => void | Promise<void>;
   onDebug?: ExecutionDebug;
   abortSignal?: AbortSignal;
   shouldContinue?: () => boolean;
@@ -3809,9 +3560,8 @@ export async function executeInteractiveBrowserTurn(input: {
   const steps = [...(input.completedSteps || [])];
   const newSteps: StepExecutionResult[] = [];
   let activeModelMessages = [...(input.conversation || [])];
-  let activeContinuationSummary = sanitizeRuntimeContinuationSummary(input.continuationSummary || '');
+  let activeContinuationSummary = (parseContextSummary(input.continuationSummary) ? input.continuationSummary! : '');
   let contextRecords = { ...input.contextRecords };
-  let taskState = input.taskState;
   const turnModelMessages: ModelMessage[] = [];
   let contextCompression: BrowserChatModelContextCompression | undefined;
   const runtimeRecord = createInteractiveBrowserRuntimeRecord({
@@ -3851,6 +3601,7 @@ export async function executeInteractiveBrowserTurn(input: {
       const requiredSubagentInstruction = requiredSubagentUuid
         ? requiredSubagentReadDirective(requiredSubagentUuid, pendingSubagentUuids.length)
         : '';
+      let checkpointTurnMessageCount = 0;
       actionResult = await executeRuntimeStep({
         session: input.session,
         runtimeRecord,
@@ -3866,9 +3617,9 @@ export async function executeInteractiveBrowserTurn(input: {
         operationalContext: input.operationalContext,
         conversation: activeModelMessages,
         continuationSummary: activeContinuationSummary,
-        contextRecords, taskState,
+        contextRecords,
         onContextCheckpoint: async (update) => {
-          contextRecords = update.records; taskState = update.taskState;
+          contextRecords = { ...contextRecords, ...update.records };
           await input.onContextCheckpoint?.(update);
         },
         referenceImagePaths: input.referenceImagePaths,
@@ -3892,6 +3643,8 @@ export async function executeInteractiveBrowserTurn(input: {
         useToolLoopAgent: input.useToolLoopAgent,
         onTextStream: input.onTextStream,
         onTurnModelCheckpoint: async (messages) => {
+          activeModelMessages = [...activeModelMessages, ...messages.slice(checkpointTurnMessageCount)];
+          checkpointTurnMessageCount = messages.length;
           await input.onModelMessages?.({ activeMessages: activeModelMessages, turnMessages: [...turnModelMessages, ...messages] });
         },
         onActiveModelCheckpoint: async (messages) => {
@@ -3938,17 +3691,7 @@ export async function executeInteractiveBrowserTurn(input: {
       contextCompression = actionResult.contextCompression || contextCompression;
       activeContinuationSummary = actionResult.contextCompression?.continuationSummary || activeContinuationSummary;
       browserStatePreflightComplete ||= !requiresBrowserStatePreflight(false, operationalTraces);
-      if (operationalTraces.length) {
-        activeContinuationSummary = fallbackRuntimeContinuationSummary({
-          goal: input.instruction,
-          stepIndex,
-          agentStep: newSteps.length + 1,
-          previousSummary: activeContinuationSummary,
-          recentToolAttempts: formatCurrentToolAttemptSummary(operationalTraces, 5),
-          runtimeState: continuationRuntimeStateFromTraces(operationalTraces),
-        });
-        await input.onContinuationSummary?.(activeContinuationSummary);
-      }
+
     } catch (error) {
       if (isBrowserChatAbortError(error, input.abortSignal) || (input.shouldContinue && !input.shouldContinue())) throw browserChatAbortError(input.abortSignal);
       const retryInfo = runtimeRetryFromError(error);
@@ -3956,18 +3699,6 @@ export async function executeInteractiveBrowserTurn(input: {
       if (recovery?.messages.length) {
         activeModelMessages = [...recovery.messages];
         turnModelMessages.splice(0, turnModelMessages.length, ...completedTurnMessages, ...recovery.turnMessages);
-      }
-      const operationalLiveToolTraces = liveToolTraces.filter((trace) => trace.name !== 'contextCompression');
-      if (operationalLiveToolTraces.length) {
-        activeContinuationSummary = fallbackRuntimeContinuationSummary({
-          goal: input.instruction,
-          stepIndex,
-          agentStep: newSteps.length + 1,
-          previousSummary: activeContinuationSummary,
-          recentToolAttempts: formatCurrentToolAttemptSummary(operationalLiveToolTraces, 8),
-          runtimeState: continuationRuntimeStateFromTraces(operationalLiveToolTraces),
-        });
-        await input.onContinuationSummary?.(activeContinuationSummary);
       }
       ensureActive();
       const recoveredVisualContext = latestToolProgress?.visualContext;
@@ -4573,7 +4304,7 @@ async function executeCodexRuntimeObject(input: {
       if (approval === 'approved') {
         return {
           ...resultWithPrerequisites,
-          actual: `用户已确认本次工具调用，现已执行。\n${resultWithPrerequisites.actual}`,
+          summary: `用户已确认本次工具调用，现已执行。\n${browserOperationSummary(resultWithPrerequisites)}`,
         } satisfies BrowserActionResult;
       }
       return resultWithPrerequisites;

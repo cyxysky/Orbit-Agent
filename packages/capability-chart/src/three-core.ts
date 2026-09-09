@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { defaultChartTranslate, type ChartTranslate } from './i18n.js';
+import { defaultChartTranslate, type ChartTranslate } from './i18n.ts';
 
 const point = z.tuple([z.number().finite().min(-1e12).max(1e12), z.number().finite().min(-1e12).max(1e12), z.number().finite().min(-1e12).max(1e12)]);
 const color = z.string().regex(/^#[0-9a-f]{6}$/i);

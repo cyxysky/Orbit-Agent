@@ -1,6 +1,6 @@
 import type { Page, Request, Response } from 'playwright';
-import type { BrowserActionResult, BrowserDependencyFailure } from './browser-session.js';
-import { compactDiagnosticText, shouldIgnoreNetworkFailure } from './browser-session-diagnostics.js';
+import type { BrowserActionResult, BrowserDependencyFailure } from './browser-session.ts';
+import { compactDiagnosticText, shouldIgnoreNetworkFailure } from './browser-session-diagnostics.ts';
 
 type HttpRequestRecord = {
   id: string;
@@ -184,7 +184,6 @@ export class BrowserNetworkDiagnostics {
     }));
     return {
       ok: true,
-      actual: JSON.stringify(output, null, 2),
       data: output,
       summary: `Read ${output.length} HTTP request record${output.length === 1 ? '' : 's'} from the active tab.`,
     };

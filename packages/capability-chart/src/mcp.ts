@@ -5,7 +5,7 @@ import {
   type CapabilityMcpServerOptions,
 } from '@webpilot/capability-adapter-mcp';
 import type { CapabilityRunContext } from '@webpilot/capability-sdk';
-import { createNodeChartCapability } from './node.js';
+import { createNodeChartCapability } from './node.ts';
 
 export type ChartMcpOptions = {
   directory: string | ((context: CapabilityRunContext) => string);

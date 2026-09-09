@@ -9,8 +9,8 @@ import { raceWithAbort, type CapabilityHealth } from '@webpilot/capability-sdk';
 import {
   fileFormatForExtension as defaultFileFormatForExtension,
   fileFormatForMimeType as defaultFileFormatForMimeType,
-} from '../formats.js';
-import type { FileArtifactOperationResult } from '../types.js';
+} from '../formats.ts';
+import type { FileArtifactOperationResult } from '../types.ts';
 import {
   createNodeArtifactPayload,
   nodeArtifactFileExtension,
@@ -18,7 +18,7 @@ import {
   uniqueNodeArtifactPath,
   type NodeArtifactPayload,
   type NodeArtifactUrlResolver,
-} from './artifacts.js';
+} from './artifacts.ts';
 
 const defaultTimeoutMs = 120_000;
 const defaultMaxBytes = 50 * 1024 * 1024;

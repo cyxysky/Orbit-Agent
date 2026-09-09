@@ -1,8 +1,8 @@
-import { loadDraft, saveDraft, withDraftLock, DOCUMENT_ID_PATTERN } from './workspace-draft-store.js';
-import { sourceDigest } from './workspace-source-editor.js';
-import type { FileArtifactOperationResult } from '../types.js';
-import type { OfficeVisualQaDeckChecks, OfficeVisualQaPageChecks } from '../office/types.js';
-import { officeDesignGuidance, missingDesignReviewChecks } from '../design-guidance.js';
+import { loadDraft, saveDraft, withDraftLock, DOCUMENT_ID_PATTERN } from './workspace-draft-store.ts';
+import { sourceDigest } from './workspace-source-editor.ts';
+import type { FileArtifactOperationResult } from '../types.ts';
+import type { OfficeVisualQaDeckChecks, OfficeVisualQaPageChecks } from '../office/types.ts';
+import { officeDesignGuidance, missingDesignReviewChecks } from '../design-guidance.ts';
 
 export const VISUAL_QA_PAGE_CHECKS = [
   'overlap', 'clipping', 'alignment', 'spacing', 'typography', 'contrast',

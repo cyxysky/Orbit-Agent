@@ -47,6 +47,7 @@ const formats: FileFormatDefinition[] = [
   ...text(['.html', '.htm'], { mimeType: 'text/html; charset=utf-8' }),
   ...text(['.js', '.jsx', '.mjs'], { mimeType: 'text/javascript; charset=utf-8' }),
   ...text(['.json'], { mimeType: 'application/json; charset=utf-8' }),
+  ...text(['.ipynb'], { mimeType: 'application/x-ipynb+json; charset=utf-8' }),
   ...text(['.jsonl', '.ndjson'], { mimeType: 'application/x-ndjson; charset=utf-8' }),
   ...text(['.md', '.mdx'], { mimeType: 'text/markdown; charset=utf-8' }),
   ...text(['.scss'], { mimeType: 'text/x-scss; charset=utf-8' }),

@@ -68,11 +68,13 @@ function browserChatRecoveredToolSteps(
     const id = typeof trace.id === 'string' && trace.id.trim() ? trace.id.trim() : `${name}:${log.id}`;
     const group = steps.get(log.stepIndex) || { order: [], tools: new Map<string, StepToolCall>() };
     const result = browserChatRecord(trace.result);
-    const actual = typeof result?.actual === 'string'
-      ? result.actual
-      : typeof result?.error === 'string'
-        ? result.error
-        : undefined;
+    const actual = typeof result?.summary === 'string'
+      ? result.summary
+      : typeof result?.actual === 'string'
+        ? result.actual
+        : typeof result?.error === 'string'
+          ? result.error
+          : undefined;
     const input = trace.input;
     const inputRecord = browserChatRecord(input);
     const previous = group.tools.get(id);

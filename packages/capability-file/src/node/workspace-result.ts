@@ -1,8 +1,8 @@
-import { type UnoDraftPatchHunkFailure } from './workspace-source-editor.js';
-import { isUnoWorkerInternalError } from './office/uno.js';
-import { type OfficeProgramDiagnostic } from './office/program-analysis.js';
-import type { OfficeDocumentDraft, OfficeDocumentKind } from '../office/types.js';
-import { officeDesignGuidance } from '../design-guidance.js';
+import { type UnoDraftPatchHunkFailure } from './workspace-source-editor.ts';
+import { isUnoWorkerInternalError } from './office/uno.ts';
+import { type OfficeProgramDiagnostic } from './office/program-analysis.ts';
+import type { OfficeDocumentDraft, OfficeDocumentKind } from '../office/types.ts';
+import { officeDesignGuidance } from '../design-guidance.ts';
 
 export type ArtifactToolPayload = {
   documentType?: OfficeDocumentKind;

@@ -56,6 +56,7 @@ import {
   compactBrowserChatModelTranscript,
   normalizeBrowserChatModelContext,
   browserChatActiveMessages,
+  browserChatContextRecordId,
   browserChatTranscript,
   archiveBrowserChatContextMessages,
   serializableBrowserChatModelMessages,
@@ -63,6 +64,7 @@ import {
 } from '@/server/ai/agents/browser-chat-model-context';
 import {
   estimateRuntimeMessageContext,
+  estimateRuntimeTextTokens,
   runtimeContextWindowTokens,
 } from '@/server/ai/agents/runtime-context-budget';
 import { browserChatContextUsageFromDebugRecord } from '@/server/ai/agents/browser-chat-context-usage';
@@ -291,6 +293,8 @@ type BrowserChatSessionRecord = Omit<BrowserChatPersistedSessionSnapshot, 'turnS
   turnState: BrowserChatTurnState;
   modelContext: BrowserChatModelContext;
   activeAssistantMessageId?: string;
+  modelContextTurnId?: string;
+  contextUsageMessageId?: string;
   activeAbortController?: AbortController;
   browser?: BrowserSession;
   started: boolean;
@@ -1161,14 +1165,8 @@ async function browserChatModelSettings(providerInput?: unknown, modelInput?: un
     model: modelInput,
     provider: providerInput,
   });
-  return {
-    ...selection,
-    supportsImageInput: modelCapabilities(
-      config?.providers?.[selection.provider],
-      selection.provider,
-      selection.model,
-    ).imageInput,
-  };
+  const capabilities = modelCapabilities(config?.providers?.[selection.provider], selection.provider, selection.model);
+  return { ...selection, supportsImageInput: capabilities.imageInput, maxContextTokens: capabilities.maxContextTokens };
 }
 
 function normalizeToolConfirmation(value: unknown): BrowserChatToolConfirmation | undefined {
@@ -1559,7 +1557,7 @@ async function createBrowserChatRuntimeOperationalContext(input: {
   const credentialReferences = new Map<string, { passwordRef: string; usernameRef: string }>();
   const usedMemoryIds = input.usedMemoryIds || new Set<string>();
   const query = retrievalQueryTexts(input.text || input.modelText || input.session.title);
-  const scopeId = input.branchId ? input.session.id + ':' + input.branchId : input.session.id;
+  const scopeId = [input.session.id, input.branchId || 'main', input.session.activeAssistantMessageId || input.session.updatedAt].join(':');
   const getState = () => input.branchId
     ? input.session.modelContext.branches?.[input.branchId]?.knowledge : input.session.modelContext.knowledge;
   const saveState = async (knowledge: RuntimeKnowledgeState) => {
@@ -1945,11 +1943,48 @@ function browserChatTabs(session: BrowserChatSessionRecord): BrowserTabSnapshot[
   }
 }
 
+const activeContextUsageCache = new WeakMap<BrowserChatModelContext, BrowserChatContextUsage>();
+
+function activeBrowserChatContextUsage(session: BrowserChatSessionRecord, maxTokens: number): BrowserChatContextUsage {
+  const context = session.modelContext;
+  const cached = activeContextUsageCache.get(context);
+  if (cached && cached.maxTokens === maxTokens) return cached;
+  const manifest = context.lastRequest;
+  const system = manifest?.systemRef ? context.records[manifest.systemRef]?.content : '';
+  const backgroundRef = context.backgroundRef || manifest?.backgroundRef;
+  const background = backgroundRef ? context.records[backgroundRef] : undefined;
+  const schema = manifest?.toolSchemaRef ? context.records[manifest.toolSchemaRef]?.content : undefined;
+  const estimated = estimateRuntimeMessageContext({
+    system: typeof system === 'string' ? system : '',
+    messages: [...(background ? [background] : []), ...browserChatActiveMessages(context)],
+  });
+  const toolTokens = typeof schema === 'string'
+    ? estimateRuntimeTextTokens(schema)
+    : Math.max(0, session.contextUsage?.toolTokens || 0);
+  const usage = {
+    currentTokens: estimated.totalTokens + toolTokens,
+    imageTokens: estimated.imageTokens,
+    maxTokens,
+    textTokens: estimated.textTokens,
+    toolTokens,
+  };
+  activeContextUsageCache.set(context, usage);
+  return usage;
+}
+
 function browserChatContextUsage(session: BrowserChatSessionRecord): BrowserChatContextUsage {
   const fallbackMax = runtimeContextWindowTokens({
     provider: session.modelProvider,
     model: session.model,
   });
+  // Request statistics belong to one turn. Until that turn has assembled its
+  // input, count the retained transcript, including interrupted tool exchanges.
+  const hasCurrentRequestUsage = (session.busy || session.status === 'running')
+    && Boolean(session.activeAssistantMessageId)
+    && session.contextUsageMessageId === session.activeAssistantMessageId;
+  if (!hasCurrentRequestUsage && session.modelContext.active.length) {
+    return activeBrowserChatContextUsage(session, fallbackMax);
+  }
   if (session.contextUsage && session.contextUsage.currentTokens > 0) {
     return { ...session.contextUsage, maxTokens: fallbackMax };
   }
@@ -1958,7 +1993,6 @@ function browserChatContextUsage(session: BrowserChatSessionRecord): BrowserChat
     if (!rawStats || typeof rawStats !== 'object' || Array.isArray(rawStats)) continue;
     const stats = rawStats as Record<string, unknown>;
     const currentTokens = Number(stats.estimatedTotalTokens);
-    const maxTokens = Number(stats.windowTokens);
     if (!Number.isFinite(currentTokens) || currentTokens < 0) continue;
     const textTokens = Number(stats.estimatedTextTokens);
     const imageTokens = Number(stats.estimatedImageTokens);
@@ -1966,7 +2000,7 @@ function browserChatContextUsage(session: BrowserChatSessionRecord): BrowserChat
     return {
       currentTokens: Math.round(currentTokens),
       imageTokens: Number.isFinite(imageTokens) && imageTokens > 0 ? Math.round(imageTokens) : 0,
-      maxTokens: Number.isFinite(maxTokens) && maxTokens > 0 ? Math.round(maxTokens) : fallbackMax,
+      maxTokens: fallbackMax,
       textTokens: Number.isFinite(textTokens) && textTokens > 0 ? Math.round(textTokens) : 0,
       toolTokens: Number.isFinite(toolTokens) && toolTokens > 0 ? Math.round(toolTokens) : 0,
     };
@@ -2004,18 +2038,10 @@ function browserChatContextUsageFromDebugDetails(
 }
 
 function refreshBrowserChatTerminalContextUsage(session: BrowserChatSessionRecord) {
-  const estimated = estimateRuntimeMessageContext(browserChatActiveMessages(session.modelContext));
-  const toolTokens = Math.max(0, browserChatContextUsage(session).toolTokens);
-  session.contextUsage = {
-    currentTokens: estimated.totalTokens + toolTokens,
-    imageTokens: estimated.imageTokens,
-    maxTokens: runtimeContextWindowTokens({
+  session.contextUsage = activeBrowserChatContextUsage(session, runtimeContextWindowTokens({
       provider: session.modelProvider,
       model: session.model,
-    }),
-    textTokens: estimated.textTokens,
-    toolTokens,
-  };
+    }));
 }
 
 function sessionSnapshotHeader(
@@ -2370,9 +2396,9 @@ function preserveInterruptedModelContext(
     ...session.modelContext,
     version: 2,
     transcript: compactBrowserChatModelTranscript(
-      appendInterruptedBrowserChatTurn(browserChatTranscript(session.modelContext), userMessage.content, assistantContent),
+      appendInterruptedBrowserChatTurn(browserChatTranscript(session.modelContext), userMessage.content, assistantContent, session.modelContextTurnId === assistantMessageId),
     ),
-    activeMessages: appendInterruptedBrowserChatTurn(browserChatActiveMessages(session.modelContext), userMessage.content, assistantContent),
+    activeMessages: appendInterruptedBrowserChatTurn(browserChatActiveMessages(session.modelContext), userMessage.content, assistantContent, session.modelContextTurnId === assistantMessageId),
   });
 }
 
@@ -4481,9 +4507,11 @@ function runningActivityFromLog(phase: string, message: string) {
   if (phase === 'perf:runtime-input') return '正在准备页面上下文';
   if (phase === 'ai:prepare') return '正在请求 AI 决策';
   if (phase === 'ai:runtime:attempt') return message;
+  if (phase === 'ai:runtime:prepare') return '正在检查上下文与请求预算';
   if (phase === 'ai:context-compression:start') return '正在压缩上下文';
+  if (phase === 'ai:context-compression:progress' || phase === 'ai:context-compression:error') return message;
   if (phase === 'ai:context-compression:complete' || phase === 'ai:context-segmented') return '上下文压缩完成，正在准备模型输入';
-  if (phase === 'ai:runtime:request') return message.startsWith('等待 AI 首包') ? message : '等待 AI 首包';
+  if (phase === 'ai:runtime:request' || phase === 'ai:runtime:dispatch') return message.startsWith('等待 AI 首包') ? message : '等待 AI 首包';
   if (phase === 'ai:runtime:response-headers' || phase === 'ai:runtime:receiving') return message;
   if (phase === 'ai:runtime:response') return 'AI 已返回，正在处理结果';
   if (phase === 'ai:runtime:object') return 'AI 已返回，正在解析动作';
@@ -5207,18 +5235,18 @@ function browserChatBranchContextOptions(session: BrowserChatSessionRecord, bran
       branches: { ...session.modelContext.branches, [branchId]: {
         knowledge: session.modelContext.branches?.[branchId]?.knowledge,
         recordIds: Object.keys(context.records), active: context.active, history: context.history,
-        taskState: context.taskState, lastRequest: context.lastRequest, continuationSummary: context.continuationSummary,
+        lastRequest: context.lastRequest, backgroundRef: context.backgroundRef, continuationSummary: context.continuationSummary,
       } },
     };
     if (!(await persistBrowserChatCheckpoint(session.id))) throw new Error('Failed to persist subagent context checkpoint.');
   };
   const options: Pick<Parameters<typeof executeInteractiveBrowserTurn>[0],
-    'conversation' | 'contextRecords' | 'taskState' | 'continuationSummary' | 'onContextCheckpoint' | 'onActiveModelCheckpoint' | 'onModelMessages' | 'onContinuationSummary' | 'onContextCompression'> = {
-    conversation: browserChatActiveMessages(context), contextRecords: context.records, taskState: context.taskState,
+    'conversation' | 'contextRecords' | 'continuationSummary' | 'onContextCheckpoint' | 'onActiveModelCheckpoint' | 'onModelMessages' | 'onContextCompression'> = {
+    conversation: browserChatActiveMessages(context), contextRecords: context.records,
     continuationSummary: context.continuationSummary,
-    onContextCheckpoint: async ({ records, taskState, manifest }) => {
+    onContextCheckpoint: async ({ records, manifest }) => {
       if (manifest) manifest.sessionId = session.id;
-      context = { ...context, records: { ...context.records, ...records }, taskState, lastRequest: manifest || context.lastRequest };
+      context = { ...context, records: { ...context.records, ...records }, backgroundRef: manifest?.backgroundRef || context.backgroundRef, lastRequest: manifest || context.lastRequest };
       await save();
     },
     onActiveModelCheckpoint: async (messages) => {
@@ -5229,8 +5257,11 @@ function browserChatBranchContextOptions(session: BrowserChatSessionRecord, bran
       context = normalizeBrowserChatModelContext({ ...context, activeMessages, transcript: [...turnBase, ...turnMessages] });
       await save();
     },
-    onContinuationSummary: async (continuationSummary) => { context = { ...context, continuationSummary }; await save(); },
-    onContextCompression: async ({ contextCompression }) => { context = { ...context, continuationSummary: contextCompression.continuationSummary }; await save(); },
+    onContextCompression: async ({ activeMessages, contextCompression, background }) => {
+      context = normalizeBrowserChatModelContext({ ...archiveBrowserChatContextMessages(context, background ? [background] : []), activeMessages,
+        backgroundRef: background ? browserChatContextRecordId(background) : context.backgroundRef, continuationSummary: contextCompression.continuationSummary });
+      await save();
+    },
   };
   return options;
 }
@@ -5812,7 +5843,6 @@ async function runBrowserChatMessage(
 ) {
   const modelSettings = await browserChatModelSettings(session.modelProvider, session.model);
   return withModelSettings(modelSettings, async () => {
-    session.contextUsage = undefined;
     const assertTurnActive = () => {
       if (isActiveBrowserChatTurn(session, assistantMessageId, abortController)) return;
       throw abortController.signal.reason || new Error('Browser chat operation interrupted by user.');
@@ -5859,15 +5889,14 @@ async function runBrowserChatMessage(
         operationalContext: initialRuntimeContext.operationalContext,
         conversation: browserChatActiveMessages(session.modelContext),
         contextRecords: session.modelContext.records,
-        taskState: session.modelContext.taskState,
-        onContextCheckpoint: async ({ records, taskState, manifest }) => {
+        onContextCheckpoint: async ({ records, manifest }) => {
           assertTurnActive();
           if (manifest) manifest.sessionId = session.id;
-          session.modelContext = { ...session.modelContext, records: { ...session.modelContext.records, ...records }, taskState, lastRequest: manifest || session.modelContext.lastRequest };
+          session.modelContext = { ...session.modelContext, records: { ...session.modelContext.records, ...records }, backgroundRef: manifest?.backgroundRef || session.modelContext.backgroundRef, lastRequest: manifest || session.modelContext.lastRequest };
           if (!(await persistBrowserChatCheckpoint(session.id))) throw new Error('Failed to persist context records before model request.');
           assertTurnActive();
         },
-        continuationSummary: session.modelContext.continuationSummary || session.modelContext.lastCompression?.continuationSummary,
+        continuationSummary: session.modelContext.continuationSummary,
         completedSteps: session.steps,
         safetyMode: session.safetyMode,
         memoryTools: createPersonalMemoryTools({
@@ -5944,6 +5973,7 @@ async function runBrowserChatMessage(
         },
         onModelMessages: ({ activeMessages, turnMessages }) => {
           if (!isActiveBrowserChatTurn(session, assistantMessageId, abortController)) return;
+          session.modelContextTurnId = assistantMessageId;
           session.modelContext = normalizeBrowserChatModelContext({
             ...session.modelContext,
             version: 2,
@@ -5955,28 +5985,19 @@ async function runBrowserChatMessage(
           });
           persistAndNotify(session.id, { defer: true, mergePersisted: false });
         },
-        onContextCompression: async ({ activeMessages, contextCompression }) => {
+        onContextCompression: async ({ activeMessages, contextCompression, background }) => {
           assertTurnActive();
           session.modelContext = normalizeBrowserChatModelContext({
             ...session.modelContext,
             version: 2,
             activeMessages: serializableBrowserChatModelMessages(activeMessages),
+            records: archiveBrowserChatContextMessages(session.modelContext, background ? [background] : []).records,
+            backgroundRef: background ? browserChatContextRecordId(background) : session.modelContext.backgroundRef,
             lastCompression: contextCompression,
             continuationSummary: contextCompression.continuationSummary,
           });
           if (!(await persistBrowserChatCheckpoint(session.id))) {
             throw new Error('Failed to persist the browser-chat context compression checkpoint.');
-          }
-          assertTurnActive();
-        },
-        onContinuationSummary: async (continuationSummary) => {
-          assertTurnActive();
-          session.modelContext = normalizeBrowserChatModelContext({
-            ...session.modelContext,
-            continuationSummary,
-          });
-          if (!(await persistBrowserChatCheckpoint(session.id))) {
-            throw new Error('Failed to persist the browser-chat continuation checkpoint.');
           }
           assertTurnActive();
         },
@@ -6023,13 +6044,17 @@ async function runBrowserChatMessage(
         onDebug: (event) => {
           if (!isActiveBrowserChatTurn(session, assistantMessageId, abortController)) return;
           if (event.phase === 'ai:runtime:request'
-            || event.phase === 'ai:context-compression:start'
-            || event.phase === 'ai:context-compression:complete') {
-            session.contextUsage = browserChatContextUsageFromDebugDetails(event.details, {
+            || event.phase === 'ai:runtime:dispatch'
+            || event.phase === 'ai:runtime:prepare'
+            || event.phase.startsWith('ai:context-compression:')) {
+            const usage = browserChatContextUsageFromDebugDetails(event.details, {
               provider: session.modelProvider,
               model: session.model,
-            })
-              || session.contextUsage;
+            });
+            if (usage) {
+              session.contextUsage = usage;
+              session.contextUsageMessageId = assistantMessageId;
+            }
           }
           const outputCycle = browserChatAiOutputCycleFromDebugEvent({
             details: event.details,

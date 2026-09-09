@@ -1,7 +1,7 @@
 import { constants } from 'node:fs';
 import { access, readFile } from 'node:fs/promises';
 import { PDFParse } from 'pdf-parse';
-import type { OfficeArtifactIssue } from './validation.js';
+import type { OfficeArtifactIssue } from './validation.ts';
 
 export type OfficeRendererResult = {
   available: boolean;

@@ -1,7 +1,7 @@
 const serviceBrowserFileDeliveryError = [
   'Rejected service-browser file delivery.',
   'page.evaluate(), Blob/object URLs, window.open(), and HTML download clicks run in the backend Playwright browser and do not deliver a file to the user browser.',
-  'Use file action=generate to create new content or file action=download with a real HTTP(S) URL to register a current-session Artifact.',
+  'Use file action=write with fileName/content for text or code files, plan → generate → render for Office/PDF, or file action=download with a real HTTP(S) URL to register a current-session Artifact.',
   'Only the Artifact download URL returned by one of those tools is user-visible delivery evidence.',
 ].join(' ');
 

@@ -4,13 +4,17 @@ type Triple = [number, number, number];
 const clamp = (value: number) => Math.max(0, Math.min(1, value));
 
 export function normalizeThemeColor(value: unknown) {
-  return typeof value === 'string' && /^#[\da-f]{6}$/i.test(value)
-    ? value.toLowerCase()
-    : DEFAULT_THEME_COLOR;
+  const match = typeof value === 'string' && /^#([\da-f]{3}|[\da-f]{6})$/i.exec(value.trim());
+  if (!match) return DEFAULT_THEME_COLOR;
+  const digits = match[1].toLowerCase();
+  return '#' + (digits.length === 3 ? [...digits].map((digit) => digit + digit).join('') : digits);
 }
 
 function rgb(hex: string): Triple {
-  return [1, 3, 5].map((start) => parseInt(hex.slice(start, start + 2), 16) / 255) as Triple;
+  // CSS optimizers can shorten palette tokens, e.g. #ffffff becomes #fff.
+  // Normalize every input before color math, including CSS-derived references.
+  const normalized = normalizeThemeColor(hex);
+  return [1, 3, 5].map((start) => parseInt(normalized.slice(start, start + 2), 16) / 255) as Triple;
 }
 
 function linear(value: number) {
