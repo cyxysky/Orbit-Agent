@@ -185,6 +185,92 @@ def chart_contrast_color(fill, preferred=None, transparency=0, background=0xFFFF
     return max((0xFFFFFF, 0x000000), key=contrast)
 
 
+def chart_pie_callouts(values, width, height, font_size, donut, legend_position='right', show_legend=True, title=False, outside_all=False):
+    """Reserve callout space and separate small-sector labels without changing data."""
+    total = sum(abs(float(value)) for value in values)
+    small = [index for index, value in enumerate(values) if total and abs(float(value)) > 0 and (outside_all or abs(float(value)) / total < .06)]
+    if not small:
+        return None, {}, []
+    # Coordinates are fractions of the whole chart; the legend keeps its own
+    # margin. A fixed native plot prevents outside labels from being clipped.
+    x, y, w, h = .10, .16, .80, .74
+    if show_legend and legend_position == 'right':
+        x, w = .08, .68
+    elif show_legend and legend_position == 'left':
+        x, w = .28, .64
+    elif show_legend and legend_position == 'top':
+        y, h = .28, .62
+    elif show_legend and legend_position == 'bottom':
+        h = .60
+    if title:
+        y += .06
+        h -= .06
+    gap = max(font_size * POINT_TO_100TH_MM * 1.5, height * .04)
+    groups = {'top': [], 'bottom': [], 'left': [], 'right': []}
+    running = 0
+    for index, value in enumerate(values):
+        fraction = abs(float(value)) / total
+        angle = math.pi / 2 - 2 * math.pi * (running + fraction / 2)
+        running += fraction
+        if index not in small:
+            continue
+        dx, dy = math.cos(angle), -math.sin(angle)
+        side = ('top' if dy < 0 else 'bottom') if abs(dy) >= abs(dx) else ('left' if dx < 0 else 'right')
+        groups[side].append((index, dx, dy, f'{fraction * 100:.6g}%'))
+    pitch = font_size * POINT_TO_100TH_MM * 1.1
+    for side in ('top', 'bottom'):
+        count = len(groups[side])
+        if not count:
+            continue
+        required = (gap + (count - 1) * pitch + font_size * POINT_TO_100TH_MM * (2.8 if side == 'top' and title else 1)) / height
+        available = y if side == 'top' else 1 - y - h
+        extra = max(0, required - available)
+        if side == 'top':
+            y += extra
+        h -= extra
+    radius = min(w * width, h * height) / 2
+    offsets = {}
+    leaders = []
+    for side, points in groups.items():
+        horizontal = side in ('top', 'bottom')
+        points.sort(key=lambda point: point[1] if horizontal else point[2])
+        if not points:
+            continue
+        spacing = font_size * POINT_TO_100TH_MM * (max(len(point[3]) for point in points) * .65 + 1.5 if horizontal else 1.8)
+        positions = []
+        for point in points:
+            ideal = radius * (point[1] if horizontal else point[2])
+            positions.append(max(ideal, positions[-1] + spacing) if positions else ideal)
+        center = sum(radius * (point[1] if horizontal else point[2]) for point in points) / len(points)
+        shift = center - (positions[0] + positions[-1]) / 2
+        for rank, ((index, dx, dy, label_text), position) in enumerate(zip(points, positions)):
+            along = position + shift
+            if horizontal and len(points) > 1:
+                # Like a conventional pie callout: stagger the upper cluster
+                # to the left, with each value above a short horizontal tail.
+                last_x = radius * points[-1][1]
+                half_text = font_size * POINT_TO_100TH_MM * (max(len(point[3]) for point in points) * .325 + .4)
+                along = last_x - half_text - (len(points) - 1 - rank) * spacing * .55
+            tx, ty = (along, (-1 if side == 'top' else 1) * (radius + gap)) if horizontal else ((-1 if side == 'left' else 1) * (radius + gap), along)
+            if horizontal:
+                ty += (-1 if side == 'top' else 1) * rank * pitch
+            base = .75 if donut else .5
+            offsets[index] = ((tx - base * radius * dx) / width, (ty - base * radius * dy) / height)
+            # Native doughnut leaders originate inside the ring in PowerPoint.
+            # A chart-relative line fixes the start at the exact outer radius.
+            direction = 1 if tx < radius * dx else -1
+            half_text = font_size * POINT_TO_100TH_MM * (len(label_text) * .325 + .15)
+            end_y = ty + (-1 if side == 'bottom' else 1) * font_size * POINT_TO_100TH_MM * .6
+            elbow_x, end_x = tx + direction * half_text, tx - direction * half_text
+            leaders.append({
+                'index': index,
+                'from': (x + w / 2 + radius * dx / width, y + h / 2 + radius * dy / height),
+                'elbow': (x + w / 2 + elbow_x / width, y + h / 2 + end_y / height),
+                'to': (x + w / 2 + end_x / width, y + h / 2 + end_y / height),
+            })
+    return (x, y, w, h), offsets, leaders
+
+
 def presentation_text_height(font_size, lines=1, padding=0, line_spacing=1.15):
     """Return a PowerPoint-calibrated TextShape height in 1/100 mm.
 
@@ -544,6 +630,78 @@ def _materialize_authored_chart_data(entries, chart_path, xml):
     return xml[:at] + external + xml[at:]
 
 
+def _patch_pptx_chart_callout_lines(entries, chart_path, xml, request):
+    """Use editable chart-relative annotations for exact outer-edge callouts."""
+    leaders = request.get('pieLeaderLines') or []
+    if not leaders:
+        return xml
+    chart_ns = 'http://schemas.openxmlformats.org/drawingml/2006/chart'
+    drawing_ns = 'http://schemas.openxmlformats.org/drawingml/2006/chartDrawing'
+    main_ns = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+    relationship_ns = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    package_ns = 'http://schemas.openxmlformats.org/package/2006/relationships'
+
+    def append_children(document, children):
+        closing = document.rfind('</')
+        if closing >= 0:
+            return document[:closing] + children + document[closing:]
+        return re.sub(r'<([\w:]+)([^>]*?)/>\s*$', lambda match: '<' + match.group(1) + match.group(2) + '>' + children + '</' + match.group(1) + '>', document)
+
+    rel_path = posixpath.join(posixpath.dirname(chart_path), '_rels', posixpath.basename(chart_path) + '.rels')
+    rel_xml = entries.get(rel_path, f'<Relationships xmlns="{package_ns}"></Relationships>'.encode()).decode()
+    relations = ET.fromstring(rel_xml)
+    reference = ET.fromstring(xml).find('{%s}userShapes' % chart_ns)
+    if reference is not None:
+        rel_id = reference.get('{%s}id' % relationship_ns)
+        relation = next((item for item in relations if item.get('Id') == rel_id and item.get('TargetMode') != 'External'), None)
+        if relation is None:
+            raise RuntimeError('Authored chart drawing has no internal relationship.')
+        drawing_path = posixpath.normpath(posixpath.join(posixpath.dirname(chart_path), relation.get('Target', ''))).lstrip('/')
+        if drawing_path not in entries:
+            raise RuntimeError('Authored chart drawing part is missing.')
+        drawing_xml = entries[drawing_path].decode()
+    else:
+        drawing_path = 'ppt/drawings/webpilot-' + posixpath.basename(chart_path).replace('.xml', '-callouts.xml')
+        while drawing_path in entries:
+            drawing_path = drawing_path.replace('.xml', '-new.xml')
+        rel_id = 'rIdWebpilotCallouts'
+        while any(item.get('Id') == rel_id for item in relations):
+            rel_id += '_'
+        target = posixpath.relpath(drawing_path, posixpath.dirname(chart_path))
+        rel_xml = append_children(rel_xml, f'<Relationship Id="{rel_id}" Type="{relationship_ns}/chartUserShapes" Target="{target}"/>')
+        entries[rel_path] = rel_xml.encode()
+        xml = append_children(xml, f'<c:userShapes r:id="{rel_id}"/>')
+        drawing_xml = f'<c:userShapes xmlns:c="{chart_ns}"></c:userShapes>'
+        entries['[Content_Types].xml'] = append_children(entries['[Content_Types].xml'].decode(),
+            f'<Override PartName="/{drawing_path}" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chartshapes+xml"/>').encode()
+    next_id = 1 + max((int(item.get('id', '0')) for item in ET.fromstring(drawing_xml).iter() if item.tag.endswith('}cNvPr')), default=0)
+    width, height = request['chartSize']
+    annotations = []
+    for index, leader in enumerate(leaders, next_id):
+        points = [leader['from'], leader['elbow'], leader['to']]
+        left, top = min(point[0] for point in points), min(point[1] for point in points)
+        right, bottom = max(point[0] for point in points), max(point[1] for point in points)
+        cx, cy = max(1, round((right - left) * width * 360)), max(1, round((bottom - top) * height * 360))
+        path_points = [(round((px - left) / max(1e-12, right - left) * 21600), round((py - top) / max(1e-12, bottom - top) * 21600)) for px, py in points]
+        path_xml = ''.join(f'<a:{"moveTo" if index == 0 else "lnTo"}><a:pt x="{px}" y="{py}"/></a:{"moveTo" if index == 0 else "lnTo"}>' for index, (px, py) in enumerate(path_points))
+        color = leader.get('color', request['leaderColor'])
+        annotations.append(
+            f'<cdr:relSizeAnchor xmlns:cdr="{drawing_ns}" xmlns:a="{main_ns}">'
+            f'<cdr:from><cdr:x>{left:.10f}</cdr:x><cdr:y>{top:.10f}</cdr:y></cdr:from>'
+            f'<cdr:to><cdr:x>{right:.10f}</cdr:x><cdr:y>{bottom:.10f}</cdr:y></cdr:to>'
+            f'<cdr:sp><cdr:nvSpPr><cdr:cNvPr id="{index}" name="Sector edge leader {index}"/><cdr:cNvSpPr/></cdr:nvSpPr>'
+            '<cdr:spPr><a:xfrm>'
+            f'<a:off x="{round(left * width * 360)}" y="{round(top * height * 360)}"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm>'
+            '<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="0" t="0" r="w" b="h"/>'
+            f'<a:pathLst><a:path w="21600" h="21600" fill="none">{path_xml}</a:path></a:pathLst></a:custGeom><a:noFill/>'
+            f'<a:ln w="6350" cap="flat"><a:solidFill><a:srgbClr val="{color:06X}"><a:alpha val="65000"/></a:srgbClr></a:solidFill>'
+            '<a:prstDash val="solid"/><a:headEnd type="none"/><a:tailEnd type="none"/></a:ln>'
+            '</cdr:spPr></cdr:sp></cdr:relSizeAnchor>'
+        )
+    entries[drawing_path] = append_children(drawing_xml, ''.join(annotations)).encode()
+    return xml
+
+
 def _patch_pptx_chart_style(job, entries):
     """Persist authored chart intent where Office clients disagree on omitted defaults.
 
@@ -578,17 +736,43 @@ def _patch_pptx_chart_style(job, entries):
             if not chart_path.startswith('ppt/charts/') or chart_path not in entries:
                 raise RuntimeError('Authored chart relationship did not resolve to a PPTX chart part.')
             xml = entries[chart_path].decode('utf-8')
+            if request.get('piePlotLayout'):
+                x, y, width, height = request['piePlotLayout']
+                layout = ('<c:layout><c:manualLayout><c:layoutTarget val="inner"/>'
+                          '<c:xMode val="edge"/><c:yMode val="edge"/><c:wMode val="factor"/><c:hMode val="factor"/>'
+                          f'<c:x val="{x}"/><c:y val="{y}"/><c:w val="{width}"/><c:h val="{height}"/>'
+                          '</c:manualLayout></c:layout>')
+                xml = re.sub(r'(<c:plotArea>)(?:<c:layout>.*?</c:layout>|<c:layout/>)?', lambda match: match.group(1) + layout, xml, count=1, flags=re.DOTALL)
             # Some LO versions serialize the series foreground over every
             # point's CharColor (especially when the series color is black).
             # Persist the resolved per-point foreground in the actual chart,
             # so the reopened preview and PowerPoint keep the same contrast.
             label_colors = iter(request.get('dataLabelColors') or [])
+            label_positions = iter(request.get('dataLabelPositions') or [])
+            label_offsets = iter(request.get('dataLabelOffsets') or [])
+            label_formats = iter(request.get('dataLabelFormats') or [])
             def label_series(match):
                 colors = next(label_colors, {})
+                positions = next(label_positions, {})
+                offsets = next(label_offsets, {})
+                formats = next(label_formats, {})
                 def point_label(label_match):
                     block = label_match.group(0)
                     index = re.search(r'<c:idx\b[^>]*\bval="(\d+)"', block)
                     color = colors.get(int(index.group(1))) if index else None
+                    position = positions.get(int(index.group(1))) if index else None
+                    offset = offsets.get(int(index.group(1))) if index else None
+                    number_format = formats.get(int(index.group(1))) if index else None
+                    if offset:
+                        block = re.sub(r'<c:layout>.*?</c:layout>|<c:layout/>', '', block, flags=re.DOTALL)
+                        layout = f'<c:layout><c:manualLayout><c:x val="{offset[0]:.8f}"/><c:y val="{offset[1]:.8f}"/></c:manualLayout></c:layout>'
+                        block = re.sub(r'(<c:idx\b[^>]*/>)', lambda match: match.group(1) + layout, block, count=1)
+                    if number_format:
+                        block = re.sub(r'<c:numFmt\b[^>]*/>', '', block)
+                        block = re.sub(r'(?=<c:(?:spPr|txPr|dLblPos|showLegendKey|showVal|showCatName|showSerName|showPercent|showBubbleSize|separator|extLst)\b|</c:dLbl>)', lambda _: f'<c:numFmt formatCode="{number_format}" sourceLinked="0"/>', block, count=1)
+                    if position:
+                        block = re.sub(r'<c:dLblPos\b[^>]*/>', '', block)
+                        block = re.sub(r'(?=<c:(?:showLegendKey|showVal|showCatName|showSerName|showPercent|showBubbleSize|separator|extLst)\b|</c:dLbl>)', lambda _: f'<c:dLblPos val="{position}"/>', block, count=1)
                     if color is None:
                         return block
                     fill = f'<a:solidFill><a:srgbClr val="{color:06X}"/></a:solidFill>'
@@ -604,7 +788,16 @@ def _patch_pptx_chart_style(job, entries):
                         return re.sub(r'<a:(?:defRPr|rPr|endParaRPr)\b[^>]*(?:/>|>.*?</a:(?:defRPr|rPr|endParaRPr)>)', text_properties, block, flags=re.DOTALL)
                     properties = '<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr>' + fill + '</a:defRPr></a:pPr><a:endParaRPr/></a:p></c:txPr>'
                     return re.sub(r'(?=<c:(?:dLblPos|showLegendKey|showVal|showCatName|showSerName|showPercent|showBubbleSize|separator|extLst)\b|</c:dLbl>)', lambda _: properties, block, count=1)
-                return re.sub(r'<c:dLbl\b[^>]*>.*?</c:dLbl>', point_label, match.group(0), flags=re.DOTALL)
+                series_xml = re.sub(r'<c:dLbl\b[^>]*>.*?</c:dLbl>', point_label, match.group(0), flags=re.DOTALL)
+                if positions:
+                    def leader_lines(labels):
+                        block = re.sub(r'<c:showLeaderLines\b[^>]*/>', '', labels.group(0))
+                        # Native doughnut leaders join the center of the ring;
+                        # the explicit chart drawing starts at its outer edge.
+                        enabled = '0' if request.get('pieLeaderLines') else '1'
+                        return re.sub(r'(?=<c:(?:leaderLines|extLst)\b|</c:dLbls>)', f'<c:showLeaderLines val="{enabled}"/>', block, count=1)
+                    series_xml = re.sub(r'<c:dLbls\b[^>]*>.*?</c:dLbls>', leader_lines, series_xml, flags=re.DOTALL)
+                return series_xml
             if request.get('dataLabelColors'):
                 xml = re.sub(r'<c:ser\b[^>]*>.*?</c:ser>', label_series, xml, flags=re.DOTALL)
             if request['kind'] == 'bubble':
@@ -634,6 +827,7 @@ def _patch_pptx_chart_style(job, entries):
                         block = re.sub(r'(<c:order\b[^>]*/>)', r'\1' + marker, block, count=1)
                     return block
                 xml = re.sub(r'<c:ser\b[^>]*>.*?</c:ser>', stock_series, xml, flags=re.DOTALL)
+            xml = _patch_pptx_chart_callout_lines(entries, chart_path, xml, request)
             entries[chart_path] = _materialize_authored_chart_data(entries, chart_path, xml).encode('utf-8')
     return entries
 
@@ -4719,10 +4913,8 @@ class PresentationLayout(OfficeUnitConversion):
                 small_slice_legend = has_labels and total > 0 and any(0 < abs(float(v)) / total < .06 for v in pie_rows[0])
                 combined_labels = sum(bool(value) for value in (show_values, show_category_name, show_percent)) > 1
                 if small_slice_legend or combined_labels:
-                    # Donut's native renderer only supports CENTER labels.
-                    # These defaults also cover weak model output that disables
-                    # the legend or forces every tiny label inside. Preserve all
-                    # requested information instead of rejecting the tool call.
+                    # Keep a precise legend as well as a label on every
+                    # nonzero sector. Small sectors get outside callouts below.
                     show_legend = True
                     legend_labels = []
                     for name, value in zip(categories, pie_rows[0]):
@@ -4878,12 +5070,24 @@ class PresentationLayout(OfficeUnitConversion):
         # Apply labels and marks after ALL Chart1 template operations. They can
         # otherwise be reset, or retain a default font/marker after export.
         data_label_colors = []
+        data_label_positions = []
+        data_label_offsets = []
+        data_label_formats = []
+        pie_plot_layout = None
+        pie_leader_lines = []
         for native_type in coordinate.getChartTypes():
             final_series = native_type.getDataSeries()
             final_palette = self._chart_palette(len(final_series), colors)
             for series_index, item in enumerate(final_series):
                 resolved_label_colors = {}
                 data_label_colors.append(resolved_label_colors)
+                resolved_label_positions = {}
+                data_label_positions.append(resolved_label_positions)
+                resolved_label_offsets = {}
+                data_label_offsets.append(resolved_label_offsets)
+                leaders = []
+                resolved_label_formats = {}
+                data_label_formats.append(resolved_label_formats)
                 authored = source_series[series_index] if series_index < len(source_series) else {}
                 if series_index < len(axis_indexes):
                     item.AttachedAxisIndex = axis_indexes[series_index]
@@ -4893,6 +5097,13 @@ class PresentationLayout(OfficeUnitConversion):
                 label.ShowCategoryName = bool(show_category_name)
                 label.ShowLegendSymbol = False
                 item.Label = label
+                if service_name in ('PieDiagram', 'DonutDiagram') and show_percent:
+                    formats = chart['document'].getNumberFormats()
+                    locale = uno.createUnoStruct('com.sun.star.lang.Locale')
+                    locale.Language = 'en'
+                    locale.Country = 'US'
+                    key = formats.queryKey('0.##%', locale, True)
+                    item.PercentageNumberFormat = formats.addNew('0.##%', locale) if key < 0 else key
                 apply_text_font(item, font_name=font_name or _CJK_FONT, font_size=font_size)
                 item.CharColor = chart_contrast_color(chart_background, preferred=label_color if label_color is not None else font_color)
                 item.TextWordWrap = False
@@ -4914,9 +5125,20 @@ class PresentationLayout(OfficeUnitConversion):
                 point_values = authored.get('y', authored.get('values', [])) or []
                 if service_name in ('PieDiagram', 'DonutDiagram'):
                     point_values = self._chart_series(categories, values, series, series_name)[2][series_index]
+                    if show_values or show_percent or show_category_name:
+                        pie_plot_layout, resolved_label_offsets, leaders = chart_pie_callouts(
+                            point_values, chart['box']['width'], chart['box']['height'],
+                            float(label_font_size or font_size), service_name == 'DonutDiagram',
+                            legend_position=str(legend_position or 'right').lower(), show_legend=show_legend, title=bool(title),
+                            outside_all=label_position == 'outside',
+                        )
+                        data_label_offsets[-1] = resolved_label_offsets
+                        pie_leader_lines.extend(leaders)
                 if authored.get('point_colors') is not None and (not isinstance(authored['point_colors'], (list, tuple)) or len(authored['point_colors']) != len(point_values)):
                     raise ValueError('CHART_STYLE_INVALID: point_colors must contain exactly one color per observation; use series.color for a group color.')
                 point_palette = self._chart_palette(len(point_values), authored.get('point_colors') or colors) if color_points or authored.get('point_colors') else [final_palette[series_index]] * len(point_values)
+                for leader in leaders:
+                    leader['color'] = office_color(point_palette[leader['index']])
                 if service_name in ('PieDiagram', 'DonutDiagram', 'BubbleDiagram', 'XYDiagram'):
                     for point_index, point_color in enumerate(point_palette):
                         data_point = item.getDataPointByIndex(point_index)
@@ -4935,8 +5157,19 @@ class PresentationLayout(OfficeUnitConversion):
                         if service_name in ('PieDiagram', 'DonutDiagram'):
                             total = sum(abs(float(v)) for v in point_values)
                             small = total > 0 and abs(float(point_values[point_index])) / total < .06
-                            outside = service_name == 'PieDiagram' and (label_position == 'outside' or (label_position == 'auto' and small and not small_slice_legend))
-                            data_point.LabelPlacement = uno.getConstantByName('com.sun.star.chart.DataLabelPlacement.' + ('OUTSIDE' if outside else 'CENTER'))
+                            outside = label_position == 'outside' or small
+                            custom_offset = resolved_label_offsets.get(point_index)
+                            placement = 'CENTER' if custom_offset else 'OUTSIDE' if outside else 'CENTER'
+                            data_point.LabelPlacement = uno.getConstantByName('com.sun.star.chart.DataLabelPlacement.' + placement)
+                            resolved_label_positions[point_index] = 'ctr' if custom_offset else 'outEnd' if outside else 'ctr'
+                            if custom_offset:
+                                position = uno.createUnoStruct('com.sun.star.chart2.RelativePosition')
+                                position.Primary, position.Secondary = custom_offset
+                                data_point.CustomLabelPosition = position
+                            if show_percent and total > 0:
+                                percentage = abs(float(point_values[point_index])) / total * 100
+                                decimals = next((digits for digits in range(7) if abs(percentage - round(percentage, digits)) < 1e-8), 6)
+                                resolved_label_formats[point_index] = '0' + ('.' + '0' * decimals if decimals else '') + '%'
                             resolved_color = chart_contrast_color(
                                 chart_background if outside else point_color,
                                 preferred=label_color if label_color is not None else font_color if outside else None,
@@ -4945,7 +5178,7 @@ class PresentationLayout(OfficeUnitConversion):
                             data_point.CharColor = resolved_color
                             resolved_label_colors[point_index] = resolved_color
                             data_point.TextWordWrap = False
-                            if float(point_values[point_index]) == 0 or (small_slice_legend and small):
+                            if float(point_values[point_index]) == 0:
                                 data_point.Label = uno.createUnoStruct('com.sun.star.chart2.DataPointLabel')
                     if service_name in ('PieDiagram', 'DonutDiagram'):
                         item.ShowCustomLeaderLines = True
@@ -5007,6 +5240,13 @@ class PresentationLayout(OfficeUnitConversion):
             'kind': normalized, 'showValues': bool(show_values),
             'bubbleScale': int(bubble_scale),
             'dataLabelColors': data_label_colors,
+            'dataLabelPositions': data_label_positions,
+            'dataLabelOffsets': data_label_offsets,
+            'dataLabelFormats': data_label_formats,
+            'piePlotLayout': pie_plot_layout,
+            'pieLeaderLines': pie_leader_lines,
+            'chartSize': (chart['box']['width'], chart['box']['height']),
+            'leaderColor': chart_contrast_color(chart_background, preferred=0x64748B),
         }
         chart['chartType'] = normalized
         return chart
@@ -6715,7 +6955,7 @@ def facade_value_schemas(document_type):
                 'axisBounds': 'Optional numeric x_axis_min/x_axis_max/y_axis_min/y_axis_max control visible axis bounds; each minimum must be below its maximum. For bubbles near plot edges, expand the axis range and chart box, not x/y/sizes data. Data overlap can be intrinsic; never move samples or change relative sizes to disguise it.',
                 'axisScales': "scatter/bubble accept x_axis_scale='linear'|'log10' and y_axis_scale='linear'|'log10'. Log scales preserve stored data and require all values/bounds positive; explicitly label the scale. axis_position='outside' (default) keeps axes/ticks on plot edges; 'zero' requests internal zero crossing. x/y titles and bounds refer to physical horizontal/vertical axes, including bar.",
                 'appearance': "font_name, font_color, grid_color, gridlines=True, line_width=1.5 (pt), series_transparency=0..100. title=None suppresses the internal title, including for single series. symbols=None enables marks only for line/scatter; stock always suppresses marks. marker_shape='circle' (also square/diamond/triangle/none); marker_size is diameter in points, default 3 for lines and 4 for scatter. Filled-radar defaults to 45% transparency; bubbles to 30% with an outline. bubble_scale=50 sets PPTX bubble area display scale (1..300%); LibreOffice preview uses its own native maximum size, so inspect both overlap and axis padding. Dense line/area/radar/scatter/bubble/stock families default show_values=False. Use shared theme helpers.",
-                'dataLabels': "label_font_size=1..72pt, label_color, label_position='auto'|'inside'|'outside'. Labels enforce readable contrast (>=4.5:1), including when an explicit label_color is unsuitable, accounting for mark transparency. Tiny pie/donut labels automatically move into a native legend even if show_legend=False or label_position='inside'; requested category/value/percent combinations are preserved in legend text. Large labels remain in their sectors. Bar labels fit/stagger without deleting values. Widen the plot if labels still collide; do not hide requested values or alter source data.",
+                'dataLabels': "label_font_size=1..72pt, label_color, label_position='auto'|'inside'|'outside'. Labels enforce readable contrast (>=4.5:1), including when an explicit label_color is unsuitable, accounting for mark transparency. Every nonzero pie/donut sector keeps its requested numeric label: small sectors automatically use staggered outside labels and editable 0.5pt elbow lines from the outer sector edge, with short horizontal tails and matching sector colors, even if label_position='inside'. Exact fractions such as 0.8% and 0.2% are preserved. The legend supplements labels, never replaces them; requested category/value/percent combinations remain in legend text. Large labels remain in their sectors unless outside is requested. Bar labels fit/stagger without deleting values. Widen the plot if labels still collide; do not hide requested values or alter source data.",
                 'chartTypes': ['area', 'bar', 'column', 'bubble', 'donut', 'doughnut', 'filled-radar', 'line', 'pie', 'radar', 'scatter', 'stock'],
                 'labelRule': 'Category charts require semantic categories; scatter/bubble use numeric X and may pass categories=[]. Supply meaningful series names, axis units and appropriate labels. Pie/donut: legend + percent-only OR category-only without legend, never multiple label modes.',
             },
