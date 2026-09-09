@@ -61,9 +61,6 @@ export type GenerateUnoProgramInput = {
   program?: string;
   /** Compact semantic create input compiled into the existing validated UNO draft pipeline. */
   spec?: OfficeSemanticDocumentInput;
-  /** Required with baseDigest for an intentional complete source replacement. */
-  replaceExisting?: boolean;
-  baseDigest?: string;
   render?: boolean;
   includeVisualVerification?: boolean;
   attachmentBindings?: FileAttachmentBinding[];
@@ -83,8 +80,6 @@ export type EditUnoProgramInput = {
   documentId?: string;
   /** Optional @webpilot-unit path. The patch is scoped to that page/section source unit. */
   path?: string;
-  /** Exact digest returned by the latest read for this draft or selected source unit. */
-  baseDigest?: string;
   /** Codex apply_patch document. Each well-formed @@ hunk is applied independently. */
   patch?: string;
   /** Exact, unique source replacements; mutually exclusive with patch. */
@@ -344,13 +339,14 @@ export async function syncDocumentAssets(
     if (!binding.name || !binding.path) continue;
     sources.push({ name: binding.name, path: binding.path, origin: 'attachment', ref: binding.ref });
   }
-  for (const origin of ['downloads', 'generated'] as const) {
+  for (const origin of ['downloads', 'generated', 'media'] as const) {
     const directory = artifactDir(runId, origin);
-    const files = origin === 'generated'
+    const files = origin !== 'downloads'
       ? await visibleFilesRecursive(directory)
       : (await visibleFiles(directory)).map((entry) => ({ name: entry.name, path: path.join(directory, entry.name) }));
     for (const entry of files) {
-      sources.push({ name: entry.name, path: entry.path, origin: origin === 'downloads' ? 'download' : 'generated' });
+      sources.push({ name: entry.name, path: entry.path, origin: origin === 'downloads' ? 'download' : 'generated',
+        ...(origin === 'media' ? { ref: path.relative(currentNodeFileWorkspaceHost().artifactsRoot, entry.path).split(path.sep).join('/') } : {}) });
     }
   }
   const claimed = new Set<string>();
@@ -420,17 +416,11 @@ function artifactResultPayload(input: {
 async function resolveEditDocumentId(
   runId: string | undefined,
   value: string | undefined,
-  baseDigest: string | undefined,
 ) {
   const supplied = String(value || '').trim();
   if (supplied) return requireDocumentId(supplied, 'edit');
 
   const drafts = (await listOfficeDraftCatalog(runId)).filter((draft) => Boolean(draft.sourceDigest));
-  const normalizedDigest = String(baseDigest || '').trim().toLowerCase();
-  const digestMatches = /^[a-f0-9]{64}$/.test(normalizedDigest)
-    ? drafts.filter((draft) => String(draft.sourceDigest || '').toLowerCase() === normalizedDigest)
-    : [];
-  if (digestMatches.length === 1) return digestMatches[0].documentId;
   if (drafts.length === 1) return drafts[0].documentId;
 
   const candidates = drafts.map((draft) => draft.documentId).join(', ') || '(none)';
@@ -522,7 +512,8 @@ export async function listOfficeDraftCatalog(runId: string | undefined): Promise
 export async function listOfficeDrafts(input: { runId?: string }): Promise<FileArtifactOperationResult> {
   try {
     const drafts = await listOfficeDraftCatalog(input.runId);
-    return { ok: true, actual: JSON.stringify({ kind: 'office-draft-catalog', drafts: drafts.map((draft) => ({
+    const assets = await syncDocumentAssets(input.runId);
+    return { ok: true, actual: JSON.stringify({ kind: 'office-draft-catalog', availableAssets: assets.map(describeDocumentAsset), drafts: drafts.map((draft) => ({
       ...draft, sourceRead: { action: 'readSource', documentId: draft.documentId },
     })) }) };
   } catch (error) {
@@ -536,7 +527,7 @@ export async function officeDraftCatalogForPrompt(runId: string | undefined) {
   return [
     '[Current Office draft catalog - saved validation may be historical]',
     'Resume an existing logical document with its exact documentId. Do not guess an ID or create a replacement unless the user explicitly requests a new document.',
-    'For source/diagnostics: file(action=readSource, documentId=...). Read one code window, then edit. readContent + artifactId reads the finished file, NOT its source. Digests listed below are state metadata; get edit.baseDigest from readSource.patchBaseDigest.',
+    'For source/diagnostics: file(action=readSource, documentId=...). Read one code window, then edit. readContent + artifactId reads the finished file, NOT its source. Digests listed below are informational state metadata, not edit parameters.',
     'validationFailureCount counts failed validations in the repair sequence, possibly with different sources/causes. It is NOT a bridge retry count. validationEvidence freshness=stale/unknown cannot justify a current infrastructure blocker: on task resumption, obtain one fresh render result, then act on that result without unchanged retry loops. A current source-unit check is not full-document validation.',
     ...drafts.slice(0, 100).map((draft) => `- documentId=${draft.documentId} | type=${draft.documentType} | file=${JSON.stringify(draft.fileName)} | state=${draft.state} | validationStatus=${draft.validationStatus || 'none'} | validationEvidence=${JSON.stringify(draft.validationEvidence ? { freshness: draft.validationEvidence.freshness, reason: draft.validationEvidence.reason, checkedAt: draft.validationEvidence.checkedAt, scope: draft.validationEvidence.scope, stage: draft.validationEvidence.stage } : null)} | validationFailureCount=${draft.validationFailureCount} | sourceDigest=${draft.sourceDigest || 'none'} | validatedSourceDigest=${draft.validatedSourceDigest || 'none'} | renderedDigest=${draft.renderedDigest || 'none'} | visualQaDigest=${draft.visualQaDigest || 'none'} | visualQaDeckStatus=${draft.visualQaDeckStatus || 'none'}${draft.visualQaFailedPages?.length || draft.visualQaDeckStatus === 'failed' ? ` | visualQaFailedPages=${draft.visualQaFailedPages?.join(',') || 'none'} | visualQaFailures=${JSON.stringify(draft.visualQaFailureSummary || [])}` : ''} | updatedAt=${draft.updatedAt}`),
   ].join('\n');
@@ -641,7 +632,7 @@ async function readUnoDraftUnlocked(input: ReadUnoDraftInput): Promise<FileArtif
         readKind: 'source',
         sourceIndexError,
         sourceIndexRecovery: sourceIndexError
-          ? 'Source-unit markers are malformed. Read/edit by global startLine/endLine without path using patchBaseDigest; repair the markers. The source buffer is still available and no render is required.'
+          ? 'Source-unit markers are malformed. Read/edit by global startLine/endLine without path; repair the markers. The source buffer is still available and no render is required.'
           : undefined,
         sourceLanguage: draft.generator === 'javascript' ? 'javascript' : 'python',
         documentId: draft.documentId,
@@ -649,9 +640,8 @@ async function readUnoDraftUnlocked(input: ReadUnoDraftInput): Promise<FileArtif
         // Recover the brief after compaction without replaying it on every bounded code read.
         design: !explicitRange && !requestedUnit ? draft.design : undefined,
         sourceUnitDigest: requestedUnit ? sourceDigest(readableSource) : undefined,
-        // A patch is optimistic-concurrency controlled against the complete
-        // draft, even when the read was scoped to one unit. edit accepts this
-        // digest both with and without the optional source-unit path.
+        // Retain this draft-wide checksum as informational result metadata.
+        // Edits and replacements do not accept or check a model-supplied version.
         patchBaseDigest: sourceDigest(draft.program),
         validationStatus: draft.validationStatus || 'pending',
         validationEvidence: officeValidationEvidence(draft, await currentUnoWorkerDigest()),
@@ -707,7 +697,7 @@ async function readUnoDraftUnlocked(input: ReadUnoDraftInput): Promise<FileArtif
             ? 'Only sourceLineRange is included in program. Continue with nextRead only if those remaining lines are needed; do not reread this window. lineCount is the total size of the source/unit, not the amount returned.'
             : undefined,
         patchGuidance: omitLargeProgram ? undefined
-          : 'Use patchBaseDigest as edit.baseDigest. Prefer replacements:[{oldText,newText}] for small fixes; copy exact program whitespace. All edits locate unique targets on this pre-edit snapshot and commit together or none do. No fuzzy matching or stale-version rebase. In patch, put -old/+new in the same @@ hunk, separate from ALL source indentation. Inspect saved and validation separately.',
+          : 'Prefer replacements:[{oldText,newText}] for small fixes; copy exact program whitespace. All edits locate unique targets in the current source and commit together or none do. No source-version parameter or fuzzy matching. In patch, put -old/+new in the same @@ hunk, separate from ALL source indentation. Inspect saved and validation separately.',
         readFallbackGuidance: hasBoundedFallback
           ? `The requested path ${requestedPath} is not a known source unit, so the supplied startLine/endLine were applied to the complete draft instead.`
           : undefined,
@@ -733,13 +723,18 @@ export async function getUnoApi(input: UnoApiInput): Promise<FileArtifactOperati
 
 async function getUnoApiUnlocked(input: UnoApiInput): Promise<FileArtifactOperationResult> {
   const documentId = String(input.documentId || '').trim();
-  if (!documentId) {
-    return { ok: false, actual: 'file action=unoApi requires a stable documentId. It may be queried before plan only when documentType is also provided.' };
-  }
   try {
+    if (!documentId && !input.documentType) {
+      const documentTypes = await Promise.all((['word', 'spreadsheet', 'presentation'] as const).map(async (documentType) => {
+        const catalog = await inspectUnoApi({ documentType, limit: 120 });
+        return { documentType, moduleIndex: catalog.moduleIndex, read: { action: 'unoApi', documentType } };
+      }));
+      return { ok: true, actual: JSON.stringify({ kind: 'uno-api-index', boundToPlannedDraft: false, documentTypes,
+        instruction: 'Choose documentType and optional query to read API details. documentId is optional; include it only to bind the read to an existing draft.' }) };
+    }
     let draft: OfficeDocumentDraft | undefined;
     try {
-      draft = await loadDraft(input.runId, documentId);
+      if (documentId) draft = await loadDraft(input.runId, documentId);
     } catch (error) {
       const code = error && typeof error === 'object' && 'code' in error
         ? String((error as { code?: unknown }).code || '')
@@ -804,22 +799,22 @@ export async function getOfficeJsApi(
   input: Pick<UnoApiInput, 'runId' | 'documentId' | 'documentType' | 'query'>,
 ): Promise<FileArtifactOperationResult> {
   const documentId = String(input.documentId || '').trim();
-  if (!documentId) {
-    return { ok: false, actual: 'file action=jsApi requires the documentId returned by action=plan.' };
+  if (!documentId && !input.documentType) {
+    return { ok: true, actual: JSON.stringify({ kind: 'office-js-api-index', boundToPlannedDraft: false,
+      documentTypes: (['word', 'spreadsheet', 'presentation'] as const).map((documentType) => ({ documentType, read: { action: 'jsApi', documentType } })),
+      instruction: 'Choose documentType to read API details without creating a draft. documentId is optional.' }) };
   }
-  let draft: OfficeDocumentDraft;
+  let draft: OfficeDocumentDraft | undefined;
   try {
-    draft = await loadDraft(input.runId, documentId);
+    if (documentId) draft = await loadDraft(input.runId, documentId);
   } catch (error) {
     const code = error && typeof error === 'object' && 'code' in error
       ? String((error as { code?: unknown }).code || '')
       : '';
-    if (code === 'ENOENT') {
-      return { ok: false, actual: `Office draft ${documentId} is not planned. Call action=plan before action=jsApi.` };
-    }
-    return { ok: false, actual: `JavaScript Office API inspection failed: ${error instanceof Error ? error.message : String(error)}` };
+    if (code !== 'ENOENT') return { ok: false, actual: `JavaScript Office API inspection failed: ${error instanceof Error ? error.message : String(error)}` };
   }
-  if ((draft.generator || 'uno') !== 'javascript') {
+  if (!draft && !input.documentType) return { ok: false, actual: `Office draft ${documentId} is not planned. Provide documentType to read the unbound API, or call plan.` };
+  if (draft && (draft.generator || 'uno') !== 'javascript') {
     return {
       ok: false,
       actual: JSON.stringify({
@@ -829,13 +824,13 @@ export async function getOfficeJsApi(
       }),
     };
   }
-  if (input.documentType && input.documentType !== draft.documentType) {
+  if (draft && input.documentType && input.documentType !== draft.documentType) {
     return {
       ok: false,
       actual: `Document ${documentId} is planned as ${draft.documentType}, not ${input.documentType}. Use the planned documentType.`,
     };
   }
-  const documentType = draft.documentType;
+  const documentType = draft?.documentType || input.documentType!;
   const examples = {
     presentation: `export async function createDocument(job) {
   const pptx = new job.PptxGenJS();
@@ -899,6 +894,8 @@ const pageBreak = new Paragraph({ children: [new PageBreak()] });`,
     ok: true,
     actual: JSON.stringify({
       kind: 'office-js-api',
+      documentId: documentId || undefined,
+      boundToPlannedDraft: Boolean(draft),
       documentType,
       libraries: {
         presentation: 'pptxgenjs via job.PptxGenJS',
@@ -920,7 +917,7 @@ const pageBreak = new Paragraph({ children: [new PageBreak()] });`,
         'JavaScript mode creates PPTX, DOCX, or XLSX directly. A .pdf target is supported by creating the matching Office source for documentType and converting it with local LibreOffice.',
         'For PDF, still write to job.outputPath exactly as shown; its temporary extension is already the correct .pptx, .docx, or .xlsx source format.',
         'Existing-file modification remains UNO-based.',
-        'Every action=edit applies source patch hunks before validation. Call readSource for one diagnostic-focused code window and its patchBaseDigest, then edit before reading another window. Combine only repairs whose exact source is already present.',
+        'Every action=edit applies source patch hunks before validation. Call readSource for one diagnostic-focused code window, then edit before reading another window. Combine only repairs whose exact source is already present.',
       ],
       recipes,
       completeDocument: examples[documentType],
@@ -2080,31 +2077,6 @@ async function generateUnoFileArtifactUnlocked(input: GenerateUnoProgramInput): 
         diagnostics: compiled.diagnostics,
       };
     }
-    const existingProgram = persistedDraft.program || '';
-    const existingDigest = sourceDigest(existingProgram);
-    const removesEntrypoint = /\b(?:async\s+)?(?:def|function)\s+create_document\b/.test(existingProgram)
-      && !/\b(?:async\s+)?(?:def|function)\s+create_document\b/.test(program);
-    const drasticShrink = existingProgram.length >= 1_000
-      && program.length < Math.max(200, Math.floor(existingProgram.length * 0.35));
-    const replacingExistingSource = Boolean(existingProgram.trim());
-    const replacementAuthorized = input.replaceExisting === true
-      && String(input.baseDigest || '').toLowerCase() === existingDigest;
-    if (replacingExistingSource && !replacementAuthorized) {
-      return {
-        ok: false,
-        actual: JSON.stringify({
-          kind: 'uno-draft-destructive-generate-blocked',
-          code: 'DESTRUCTIVE_GENERATE_REQUIRES_CONFIRMATION',
-          documentId,
-          changed: false,
-          saved: false,
-          sourceCharacters: existingProgram.length,
-          sourceDigest: existingDigest,
-          patchBaseDigest: existingDigest,
-          error: `action=generate found an existing working source${drasticShrink || removesEntrypoint ? ' and this replacement would discard most of it or its create_document entrypoint' : ''}. Replacing it requires replaceExisting=true with the current baseDigest. A smaller change may instead be submitted through action=edit.`,
-        }),
-      };
-    }
     const draft = structuredClone(persistedDraft);
     draft.program = program;
     delete draft.lastSourceEdit;
@@ -2117,8 +2089,8 @@ async function generateUnoFileArtifactUnlocked(input: GenerateUnoProgramInput): 
     delete draft.rendererValidation;
     invalidateActiveVisualQa(draft);
     draft.workflow = { state: 'authoring', checkpointAt: new Date().toISOString() };
-    // A documentId owns exactly one editable source buffer. An explicitly
-    // authorized generate atomically replaces that same buffer.
+    // A documentId owns exactly one editable source buffer. Generate atomically
+    // saves to that same buffer, including when a previous source already exists.
     return validateDraft({ ...input, draft, documentChanged: true });
   } catch (error) {
     return { ok: false, actual: `Office source generation failed: ${error instanceof Error ? error.message : String(error)}` };
@@ -2132,7 +2104,7 @@ async function editUnoFileArtifactUnlocked(input: EditUnoProgramInput): Promise<
     if (typeof input.program === 'string' && input.program.trim()) {
       return {
         ok: false,
-        actual: 'file action=edit requires exact oldText/newText replacements or a Codex-format patch, not a complete program. Read current source and patchBaseDigest; do not switch to generate after an edit or validation failure.',
+        actual: 'file action=edit requires exact oldText/newText replacements or a Codex-format patch, not a complete program. Read the affected source; do not switch to generate after an edit or validation failure.',
       };
     }
     const persistedDraft = await loadDraft(input.runId, documentId);
@@ -2151,10 +2123,6 @@ async function editUnoFileArtifactUnlocked(input: EditUnoProgramInput): Promise<
     if (hasPatch === hasReplacements) {
       return { ok: false, actual: 'file action=edit requires exactly one of patch or replacements (exact oldText/newText pairs). For indentation repairs prefer replacements.' };
     }
-    const baseDigest = String(input.baseDigest || '').trim().toLowerCase();
-    if (!/^[a-f0-9]{64}$/.test(baseDigest)) {
-      return { ok: false, actual: 'file action=edit patch requires baseDigest copied from the latest readSource.patchBaseDigest, not an artifactId or a render digest.' };
-    }
     if (hasReplacements && (!Array.isArray(input.replacements) || input.replacements.some((item) => !item || typeof item.oldText !== 'string' || typeof item.newText !== 'string'))) {
       return { ok: false, actual: JSON.stringify({
         kind: 'uno-draft-patch-conflict', code: 'PATCH_INPUT_REJECTED', editStatus: 'rejected',
@@ -2163,12 +2131,12 @@ async function editUnoFileArtifactUnlocked(input: EditUnoProgramInput): Promise<
       }) };
     }
     const requestDigest = sourceDigest(JSON.stringify({
-      baseDigest, path: requestedPath || null,
+      path: requestedPath || null,
       patch: hasPatch ? normalizedDraftSource(patchText).trim() : null,
       replacements: hasReplacements ? input.replacements!.map((item) => ({ oldText: normalizedDraftSource(item.oldText), newText: normalizedDraftSource(item.newText) })) : null,
     }));
     const receipt = persistedDraft.lastSourceEdit;
-    if (receipt?.requestDigest === requestDigest && receipt.afterDigest === draftDigest && receipt.beforeDigest === baseDigest) {
+    if (receipt?.requestDigest === requestDigest && receipt.afterDigest === draftDigest) {
       return { ok: persistedDraft.validationStatus !== 'failed', actual: JSON.stringify({
         kind: 'uno-draft-patch-no-changes', code: 'EDIT_REPLAY_CONFIRMED', editStatus: 'already-applied',
         documentId, changed: false, saved: true, patchBaseDigest: draftDigest, sourceUnitPath: requestedPath,
@@ -2176,15 +2144,6 @@ async function editUnoFileArtifactUnlocked(input: EditUnoProgramInput): Promise<
         validationStatus: persistedDraft.validationStatus || 'pending',
         diagnostics: compactValidationDiagnosticsForTool(persistedDraft.validationDiagnostics),
         message: 'The identical edit is confirmed by its saved receipt and current source revision. No source write or validation was repeated. Saved source is not proof of successful validation.',
-      }) };
-    }
-    if (baseDigest !== draftDigest) {
-      return { ok: false, actual: JSON.stringify({
-        kind: 'uno-draft-patch-conflict', code: 'PATCH_BASE_DIGEST_MISMATCH', editStatus: 'rejected',
-        documentId, changed: false, saved: false, patchBaseDigest: draftDigest,
-        expectedBaseDigest: draftDigest, suppliedBaseDigest: baseDigest, sourceUnitPath: requestedPath,
-        error: 'Source revision changed and this request is not a confirmed replay. No automatic rebase or source write was performed. Read only the affected source window and prepare the edit again.',
-        nextAction: { action: 'readSource', documentId, ...(requestedUnit ? { path: requestedPath } : {}) },
       }) };
     }
     if (requestedPath && !requestedUnit) {
@@ -2217,8 +2176,6 @@ async function editUnoFileArtifactUnlocked(input: EditUnoProgramInput): Promise<
           editStatus: 'rejected', changed: false, saved: false, patchBaseDigest: draftDigest,
           documentId,
           sourceUnitPath: requestedUnit?.path,
-          expectedBaseDigest: draftDigest,
-          suppliedBaseDigest: baseDigest,
           patchHunks: {
             applied: 0,
             alreadyApplied: patchResult.alreadyAppliedHunks,
@@ -2315,7 +2272,7 @@ async function editUnoFileArtifactUnlocked(input: EditUnoProgramInput): Promise<
           recoverySuggestion: !patchWasSaved ? 'Source save failed. Read the persisted source before retrying; candidate edits are not confirmed as saved.' : failure.recoverySuggestion
             || (infrastructureFailure
               ? 'Validation did not complete because of a renderer failure, not a demonstrated source defect. Preserve the applied edits and follow repairHints; do not change source or replay edits to repair the runtime.'
-              : 'Source saved, validation FAILED. Do not replay applied edits or add comments to force a change. Read the failing block and repair it with exact oldText/newText replacements and this patchBaseDigest. Rendering remains blocked.'),
+              : 'Source saved, validation FAILED. Do not replay applied edits or add comments to force a change. Read the failing block and repair it with exact oldText/newText replacements. Rendering remains blocked.'),
           workflow: compactWorkflowForTool(draft.workflow),
         }),
       };
@@ -2369,11 +2326,17 @@ export async function readUnoDraft(input: ReadUnoDraftInput): Promise<FileArtifa
 }
 
 export async function planFileArtifact(input: PlanArtifactInput): Promise<FileArtifactOperationResult> {
-  const documentId = String(input.documentId || '').trim();
+  const names = { presentation: ['演示文稿', '.pptx'], spreadsheet: ['工作簿', '.xlsx'], word: ['文档', '.docx'] } as const;
+  if (!input.documentType || !names[input.documentType]) return { ok: false, actual: 'file action=plan requires documentType=word|spreadsheet|presentation.' };
+  const [defaultTitle, extension] = names[input.documentType];
+  const title = String(input.intent || '').match(/《([^》]+)》/)?.[1] || defaultTitle;
+  const fileName = String(input.fileName || '').trim() || `${sanitizeFileName(title, defaultTitle).slice(0, 160)}${extension}`;
+  const documentId = String(input.documentId || '').trim() || `doc_${sourceDigest(JSON.stringify({ documentType: input.documentType,
+    fileName, intent: input.intent || '', operation: input.operation || 'create', sourceAttachmentId: input.sourceAttachmentId || '' })).slice(0, 20)}`;
   if (!DOCUMENT_ID_PATTERN.test(documentId)) {
     return { ok: false, actual: 'file action=plan requires a stable model-chosen documentId (1-96 ASCII letters, numbers, dot, underscore, or hyphen).' };
   }
-  const result = await withDraftLock(input.runId, documentId, () => planFileArtifactUnlocked({ ...input, documentId }), input.abortSignal);
+  const result = await withDraftLock(input.runId, documentId, () => planFileArtifactUnlocked({ ...input, documentId, fileName }), input.abortSignal);
   if (!result.ok) return result;
   try {
     const payload = JSON.parse(result.actual) as Record<string, unknown>;
@@ -2401,7 +2364,7 @@ export async function generateUnoFileArtifact(input: GenerateUnoProgramInput): P
 
 export async function editUnoFileArtifact(input: EditUnoProgramInput): Promise<FileArtifactOperationResult> {
   try {
-    const documentId = await resolveEditDocumentId(input.runId, input.documentId, input.baseDigest);
+    const documentId = await resolveEditDocumentId(input.runId, input.documentId);
     return await withDraftLock(input.runId, documentId, () => editUnoFileArtifactUnlocked({ ...input, documentId }), input.abortSignal);
   } catch (error) {
     return { ok: false, actual: `Office draft edit failed: ${error instanceof Error ? error.message : String(error)}` };

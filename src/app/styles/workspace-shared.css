@@ -2320,12 +2320,12 @@
   }
 
   .browser-chat-layout.sidebar-collapsed .workspace-sidebar-archive-row-action > .browser-chat-collapsed-delete {
-    background: var(--danger) !important;
+    background: transparent !important;
     border: 0 !important;
-    border-radius: 7px 0 0 0;
+    border-radius: 4px;
     box-shadow: none !important;
-    clip-path: polygon(0 0, 100% 0, 0 100%);
-    color: #fff !important;
+    clip-path: none;
+    color: #ff3b30 !important;
     display: block;
     height: 20px;
     min-height: 20px;
@@ -2340,17 +2340,17 @@
   }
 
   .browser-chat-layout.sidebar-collapsed .workspace-sidebar-archive-row-action > .browser-chat-collapsed-delete > svg {
-    height: 8px;
+    height: 10px;
     left: 2.5px;
     position: absolute;
     stroke-width: 2.5;
     top: 2.5px;
-    width: 8px;
+    width: 10px;
   }
 
   .browser-chat-layout.sidebar-collapsed .workspace-sidebar-archive-row-action > .browser-chat-collapsed-delete:not(:disabled):hover {
-    background: var(--menu-hover-bg) !important;
-    color: var(--menu-hover-foreground) !important;
+    background: transparent !important;
+    color: #ff3b30 !important;
   }
 }
 

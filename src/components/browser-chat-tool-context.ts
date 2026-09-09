@@ -12,9 +12,16 @@ function elapsedMilliseconds(value: unknown) {
     : undefined;
 }
 
-export function browserChatToolContextTokenMetrics(tool: Pick<StepToolCall, 'contextAfter' | 'contextBefore'>) {
+type ToolContext = Pick<StepToolCall, 'contextAfter' | 'contextBefore'> & { name?: string };
+
+export function browserChatToolHasLegacyContextAfter(tool: ToolContext) {
+  return tool.name !== 'contextCompression' && Boolean(tool.contextBefore?.requestId)
+    && tokenCount(tool.contextAfter?.estimatedTotalTokens) !== undefined && !tool.contextAfter?.requestId;
+}
+
+export function browserChatToolContextTokenMetrics(tool: ToolContext) {
   const before = tokenCount(tool.contextBefore?.estimatedTotalTokens);
-  const after = tokenCount(tool.contextAfter?.estimatedTotalTokens);
+  const after = browserChatToolHasLegacyContextAfter(tool) ? undefined : tokenCount(tool.contextAfter?.estimatedTotalTokens);
   return {
     before,
     after,

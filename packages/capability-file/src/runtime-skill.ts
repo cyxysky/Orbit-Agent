@@ -4,7 +4,7 @@ export { fileDiagramReferenceSkills } from './diagram-guidance/index.ts';
 import { fileAuthoringReferenceRouting } from './authoring-guidance.ts';
 export { fileAuthoringReferenceSkills } from './authoring-guidance.ts';
 
-/** Complete model-facing operating manual for the File Capability workflow. */
+/** Compact mandatory workflow; detailed references are loaded only on demand. */
 export const fileArtifactRuntimeSkillId = 'system-file-artifact-runtime';
 
 export const fileArtifactRuntimeSkillSummary = [
@@ -12,12 +12,12 @@ export const fileArtifactRuntimeSkillSummary = [
   `<id>${fileArtifactRuntimeSkillId}</id>`,
   '<title>File Artifact Runtime</title>',
 
-  '<description>Required built-in operating manual for the unified file tool. Read this Skill before the first file call. readSource + documentId reads generation code; readContent + artifactId/attachmentId reads file data; visualRead reads page images.</description>',
+  '<description>Read this compact Skill once before using file. It covers identities, workflow and recovery, with optional references for specific tasks. readSource reads generation code; readContent reads file data. Do not load the entire reference manual.</description>',
   '<required>true</required>',
   '</system_skill>',
 ].join('\n');
 
-export const fileArtifactRuntimeSkillContent = `# File Artifact Runtime
+const fileArtifactRuntimeManual = `# File Artifact Runtime
 
 This Skill is authoritative for the unified file artifact workflow and is supplied by the file package. The consuming Agent is responsible for loading it and deciding when the file tool becomes available.
 
@@ -25,7 +25,7 @@ Content selection: readContent accepts sheet plus range (A1:D20) for spreadsheet
 
 ## Required sequence
 
-1. Explicitly call skill action=read with skillId=${fileArtifactRuntimeSkillId}.
+1. Read skillId=${fileArtifactRuntimeSkillId} once. Complete current Skill text included in a prerequisite response counts as that read; do not call skill again in that case.
 2. Wait for that Skill read to succeed. Do not emit a file call in the same model step.
 3. Continue the workflow below. The Agent host must reject a file call emitted before the successful read without executing it.
 
@@ -58,7 +58,7 @@ type FileToolResult = {
 declare function file(input: FileInput): Promise<FileToolResult>;
 \`\`\`
 
-Do not guess returned identities. Copy \`documentId\`, \`artifactId\`, screenshot ids, and the requested next action exactly from the latest successful result. For edit, copy the latest readSource result's \`patchBaseDigest\` into \`baseDigest\`; other source and render digests remain informational runtime metadata.
+Do not guess returned identities. Copy \`documentId\`, \`artifactId\`, screenshot ids, and the requested next action exactly from the latest successful result. Source and render digests are informational runtime metadata, not model-supplied edit or replacement parameters.
 
 ## Choose the object before choosing the action
 
@@ -74,7 +74,7 @@ Do not guess returned identities. Copy \`documentId\`, \`artifactId\`, screensho
 | Export an existing Office file to PDF | convert + sourceArtifactId | PDF artifact; no source editing |
 | Author a text/code/config file | write + fileName + content | Exact UTF-8 contents saved as a downloadable artifact |
 | Author an Office/PDF document | plan → generate → render | Plan chooses engine; generate validates code; render publishes |
-| Look up supported syntax/features | unoApi OR jsApi + documentId | Documentation, not execution; follow plan's engine |
+| Look up supported syntax/features | unoApi OR jsApi; optional documentId/documentType | Documentation; omit both for the type index, or follow an existing plan's engine |
 | Record visual evidence | visualReport + artifactId | QA records only; no automatic layout repair |
 
 Identity rules are strict: documentId is a stable draft id; artifactId identifies finished binary bytes; attachmentId identifies an upload; screenshotId identifies a printed/rendered page. A worksheet name, elementId, file name, downloadUrl, asset name, and sourceFileName are NOT substitutes for any of these. Never put a generated .xlsx artifactId into readSource. Never put documentId into readContent.
@@ -157,8 +157,8 @@ type FileInput =
   | {
       action: "plan";
       reason?: string;
-      documentId: string; // 1-96 ASCII letters, numbers, dot, underscore, or hyphen
-      fileName: string;
+      documentId?: string; // auto-created for a new plan; reuse the returned ID for all later actions
+      fileName?: string; // defaults from intent's 《title》 and documentType; specify explicitly for PDF
       documentType: DocumentType;
       operation?: "create" | "modify"; // defaults to create
       intent?: string;
@@ -171,23 +171,23 @@ type FileInput =
         selectedDirection?: string;
         selectionReason?: string;
         rhythm?: string;
-        preserve?: string[];
-        avoid?: string[];
+        preserve?: string[] | string; // max 8 items, 320 characters each; semicolon/newline text is normalized to an array
+        avoid?: string[] | string; // same limits as preserve
       };
       sourceAttachmentId?: string; // required when operation is modify
     }
   | {
       action: "unoApi";
       reason?: string;
-      documentId: string;
-      documentType?: DocumentType; // inferred from the planned documentId when omitted
+      documentId?: string;
+      documentType?: DocumentType; // inferred from a draft; omit both for the document-type/module index
       query?: string; // exact module id; module responses are complete, not paginated
     }
   | {
       action: "jsApi";
       reason?: string;
-      documentId: string;
-      documentType?: DocumentType;
+      documentId?: string;
+      documentType?: DocumentType; // no draft required; omit both for the document-type index
     }
   | {
       action: "generate";
@@ -195,8 +195,6 @@ type FileInput =
       documentId: string;
       program?: string;
       spec?: SemanticDocumentSpec;
-      replaceExisting?: boolean; // exceptional last resort; never an ordinary repair
-      baseDigest?: string; // required with replaceExisting
       render?: boolean; // legacy; publishing always requires action=render
     }
   | {
@@ -204,7 +202,6 @@ type FileInput =
       reason?: string;
       documentId: string;
       path?: string;
-      baseDigest: string;
       patch?: string; // exactly one of patch or replacements
       replacements?: Array<{ oldText: string; newText: string }>;
       render?: boolean; // legacy; publishing always requires action=render
@@ -223,10 +220,10 @@ Action requirements:
 - \`readContent\`: requires exactly one artifactId or attachmentId. Returns file text/data, NOT the code that generated it. offset/limit count characters (zero-based offset; default 8000, maximum 40000). includeVisuals defaults to false; only request it explicitly for a needed preview. For full page QA use visualIndex/visualRead instead.
 - \`download\`: provide a real source in \`urlOrPath\`, \`url\`, or \`path\`, plus \`fileType\` without a dot. When two or more independent URLs are already known, emit their separate file calls in the same model response; the runtime batches them concurrently, coalesces duplicates, limits same-origin pressure, and performs only short bounded 429 retries. For Wikimedia, copy the exact thumbnail URL returned by Commons \`imageinfo/thumburl\`; never invent or rewrite its \`Npx-\` size segment. Never add a manual sleep or a fixed 30-second wait; after a persistent 429, switch to a different source or origin.
 - \`convert\`: sourceArtifactId identifies an existing Office file; The bundled converter currently supports PDF output only: omit fileName or use a .pdf name; do not request arbitrary Office-to-Office conversions. Conversion creates a file, not an editable code draft. It is not the repair path for an authored document.
-- \`plan\`: \`documentId\`, \`fileName\`, and \`documentType\` are required. The extension must match the document type (Word: doc/docx/odt; spreadsheet: xls/xlsx/ods; presentation: ppt/pptx/odp; PDF is valid for each). If plan fails, correct and retry with the same documentId. \`operation\` defaults to \`"create"\`; \`sourceAttachmentId\` is required for \`operation: "modify"\`.
-- \`unoApi\` and \`jsApi\`: normally call after plan and only for its returned generation mode, always with the same \`documentId\`. An early UNO catalog lookup is also accepted when both \`documentId\` and \`documentType\` are supplied; it is read-only and returns \`boundToPlannedDraft=false\` plus \`nextAction=plan\`, so plan that same ID before generate. For UNO, omit \`query\` once to receive the module index, then query only the modules the draft uses (for example \`presentation.shape\` or \`presentation.professional\`). Every module response contains all exact installed signatures, accepted schemas, and registered examples for that module. Copy those examples instead of guessing. Repeated planned-module queries are cached. Raw UNO reflection is not exposed.
-- \`generate\`: create the initial source with exactly one of \`spec\` or \`program\`. Prefer \`spec\` only when plan returns \`semanticGeneration.recommended=true\` and fixed geometry fits the content. \`available=true\` alone does not recommend a template. Use \`program\` for bespoke design, advanced freeform requirements, JavaScript-planned work, or existing-file modification; it has the same validation/render safety gates. If the result already contains a saved source and \`patchBaseDigest\`, normally use \`edit\` for repairs or revisions instead of starting over. Do not regenerate unchanged source to publish or preview it. A complete replacement requires \`replaceExisting=true\` plus the current \`baseDigest\`. Program generation must preserve the required entrypoint and save/close lifecycle.
-- \`edit\`: prefer exact \`replacements\` for small changes, or submit one Codex-format \`patch\`; never both. Patch grammar: one \`*** Begin Patch\` / \`*** End Patch\` envelope, \`*** Update File: draft.py\`, and \`@@\` hunks. Context/deletion/addition markers are one space / \`-\` / \`+\`, separate from ALL source indentation. draft.py is the staging alias for Python and JavaScript, not a filesystem path. All targets must match uniquely on the same pre-edit snapshot. The entire call is atomic: any conflict saves NOTHING, including otherwise valid hunks. Correct the failed targets and resubmit the complete related batch; blocked hunks were not applied. A successful source edit can still fail validation; inspect saved/validation separately. No automatic stale-version rebase or fuzzy matching.
+- \`plan\`: \`documentType\` is required. For a new plan, omitted documentId is generated and omitted fileName is derived from intent/title plus .docx/.xlsx/.pptx. Supply fileName explicitly for PDF or another supported extension. Reuse the returned documentId for later actions and existing-draft re-planning. The extension must match the document type (Word: doc/docx/odt; spreadsheet: xls/xlsx/ods; presentation: ppt/pptx/odp; PDF is valid for each). operation defaults to create; sourceAttachmentId is required for modify.
+- \`unoApi\` and \`jsApi\`: documentation can be read before plan, without a documentId. Omit both documentId/documentType for the type index, or provide documentType for its unbound API. For an existing draft, pass its documentId and follow the planned engine. For UNO, omit query to receive the module index, then query only modules the draft uses (for example presentation.shape). Each module contains exact installed signatures, schemas and registered examples. Copy these instead of guessing; repeated planned-module queries are cached. Raw UNO reflection is not exposed.
+- \`generate\`: create the initial source with exactly one of \`spec\` or \`program\`. Prefer \`spec\` only when plan returns \`semanticGeneration.recommended=true\` and fixed geometry fits the content. \`available=true\` alone does not recommend a template. Use \`program\` for bespoke design, advanced freeform requirements, JavaScript-planned work, or existing-file modification; it has the same validation/render safety gates. If the result already contains a saved source and \`patchBaseDigest\`, normally use \`edit\` for repairs or revisions instead of starting over. Do not regenerate unchanged source to publish or preview it. Calling \`generate\` on the same documentId replaces its complete source; no replacement flag or source-version parameter is required. Program generation must preserve the required entrypoint and save/close lifecycle.
+- \`edit\`: prefer exact \`replacements\` for small changes, or submit one Codex-format \`patch\`; never both. Patch grammar: one \`*** Begin Patch\` / \`*** End Patch\` envelope, \`*** Update File: draft.py\`, and \`@@\` hunks. Context/deletion/addition markers are one space / \`-\` / \`+\`, separate from ALL source indentation. draft.py is the staging alias for Python and JavaScript, not a filesystem path. All targets must match uniquely on the same pre-edit snapshot. The entire call is atomic: any conflict saves NOTHING, including otherwise valid hunks. Correct the failed targets and resubmit the complete related batch; blocked hunks were not applied. A successful source edit can still fail validation; inspect saved/validation separately. Edits apply to the current source with no fuzzy matching.
 - In an edit hunk, replacing a line always means \`-old line\` followed by \`+new line\`. A space-prefixed old line is unchanged context, so writing \` old line\` followed only by \`+new line\` inserts a duplicate; never use that form for replacement. Every hunk must contain a real \`+\` or \`-\` change; a context-only hunk is rejected before matching. Copy indentation from the exact unnumbered read result for both \`-\` and \`+\` lines.
 - \`render\`: publishes the current validated source. After render succeeds, inspect or deliver that artifact instead of rewriting it without a concrete reason. If the user request, validation result, or visual review identifies a real change, readSource and edit the same documentId, then render the updated source.
 
@@ -260,7 +257,7 @@ Use this path only when the latest plan returns \`semanticGeneration.available=t
 - Calc uses \`type="sheet"\`, \`name\`, and \`children\`. Tables receive frozen/filterable headers, content-based column widths, wrapping, print area, repeat rows, and portrait/landscape selection. Chart blocks create native charts from their semantic series.
 - Theme presets are versioned under schema v1: \`clean\` (default), \`executive\`, \`editorial\`, and \`signal\`. They are starting tokens, not mandatory visual identities. Override colors, fonts and typography for a justified content-led direction even without user-supplied brand tokens; respect actual brand constraints and installed font support. Semantic geometry remains template-owned: choose program authoring when changing tokens cannot express the intended composition.
 - Layout defaults are \`enabled=true\`, \`mode="repair"\`, \`overflow="split"\`, and \`imageFit="contain"\`. The compiler assigns missing IDs, clamps unreadable type, repairs low contrast, splits long slide text/lists/tables, repeats table headers, and reflows dense slides. Review returned \`semantic.diagnostics\`; errors stop before Office execution and repaired warnings explain deterministic changes.
-- Each image needs the exact downloaded workspace asset name in \`source\`; add \`alt\` or \`caption\` when it conveys meaning. Never invent an asset name.
+- Each image needs the exact workspace asset name in \`source\`; add \`alt\` or \`caption\` when it conveys meaning. Generated media is already saved and automatically mounted, so do not download it again. Use availableAssets from plan/list to map the returned artifactId to assetName. Never invent an asset name.
 
 Example:
 
@@ -304,11 +301,12 @@ UNO remains the internal Office engine, but authored source uses only the return
 - \`shape_type='caption'\` and \`shape_type='measure'\` invoke the real native UNO services and automatically pair them with one named editable export fallback because LibreOffice drops raw CaptionShape and MeasureShape during PPTX export. Use the one facade call shown by \`presentation.shape\`; never add a second manual lookalike or claim the exporter preserves the raw service.
 - For Impress, create \`slide = deck.slide(id, layout=..., title=...)\`. Named slots are useful when they fit; \`layout='blank'\` also supports custom content/data pages, not just covers. Use \`slide.add_text/image/table/chart/card/timeline\` with allocated slots or boxes. Passing \`title\` fills a title slot; do not add another title over it. Supply \`title_style\` when the design or requested minimum differs from the default title size. Never emulate a connector arrowhead with a separate \`triangle\` shape: making the triangle box touch the target does not put its top-center apex on the line endpoint, so the visible arrow tip lands above or beside the target. Use \`slide.connect(..., end_arrow=True)\`; when complete endpoint boxes are already allocated, add the connector before the node shapes, otherwise create the child IDs first and pass those IDs. Headers, footers and accent rules are optional. When needed, \`slide.add_header(...)\` and \`slide.add_footer(...)\` stay inside layout-reserved margins; never draw a manual rule through the title or body slots. Use \`slide.grid(...)\` and \`slide.stack(...)\` for freeform composition. They return one flat row-major list (never nested rows) of mapping cells with \`x/y/width/height\`, PptxGenJS-compatible \`w/h\` aliases, and a unit marker. Iterate that list directly and pass \`box=cell\`; never flatten/extend it or tuple-index a cell. \`deck.content_box/grid/stack\` return the same unit-tagged rectangles. Use \`add_card\` or \`add_timeline\` only when those components fit the content; native tables/charts and allocated cells avoid fragile hand-layering. Omit text-box height or set \`auto_height=True\` when subsequent elements are allocated from a stack rather than hand-positioned.
 - New Impress decks use the fixed wide-screen canvas \`13.333 x 7.5\` inches, whose horizontal center is \`6.6665\`. Never compose a blank slide against a \`10 x 7.5\` canvas. \`align='CENTER'\` centers text only inside its own box; it does not center that box on the slide. Prefer named slots or \`slide.grid/stack\` without an explicit box. For intentional freeform geometry, derive the region from \`deck.bounds()\` / \`deck.content_box()\` or center an inch box with \`x = (13.333 - width) / 2\`.
-- Presentation text rejects \`letter_spacing\`, \`tracking\`, \`margin\`, \`autofit\`, and \`word_wrap\`. Use only the installed \`presentation.text\` vocabulary; replace those guesses with \`padding\`, \`line_spacing\`, \`min_font_size\`, explicit box geometry, or \`auto_height\`.
+- Presentation text rejects \`letter_spacing\`, \`tracking\`, \`margin\`, \`autofit\`, and \`word_wrap\`. Use the installed \`presentation.text\` vocabulary: \`padding\`, \`line_spacing\`, \`min_font_size\`, \`text_wrap\`, explicit box geometry, or \`auto_height\`. Short labels such as “① 价格” must fit on one line: use text_wrap=False and widen their column; never split a Chinese word or crowd its neighboring body text. Use text_wrap=True only for intentional wrapping. Flow arrows use slide.connect from source to target; native right-arrow/left-arrow/up-arrow/down-arrow shapes also have explicit direction. Do not use an unrotated triangle as a directional arrow.
 - \`slide.add_chart\` creates a native OLE2 chart, not a vector-shape chart; never claim otherwise in the delivery report. Its background is transparent by default. Give Cartesian charts with titles/axis titles/legends enough height, and for pie/donut choose either legend + percent-only labels or category labels without a legend. Reopen validation rejects any OLE2 chart that collapses to a non-positive size.
-- Chart families have different data roles. Read the current presentation.chart module: scatter series use numeric x/y arrays, bubble adds positive sizes, and stock uses open/high/low/close arrays satisfying low <= open/close <= high. Scatter/bubble may pass categories=[]; labels are not numeric X coordinates. Do not flatten point tuples, turn roles into unrelated series, or remove required roles to pass validation. CHART_DATA_ROLE_INVALID is a source data-contract error, not a bridge failure.
+- Chart families have different data roles. Read the current presentation.chart module: scatter series use numeric x/y arrays, bubble adds non-negative area weights in sizes (zero has no visible area), and stock uses open/high/low/close arrays satisfying low <= open/close <= high. Scatter/bubble may pass categories=[]; labels are not numeric X coordinates. Do not flatten point tuples, turn roles into unrelated series, or remove required roles to pass validation. Three individual scenarios require three total points, not a Cartesian product. Give each semantic group its own name and color so native legend, actual marks and surrounding prose agree. Bubble area is proportional to size; signed outcomes need clearly labeled magnitude plus sign/color, never a negative radius. CHART_DATA_ROLE_INVALID is a source data-contract error, not a bridge failure.
 - Visual repairs must preserve numeric data. Never move X/Y points or selectively reduce bubble sizes to clear axes. Use x_axis_min/x_axis_max/y_axis_min/y_axis_max for axis padding and allocate a larger plotting region; disclose unavoidable sample overlap. Labels and axis bounds are presentation, whereas values and relative bubble sizes are evidence.
-- Preserve chart meaning as well as numeric arrays: do not stack independent indices merely to expose an occluded area series. Use a suitable series order, supported transparency, or separate native charts with comparable axes. For horizontal bars, verify the exported physical value/category axis titles, not only their parameter names. Axis padding alone does not fix labels drawn at an internal zero crossing; inspect their actual positions.
+- Preserve chart meaning as well as numeric arrays: do not stack independent indices merely to expose an occluded area series. For incompatible units or widely different scales, use separate charts or series.axis='primary'/'secondary' with distinct y_axis_title and secondary_y_axis_title including units. Keep explicitly normalized indices on a common scale. For horizontal bars, verify the exported physical value/category axis titles, not only their parameter names. Axis padding alone does not fix labels drawn at an internal zero crossing; inspect their actual positions.
+- Keep line/scatter marks small and round: native defaults are marker_shape='circle', marker_size=3pt for lines and 4pt for scatter. Pie/donut label contrast is enforced per sector, including transparency and an explicitly supplied unreadable label_color. Tiny values move to exact readable legend entries even if show_legend=False or label_position='inside'; mixed label modes are consolidated without removing data. Use these native defaults instead of manually overlaying labels. Check every requested bar value for overlap; widen the chart, use label_font_size/label_position or supported automatic staggering. Do not delete requested labels or reduce numeric precision to disguise crowding. Bubble colors, sizes, sample counts and X/Y pairings must match the stated scenarios. Use transparency, bubble_scale and axis padding for occlusion, then inspect the actual preview; the LibreOffice preview uses its native bubble sizing.
 - For Writer, keep body content in native flow with \`document.add_title/heading/paragraph/bullets/numbered_list/table/inline_image/page_break\`; page style and header/footer configuration use returned versioned recipes.
 - For Calc, create \`sheet = workbook.sheet(id, name)\` and use A1-based \`sheet.set_cell/set_range/add_table/format/merge/freeze/column_width/row_height\`. Do not obtain raw sheets, cells, ranges, draw pages, or controllers.
 - Impress text, images, tables, and charts participate in bounds and collision validation. Repair the returned leaf \`elementIds\`; do not hide defects by shrinking body text below 16pt.
@@ -381,13 +379,12 @@ file({
 })
 \`\`\`
 
-Make a focused patch from the exact unnumbered \`program\` and \`patchBaseDigest\` returned by the latest \`readSource\` result:
+Make a focused patch from the exact unnumbered \`program\` returned by \`readSource\`:
 
 \`\`\`js
 file({
   action: "edit",
   documentId: "quarterly-review",
-  baseDigest: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   patch: "*** Begin Patch\\n*** Update File: draft.py\\n@@\\n     deck = job.presentation('quarterly-review')\\n-    title = 'Old title'\\n+    title = 'New title'\\n     slide = deck.slide('cover')\\n*** End Patch",
   render: false,
   reason: "修正第八页指标区域的排版和内容"
@@ -578,18 +575,18 @@ file({
 2. Call action=plan for that documentId, including a compact bespoke design brief for original/high-design work. For an existing attachment, use operation=modify with the exact sourceAttachmentId; for a new file, use operation=create. Prefer one complete initial plan; do not repeatedly plan after authoring.
 3. Follow designGuidance and semanticGeneration.recommended, not available alone. For conventional files with recommended=true and suitable fixed geometry, go directly to action=generate with spec; for bespoke work use program, calling action=unoApi only for an UNO plan or action=jsApi only for a JavaScript plan and only for modules actually needed.
 4. Call action=generate with exactly one of spec or program to create the initial editable source. A failed generate may still return a saved source and patchBaseDigest, so inspect the result before choosing the next action.
-5. When a usable source already exists, prefer action=edit on that same documentId for repairs and revisions. If no source checkpoint was created, correct the input and retry generate. Use guarded replacement only when bounded edits cannot coherently implement the requested change, after understanding the current structure and obtaining its exact patchBaseDigest. Never reconstruct a large source through consecutive reads just to replace it.
+5. When a usable source already exists, prefer action=edit on that same documentId for repairs and revisions. If no source checkpoint was created, correct the input and retry generate. Use generate for full replacement only when bounded edits cannot coherently implement the requested change, after understanding the current structure. Never reconstruct a large source through consecutive reads just to replace it.
 6. Call action=render only after the current source passes validation and the complete requested content is present; render publishes that exact source.
 7. After render, inspect the latest artifact when visual QA is available. Do not rewrite it speculatively. If the user request, validator, or visual inspection reveals a concrete issue, read and edit the same documentId and render again; otherwise return the artifact in finalResponse.
 
-Use action=readSource whenever the exact current source, patchBaseDigest, workflow checkpoint, or validation diagnostics are needed. Use action=download for an existing URL/path and action=convert to convert an existing Office artifact identified by sourceArtifactId. For web research, browser action=code may locate and verify a direct asset URL, but it must not fetch or save that asset locally; pass the direct URL to file action=download, then use the exact returned artifact name in Office source. Use readContent to inspect downloaded image artifacts when authoritative pixel dimensions or aspect ratio are needed.
+Use action=readSource whenever the exact current source, workflow checkpoint, or validation diagnostics are needed. Use action=download for an existing URL/path and action=convert to convert an existing Office artifact identified by sourceArtifactId. For web research, browser action=code may locate and verify a direct asset URL, but it must not fetch or save that asset locally; pass the direct URL to file action=download, then use the exact returned artifact name in Office source. Use readContent to inspect downloaded image artifacts when authoritative pixel dimensions or aspect ratio are needed.
 
 ## Identity and current source
 
 - documentId is the stable workspace identity. Reuse it across plan, API lookup, generate, readSource, edit, and render.
-- Each documentId owns exactly one current editable source. There is no source history or restore operation; the latest readSource's patchBaseDigest is only an optimistic-concurrency guard for edit.
-- action=edit always targets that one current source. Initial action=generate creates it atomically; the guarded replaceExisting form replaces that same buffer without creating a second document identity.
-- Digests in results are runtime checksums for validation, cache, render currency, and QA. For every edit, copy the latest readSource's patchBaseDigest as baseDigest; do not use older source or render digests.
+- Each documentId owns exactly one current editable source. There is no source history or restore operation. Edits apply to the current source; no model-supplied version hash is required.
+- action=edit always targets that one current source. action=generate atomically saves the complete source to that same buffer, replacing any existing source without creating a second document identity or requiring an extra replacement parameter.
+- Digests in results are runtime checksums for validation, cache, render currency, and QA. They are not required edit or replacement inputs.
 
 Do not mix ids from different documents or formats. Different documentIds and output formats may coexist in one run.
 
@@ -613,19 +610,19 @@ readSource.lineCount is the total source/unit size, not the returned amount. pro
 
 Keep common styling in a few small helpers and keep page-specific content in independent functions or paired source units. Reuse helpers without turning every page into the same composition. Change a helper and its affected callers atomically; avoid repeated copies of large coordinate/style blocks that multiply repair sites.
 
-action=edit accepts exact replacements OR one Codex apply_patch document, with documentId, the current patchBaseDigest as baseDigest, and optional source-unit path. Patch grammar uses \`*** Begin Patch\`, \`*** Update File: draft.py\`, \`@@\`, \`*** End Patch\`; never emit numeric hunk counts. Every hunk needs literal \`-old\` or \`+new\` lines; replacement needs both in the SAME hunk. Matching is unique and exact, including whitespace and punctuation; duplicate targets are rejected rather than choosing the first. Every hunk is located against the original snapshot, never text produced by another hunk in this call. Changed ranges must not overlap, though unchanged context may be shared. A malformed, ambiguous, overlapping, missing-target or stale-version edit saves nothing. patchHunks.failed identifies conflicts; patchHunks.blocked identifies otherwise valid changes withheld by atomicity. Correct the conflicts and retain the blocked changes in the resubmitted batch. Use a new read only when source/version/context is missing, not to repair patch-marker formatting.
+action=edit accepts exact replacements OR one Codex apply_patch document, with documentId and optional source-unit path. Patch grammar uses \`*** Begin Patch\`, \`*** Update File: draft.py\`, \`@@\`, \`*** End Patch\`; never emit numeric hunk counts. Every hunk needs literal \`-old\` or \`+new\` lines; replacement needs both in the SAME hunk. Matching is unique and exact, including whitespace and punctuation; duplicate targets are rejected rather than choosing the first. Every hunk is located against the original snapshot, never text produced by another hunk in this call. Changed ranges must not overlap, though unchanged context may be shared. A malformed, ambiguous, overlapping, or missing-target edit saves nothing. patchHunks.failed identifies conflicts; patchHunks.blocked identifies otherwise valid changes withheld by atomicity. Correct the conflicts and retain the blocked changes in the resubmitted batch. Use a new read only when source/context is missing, not to repair patch-marker formatting.
 
 For example, replace \`    title = "Old"\` with \`    title = "New"\` using the two change lines \`-    title = "Old"\` and \`+    title = "New"\`. Do not write the old line with a leading space and then add the new line; that is a valid insertion, not a replacement.
 
-Prefer action=edit with replacements for small changes and Python indentation repairs: [{oldText: "   title = 'Old'", newText: "    title = 'New'"}]. Supply documentId and current baseDigest; omit patch. These are literal source strings with no diff prefixes or line numbers. oldText must match exactly once; include surrounding code if repeated. For insertion include the existing anchor in newText; for deletion use newText="". Every pair matches the same original snapshot and the entire batch commits together. A missing oldText is NOT success just because newText exists elsewhere. Only an identical latest request with a saved receipt whose resulting digest equals the current source is acknowledged as EDIT_REPLAY_CONFIRMED without another write or validation.
+Prefer action=edit with replacements for small changes and Python indentation repairs: [{oldText: "   title = 'Old'", newText: "    title = 'New'"}]. Supply documentId; omit patch. These are literal source strings with no diff prefixes or line numbers. oldText must match exactly once; include surrounding code if repeated. For insertion include the existing anchor in newText; for deletion use newText="". Every pair matches the same original snapshot and the entire batch commits together. A missing oldText is NOT success just because newText exists elsewhere. Only an identical latest request with a saved receipt whose resulting digest equals the current source is acknowledged as EDIT_REPLAY_CONFIRMED without another write or validation.
 
 For Python syntax diagnostics, replace each smallest syntactically complete block. Repair the syntax issues whose exact source is present in this window; combine independent replacements only when their contexts are available. Read and repair distant windows separately. Never reconstruct indentation from diagnostic line numbers or prose: copy it from readSource.program. If using patch, the +/- marker is separate from ALL source indentation; never express old/new code as two context-only @@ blocks. A malformed patch saves nothing. Never add comments or whitespace just to defeat a no-change result. saved=true means the buffer is retained, NOT that validation passed; validation=failed requires a real repair before rendering.
 
-Put related repairs, especially a helper signature and all affected callers, in one atomic call using non-overlapping hunks/replacements. Include unchanged context to identify each location uniquely. An optional \`@@ exact_source_line\` anchor must itself be unique and preserve indentation; Python def/class anchors are confined to that declaration's block. Prefer source-unit path for page-specific repairs. Insertions should include an unchanged anchor in the hunk; a context-free insertion means append at EOF. Validation may fail AFTER all edits are saved; then repair the saved candidate using its returned patchBaseDigest, without replaying applied changes. Conversely a target conflict saves none. Blocking errors and visible defects require focused edits; warnings alone do not justify rewriting. Final delivery still requires full validation and render.
+Put related repairs, especially a helper signature and all affected callers, in one atomic call using non-overlapping hunks/replacements. Include unchanged context to identify each location uniquely. An optional \`@@ exact_source_line\` anchor must itself be unique and preserve indentation; Python def/class anchors are confined to that declaration's block. Prefer source-unit path for page-specific repairs. Insertions should include an unchanged anchor in the hunk; a context-free insertion means append at EOF. Validation may fail AFTER all edits are saved; then repair the saved candidate with exact source edits, without replaying applied changes. Conversely a target conflict saves none. Blocking errors and visible defects require focused edits; warnings alone do not justify rewriting. Final delivery still requires full validation and render.
 
-Source units are optional navigation aids, not a source-size rule and never a validation requirement. For focused repairs, presentation page units use authored IDs such as \`pages/s30-risk-matrix\`; reusable Python helpers use symbol paths such as \`symbols/add_bg\` or \`symbols/section_divider\`. Runtime-created pages are repaired through their helper symbol. Writer page breaks and Calc worksheets are indexed semantically. Nonstandard builders may use @webpilot-unit/@webpilot-endunit markers. Large unscoped reads may return the unit index and bounded-read guidance to control payload size. Scoped reads return exact unnumbered program text and sourceLineRange.coordinateSpace. sourceDigest/sourceUnitDigest may describe a selected unit, but patchBaseDigest ALWAYS guards the complete current draft. Copy patchBaseDigest into edit.baseDigest; never substitute another digest.
+Source units are optional navigation aids, not a source-size rule and never a validation requirement. For focused repairs, presentation page units use authored IDs such as \`pages/s30-risk-matrix\`; reusable Python helpers use symbol paths such as \`symbols/add_bg\` or \`symbols/section_divider\`. Runtime-created pages are repaired through their helper symbol. Writer page breaks and Calc worksheets are indexed semantically. Nonstandard builders may use @webpilot-unit/@webpilot-endunit markers. Large unscoped reads may return the unit index and bounded-read guidance to control payload size. Scoped reads return exact unnumbered program text and sourceLineRange.coordinateSpace. sourceDigest/sourceUnitDigest may describe a selected unit; patchBaseDigest describes the complete current draft as informational metadata. No version hash needs to be submitted for an edit.
 
-Large-draft repair is a bounded workflow: read one diagnostic-focused source unit/window and edit it. Do not reconstruct a large draft through consecutive reads. Exception: a signature change and its callers may require several small, targeted windows; read only those locations, confirm the same patchBaseDigest across them, and submit their related changes in one atomic call. Independent distant repairs can proceed one window at a time. After a saved edit, reuse the returned patchBaseDigest and still-exact source when possible; read again only for missing/stale context.
+Large-draft repair is a bounded workflow: read one diagnostic-focused source unit/window and edit it. Do not reconstruct a large draft through consecutive reads. Exception: a signature change and its callers may require several small, targeted windows; read only those locations and submit their related changes in one atomic call. Independent distant repairs can proceed one window at a time. After a saved edit, reuse still-exact source when possible; read again only for missing/stale context.
 
 ## Rendering and visual QA
 
@@ -668,6 +665,71 @@ Delivery succeeds only when visualQaDigest equals renderedDigest, seenPageCount 
 ## Failure continuation
 
 Read the complete error, validation state, digests, and diagnostics. Preserve documentId and artifactId when continuing the same logical document. Choose the next operation from that evidence instead of mechanically repeating the failed action or starting a substitute artifact.
+`;
+
+// Keep the detailed operating contracts available without sending a 70 KB manual
+// on every required Skill read. Stable heading IDs also survive pagination changes.
+const fileRuntimeReferenceSections = fileArtifactRuntimeManual.split(/(?=^## )/m).map((content) => {
+  const title = content.match(/^#+ (.+)/)?.[1] || 'Overview';
+  const id = `system-file-reference-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`;
+  const pages: string[] = [];
+  let remaining = content.trim();
+  while (remaining.length > 10000) {
+    const newline = remaining.lastIndexOf('\n', 10000);
+    const end = newline > 5000 ? newline + 1 : 10000;
+    pages.push(remaining.slice(0, end));
+    remaining = remaining.slice(end);
+  }
+  if (remaining) pages.push(remaining);
+  return { id, title, pages };
+});
+
+export const fileRuntimeReferenceSkills: readonly CapabilitySkill[] = Object.freeze(
+  fileRuntimeReferenceSections.flatMap(({ id, title, pages }) => pages.map((content, index) => Object.freeze({
+    id: index ? `${id}-${index + 1}` : id,
+    title: `${title}${pages.length > 1 ? ` (${index + 1}/${pages.length})` : ''}`,
+    // Discoverable through the compact runtime Skill's index, not injected into
+    // every request as another required or globally advertised manual.
+    summary: '',
+    required: false,
+    content: `# File reference: ${title} (${index + 1}/${pages.length})\nOptional reference excerpt. Follow the current tool schema and compact File Artifact Runtime workflow. Read only what the current operation needs.\n\n${content}\n\n${index + 1 < pages.length ? `Continuation, only if needed: skill action=read skillId=${id}-${index + 2}.` : 'End of this reference. Continue the user task; do not load unrelated references.'}`,
+  }))),
+);
+
+export const fileArtifactRuntimeSkillContent = `# File Artifact Runtime
+
+Read this compact Skill once before the first file call, then use file in a later model step. A successful current read OR the full current Skill included in a tool's prerequisite response satisfies this requirement. If a tool already returned these complete rules, apply them and retry that tool in the next step; do not call skill again. The optional references below are NOT prerequisites. Never enumerate or read the whole manual just to unlock file.
+
+## Tool boundary and identities
+- file is a separate model tool, not a JavaScript global in browser code. Use only actions/parameters advertised by its current schema. Parse JSON text in result.actual; inspect ok and the latest diagnostic.
+- readContent + attachmentId (upload) OR artifactId (finished file) reads data. Use the ID returned by upload/download/list. Select sheet/range or contentPages when supported, then character offset/limit; follow nextOffset only for information needed by the task.
+- readSource + documentId reads editable generation code and patchBaseDigest. It does not read file data or images. Never substitute documentId, artifactId, attachmentId, screenshotId, names or URLs for one another. If an ID is missing, use list to recover the existing object.
+- Source and render digests are informational runtime metadata. No source-version hash is required for edit or replacement; submit only the document identity and the requested changes.
+
+## Minimal planning and API calls
+- New plan: file({ action: "plan", documentType: "presentation", intent: "《项目汇报》中文演示文稿" }). documentType is required (word/spreadsheet/presentation). documentId and fileName are optional: the runtime creates a stable draft ID and derives a name with .docx/.xlsx/.pptx. Supply fileName explicitly for PDF or a specific title. Copy the returned documentId into all later generate/edit/render/readSource calls; use list only to recover existing work, not to obtain an ID before creating a new plan.
+- plan(operation="modify") additionally requires the uploaded sourceAttachmentId. New creation omits that field. For bespoke design, preserve and avoid each accept at most 8 strings of at most 320 characters; semicolon/newline-separated text is also accepted and converted to an array.
+- API index before any plan: file({ action: "unoApi" }) or file({ action: "jsApi" }). Read a specific type with documentType and an optional query; documentId is not required for documentation. When a draft exists, pass its documentId to follow its selected engine and type. Do not re-plan just to read an API.
+
+## Choose the shortest applicable workflow
+- Read an existing file: readContent with its exact attachmentId/artifactId. No plan, generation API reference or visual inspection is required just to read text/data.
+- Text/code/config: write(fileName, content) saves literal UTF-8 (up to 1,000,000 characters), returns artifactId/downloadUrl. Code is saved, not executed. No Office plan/render is needed; a binary extension does not turn text into a binary file.
+- Create Office/PDF: plan, inspect its engine and constraints, query targeted unoApi or jsApi, generate, then render. A successful generate validates/saves source; only a successful render publishes the deliverable. Follow the planned UNO or JavaScript engine and current API signatures.
+- Modify an uploaded Office file: plan(operation=modify, sourceAttachmentId), preserving its requested content and structure. For an existing draft, readSource, edit with exact current text, then render using the SAME documentId. A draft has exactly one current editable source. Do not generate a replacement just to escape an error.
+- Existing drafts MUST be edited, including drafts with validation or rendering failures. First inspect the affected source, then apply focused replacements/patches and render. Fix patch syntax and exact-match errors; they do not justify regeneration. Only when the current structure demonstrably cannot be repaired or changed through targeted edits may you explain the concrete limitation and use generate for full replacement on the SAME documentId. Convenience, source length, repeated errors or changing the design alone are not sufficient reasons. Never create a new draft to bypass this rule.
+- Generated media is already saved locally and automatically available to document authoring; do not call download, browser fetch or codeSandbox to download it again, and do not turn application-relative URLs into invented absolute URLs. plan/list returns availableAssets; match the media artifactId to ref, then use the exact assetName in Office source. If the draft already exists, use list to find newly generated assets and edit that draft. Do not re-plan or regenerate just to add images.
+- Design for the user's audience, content and requested format. For complex creation/edits, consult the relevant design/editing reference below; for simple reading, skip authoring references.
+- Before authoring native PPT charts, query presentation.chart for current data roles and style controls. Verify label contrast/overlap, small round markers, compatible axes, bubble grouping/colors/area, and arrow direction; short headings must not split words. Apply these same visual checks with the JavaScript engine.
+- If visual actions are advertised and rendered review is needed, visualIndex then targeted visualRead, repair the same source, render again, and report evidence with visualReport. Never claim to have viewed pixels or passed QA without actual evidence. Deliver the exact returned downloadUrl.
+
+## Bounded recovery
+- Inspect saved/editStatus/validation before retrying: validation-failed source can already be saved. Do not replay applied edits. Read only the affected source region and relevant API/error reference.
+- Follow retryable/retryAfter and fresh execution diagnostics. Stop unchanged failed calls after the indicated retry; changing reason or re-reading this Skill is not a repair. Report the concrete blocker if no relevant corrective action is available.
+- After compression, recover the object ID and next step from saved evidence or list. If this required Skill is no longer present, read its current skillId once; do not reconstruct an old full manual through repeated contextRead calls. Reuse retained current instructions and completed work.
+
+## Optional reference index
+Read a reference using skill action=read and the listed skillId only when its topic is needed. Longer topics have a continuation ID in the result; stop as soon as the needed information is found. Current unoApi/jsApi and the tool schema take precedence over example signatures.
+${fileRuntimeReferenceSections.map(({ id, title }) => `- ${title}: ${id}`).join('\n')}
 `;
 
 export const fileRuntimeSkill = Object.freeze({

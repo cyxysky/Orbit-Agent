@@ -68,8 +68,6 @@ export type FileToolInput = {
   program?: string;
   /** Compact semantic create spec. Generate accepts exactly one of spec or program. */
   spec?: OfficeSemanticDocumentInput;
-  baseDigest?: string;
-  replaceExisting?: boolean;
   patch?: string;
   replacements?: Array<{ oldText: string; newText: string }>;
   render?: boolean;

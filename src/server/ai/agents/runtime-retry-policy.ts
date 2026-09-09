@@ -182,11 +182,8 @@ export function classifyRuntimeRetry(error: unknown, signal?: AbortSignal): Runt
       ['INSUFFICIENT_QUOTA', 'INSUFFICIENT_BALANCE', 'CREDIT_BALANCE_TOO_LOW'].includes(String(value || '').toUpperCase())))) {
     return { category: 'billing', reason: `provider balance is unavailable${statusCode ? ` (${statusCode})` : ''}`, retryable: false, statusCode };
   }
-  if (name === 'RuntimeContextBudgetError' || name === 'ContextSummaryError') {
-    return { category: 'configuration', reason: message, retryable: false };
-  }
   if (/context[_ -]?(?:length|window|limit|overflow)|maximum context|too many (?:input )?tokens|prompt (?:is )?too long|input.*exceeds.*token/i.test(message)) {
-    return { category: 'invalid-request', reason: 'provider input limit exceeded; reduce the request budget', recovery: 'compact-context', retryable: true, statusCode };
+    return { category: 'invalid-request', reason: 'provider context limit exceeded; compress more history', recovery: 'compact-context', retryable: true, statusCode };
   }
   if (name === 'AbortError' || /\b(aborted|cancelled|canceled)\b/.test(normalizedMessage)) {
     return { category: 'aborted', reason: 'provider request was aborted; caller is still active', retryAfterMs, retryable: true, statusCode };

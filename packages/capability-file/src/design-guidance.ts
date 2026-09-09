@@ -2,6 +2,10 @@ import { z } from 'zod';
 import type { OfficeDesignBrief, OfficeDocumentDraft, OfficeVisualQaDeckChecks } from './office/types.ts';
 
 const sentence = z.string().trim().min(1).max(320);
+const sentenceList = z.preprocess(
+  (value) => typeof value === 'string' ? value.split(/[;；\r\n]+/).map((item) => item.trim()).filter(Boolean) : value,
+  z.array(sentence).max(8),
+).describe('At most 8 strings, each at most 320 characters. A semicolon/newline-separated string is also accepted and normalized to an array.');
 
 /** Shared validation for model tools and direct workspace callers. Keep this brief, not a second draft. */
 export const officeDesignBriefSchema = z.object({
@@ -19,8 +23,8 @@ export const officeDesignBriefSchema = z.object({
   selectedDirection: z.string().trim().min(1).max(40).optional(),
   selectionReason: sentence.optional(),
   rhythm: sentence.optional(),
-  preserve: z.array(sentence).max(8).optional(),
-  avoid: z.array(sentence).max(8).optional(),
+  preserve: sentenceList.optional(),
+  avoid: sentenceList.optional(),
 }).strict().superRefine((brief, context) => {
   const ids = (brief.directions || []).map((direction) => direction.id);
   if (new Set(ids).size !== ids.length) context.addIssue({ code: 'custom', path: ['directions'], message: 'Design direction IDs must be unique.' });

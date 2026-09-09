@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { assembleRuntimeContext, createRuntimeContextReadTool, contextReadToolName, runtimeContextMessageRef, RuntimeContextBudgetError, type RuntimeContextManifest } from './runtime-context-assembler';
+import { assembleRuntimeContext, createRuntimeContextReadTool, contextReadToolName, runtimeContextMessageRef, type RuntimeContextManifest } from './runtime-context-assembler';
 import { runtimeKnowledgeMessage, type RuntimeKnowledgeBlock } from './runtime-knowledge-context';
 import { generateText, hasToolCall, parsePartialJson, streamText, ToolLoopAgent, tool, type ModelMessage, type StopCondition, type ToolCallRepairFunction, type ToolSet } from 'ai';
 import { z } from 'zod';
@@ -1711,10 +1711,12 @@ function runtimePrompt(input: { runtimeRecord: BrowserChatRuntimeRecord; fileVis
   const customPrompt = customRuntimePromptFromEnv();
   const screenshotAvailable = modelSupportsImageInput();
   return [
-    'You are an AI browser chat agent. Satisfy the latest user message from the live browser or answer directly when browser evidence is unnecessary.',
+    'You are an AI browser chat agent. Satisfy the latest user message using current, verified browser evidence. Only absolute common-knowledge questions may normally be answered from memory.',
     '',
     'Operating rules:',
-    '- Simple knowledge questions and other text-only requests that do not need a capability may be answered directly as ordinary assistant Markdown so the answer can stream to the user. Before using browser, file, chart, an infrastructure capability, or subagent spawn, read its required system Skill. Capability schemas are visible from the start; if one is called before its Skill is loaded, the Agent returns the Skill content and skips the requested operation, so read that content and retry in the next model step. In one model step call at most one relevant tool.',
+    '- Mandatory web research: except for absolute, timeless common knowledge (for example 1+1), use browser action=code to search the web and obtain current evidence before answering or carrying out subsequent analysis, recommendations, planning, or content generation. The common-knowledge exemption is extremely narrow: technology explanations, framework comparisons, product introductions, and professional knowledge are NOT exempt even when the user does not say "latest" or "search". A short question, a text-only answer, familiarity with the topic, or remembered facts is NOT an exemption. When unsure whether something is absolute common knowledge, search first. Current facts, figures, prices, dates, versions, policies, companies, people, products, and industry information always require live verification.',
+    '- Search with queries specific to the current task, open relevant result pages, and inspect their actual content. Prefer official or primary sources, check publication/update dates and the period covered by each figure, and use the latest applicable data in subsequent steps. Cite the supporting page URLs near factual claims. A browser state snapshot, opening an empty search page, or inventing a search result does not satisfy research. Reuse sufficiently current browser evidence already collected for this same task; do not repeat the same search before every tool call. If research fails, report what remains unverified and never present memory or estimates as verified live data. Respect explicit user instructions that prohibit browsing, restrict the answer to supplied material, or narrow this turn to a specific operation.',
+    '- Before using browser, file, chart, an infrastructure capability, or subagent spawn, read its required system Skill. Capability schemas are visible from the start; if one is called before its Skill is loaded, the Agent returns the complete Skill content and skips the requested operation. That returned content satisfies the read prerequisite: apply it directly and retry the original operation in the next model step without calling skill again. In one model step call at most one relevant tool.',
     `- Optional infrastructure tools are ${agentInfrastructureToolNames.join(', ')}. Use only a configured tool that directly helps the current request. Knowledge is durable reference storage; workflow is durable multi-stage state; connectors, data, media, communication, Git, code execution, and computer control retain their separate permission boundaries.`,
     '- The latest user message is the scope authority. If it explicitly narrows the current turn to one action (for example, "just click Search"), perform and verify only that action, then stop. Do not silently resume a broader goal from an earlier message unless the latest message explicitly asks you to continue it.',
     '- The single browser tool is the real browser mechanism. action=state returns a fresh fixed top-level snapshot, action=code performs targeted Playwright reads and interactions, and action=waitForHumanVerification pauses for user-owned verification. The action field is authoritative; unrelated fields are discarded. Use action=code for iframe, selector, DOM, screenshot, and targeted page-state inspection. A pending browser-state prerequisite is executed internally and returned in prerequisiteResults while the requested action still executes in the same call. Never say navigation/clicking is unavailable, substitute a file download, or ask the user to navigate manually while browser action=code is available unless a real attempt failed and you report that failure. One code cell may execute multiple bounded operations.',
@@ -1744,7 +1746,8 @@ function runtimePrompt(input: { runtimeRecord: BrowserChatRuntimeRecord; fileVis
     caseSystemPrompt ? `Loaded safety rules and Skills:\n${caseSystemPrompt}` : '',
     customPrompt,
     '',
-    'When the request is satisfied with text only, return the final answer directly as Chinese Markdown. When chart/UI blocks or an explicit failed/blocked status are required, call finalResponse and put user-facing prose in its Markdown blocks. Never return standalone JSON as assistant text.',
+    '回答前再次检查联网要求：除 1+1 这类绝对常识，以及用户明确禁止联网或限制本轮操作范围外，必须先实际调用 browser 工具搜索并读取相关网页，再使用核实的信息回答或继续制作内容。技术原理、框架对比、产品介绍等都需要搜索，即使你认为自己知道答案、用户只要求几句话，也不能直接凭记忆作答。没有执行搜索时，下一步应调用浏览器，不应直接给出结论。已经取得的本任务有效网页证据可以复用。',
+    'After satisfying the research requirement, return a text-only final answer directly as Chinese Markdown. When chart/UI blocks or an explicit failed/blocked status are required, call finalResponse and put user-facing prose in its Markdown blocks. Never return standalone JSON as assistant text.',
   ].filter(Boolean).join('\n');
 }
 
@@ -2142,7 +2145,6 @@ async function executeRuntimeStep(input: {
       ].join('\n')
     : '';
   const prompt = runtimePrompt({ runtimeRecord, fileVisualAvailable: Boolean(input.readFileVisuals) });
-  const runtimeTimeLine = currentRuntimeTimePromptLine();
   let activeOperationalContext = input.operationalContext || '';
   let activeKnowledge: RuntimeKnowledgeBlock[] = [];
   let onKnowledgeSelected: BrowserChatOperationalContext['onKnowledgeSelected'];
@@ -2166,7 +2168,7 @@ async function executeRuntimeStep(input: {
   let lastAiRequest: AiRequestSnapshot | undefined;
   let lastRetryState: RuntimeRetryState | undefined;
   let consecutiveRequestFailures = 0;
-  let retryInputBudget: number | undefined;
+  let retryCompressionThreshold: number | undefined;
   let durableSummary = parseContextSummary(input.continuationSummary) ? input.continuationSummary! : '';
   const durableTraces: ToolTrace[] = [];
   let durableTurnMessages: ModelMessage[] = [];
@@ -2391,7 +2393,7 @@ async function executeRuntimeStep(input: {
 
     async function prepareStep(turnIndex: number, previousMessages?: RuntimeModelMessage[]) {
       ensureActive();
-      await onAttemptDebug?.({ phase: 'ai:runtime:prepare', stepIndex, message: '正在检查上下文与请求预算' });
+      await onAttemptDebug?.({ phase: 'ai:runtime:prepare', stepIndex, message: '正在检查上下文与压缩阈值' });
       // Visibility is a property of the request, not a lifetime read receipt.
       if (codexMode) {
         for (const id of hiddenRuntimeSkillIdsReadFromTraces(traces)) loadedHiddenRuntimeSkillIds.add(id);
@@ -2431,12 +2433,13 @@ async function executeRuntimeStep(input: {
         ? stepAllowedToolTypes : requiredSubagentUuid ? ['subagent'] : Object.keys(nativeToolsRef.current || {});
       const stepTools = codexMode ? undefined : Object.fromEntries(Object.entries(nativeToolsRef.current || {})
         .filter(([name]) => availableStepNames.includes(name)).sort(([left], [right]) => left.localeCompare(right)));
-      const baseSystemPrompt = codexMode ? buildCodexObjectPrompt(prompt, stepAllowedToolTypes) : prompt;
+      const baseSystemPrompt = [currentRuntimeTimePromptLine(), codexMode ? buildCodexObjectPrompt(prompt, stepAllowedToolTypes) : prompt].join('\n\n');
       const agentStepIndex = retryAgentStepOffset + turnIndex + 1;
       const activeModelSettings = getModelSettings();
       const contextProfile = runtimeContextProfile(activeModelSettings);
       const windowTokens = contextProfile.windowTokens;
-      const thresholdTokens = Math.min(contextProfile.inputBudgetTokens, retryInputBudget ?? Infinity);
+      const thresholdTokens = Math.min(contextProfile.compressionTriggerTokens, retryCompressionThreshold ?? Infinity);
+      const targetTokens = Math.min(contextProfile.compressionTargetTokens, Math.floor(thresholdTokens * 0.9));
       const appendedMessages: RuntimeModelMessage[] = [];
       const appendedImagePaths: string[] = [];
       while (pendingObservationMessages.length) {
@@ -2494,26 +2497,25 @@ async function executeRuntimeStep(input: {
       requestSystemPrompt = baseSystemPrompt;
       const operationalContext = runtimeOperationalContextText(requiredSubagentDirective);
       const beforeStats = modelMessagesTextAndImageStats(sanitizeModelInputForStats(requestSystemPrompt, candidates, messageImagePaths), stepTools);
-      await onAttemptDebug?.({ phase: 'ai:runtime:prepare', stepIndex, message: '正在检查上下文与请求预算',
-        details: { modelContextStats: { ...beforeStats, windowTokens } } });
-      await attachContextAfterToCompletedTools(toolContextFromStats(beforeStats));
+      let compressionBeforeStats = beforeStats;
+      await onAttemptDebug?.({ phase: 'ai:runtime:prepare', stepIndex, message: '正在检查上下文与压缩阈值',
+        details: { rawContextStats: { ...beforeStats, windowTokens } } });
       const startedAt = Date.now();
       let assembled: Awaited<ReturnType<typeof assembleRuntimeContext>>;
       try {
         assembled = await assembleRuntimeContext({ messages: candidates,
           currentUserIndex: visibleIndexes.indexOf(source.indexOf(initialMessages[currentUserSourceIndex])), continuationSummary: continuationSummaryText,
-          system: requestSystemPrompt, tools: toolSchemaEstimateInput(stepTools), operationalContext, currentTimeLine: runtimeTimeLine, observations: appendedMessages,
-          knowledge: activeKnowledge, inputBudgetTokens: thresholdTokens,
-          compressionTriggerTokens: Math.min(contextProfile.compressionTriggerTokens, thresholdTokens), compressionTargetTokens: Math.min(contextProfile.compressionTargetTokens, Math.floor(thresholdTokens * 0.5)),
+          system: requestSystemPrompt, tools: toolSchemaEstimateInput(stepTools), operationalContext, currentTimeLine: '', observations: appendedMessages,
+          knowledge: activeKnowledge, contextWindowTokens: windowTokens,
+          compressionTriggerTokens: thresholdTokens, compressionTargetTokens: targetTokens,
           generateSummary: generateContextSummary, abortSignal,
           onCheckpoint: async (checkpoint) => {
             ensureActive();
             const stats = modelMessagesTextAndImageStats(sanitizeModelInputForStats(requestSystemPrompt, checkpoint.messages, messageImagePaths), stepTools);
             const compression = { compressedAt: new Date().toISOString(), continuationSummary: checkpoint.continuationSummary,
-              estimatedTokensBefore: beforeStats.estimatedTotalTokens, estimatedTokensAfter: stats.estimatedTotalTokens,
+              estimatedTokensBefore: compressionBeforeStats.estimatedTotalTokens, estimatedTokensAfter: stats.estimatedTotalTokens,
               retainedMessageCount: checkpoint.activeMessages.length, summarizedMessageCount: checkpoint.compressedMessages,
-              targetTokens: Math.min(contextProfile.compressionTargetTokens, Math.floor(thresholdTokens * 0.5)),
-              thresholdTokens: Math.min(contextProfile.compressionTriggerTokens, thresholdTokens), windowTokens };
+              targetTokens, thresholdTokens, windowTokens };
             await input.onContextCompression?.({ activeMessages: checkpoint.activeMessages, contextCompression: compression, background: checkpoint.messages[0] });
             latestContextCompression = compression;
             continuationSummaryText = checkpoint.continuationSummary;
@@ -2522,19 +2524,22 @@ async function executeRuntimeStep(input: {
             rememberRetryState({ messages: checkpoint.activeMessages, imagePaths: [...messageImagePaths], agentStepOffset: agentStepIndex - 1 });
             checkpoint.removedIndexes.forEach((index) => compactedSourceIndexes.add(visibleIndexes[index]));
           },
-          onProgress: async (progress) => {
+          onProgress: async (progress, compressionMessages) => {
             ensureActive(); requestWatchdog.touch();
             // Completion is published only after the durable checkpoint below succeeds.
             if (progress.stage === 'complete') return;
+            const compressionStats = modelMessagesTextAndImageStats(sanitizeModelInputForStats(requestSystemPrompt, compressionMessages, messageImagePaths), stepTools);
+            if (progress.stage === 'start') compressionBeforeStats = compressionStats;
             await onAttemptDebug?.({ phase: progress.stage === 'start' ? 'ai:context-compression:start' : 'ai:context-compression:progress', stepIndex,
               message: progress.stage === 'start' ? '正在压缩较早的对话记录' : `正在压缩上下文：已处理 ${progress.completedMessages}/${progress.totalMessages} 条记录`,
-              details: { ...progress, modelContextStats: { ...beforeStats, windowTokens } } });
+              details: { ...progress, beforeTokens: compressionBeforeStats.estimatedTotalTokens, afterTokens: compressionStats.estimatedTotalTokens,
+                modelContextStats: { ...compressionStats, windowTokens } } });
           },
         });
       } catch (error) {
         if (isBrowserChatAbortError(error, abortSignal)) throw error;
         await onAttemptDebug?.({ phase: 'ai:context-compression:error', stepIndex,
-          message: '上下文准备失败，原始记录已保留，本轮不会发送超限或未验证的输入。', details: { error: infrastructureError(error) } });
+          message: '上下文压缩失败，原始记录已保留，本轮不会使用未验证的摘要。', details: { error: infrastructureError(error) } });
         throw error;
       }
       const messagesToSend = assembled.messages;
@@ -2542,7 +2547,6 @@ async function executeRuntimeStep(input: {
       const attachedImagePaths = [...messageImagePaths];
       const modelMessagesForLog = sanitizeModelMessagesForLog(requestSystemPrompt, requestMessages, attachedImagePaths);
       const finalStats = modelMessagesTextAndImageStats(sanitizeModelInputForStats(requestSystemPrompt, requestMessages, attachedImagePaths), stepTools);
-      if (finalStats.estimatedTotalTokens > thresholdTokens) throw new RuntimeContextBudgetError(finalStats.estimatedTotalTokens, thresholdTokens);
       if (!codexMode) {
         loadedHiddenRuntimeSkillIds.clear();
         for (const id of hiddenRuntimeSkillIdsInModelContext(messagesToSend)) loadedHiddenRuntimeSkillIds.add(id);
@@ -2559,21 +2563,23 @@ async function executeRuntimeStep(input: {
       await checkpointContext([systemRecord, schemaRecord, ...(background ? [background] : [])], assembled.manifest);
       if (assembled.compressedMessages) {
         latestContextCompression = { compressedAt: new Date().toISOString(), continuationSummary: assembled.continuationSummary,
-          estimatedTokensBefore: beforeStats.estimatedTotalTokens, estimatedTokensAfter: finalStats.estimatedTotalTokens,
+          estimatedTokensBefore: compressionBeforeStats.estimatedTotalTokens, estimatedTokensAfter: finalStats.estimatedTotalTokens,
           retainedMessageCount: assembled.activeMessages.length, summarizedMessageCount: assembled.compressedMessages,
-          targetTokens: Math.min(contextProfile.compressionTargetTokens, Math.floor(thresholdTokens * 0.5)),
-          thresholdTokens: contextProfile.compressionTriggerTokens, windowTokens };
+          targetTokens, thresholdTokens, windowTokens };
         continuationSummaryText = assembled.continuationSummary;
         durableSummary = continuationSummaryText;
         assembled.removedIndexes.forEach((index) => compactedSourceIndexes.add(visibleIndexes[index]));
         contextSegmentationTurns += 1;
-        await publishToolTrace({ id: 'context-compression:' + input.runId + ':' + stepIndex + ':' + contextSegmentationTurns,
+        const compressionToolCallId = 'context-compression:' + input.runId + ':' + stepIndex + ':' + contextSegmentationTurns;
+        await publishToolTrace({ id: compressionToolCallId,
           name: 'contextCompression', input: { summarizedMessageCount: assembled.compressedMessages },
           result: { ok: true, actual: 'Earlier dialogue summarized; original records remain available through contextRead.' },
           startedAt, completedAt: Date.now(), elapsedMs: Date.now() - startedAt, actionElapsedMs: Date.now() - startedAt,
-          contextBefore: toolContextFromStats(beforeStats), contextAfter: toolContextFromStats(finalStats) });
+          contextBefore: toolContextFromStats(compressionBeforeStats), contextAfter: toolContextFromStats(finalStats) });
         await onAttemptDebug?.({ phase: 'ai:context-compression:complete', stepIndex, message: '上下文压缩完成',
-          details: { summarizedMessageCount: assembled.compressedMessages, modelContextStats: { ...finalStats, windowTokens } } });
+          details: { toolCallId: compressionToolCallId,
+            estimatedTokensBefore: compressionBeforeStats.estimatedTotalTokens, estimatedTokensAfter: finalStats.estimatedTotalTokens,
+            summarizedMessageCount: assembled.compressedMessages, modelContextStats: { ...finalStats, windowTokens } } });
       }
       lastPreparedMessages = [...assembled.activeMessages];
       await input.onActiveModelCheckpoint?.(assembled.activeMessages);
@@ -2582,6 +2588,9 @@ async function executeRuntimeStep(input: {
       aiRequest = createAiRequestSnapshot({ kind: 'runtime', stepIndex, prompt: '', systemPrompt: requestSystemPrompt,
         screenshotPath: undefined, imagePaths: attachedImagePaths, imageAttached: attachedImagePaths.length > 0,
         tools: stepAllowedToolTypes, options: { modelContextStats: { ...finalStats, windowTokens } } });
+      // Both ends must use prepared requests, after receipts/background/compaction.
+      // Raw candidates include material that may never be sent to the model.
+      await attachContextAfterToCompletedTools(toolContextFromAiRequest(aiRequest));
       lastAiRequest = aiRequest;
       const hiddenSkillGateActive = stepAllowedToolTypes.length !== allowedToolTypes.length;
       const activeTools = browserStateGatePending || hiddenSkillGateActive
@@ -2617,7 +2626,7 @@ async function executeRuntimeStep(input: {
         messages,
         temperature: 0.1,
         reasoning: aiReasoningEffort(),
-        maxOutputTokens: runtimeContextProfile(getModelSettings()).outputReserveTokens,
+        maxOutputTokens: runtimeContextProfile(getModelSettings()).maxOutputTokens,
         maxRetries: 0,
         abortSignal: requestWatchdog.abortSignal,
         timeout: runtimeRequestTimeoutMs,
@@ -2626,7 +2635,7 @@ async function executeRuntimeStep(input: {
       await onAttemptDebug?.({ phase: 'ai:runtime:request', stepIndex, message: '模型请求已发送',
         details: aiRequestLogDetails(aiRequest, modelRequestBody(result.request?.body,
           { model: getModelSettings().model, messages: modelMessagesForLog, temperature: 0.1,
-            reasoning: aiReasoningEffort(), maxOutputTokens: runtimeContextProfile(getModelSettings()).outputReserveTokens })) });
+            reasoning: aiReasoningEffort(), maxOutputTokens: runtimeContextProfile(getModelSettings()).maxOutputTokens })) });
       const aiElapsedMs = elapsedSince(aiStartedAt);
       ensureActive();
       const object = alignCodexRuntimeObjectTool(
@@ -3093,7 +3102,7 @@ async function executeRuntimeStep(input: {
         onStepEnd: onAgentStepEnd,
         temperature: 0.1,
         reasoning: aiReasoningEffort(),
-        maxOutputTokens: runtimeContextProfile(getModelSettings()).outputReserveTokens,
+        maxOutputTokens: runtimeContextProfile(getModelSettings()).maxOutputTokens,
         maxRetries: 0,
         repairToolCall,
         onError: ({ error }: { error: unknown }) => {
@@ -3354,7 +3363,7 @@ async function executeRuntimeStep(input: {
       consecutiveRequestFailures += 1;
       lastRetryDecision = classifyRuntimeRetry(error, abortSignal);
       if (lastRetryDecision.recovery === 'compact-context') {
-        retryInputBudget = Math.max(1, Math.floor((retryInputBudget || runtimeContextProfile(getModelSettings()).inputBudgetTokens) * 0.75));
+        retryCompressionThreshold = Math.max(1, Math.floor((retryCompressionThreshold || runtimeContextProfile(getModelSettings()).compressionTriggerTokens) * 0.75));
       }
       const missingToolCallId = runtimeMissingToolCallId(error);
       if (missingToolCallId && lastRetryState?.messages.length) {

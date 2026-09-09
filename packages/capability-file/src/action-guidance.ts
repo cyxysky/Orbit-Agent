@@ -20,7 +20,7 @@ export function fileActionInputIssues(input: FileToolInput) {
     if (typeof input.content !== 'string' || input.content.length > 1_000_000) {
       issues.push({ field: 'content', message: 'write requires string content, at most 1,000,000 characters; an empty string is allowed.' });
     }
-    forbid(['documentId', 'documentType', 'artifactId', 'attachmentId', 'sourceArtifactId', 'sourceAttachmentId', 'program', 'spec', 'patch', 'baseDigest', 'render', 'path', 'url', 'urlOrPath', 'operation', 'replaceExisting', 'fileType'],
+    forbid(['documentId', 'documentType', 'artifactId', 'attachmentId', 'sourceArtifactId', 'sourceAttachmentId', 'program', 'spec', 'patch', 'render', 'path', 'url', 'urlOrPath', 'operation', 'fileType'],
       'write publishes fileName + content as a new text artifact. It does not use an Office draft, execute a program, fetch a URL, or overwrite an existing artifact.');
   }
   if (action !== 'readSource') forbid(['includeDiagnostics'], 'includeDiagnostics is only supported by readSource. It reads saved validation details, not file content or page images.');
@@ -40,7 +40,7 @@ export function fileActionInputIssues(input: FileToolInput) {
     if (Number(has('artifactId')) + Number(has('attachmentId')) !== 1) {
       issues.push({ field: 'artifactId', message: 'readContent requires exactly one of artifactId (generated/downloaded file) or attachmentId (uploaded file). Use readSource + documentId for Python/JavaScript source.' });
     }
-    forbid(['documentId', 'path', 'startLine', 'endLine', 'baseDigest', 'sourceArtifactId', 'sourceAttachmentId'],
+    forbid(['documentId', 'path', 'startLine', 'endLine', 'sourceArtifactId', 'sourceAttachmentId'],
       'readContent returns parsed file text/data, NOT the generation source. Use readSource + documentId + startLine/endLine to locate code for edit.');
     forbid(['screenshotIds'], 'Use visualRead + artifactId + screenshotIds for indexed page images, not readContent.');
     if (has('pages') && input.includeVisuals !== true) {
@@ -48,20 +48,17 @@ export function fileActionInputIssues(input: FileToolInput) {
     }
   }
   if (['plan', 'generate', 'edit', 'render', 'unoApi', 'jsApi'].includes(action || '')) {
-    // edit retains its existing unique-baseDigest recovery for legacy clients.
-    if (action !== 'edit' || !has('baseDigest')) requireField('documentId', `${action} requires documentId. Use list to recover the current draft identity; do not pass a finished-file artifactId.`);
+    if (['generate', 'edit', 'render'].includes(action || '')) requireField('documentId', `${action} requires documentId. Use list to recover the current draft identity; do not pass a finished-file artifactId.`);
     forbid(['artifactId', 'attachmentId'], `${action} operates on a draft documentId. For plan(operation=modify), identify the uploaded original with sourceAttachmentId.`);
   }
   if (action === 'plan') {
-    requireField('fileName', 'plan requires fileName including its output extension.');
     requireField('documentType', 'plan requires documentType=word|spreadsheet|presentation.');
     if (input.operation === 'modify') requireField('sourceAttachmentId', 'plan(operation=modify) requires sourceAttachmentId of the uploaded original; readContent does not create editable generation source.');
     else forbid(['sourceAttachmentId'], 'sourceAttachmentId is only valid for plan(operation=modify).');
   }
   if (action === 'edit') {
-    requireField('baseDigest', 'edit requires baseDigest copied from the latest readSource.patchBaseDigest, not sourceDigest/renderedDigest/an artifactId.');
     if (Number(has('patch')) + Number(has('replacements')) !== 1) {
-      issues.push({ field: 'patch', message: 'edit requires exactly one of replacements (exact oldText/newText pairs, preferred for indentation) or patch (Codex diff). Read source first, preserve every space, and use the latest baseDigest.' });
+      issues.push({ field: 'patch', message: 'edit requires exactly one of replacements (exact oldText/newText pairs, preferred for indentation) or patch (Codex diff). Read the affected source first and preserve every space.' });
     }
     forbid(['program', 'spec'], 'edit accepts patch, not replacement program/spec. Use a focused source patch.');
   }

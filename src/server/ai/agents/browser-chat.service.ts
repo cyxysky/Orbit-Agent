@@ -64,10 +64,9 @@ import {
 } from '@/server/ai/agents/browser-chat-model-context';
 import {
   estimateRuntimeMessageContext,
-  estimateRuntimeTextTokens,
   runtimeContextWindowTokens,
 } from '@/server/ai/agents/runtime-context-budget';
-import { browserChatContextUsageFromDebugRecord } from '@/server/ai/agents/browser-chat-context-usage';
+import { browserChatActiveContextUsage, browserChatContextUsageFromDebugRecord } from '@/server/ai/agents/browser-chat-context-usage';
 import {
   alignBrowserChatMessageStepIndexes,
   attachBrowserChatStepOwners,
@@ -203,6 +202,7 @@ export type BrowserChatMessage = {
     label: string;
     updatedAt: string;
     startedAt?: string;
+    operationId?: string;
   };
   status?: 'queued' | 'running' | 'passed' | 'failed' | 'blocked' | 'interrupted';
 };
@@ -1949,25 +1949,7 @@ function activeBrowserChatContextUsage(session: BrowserChatSessionRecord, maxTok
   const context = session.modelContext;
   const cached = activeContextUsageCache.get(context);
   if (cached && cached.maxTokens === maxTokens) return cached;
-  const manifest = context.lastRequest;
-  const system = manifest?.systemRef ? context.records[manifest.systemRef]?.content : '';
-  const backgroundRef = context.backgroundRef || manifest?.backgroundRef;
-  const background = backgroundRef ? context.records[backgroundRef] : undefined;
-  const schema = manifest?.toolSchemaRef ? context.records[manifest.toolSchemaRef]?.content : undefined;
-  const estimated = estimateRuntimeMessageContext({
-    system: typeof system === 'string' ? system : '',
-    messages: [...(background ? [background] : []), ...browserChatActiveMessages(context)],
-  });
-  const toolTokens = typeof schema === 'string'
-    ? estimateRuntimeTextTokens(schema)
-    : Math.max(0, session.contextUsage?.toolTokens || 0);
-  const usage = {
-    currentTokens: estimated.totalTokens + toolTokens,
-    imageTokens: estimated.imageTokens,
-    maxTokens,
-    textTokens: estimated.textTokens,
-    toolTokens,
-  };
+  const usage = browserChatActiveContextUsage(context, maxTokens, session.contextUsage?.toolTokens);
   activeContextUsageCache.set(context, usage);
   return usage;
 }
@@ -2590,7 +2572,11 @@ function appendLog(
       ...item,
       activity: item.status === 'running' && runningActivity
         ? {
-          ...nextBrowserChatActivity({ phase, label: runningActivity, timestamp, elapsedMs: input.elapsedMs, previous: item.activity }),
+          ...nextBrowserChatActivity({ phase, label: runningActivity, timestamp, elapsedMs: input.elapsedMs, previous: item.activity,
+            operationId: phase.startsWith('ai:context-compression:')
+              ? `compression:${execution.attemptId || stepIndex}`
+              : phase === 'ai:tool' && execution.toolCallId ? `tool:${execution.toolCallId}`
+                : /^ai:runtime:(?:request|dispatch|response|receiving|object)/.test(phase) && execution.attemptId ? `ai:${execution.attemptId}` : undefined }),
         }
         : item.activity,
       stepIndexes: stepIndex
@@ -4507,7 +4493,7 @@ function runningActivityFromLog(phase: string, message: string) {
   if (phase === 'perf:runtime-input') return '正在准备页面上下文';
   if (phase === 'ai:prepare') return '正在请求 AI 决策';
   if (phase === 'ai:runtime:attempt') return message;
-  if (phase === 'ai:runtime:prepare') return '正在检查上下文与请求预算';
+  if (phase === 'ai:runtime:prepare') return '正在检查上下文与压缩阈值';
   if (phase === 'ai:context-compression:start') return '正在压缩上下文';
   if (phase === 'ai:context-compression:progress' || phase === 'ai:context-compression:error') return message;
   if (phase === 'ai:context-compression:complete' || phase === 'ai:context-segmented') return '上下文压缩完成，正在准备模型输入';
@@ -5946,14 +5932,12 @@ async function runBrowserChatMessage(
             const updated: BrowserChatMessage = {
               ...message,
               ...(blocks?.length ? { content: streamedText } : {}),
-              activity: {
-                phase: 'ai:text:streaming',
-                startedAt: message.activity?.startedAt || message.activity?.updatedAt || timestamp,
+              activity: nextBrowserChatActivity({
+                phase: 'ai:text:streaming', previous: message.activity, timestamp,
                 label: message.activity?.phase === 'ai:runtime:receiving' || message.activity?.phase === 'ai:text:streaming'
                   ? message.activity.label
                   : '正在接收 AI 回复',
-                updatedAt: timestamp,
-              },
+              }),
               status: 'running',
               updatedAt: timestamp,
             };
@@ -6024,9 +6008,15 @@ async function runBrowserChatMessage(
           if (step.index >= fromStepIndex) {
             const timestamp = now();
             updateAssistantMessage(session, assistantMessageId, (message) => {
+              const latestTool = step.tools?.at(-1);
+              const keepRequestActivity = latestTool?.ok !== undefined && message.activity?.operationId?.startsWith('ai:');
               const updated: BrowserChatMessage = {
                 ...message,
-                activity: runningAssistantActivity(step, timestamp),
+                activity: keepRequestActivity ? message.activity : nextBrowserChatActivity({
+                  ...runningAssistantActivity(step, timestamp), timestamp, previous: message.activity,
+                  operationId: latestTool ? `tool:${latestTool.id || `${step.index}:${step.tools!.length}`}` : undefined,
+                  elapsedMs: latestTool?.elapsedMs ?? latestTool?.progress?.elapsedMs,
+                }),
                 status: 'running',
                 updatedAt: timestamp,
                 stepIndexes: Array.from(new Set([...(message.stepIndexes || []), step.index])).sort((a, b) => a - b),
@@ -6045,8 +6035,9 @@ async function runBrowserChatMessage(
           if (!isActiveBrowserChatTurn(session, assistantMessageId, abortController)) return;
           if (event.phase === 'ai:runtime:request'
             || event.phase === 'ai:runtime:dispatch'
-            || event.phase === 'ai:runtime:prepare'
-            || event.phase.startsWith('ai:context-compression:')) {
+            || event.phase === 'ai:context-compression:start'
+            || event.phase === 'ai:context-compression:progress'
+            || event.phase === 'ai:context-compression:complete') {
             const usage = browserChatContextUsageFromDebugDetails(event.details, {
               provider: session.modelProvider,
               model: session.model,

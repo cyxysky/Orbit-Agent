@@ -40,7 +40,6 @@ async function editDraftText(input: {
   return editUnoFileArtifact({
     documentId: input.documentId,
     path: input.path,
-    baseDigest: state.patchBaseDigest,
     patch: [
       '*** Begin Patch',
       '*** Update File: draft.py',
@@ -150,7 +149,6 @@ describe('UNO file tool policies', () => {
 
       const edited = await editUnoFileArtifact({
         documentId: 'unit-relative-read',
-        baseDigest: payload.patchBaseDigest,
         patch: [
           '*** Begin Patch',
           '*** Update File: draft.py',
@@ -163,7 +161,6 @@ describe('UNO file tool policies', () => {
         runId: 'chat_test',
       });
       expect(edited.ok, edited.actual).toBe(true);
-      expect(edited.actual).not.toContain('PATCH_BASE_DIGEST_MISMATCH');
       const after = await readUnoDraft({ documentId: 'unit-relative-read', runId: 'chat_test' });
       expect(after.actual).toContain('return (');
     } finally {
@@ -558,7 +555,7 @@ describe('UNO file tool policies', () => {
     }
   });
 
-  it('rejects stale edits and confirms identical replay without repeating failed validation', async () => {
+  it('edits without version checks and confirms identical replay without repeating failed validation', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'webpilot-stale-patch-rebase-'));
     roots.push(root);
     const previousArtifacts = process.env.ARTIFACTS_DIR;
@@ -572,9 +569,6 @@ describe('UNO file tool policies', () => {
         program: 'def wrong_entrypoint(job):\n    return 1',
         runId: 'chat_test',
       });
-      const initial = JSON.parse((await readUnoDraft({
-        documentId: 'stale-patch-rebase', runId: 'chat_test',
-      })).actual || '{}') as { patchBaseDigest?: string };
       const patch = (oldValue: number, newValue: number) => [
         '*** Begin Patch',
         '*** Update File: draft.py',
@@ -584,7 +578,7 @@ describe('UNO file tool policies', () => {
         '*** End Patch',
       ].join('\n');
       const applied = await editUnoFileArtifact({
-        documentId: 'stale-patch-rebase', baseDigest: initial.patchBaseDigest,
+        documentId: 'stale-patch-rebase',
         patch: patch(1, 2), runId: 'chat_test',
       });
       expect(applied.ok).toBe(false); // The wrong entrypoint remains invalid.
@@ -592,15 +586,16 @@ describe('UNO file tool policies', () => {
       expect(appliedPayload).toMatchObject({ editStatus: 'patch-applied', saved: true, validation: 'failed' });
 
       const rebased = await editUnoFileArtifact({
-        documentId: 'stale-patch-rebase', baseDigest: initial.patchBaseDigest,
+        documentId: 'stale-patch-rebase', ...{ baseDigest: 'outdated-or-invalid-legacy-value' },
         patch: patch(2, 3), runId: 'chat_test',
       });
       expect(rebased.ok, rebased.actual).toBe(false);
-      expect(JSON.parse(rebased.actual || '{}')).toMatchObject({ code: 'PATCH_BASE_DIGEST_MISMATCH', changed: false, saved: false });
+      const rebasedPayload = JSON.parse(rebased.actual || '{}');
+      expect(rebasedPayload).toMatchObject({ editStatus: 'patch-applied', changed: true, saved: true, validation: 'failed' });
 
       const repeated = await editUnoFileArtifact({
-        documentId: 'stale-patch-rebase', baseDigest: initial.patchBaseDigest,
-        patch: patch(1, 2), runId: 'chat_test',
+        documentId: 'stale-patch-rebase',
+        patch: patch(2, 3), runId: 'chat_test',
       });
       expect(repeated.ok, repeated.actual).toBe(false);
       expect(JSON.parse(repeated.actual || '{}')).toMatchObject({
@@ -611,9 +606,13 @@ describe('UNO file tool policies', () => {
         validationStatus: 'failed',
       });
       const current = JSON.parse((await readUnoDraft({ documentId: 'stale-patch-rebase', runId: 'chat_test' })).actual || '{}');
-      expect(current.program).toContain('return 2');
-      expect(current.validationEvidence.checkedAt).toBe(appliedPayload.validationEvidence.checkedAt);
-      expect(current.patchBaseDigest).toBe(appliedPayload.patchBaseDigest);
+      expect(current.program).toContain('return 3');
+      expect(current.validationEvidence.checkedAt).toBe(rebasedPayload.validationEvidence.checkedAt);
+      expect(current.patchBaseDigest).toBe(rebasedPayload.patchBaseDigest);
+      const missingTarget = await editUnoFileArtifact({
+        documentId: 'stale-patch-rebase', patch: patch(1, 4), runId: 'chat_test',
+      });
+      expect(JSON.parse(missingTarget.actual || '{}')).toMatchObject({ code: 'PATCH_ATOMIC_CONFLICT', changed: false, saved: false });
     } finally {
       if (previousArtifacts === undefined) delete process.env.ARTIFACTS_DIR;
       else process.env.ARTIFACTS_DIR = previousArtifacts;
@@ -802,7 +801,7 @@ describe('UNO file tool policies', () => {
     }
   });
 
-  it('uses one current source and guards every later full-source replacement', async () => {
+  it('uses one current source and replaces it without extra flags', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'webpilot-uno-single-source-'));
     roots.push(root);
     const previousArtifacts = process.env.ARTIFACTS_DIR;
@@ -826,19 +825,7 @@ describe('UNO file tool policies', () => {
         runId: 'chat_test',
       });
       expect(replacement.ok).toBe(false);
-      expect(JSON.parse(replacement.actual || '{}').code).toBe('DESTRUCTIVE_GENERATE_REQUIRES_CONFIRMATION');
-      const beforeReplacement = JSON.parse((await readUnoDraft({
-        documentId: 'single-source', runId: 'chat_test',
-      })).actual || '{}') as Record<string, unknown> & { patchBaseDigest?: string; program?: string };
-      expect(beforeReplacement.program).toContain('return 1');
-      const intentionalReplacement = await generateUnoFileArtifact({
-        documentId: 'single-source',
-        program: 'def wrong_entrypoint(job):\n    return 2',
-        replaceExisting: true,
-        baseDigest: beforeReplacement.patchBaseDigest,
-        runId: 'chat_test',
-      });
-      expect(intentionalReplacement.ok).toBe(false);
+      expect(JSON.parse(replacement.actual || '{}')).toMatchObject({ kind: 'uno-draft-validation', saved: true });
       const afterGenerate = JSON.parse((await readUnoDraft({
         documentId: 'single-source', runId: 'chat_test',
       })).actual || '{}') as Record<string, unknown> & { program?: string };
@@ -853,8 +840,9 @@ describe('UNO file tool policies', () => {
         newText: '    return 3',
         runId: 'chat_test',
       });
-      expect(edited.ok, edited.actual).toBe(true);
-      expect(JSON.parse(edited.actual || '{}').kind).toBe('uno-draft-validation');
+      // The exact edit is saved, but wrong_entrypoint is still invalid source.
+      expect(edited.ok).toBe(false);
+      expect(JSON.parse(edited.actual || '{}')).toMatchObject({ kind: 'uno-draft-validation', saved: true, validation: 'failed' });
       const afterEdit = await readUnoDraft({ documentId: 'single-source', runId: 'chat_test' });
       expect(afterEdit.actual).toContain('return 3');
     } finally {
@@ -865,7 +853,7 @@ describe('UNO file tool policies', () => {
     }
   });
 
-  it('recovers a missing edit documentId from the unique patch digest and keeps re-planning idempotent', async () => {
+  it('recovers a missing edit documentId from the only draft and keeps re-planning idempotent', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'webpilot-uno-edit-id-recovery-'));
     roots.push(root);
     const previousArtifacts = process.env.ARTIFACTS_DIR;
@@ -881,10 +869,7 @@ describe('UNO file tool policies', () => {
         program: 'def wrong_entrypoint(job):\n    return 1',
         runId: 'chat_test',
       });
-      const read = await readUnoDraft({ documentId: 'recover-edit-id', runId: 'chat_test' });
-      const state = JSON.parse(read.actual || '{}') as { patchBaseDigest?: string };
       const edited = await editUnoFileArtifact({
-        baseDigest: state.patchBaseDigest,
         patch: [
           '*** Begin Patch',
           '*** Update File: draft.py',
@@ -895,7 +880,7 @@ describe('UNO file tool policies', () => {
         ].join('\n'),
         runId: 'chat_test',
       });
-      expect(edited.ok, edited.actual).toBe(true);
+      expect(edited.ok, edited.actual).toBe(false); // Source is saved, but wrong_entrypoint remains invalid.
       expect(JSON.parse(edited.actual || '{}')).toMatchObject({
         documentId: 'recover-edit-id',
         editStatus: 'patch-applied',
@@ -927,7 +912,7 @@ describe('UNO file tool policies', () => {
     }
   });
 
-  it('blocks a failed tiny generate from destroying a large editable draft', async () => {
+  it('saves a smaller replacement without a size guard and still reports validation failures', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'webpilot-uno-destructive-generate-'));
     roots.push(root);
     const previousArtifacts = process.env.ARTIFACTS_DIR;
@@ -947,20 +932,17 @@ describe('UNO file tool policies', () => {
         documentId: 'protected-source', program: largeInvalidSource, runId: 'chat_test',
       });
       expect(initial.ok).toBe(false);
-      const destructive = await generateUnoFileArtifact({
+      const replacement = await generateUnoFileArtifact({
         documentId: 'protected-source', program: 'def wrong_entrypoint(job):\n    return 2', runId: 'chat_test',
       });
-      expect(destructive.ok).toBe(false);
-      expect(JSON.parse(destructive.actual || '{}')).toMatchObject({
-        code: 'DESTRUCTIVE_GENERATE_REQUIRES_CONFIRMATION',
-        changed: false,
-        saved: false,
+      expect(replacement.ok).toBe(false);
+      expect(JSON.parse(replacement.actual || '{}')).toMatchObject({
+        kind: 'uno-draft-validation',
+        saved: true,
+        validation: 'failed',
       });
-      const current = JSON.parse((await readUnoDraft({
-        documentId: 'protected-source', runId: 'chat_test',
-      })).actual || '{}') as { program?: string };
-      expect(current.program).toContain('# retained source line 180');
-      expect(current.program).not.toContain('return 2');
+      const current = await readFile(path.join(root, 'chat_test', 'document-drafts', 'protected-source.py'), 'utf8');
+      expect(current).toBe('def wrong_entrypoint(job):\n    return 2');
     } finally {
       if (previousArtifacts === undefined) delete process.env.ARTIFACTS_DIR;
       else process.env.ARTIFACTS_DIR = previousArtifacts;

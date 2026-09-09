@@ -163,6 +163,28 @@ def presentation_text_line_count(value, width, font_size, padding=0):
     return max(1, sum(max(1, int(math.ceil(units / units_per_line))) for units in presentation_text_units(value)))
 
 
+def chart_contrast_color(fill, preferred=None, transparency=0, background=0xFFFFFF):
+    """Keep a requested label color only when its actual contrast is readable."""
+    def luminance(channels):
+        return sum(weight * (c / 12.92 if c <= .04045 else ((c + .055) / 1.055) ** 2.4)
+                   for c, weight in zip(channels, (.2126, .7152, .0722)))
+
+    def channels(value):
+        color = office_color(value)
+        return [((color >> shift) & 255) / 255 for shift in (16, 8, 0)]
+
+    alpha = min(1, max(0, float(transparency) / 100))
+    fill_luminance = luminance([a * (1 - alpha) + b * alpha for a, b in zip(channels(fill), channels(background))])
+
+    def contrast(color):
+        text_luminance = luminance(channels(color))
+        return (max(fill_luminance, text_luminance) + .05) / (min(fill_luminance, text_luminance) + .05)
+
+    if preferred is not None and contrast(preferred) >= 4.5:
+        return office_color(preferred)
+    return max((0xFFFFFF, 0x000000), key=contrast)
+
+
 def presentation_text_height(font_size, lines=1, padding=0, line_spacing=1.15):
     """Return a PowerPoint-calibrated TextShape height in 1/100 mm.
 
@@ -343,6 +365,33 @@ def _patch_xlsx_subtotal_formulas(job, entries):
             r'\1\2', xml, flags=re.IGNORECASE,
         )
         entries[name] = xml.encode('utf-8')
+    return entries
+
+
+def _patch_pptx_text_wrap(job, entries):
+    requests = job.ooxml_patches.get('textWrapSlideParts') or {}
+    if not requests:
+        return entries
+
+    def patch_shape(match, slide_requests):
+        xml = match.group(0)
+        name = re.search(r'<p:cNvPr\b[^>]*\bname="([^"]+)"', xml)
+        if not name or unescape(name.group(1)) not in slide_requests:
+            return xml
+        wrap = 'square' if slide_requests[unescape(name.group(1))] else 'none'
+        # Impress omits TextWordWrap on plain TextShape export; preserve the
+        # authored setting so PowerPoint does not silently wrap short headings.
+        def body_properties(body):
+            tag = re.sub(r'\s+wrap="[^"]*"', '', body.group(0))
+            return tag.replace('<a:bodyPr', f'<a:bodyPr wrap="{wrap}"', 1)
+        return re.sub(r'<a:bodyPr\b[^>]*>', body_properties, xml, count=1)
+
+    for name in list(entries):
+        if re.fullmatch(r'ppt/slides/slide\d+\.xml', name, re.I):
+            xml = entries[name].decode('utf-8')
+            slide_requests = requests.get(name, {})
+            if slide_requests:
+                entries[name] = re.sub(r'<p:sp\b[^>]*>.*?</p:sp>', lambda match: patch_shape(match, slide_requests), xml, flags=re.DOTALL).encode('utf-8')
     return entries
 
 
@@ -529,7 +578,44 @@ def _patch_pptx_chart_style(job, entries):
             if not chart_path.startswith('ppt/charts/') or chart_path not in entries:
                 raise RuntimeError('Authored chart relationship did not resolve to a PPTX chart part.')
             xml = entries[chart_path].decode('utf-8')
+            # Some LO versions serialize the series foreground over every
+            # point's CharColor (especially when the series color is black).
+            # Persist the resolved per-point foreground in the actual chart,
+            # so the reopened preview and PowerPoint keep the same contrast.
+            label_colors = iter(request.get('dataLabelColors') or [])
+            def label_series(match):
+                colors = next(label_colors, {})
+                def point_label(label_match):
+                    block = label_match.group(0)
+                    index = re.search(r'<c:idx\b[^>]*\bval="(\d+)"', block)
+                    color = colors.get(int(index.group(1))) if index else None
+                    if color is None:
+                        return block
+                    fill = f'<a:solidFill><a:srgbClr val="{color:06X}"/></a:solidFill>'
+                    def text_properties(properties):
+                        text = re.sub(r'<a:(?:solidFill|gradFill|pattFill|blipFill)\b[^>]*>.*?</a:(?:solidFill|gradFill|pattFill|blipFill)>|<a:(?:noFill|grpFill)\s*/>', '', properties.group(0), flags=re.DOTALL)
+                        if text.endswith('/>'):
+                            tag = re.match(r'<(a:\w+)', text).group(1)
+                            return text[:-2] + '>' + fill + '</' + tag + '>'
+                        if '</a:ln>' in text:
+                            return text.replace('</a:ln>', '</a:ln>' + fill, 1)
+                        return text.replace('>', '>' + fill, 1)
+                    if '<c:txPr>' in block:
+                        return re.sub(r'<a:(?:defRPr|rPr|endParaRPr)\b[^>]*(?:/>|>.*?</a:(?:defRPr|rPr|endParaRPr)>)', text_properties, block, flags=re.DOTALL)
+                    properties = '<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr>' + fill + '</a:defRPr></a:pPr><a:endParaRPr/></a:p></c:txPr>'
+                    return re.sub(r'(?=<c:(?:dLblPos|showLegendKey|showVal|showCatName|showSerName|showPercent|showBubbleSize|separator|extLst)\b|</c:dLbl>)', lambda _: properties, block, count=1)
+                return re.sub(r'<c:dLbl\b[^>]*>.*?</c:dLbl>', point_label, match.group(0), flags=re.DOTALL)
+            if request.get('dataLabelColors'):
+                xml = re.sub(r'<c:ser\b[^>]*>.*?</c:ser>', label_series, xml, flags=re.DOTALL)
             if request['kind'] == 'bubble':
+                # UNO exports the data roles but omits PowerPoint's visual size
+                # control. Keep the actual size data intact; scale the marks.
+                scale = str(request.get('bubbleScale', 50))
+                def bubble_options(match):
+                    block = re.sub(r'<c:(?:bubbleScale|showNegBubbles|sizeRepresents)\b[^>]*/>', '', match.group(0))
+                    options = '<c:bubbleScale val="' + scale + '"/><c:showNegBubbles val="0"/><c:sizeRepresents val="area"/>'
+                    return re.sub(r'(?=<c:axId\b)', lambda _: options, block, count=1)
+                xml = re.sub(r'<c:bubbleChart\b[^>]*>.*?</c:bubbleChart>', bubble_options, xml, flags=re.DOTALL)
                 def labels(match):
                     block = re.sub(r'<c:showBubbleSize\b[^>]*/>', '', match.group(0))
                     value = '1' if request['showValues'] else '0'
@@ -737,6 +823,7 @@ def postprocess_ooxml(job):
         entries = _patch_xlsx_freeze_panes(job, entries)
         entries = _patch_xlsx_subtotal_formulas(job, entries)
     elif suffix == '.pptx':
+        entries = _patch_pptx_text_wrap(job, entries)
         entries = _patch_pptx_native_bullets(job, entries)
         entries = _patch_pptx_slide_order(job, entries)
         entries = _patch_pptx_shape_animations(job, entries)
@@ -2136,7 +2223,7 @@ class PresentationShape:
         if not hasattr(self._shape, 'String'):
             raise ValueError(f'Presentation shape {self.element_id!r} is not a text shape.')
         self._shape.String = str(value)
-        self.deck._format_text_shape(self._shape, **self.deck._normalized_text_options(style or {}))
+        self.deck._format_text_shape(self._shape, _page=self.slide._page, **self.deck._normalized_text_options(style or {}))
         return self
 
     def replace_text(self, old_text, new_text, replace_all=True):
@@ -2169,7 +2256,7 @@ class PresentationShape:
             'fontWeight', 'italic', 'underline', 'strike', 'strikeout', 'align',
             'textAlign', 'padding', 'valign', 'verticalAlign', 'line_spacing',
             'lineSpacing', 'layout_role', 'layoutRole', 'allow_overlap', 'allowOverlap',
-            'link',
+            'link', 'text_wrap', 'wrap', 'wordWrap',
         }
         unknown = sorted(set(style) - shape_keys - text_keys)
         if unknown:
@@ -2198,7 +2285,7 @@ class PresentationShape:
             self.deck._apply_shape_gradient(self._shape, gradient)
         if hasattr(self._shape, 'Text'):
             text_style = {key: value for key, value in style.items() if key in text_keys}
-            self.deck._format_text_shape(self._shape, **self.deck._normalized_text_options(text_style))
+            self.deck._format_text_shape(self._shape, _page=self.slide._page, **self.deck._normalized_text_options(text_style))
         return self
 
     def remove(self):
@@ -2932,11 +3019,12 @@ class PresentationLayout(OfficeUnitConversion):
             'backgroundTransparency': 'background_transparency',
             'allowOverlap': 'allow_overlap', 'layoutRole': 'layout_role',
             'strikeout': 'strike', 'rotate': 'rotation',
+            'wrap': 'text_wrap', 'wordWrap': 'text_wrap',
         }
         allowed = {
             'font_size', 'color', 'bold', 'italic', 'underline', 'strike',
             'align', 'font_name', 'min_font_size', 'padding', 'valign',
-            'layout_role', 'allow_overlap', 'rotation', 'line_spacing',
+            'layout_role', 'allow_overlap', 'rotation', 'line_spacing', 'text_wrap',
             'background', 'fill', 'border', 'line', 'background_transparency',
             'fill_transparency', 'line_width', 'link',
         }
@@ -2959,10 +3047,15 @@ class PresentationLayout(OfficeUnitConversion):
             )
         return result
 
-    @staticmethod
-    def _format_text_shape(shape, font_size=None, color=None, bold=None, italic=None,
+    def _format_text_shape(self, shape, font_size=None, color=None, bold=None, italic=None,
                            underline=None, strike=None, align=None, font_name=None,
-                           rotation=None, line_spacing=None, **_unused):
+                           rotation=None, line_spacing=None, text_wrap=None, _page=None, **_unused):
+        if text_wrap is not None:
+            if not isinstance(text_wrap, bool):
+                raise ValueError('Presentation text_wrap must be true or false.')
+            shape.TextWordWrap = text_wrap
+            if _page is not None:
+                self.job.ooxml_patches.setdefault('textWrap', {}).setdefault(str(_page.Name), {})[str(shape.Name)] = text_wrap
         cursor = shape.Text.createTextCursor()
         cursor.gotoEnd(True)
         apply_text_font(cursor, font_name=font_name, font_size=font_size, bold=bold, italic=italic)
@@ -3467,7 +3560,7 @@ class PresentationLayout(OfficeUnitConversion):
     def add_text(self, element_id, page, text, x, y, width, height, font_size=18, color=0x000000,
                  bold=False, italic=False, align='LEFT', font_name=None, fit='shrink', min_font_size=8,
                  padding=0, valign='TOP', layout_role='content', allow_overlap=False,
-                 underline=False, strike=False, rotation=0, line_spacing=None, _unit=None):
+                 underline=False, strike=False, rotation=0, line_spacing=None, _unit=None, text_wrap=None):
         shape = self._add_shape(
             page, element_id, 'com.sun.star.drawing.TextShape', x, y, width, height, 'text',
             layout_role=layout_role, allow_overlap=allow_overlap,
@@ -3522,10 +3615,29 @@ class PresentationLayout(OfficeUnitConversion):
                 f'Presentation min_font_size={minimum_font_size:g} cannot exceed font_size={requested_font_size:g} '
                 f'for elementId={element_id!r}.'
             )
-        estimated_lines = presentation_text_line_count(text, requested_width, requested_font_size, inset)
+        single_line = text_wrap is False or (text_wrap is None and '\n' not in str(text) and '\r' not in str(text)
+                                            and len(re.sub(r'\s+', '', str(text))) <= 12 and requested_font_size >= 20)
+        if text_wrap is not None and not isinstance(text_wrap, bool):
+            raise ValueError('Presentation text_wrap must be true, false, or omitted for automatic short-label handling.')
+        shape.TextWordWrap = not single_line
+        self.job.ooxml_patches.setdefault('textWrap', {}).setdefault(str(page.Name), {})[str(shape.Name)] = not single_line
+        if single_line:
+            units = max(presentation_text_units(text))
+            width_font = (requested_width - 2 * inset) / max(1, units * POINT_TO_100TH_MM)
+            if width_font < requested_font_size:
+                if str(fit or 'shrink').lower() == 'shrink' and width_font >= minimum_font_size:
+                    requested_font_size = width_font
+                    apply_text_font(shape, font_name=font_name or _CJK_FONT, font_size=width_font)
+                else:
+                    self.job.layout_issues.append({
+                        'code': 'PRESENTATION_TEXT_SINGLE_LINE_OVERFLOW', 'severity': 'error', 'elementId': str(element_id),
+                        **self.job._source_location(),
+                        'message': f'Short label must remain on one line: {str(text)!r}. Widen its column to at least {(units * requested_font_size * POINT_TO_100TH_MM + 2 * inset) / 2540:.2f} inches, or explicitly set text_wrap=True for intentional wrapping. Do not split a word or shrink below min_font_size.',
+                    })
+        estimated_lines = 1 if single_line else presentation_text_line_count(text, requested_width, requested_font_size, inset)
         effective_line_spacing = 1.15 if line_spacing is None else float(line_spacing)
         estimated_height = presentation_text_height(requested_font_size, estimated_lines, inset, effective_line_spacing)
-        minimum_lines = presentation_text_line_count(text, requested_width, minimum_font_size, inset)
+        minimum_lines = 1 if single_line else presentation_text_line_count(text, requested_width, minimum_font_size, inset)
         minimum_height = presentation_text_height(minimum_font_size, minimum_lines, inset, effective_line_spacing)
         shape.Position, shape.Size = point(int(x), int(y)), size(requested_width, requested_height)
         shape.TextAutoGrowHeight = True
@@ -3574,7 +3686,7 @@ class PresentationLayout(OfficeUnitConversion):
     def add_text_box(self, element_id, page, text, box, font_size=18, color=0x000000,
                      bold=False, italic=False, align='LEFT', font_name=None, min_font_size=None,
                      padding=None, valign='TOP', layout_role='content', allow_overlap=False,
-                     underline=False, strike=False, rotation=0, line_spacing=None):
+                     underline=False, strike=False, rotation=0, line_spacing=None, text_wrap=None):
         """Add text to a semantic rectangle, deriving a safe height when omitted."""
         if not isinstance(box, dict):
             raise ValueError('Presentation text box must be a dict containing x, y, and width.')
@@ -3590,14 +3702,14 @@ class PresentationLayout(OfficeUnitConversion):
             font_size=font_size, color=color, bold=bold, italic=italic, align=align,
             font_name=font_name, fit='shrink', min_font_size=minimum, padding=inset,
             valign=valign, layout_role=layout_role, allow_overlap=allow_overlap,
-            underline=underline, strike=strike, rotation=rotation, line_spacing=line_spacing,
+            underline=underline, strike=strike, rotation=rotation, line_spacing=line_spacing, text_wrap=text_wrap,
         )
 
     def add_text_link(self, element_id, page, text, box, url=None, target_slide_id=None,
                       font_size=18, color=0x2563EB, bold=False, italic=False,
                       align='LEFT', font_name=None, min_font_size=None, padding=0,
                       valign='CENTER', layout_role='content', allow_overlap=False,
-                      underline=True, strike=False, rotation=0, line_spacing=None):
+                      underline=True, strike=False, rotation=0, line_spacing=None, text_wrap=None):
         """Add clickable text for an external URL or a stable slide-element destination."""
         if bool(url) == bool(target_slide_id):
             raise ValueError('Presentation text link requires exactly one of url or target_slide_id.')
@@ -3616,7 +3728,7 @@ class PresentationLayout(OfficeUnitConversion):
             bold=bold, italic=italic, align=align, font_name=font_name,
             min_font_size=min_font_size, padding=padding, valign=valign,
             layout_role=layout_role, allow_overlap=allow_overlap,
-            underline=underline, strike=strike, rotation=rotation, line_spacing=line_spacing,
+            underline=underline, strike=strike, rotation=rotation, line_spacing=line_spacing, text_wrap=text_wrap,
         )
         shape.String = ''
         cursor = shape.Text.createTextCursor()
@@ -3784,6 +3896,8 @@ class PresentationLayout(OfficeUnitConversion):
         }
         custom_shape_types = {
             'diamond': 'diamond',
+            'right-arrow': 'right-arrow', 'left-arrow': 'left-arrow',
+            'up-arrow': 'up-arrow', 'down-arrow': 'down-arrow',
             'triangle': 'isosceles-triangle',
             'right-triangle': 'right-triangle',
             'parallelogram': 'parallelogram',
@@ -4240,8 +4354,8 @@ class PresentationLayout(OfficeUnitConversion):
             lengths = {len(data) for _, data in parsed}
             if len(lengths) != 1:
                 raise ValueError(f'CHART_DATA_ROLE_INVALID: series {index + 1} role arrays must have equal lengths; got {sorted(lengths)}.')
-            if family == 'BubbleDiagram' and any(v <= 0 for v in parsed[2][1]):
-                raise ValueError('CHART_DATA_ROLE_INVALID: bubble sizes must be positive; do not drop or flatten the size role.')
+            if family == 'BubbleDiagram' and any(v < 0 for v in parsed[2][1]):
+                raise ValueError('CHART_DATA_ROLE_INVALID: bubble sizes must be non-negative; encode signed outcomes with color and a clearly labeled magnitude, never negative area.')
             if family == 'StockDiagram':
                 if not isinstance(categories, (list, tuple)) or len(categories) != len(parsed[0][1]):
                     raise ValueError('CHART_DATA_ROLE_INVALID: stock categories must match the OHLC sample count.')
@@ -4508,7 +4622,10 @@ class PresentationLayout(OfficeUnitConversion):
                   x_axis_min=None, x_axis_max=None, y_axis_min=None, y_axis_max=None,
                   x_axis_scale='linear', y_axis_scale='linear', axis_position='outside',
                   series_transparency=None, line_width=1.5, font_name=None,
-                  font_color=0x334155, grid_color=0xD9DEE2, gridlines=True):
+                  font_color=0x334155, grid_color=0xD9DEE2, gridlines=True,
+                  marker_shape='circle', marker_size=None, label_font_size=None,
+                  label_color=None, label_position='auto', bubble_scale=50,
+                  secondary_y_axis_title=None, secondary_y_axis_min=None, secondary_y_axis_max=None):
         """Add any chart family natively supported by LibreOffice's UNO chart module."""
         aliases = {
             'area': 'AreaDiagram',
@@ -4529,8 +4646,27 @@ class PresentationLayout(OfficeUnitConversion):
             raise ValueError(f'Unsupported native presentation chart type {chart_type!r}. Supported types: {supported}.')
         if symbols is None:
             symbols = normalized in ('line', 'xy', 'scatter')
+        marker_shapes = {'circle': 8, 'square': 0, 'diamond': 1, 'triangle': 3, 'none': None}
+        if marker_shape not in marker_shapes:
+            raise ValueError('CHART_STYLE_INVALID: marker_shape must be circle, square, diamond, triangle, or none.')
+        marker_size = (4 if service_name == 'XYDiagram' else 3) if marker_size is None else marker_size
+        if not isinstance(marker_size, (int, float)) or isinstance(marker_size, bool) or not math.isfinite(marker_size) or not 0 <= marker_size <= 72:
+            raise ValueError('CHART_STYLE_INVALID: marker_size is a diameter in points, 0..72; use 3 for lines or 4 for scatter.')
+        if label_position not in ('auto', 'inside', 'outside'):
+            raise ValueError('CHART_STYLE_INVALID: label_position must be auto, inside, or outside.')
+        if label_font_size is not None and (isinstance(label_font_size, bool) or not isinstance(label_font_size, (int, float)) or not math.isfinite(label_font_size) or not 1 <= label_font_size <= 72):
+            raise ValueError('CHART_STYLE_INVALID: label_font_size must be 1..72 points.')
+        if not isinstance(bubble_scale, (int, float)) or isinstance(bubble_scale, bool) or not math.isfinite(bubble_scale) or not 1 <= bubble_scale <= 300:
+            raise ValueError('CHART_STYLE_INVALID: bubble_scale must be 1..300 percent; it changes mark size, never the source values.')
+        source_series = ([{'name': name, 'values': row} for name, row in series.items()] if isinstance(series, dict)
+                         else list(series) if series is not None else [{'name': series_name, 'values': values}])
+        source_series = [item if isinstance(item, dict) else {'name': f'Series {i + 1}', 'values': item}
+                         for i, item in enumerate(source_series)]
+        if colors is None and any(item.get('color') is not None for item in source_series):
+            defaults = self._chart_palette(len(source_series))
+            colors = [item.get('color', defaults[i]) for i, item in enumerate(source_series)]
         if series_transparency is None:
-            series_transparency = 45 if service_name == 'FilledNetDiagram' else 0
+            series_transparency = 45 if service_name == 'FilledNetDiagram' else 30 if service_name == 'BubbleDiagram' else 0
         if (isinstance(series_transparency, bool) or not isinstance(series_transparency, (int, float))
                 or not math.isfinite(series_transparency) or not 0 <= series_transparency <= 100):
             raise ValueError('CHART_STYLE_INVALID: series_transparency must be 0..100 (0=opaque).')
@@ -4549,18 +4685,20 @@ class PresentationLayout(OfficeUnitConversion):
                 numbers = [v for group in data[3] for key, row in group if key == role for v in data[2][row] if math.isfinite(v)]
                 if any(v <= 0 for v in numbers):
                     raise ValueError(f'CHART_DATA_ROLE_INVALID: {axis_name} log10 axis requires strictly positive data; use linear, do not alter the data.')
-        for axis_name, minimum, maximum in (('x', x_axis_min, x_axis_max), ('y', y_axis_min, y_axis_max)):
+        for axis_name, minimum, maximum in (('x', x_axis_min, x_axis_max), ('y', y_axis_min, y_axis_max), ('secondary_y', secondary_y_axis_min, secondary_y_axis_max)):
             for value in (minimum, maximum):
                 if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)):
                     raise ValueError(f'CHART_DATA_ROLE_INVALID: {axis_name}_axis_min/max must be finite numbers.')
             if minimum is not None and maximum is not None and minimum >= maximum:
                 raise ValueError(f'CHART_DATA_ROLE_INVALID: {axis_name}_axis_min must be less than {axis_name}_axis_max.')
-            scale = x_axis_scale if axis_name == 'x' else y_axis_scale
+            scale = x_axis_scale if axis_name == 'x' else y_axis_scale if axis_name == 'y' else 'linear'
             if scale == 'log10' and any(value is not None and value <= 0 for value in (minimum, maximum)):
                 raise ValueError(f'CHART_DATA_ROLE_INVALID: {axis_name} log10 bounds must be positive.')
         if show_legend is None:
             show_legend = series is not None or normalized in ('pie', 'donut', 'doughnut')
-        color_points = normalized in ('pie', 'donut', 'doughnut') if color_by_point is None else bool(color_by_point)
+        color_points = (normalized in ('pie', 'donut', 'doughnut') or (
+            normalized == 'bubble' and len(source_series) == 1 and colors is not None and len(colors) > 1
+        )) if color_by_point is None else bool(color_by_point)
         if show_percent is None:
             show_percent = bool(percent) or (normalized in ('pie', 'donut', 'doughnut') and bool(show_legend) and not (show_values or show_category_name))
         if show_values is None:
@@ -4570,17 +4708,34 @@ class PresentationLayout(OfficeUnitConversion):
             show_values = normalized in ('bar', 'column') and point_count <= 8 and len(series or [None]) == 1
         if show_category_name is None:
             show_category_name = normalized in ('pie', 'donut', 'doughnut') and not bool(show_legend) and not (show_values or show_percent)
-        if normalized in ('pie', 'donut', 'doughnut'):
-            crowded_labels = sum(bool(value) for value in (show_values, show_category_name, show_percent))
-            if crowded_labels > 1:
-                self.job.layout_issues.append({
-                    'code': 'PRESENTATION_CHART_LABEL_DENSITY', 'severity': 'error',
-                    'elementId': str(element_id), **self.job._source_location(),
-                    'message': (
-                        'Pie/donut labels request more than one of value, category name, and percent. '
-                        'Use a legend plus percent-only labels, or category labels without a legend; combined labels clip at chart edges.'
-                    ),
-                })
+        chart_background = background if background is not None else getattr(page, 'FillColor', 0xFFFFFF)
+        font_color = chart_contrast_color(chart_background, preferred=font_color)
+        small_slice_legend = False
+        if service_name in ('PieDiagram', 'DonutDiagram'):
+            pie_rows = self._chart_series(categories, values, series, series_name)[2]
+            if len(pie_rows) == 1:
+                total = sum(abs(float(v)) for v in pie_rows[0])
+                has_labels = bool(show_values or show_percent or show_category_name)
+                small_slice_legend = has_labels and total > 0 and any(0 < abs(float(v)) / total < .06 for v in pie_rows[0])
+                combined_labels = sum(bool(value) for value in (show_values, show_category_name, show_percent)) > 1
+                if small_slice_legend or combined_labels:
+                    # Donut's native renderer only supports CENTER labels.
+                    # These defaults also cover weak model output that disables
+                    # the legend or forces every tiny label inside. Preserve all
+                    # requested information instead of rejecting the tool call.
+                    show_legend = True
+                    legend_labels = []
+                    for name, value in zip(categories, pie_rows[0]):
+                        parts = [str(name)]
+                        if show_values:
+                            parts.append(f'{float(value):g}')
+                        if show_percent and total > 0:
+                            parts.append(f'{100 * abs(float(value)) / total:.4g}%')
+                        legend_labels.append(' · '.join(parts))
+                    categories = legend_labels
+                    show_category_name = False
+                    if show_percent:
+                        show_values = False
         chart = self._add_native_chart(
             element_id, page, box, f'com.sun.star.chart.{service_name}', categories,
             values=values, series=series, colors=colors, font_size=font_size,
@@ -4655,6 +4810,53 @@ class PresentationLayout(OfficeUnitConversion):
                 axis.AutoMax = False
                 axis.Max = float(maximum)
         coordinate = chart['document'].getFirstDiagram().getCoordinateSystems()[0]
+        axis_indexes = []
+        for item in source_series:
+            axis = item.get('axis', 'primary')
+            if axis not in ('primary', 'secondary'):
+                raise ValueError('CHART_STYLE_INVALID: series.axis must be primary or secondary.')
+            axis_indexes.append(1 if axis == 'secondary' else 0)
+        normalized_units = bool(percent or stacked or re.search(r'归一|指数|index|normaliz|base\s*=?\s*100', str(y_axis_title or ''), re.I))
+        if service_name == 'LineDiagram' and len(source_series) == 2 and not normalized_units and not any('axis' in item for item in source_series):
+            magnitudes = [max((abs(float(v)) for v in item.get('values', []) if isinstance(v, (int, float)) and math.isfinite(v)), default=0) for item in source_series]
+            units = [item.get('unit') for item in source_series]
+            if (min(magnitudes) > 0 and max(magnitudes) / min(magnitudes) >= 50) or (all(units) and units[0] != units[1]):
+                secondary = magnitudes.index(min(magnitudes))
+                axis_indexes[secondary] = 1
+                primary = 1 - secondary
+                def axis_caption(item, fallback):
+                    name, unit = str(item.get('name') or fallback), str(item.get('unit') or '')
+                    return f'{name} ({unit})' if unit and unit not in name else name
+                y_axis_title = axis_caption(source_series[primary], 'Primary')
+                secondary_y_axis_title = secondary_y_axis_title or axis_caption(source_series[secondary], 'Secondary')
+                diagram.HasYAxisTitle = True
+                diagram.YAxisTitle.String = str(y_axis_title)
+        if any(axis_indexes):
+            if service_name not in ('LineDiagram', 'BarDiagram', 'AreaDiagram', 'XYDiagram'):
+                raise ValueError('CHART_STYLE_INVALID: secondary axes require line, bar/column, area or scatter.')
+            # Axis is owned by the chart model, not a standalone service from
+            # the process service manager. Chart1 creates its Chart2 axis here.
+            diagram.HasSecondaryYAxis = True
+            secondary_axis = coordinate.getAxisByDimension(1, 1)
+            secondary_axis.Show = True
+            secondary_axis.CrossoverPosition = uno.Enum('com.sun.star.chart.ChartAxisPosition', 'END')
+            secondary_axis.LabelPosition = uno.Enum('com.sun.star.chart.ChartAxisLabelPosition', 'OUTSIDE_END')
+            apply_text_font(secondary_axis, font_name=font_name or _CJK_FONT, font_size=font_size)
+            secondary_axis.CharColor = office_color(font_color)
+            secondary_axis.LineColor = office_color(grid_color)
+            secondary_axis.getGridProperties().Show = False
+            secondary_title = secondary_y_axis_title or next((item.get('name') for i, item in enumerate(source_series) if axis_indexes[i]), 'Secondary')
+            diagram.HasSecondaryYAxisTitle = True
+            secondary_title_shape = diagram.getSecondYAxisTitle()
+            secondary_title_shape.String = str(secondary_title)
+            apply_text_font(secondary_title_shape, font_name=font_name or _CJK_FONT, font_size=font_size)
+            secondary_title_shape.CharColor = office_color(font_color)
+            secondary_scale = secondary_axis.getScaleData()
+            if secondary_y_axis_min is not None:
+                secondary_scale.Minimum = float(secondary_y_axis_min)
+            if secondary_y_axis_max is not None:
+                secondary_scale.Maximum = float(secondary_y_axis_max)
+            secondary_axis.setScaleData(secondary_scale)
         for index, scale in enumerate((x_axis_scale, y_axis_scale)):
             if service_name in ('PieDiagram', 'DonutDiagram'):
                 break
@@ -4675,10 +4877,16 @@ class PresentationLayout(OfficeUnitConversion):
             grid.Show = bool(gridlines and index == 1)
         # Apply labels and marks after ALL Chart1 template operations. They can
         # otherwise be reset, or retain a default font/marker after export.
+        data_label_colors = []
         for native_type in coordinate.getChartTypes():
             final_series = native_type.getDataSeries()
             final_palette = self._chart_palette(len(final_series), colors)
             for series_index, item in enumerate(final_series):
+                resolved_label_colors = {}
+                data_label_colors.append(resolved_label_colors)
+                authored = source_series[series_index] if series_index < len(source_series) else {}
+                if series_index < len(axis_indexes):
+                    item.AttachedAxisIndex = axis_indexes[series_index]
                 label = uno.createUnoStruct('com.sun.star.chart2.DataPointLabel')
                 label.ShowNumber = bool(show_values)
                 label.ShowNumberInPercent = bool(show_percent)
@@ -4686,21 +4894,96 @@ class PresentationLayout(OfficeUnitConversion):
                 label.ShowLegendSymbol = False
                 item.Label = label
                 apply_text_font(item, font_name=font_name or _CJK_FONT, font_size=font_size)
-                item.CharColor = office_color(font_color)
+                item.CharColor = chart_contrast_color(chart_background, preferred=label_color if label_color is not None else font_color)
+                item.TextWordWrap = False
                 item.Transparency = int(series_transparency)
                 item.LineWidth = int(round(float(line_width) * POINT_TO_100TH_MM))
                 if service_name in ('LineDiagram', 'XYDiagram', 'NetDiagram', 'FilledNetDiagram', 'StockDiagram'):
                     symbol = item.Symbol
-                    enabled = bool(symbols and service_name != 'StockDiagram')
+                    enabled = bool(symbols and marker_shape != 'none' and marker_size > 0 and service_name != 'StockDiagram')
                     symbol.Style = uno.Enum('com.sun.star.chart2.SymbolStyle', 'STANDARD' if enabled else 'NONE')
                     if enabled:
                         # AUTO lets the exporter replace the authored color. Explicit
                         # native symbols preserve both palette and series distinction.
-                        symbol.StandardSymbol = series_index % 8
+                        symbol.StandardSymbol = marker_shapes[marker_shape]
                         symbol.FillColor = office_color(final_palette[series_index])
                         symbol.BorderColor = office_color(final_palette[series_index])
-                        symbol.Size = size(300, 300)
+                        diameter = int(round(float(marker_size) * POINT_TO_100TH_MM))
+                        symbol.Size = size(diameter, diameter)
                     item.Symbol = symbol
+                point_values = authored.get('y', authored.get('values', [])) or []
+                if service_name in ('PieDiagram', 'DonutDiagram'):
+                    point_values = self._chart_series(categories, values, series, series_name)[2][series_index]
+                if authored.get('point_colors') is not None and (not isinstance(authored['point_colors'], (list, tuple)) or len(authored['point_colors']) != len(point_values)):
+                    raise ValueError('CHART_STYLE_INVALID: point_colors must contain exactly one color per observation; use series.color for a group color.')
+                point_palette = self._chart_palette(len(point_values), authored.get('point_colors') or colors) if color_points or authored.get('point_colors') else [final_palette[series_index]] * len(point_values)
+                if service_name in ('PieDiagram', 'DonutDiagram', 'BubbleDiagram', 'XYDiagram'):
+                    for point_index, point_color in enumerate(point_palette):
+                        data_point = item.getDataPointByIndex(point_index)
+                        if color_points or authored.get('point_colors'):
+                            data_point.Color = office_color(point_color)
+                            data_point.BorderColor = office_color(point_color)
+                            if service_name == 'XYDiagram' and symbols:
+                                point_symbol = item.Symbol
+                                point_symbol.FillColor = office_color(point_color)
+                                point_symbol.BorderColor = office_color(point_color)
+                                data_point.Symbol = point_symbol
+                        if service_name == 'BubbleDiagram':
+                            data_point.BorderColor = 0xFFFFFF
+                            data_point.BorderStyle = uno.Enum('com.sun.star.drawing.LineStyle', 'SOLID')
+                            data_point.BorderWidth = 30
+                        if service_name in ('PieDiagram', 'DonutDiagram'):
+                            total = sum(abs(float(v)) for v in point_values)
+                            small = total > 0 and abs(float(point_values[point_index])) / total < .06
+                            outside = service_name == 'PieDiagram' and (label_position == 'outside' or (label_position == 'auto' and small and not small_slice_legend))
+                            data_point.LabelPlacement = uno.getConstantByName('com.sun.star.chart.DataLabelPlacement.' + ('OUTSIDE' if outside else 'CENTER'))
+                            resolved_color = chart_contrast_color(
+                                chart_background if outside else point_color,
+                                preferred=label_color if label_color is not None else font_color if outside else None,
+                                transparency=0 if outside else series_transparency, background=chart_background,
+                            )
+                            data_point.CharColor = resolved_color
+                            resolved_label_colors[point_index] = resolved_color
+                            data_point.TextWordWrap = False
+                            if float(point_values[point_index]) == 0 or (small_slice_legend and small):
+                                data_point.Label = uno.createUnoStruct('com.sun.star.chart2.DataPointLabel')
+                    if service_name in ('PieDiagram', 'DonutDiagram'):
+                        item.ShowCustomLeaderLines = True
+                    if service_name == 'BubbleDiagram':
+                        item.BorderColor = 0xFFFFFF
+                        item.BorderStyle = uno.Enum('com.sun.star.drawing.LineStyle', 'SOLID')
+                        item.BorderWidth = 30
+                if service_name == 'BarDiagram' and show_values:
+                    available = chart['box']['height' if horizontal else 'width'] * (.68 if show_legend and not horizontal else .85)
+                    slots = max(1, len(categories) * (1 if stacked else len(final_series)))
+                    characters = max((len(f'{float(v):g}') for v in point_values), default=1)
+                    fitted = min(float(font_size), max(9, available / slots / POINT_TO_100TH_MM / (characters * .62 + .8)))
+                    label_size = float(label_font_size) if label_font_size is not None else fitted
+                    apply_text_font(item, font_name=font_name or _CJK_FONT, font_size=label_size)
+                    # Preserve every requested value. Stagger crowded labels
+                    # outside the bars; white inside text would disappear where
+                    # a long number extends past a narrow dark bar.
+                    crowded = available / slots < (characters * .62 + .5) * label_size * POINT_TO_100TH_MM
+                    for point_index, point_color in enumerate(point_palette):
+                        data_point = item.getDataPointByIndex(point_index)
+                        slot_index = point_index * len(final_series) + series_index
+                        inside = label_position == 'inside' or (label_position == 'auto' and stacked)
+                        data_point.LabelPlacement = uno.getConstantByName('com.sun.star.chart.DataLabelPlacement.' + ('INSIDE' if inside else 'OUTSIDE'))
+                        resolved_color = chart_contrast_color(
+                            point_color if inside else chart_background,
+                            preferred=label_color if label_color is not None else None if inside else font_color,
+                            transparency=series_transparency if inside else 0, background=chart_background,
+                        )
+                        data_point.CharColor = resolved_color
+                        resolved_label_colors[point_index] = resolved_color
+                        if crowded and not inside and slot_index % 2 == 1:
+                            offset = uno.createUnoStruct('com.sun.star.chart2.RelativePosition')
+                            direction = 1 if float(point_values[point_index]) >= 0 else -1
+                            offset.Primary = direction * (characters * .62 + 1) * label_size * POINT_TO_100TH_MM / chart['box']['width'] if horizontal else 0
+                            offset.Secondary = 0 if horizontal else -direction * 3 * label_size * POINT_TO_100TH_MM / chart['box']['height']
+                            data_point.CustomLabelPosition = offset
+                elif label_font_size is not None:
+                    apply_text_font(item, font_name=font_name or _CJK_FONT, font_size=float(label_font_size))
         # Chart1's HasMainTitle setter can recreate a default "main-title", even
         # when assigned True again. Enable it before restoring text/style and
         # never toggle it after formatting. Template operations above may reset it.
@@ -4722,6 +5005,8 @@ class PresentationLayout(OfficeUnitConversion):
                 target.CharColor = office_color(font_color)
         self.job.ooxml_patches.setdefault('nativeChartStyle', {})[str(chart['shape'].Name)] = {
             'kind': normalized, 'showValues': bool(show_values),
+            'bubbleScale': int(bubble_scale),
+            'dataLabelColors': data_label_colors,
         }
         chart['chartType'] = normalized
         return chart
@@ -4751,18 +5036,10 @@ class PresentationLayout(OfficeUnitConversion):
             series_name=series_name, title=title, x_axis_title=x_axis_title,
             y_axis_title=y_axis_title, show_values=show_values, show_legend=show_legend,
         )
-        diagram = chart['diagram']
-        try:
-            diagram.Lines = True
-            diagram.SymbolType = uno.getConstantByName('com.sun.star.chart.ChartSymbolType.AUTO')
-        except Exception:
-            pass
-        try:
-            series = diagram.getDataRowProperties(0)
-            series.LineColor = office_color(color, 'chart line color')
-            series.FillColor = office_color(point_fill, 'chart point fill')
-        except Exception:
-            pass
+        for item in chart['document'].getFirstDiagram().getCoordinateSystems()[0].getChartTypes()[0].getDataSeries():
+            symbol = item.Symbol
+            symbol.FillColor = office_color(point_fill, 'chart point fill')
+            item.Symbol = symbol
         return chart
 
     def add_area_chart(self, element_id, page, box, categories, values=None, series=None,
@@ -5135,6 +5412,14 @@ class PresentationLayout(OfficeUnitConversion):
             self._component.DrawPages.getByIndex(index)
             for index in range(self._component.DrawPages.Count)
         ]
+        wrap_requests = self.job.ooxml_patches.get('textWrap') or {}
+        if wrap_requests:
+            # Exported slides omit cSld names. Resolve the physical part order
+            # at save time, before any logical presentation-order patch.
+            self.job.ooxml_patches['textWrapSlideParts'] = {
+                f'ppt/slides/slide{index + 1}.xml': wrap_requests[str(page.Name)]
+                for index, page in enumerate(physical) if str(page.Name) in wrap_requests
+            }
         order = [physical.index(page) + 1 for page in self._logical_pages]
         if order != list(range(1, len(order) + 1)):
             self.job.ooxml_patches['slideOrder'] = order
@@ -6391,9 +6676,10 @@ def facade_value_schemas(document_type):
                     'font_size', 'min_font_size', 'font_name', 'color', 'bold', 'italic',
                     'underline', 'strike', 'align', 'valign', 'padding', 'line_spacing',
                     'background', 'background_transparency', 'border', 'line_width',
-                    'link', 'rotation', 'allow_overlap', 'layout_role',
+                    'link', 'rotation', 'allow_overlap', 'layout_role', 'text_wrap',
                 ],
-                'aliases': {'fontSize': 'font_size', 'fontFace': 'font_name', 'verticalAlign': 'valign', 'fill': 'background', 'line': 'border'},
+                'aliases': {'fontSize': 'font_size', 'fontFace': 'font_name', 'verticalAlign': 'valign', 'fill': 'background', 'line': 'border', 'wrap': 'text_wrap', 'wordWrap': 'text_wrap'},
+                'shortLabels': 'Use text_wrap=False for one-line labels. Short headings (up to 12 non-space characters at 20pt+) default to one line. Allocate enough width for the whole label; do not split a Chinese word or shrink below min_font_size. text_wrap=True opts into intentional wrapping.',
                 'alignValues': ['LEFT', 'CENTER', 'RIGHT', 'BLOCK'],
                 'valignValues': ['TOP', 'CENTER', 'MIDDLE', 'BOTTOM'],
             },
@@ -6402,7 +6688,7 @@ def facade_value_schemas(document_type):
                     'rectangle', 'round-rectangle', 'rounded-rectangle', 'ellipse',
                     'circle', 'diamond', 'triangle', 'right-triangle', 'parallelogram',
                     'trapezoid', 'pentagon', 'hexagon', 'octagon', 'star', 'line',
-                    'caption', 'measure',
+                    'caption', 'measure', 'right-arrow', 'left-arrow', 'up-arrow', 'down-arrow',
                 ],
                 'line': "color or {'color': color, 'width': points, 'transparency': 0..100}",
                 'keys': ['fill', 'line', 'line_width', 'gradient', 'rotation', 'transparency', 'fill_transparency', 'allow_overlap', 'layout_role'],
@@ -6421,12 +6707,15 @@ def facade_value_schemas(document_type):
                 'singleSeries': "values=[12, 18, 27], series_name='Revenue'",
                 'multipleSeries': "series=[{'name': 'Actual', 'values': [12, 18]}, {'name': 'Plan', 'values': [14, 20]}]",
                 'scatter': "categories=[]; series=[{'name':'Samples', 'x':[1,2,4], 'y':[8,13,21]}]. Each series may have its own numeric X values and sample count. Never use category strings as X or flatten pairs.",
-                'bubble': "categories=[]; series=[{'name':'Samples', 'x':[1,2], 'y':[8,13], 'sizes':[4,9]}]. Positive sizes are required. Per-series X/Y/sizes lengths must agree; different series may have different counts.",
+                'bubble': "categories=[]; series=[{'name':'Samples', 'x':[1,2], 'y':[8,13], 'sizes':[4,9]}]. Sizes are non-negative area weights (zero means no visible area), not radii. Per-series X/Y/sizes lengths must agree; different series may have different counts. Use one named series per semantic group with color='#RRGGBB'; three scenarios with one observation each require three total points, not a 3x3 cross product. Encode signed outcomes with named colors and use explicitly labeled absolute magnitudes for area.",
+                'seriesStyle': "Each series accepts color, point_colors (one color per observation), axis='primary'|'secondary', and unit. Prefer separate named series for different groups so native legend colors and accompanying prose agree. One bubble series with multiple colors uses per-point colors; it does not invent group names.",
+                'secondaryAxis': "For incompatible units or orders of magnitude, use separate panels or assign series.axis explicitly and provide y_axis_title + secondary_y_axis_title with units. secondary_y_axis_min/max optionally set right-axis bounds. Two unassigned line series with different explicit units or a >=50x magnitude ratio automatically use separate axes; explicit axis assignments and normalized/index charts keep the authored choice. Never alter source values to make two lines fit one axis.",
                 'stock': "categories=['Day 1','Day 2']; series=[{'name':'Price', 'open':[10,12], 'high':[14,16], 'low':[8,11], 'close':[12,15]}]. Four equal-length roles are required, with low <= open/close <= high. They are not four unrelated lines.",
                 'pointTupleCompatibility': "Scatter also accepts values=[[x,y], ...], bubble values=[[x,y,size], ...]. Do not combine tuple values and named role arrays. Prefer named arrays in new code.",
                 'axisBounds': 'Optional numeric x_axis_min/x_axis_max/y_axis_min/y_axis_max control visible axis bounds; each minimum must be below its maximum. For bubbles near plot edges, expand the axis range and chart box, not x/y/sizes data. Data overlap can be intrinsic; never move samples or change relative sizes to disguise it.',
                 'axisScales': "scatter/bubble accept x_axis_scale='linear'|'log10' and y_axis_scale='linear'|'log10'. Log scales preserve stored data and require all values/bounds positive; explicitly label the scale. axis_position='outside' (default) keeps axes/ticks on plot edges; 'zero' requests internal zero crossing. x/y titles and bounds refer to physical horizontal/vertical axes, including bar.",
-                'appearance': "font_name, font_color, grid_color, gridlines=True, line_width=1.5 (pt), series_transparency=0..100. title=None suppresses the internal title, including for single series. symbols=None enables marks only for line/scatter; stock always suppresses marks. Filled-radar defaults to 45% transparency. Dense line/area/radar/scatter/bubble/stock families default show_values=False. Set True only after budgeting label space. Use shared theme helpers rather than repeated per-point styling.",
+                'appearance': "font_name, font_color, grid_color, gridlines=True, line_width=1.5 (pt), series_transparency=0..100. title=None suppresses the internal title, including for single series. symbols=None enables marks only for line/scatter; stock always suppresses marks. marker_shape='circle' (also square/diamond/triangle/none); marker_size is diameter in points, default 3 for lines and 4 for scatter. Filled-radar defaults to 45% transparency; bubbles to 30% with an outline. bubble_scale=50 sets PPTX bubble area display scale (1..300%); LibreOffice preview uses its own native maximum size, so inspect both overlap and axis padding. Dense line/area/radar/scatter/bubble/stock families default show_values=False. Use shared theme helpers.",
+                'dataLabels': "label_font_size=1..72pt, label_color, label_position='auto'|'inside'|'outside'. Labels enforce readable contrast (>=4.5:1), including when an explicit label_color is unsuitable, accounting for mark transparency. Tiny pie/donut labels automatically move into a native legend even if show_legend=False or label_position='inside'; requested category/value/percent combinations are preserved in legend text. Large labels remain in their sectors. Bar labels fit/stagger without deleting values. Widen the plot if labels still collide; do not hide requested values or alter source data.",
                 'chartTypes': ['area', 'bar', 'column', 'bubble', 'donut', 'doughnut', 'filled-radar', 'line', 'pie', 'radar', 'scatter', 'stock'],
                 'labelRule': 'Category charts require semantic categories; scatter/bubble use numeric X and may pass categories=[]. Supply meaningful series names, axis units and appropriate labels. Pie/donut: legend + percent-only OR category-only without legend, never multiple label modes.',
             },
@@ -6589,8 +6878,18 @@ scatter_slide.add_chart('samples', 'scatter', [], box=(0.8,1.5,11.7,4.8),
 # X, Y and size are separate numeric roles, NOT three independent series.
 bubble_slide = deck.slide('bubble-example', layout='blank')
 bubble_slide.add_chart('cost', 'bubble', [], box=(0.8,1.5,11.7,4.8),
-    series=[{'name':'Models', 'x':[1,2], 'y':[8,13], 'sizes':[4,9]}],
-    title='Cost vs compute', x_axis_title='Compute', y_axis_title='Cost')
+    series=[{'name':'Optimistic', 'x':[10.5], 'y':[17], 'sizes':[650], 'color':'#D4A017'},
+            {'name':'Neutral', 'x':[11.5], 'y':[15], 'sizes':[100], 'color':'#0F172A'},
+            {'name':'Pessimistic', 'x':[12.5], 'y':[13], 'sizes':[550], 'color':'#C81E1E'}],
+    title='Scenario assumptions (illustrative)', x_axis_title='Unit cost', y_axis_title='Unit price',
+    x_axis_min=10, x_axis_max=13, y_axis_min=11, y_axis_max=19)
+# The three legend colors must also be used in the accompanying scenario text.
+# Area represents absolute outcome magnitude, not a signed value or a radius.
+dual_slide = deck.slide('dual-axis-example', layout='blank')
+dual_slide.add_chart('supply-price', 'line', ['2023','2024','2025'], box=(0.8,1.5,11.7,4.8),
+    series=[{'name':'Supply', 'values':[4100,4000,3900], 'unit':'10k head', 'axis':'primary'},
+            {'name':'Price', 'values':[14,16,18], 'unit':'CNY/kg', 'axis':'secondary'}],
+    y_axis_title='Supply (10k head)', secondary_y_axis_title='Price (CNY/kg)')
 # One candle series, ordered Open / High / Low / Close.
 stock_slide = deck.slide('stock-example', layout='blank')
 stock_slide.add_chart('price', 'stock', ['Day 1','Day 2'], box=(0.8,1.5,11.7,4.8),
@@ -7275,7 +7574,7 @@ details.getCellByPosition(0, 0).String = 'Detail' ''',
             "deck.add_image_contain(element_id, page, asset_name, box, padding=0, layout_role='content', allow_overlap=False)",
             "deck.add_text_link(element_id, page, text, box, url=None, target_slide_id=None, font_size=18, color=0x2563EB, bold=False, italic=False, align='LEFT', font_name=None, min_font_size=None, padding=0, valign='CENTER', layout_role='content', allow_overlap=False)",
             "deck.add_native_table(element_id, page, box, rows, column_weights=None, header_fill=0x0F172A, header_color=0xFFFFFF, body_fill=0xF8FAFC, alternate_fill=0xFFFFFF, body_color=0x1E293B, font_size=11, font_name=None, first_column_align='LEFT')",
-            "deck.add_chart(element_id, page, box, chart_type, categories, values=None, series=None, colors=None, font_size=12, show_legend=None, stacked=False, percent=False, vertical=None, lines=True, symbols=None, dim3d=False, color_by_point=None, series_name='Values', title=None, x_axis_title=None, y_axis_title=None, show_values=None, show_category_name=None, show_percent=None, background=None, legend_position='right', alt_text=None, x_axis_min=None, x_axis_max=None, y_axis_min=None, y_axis_max=None, x_axis_scale='linear', y_axis_scale='linear', axis_position='outside', series_transparency=None, line_width=1.5, font_name=None, font_color=0x334155, grid_color=0xD9DEE2, gridlines=True); transparent background and no internal title are default; chart_type: area, bar, column, bubble, donut/doughnut, filled-radar, line, radar, pie, stock, xy/scatter",
+            "deck.add_chart(element_id, page, box, chart_type, categories, values=None, series=None, colors=None, font_size=12, show_legend=None, stacked=False, percent=False, vertical=None, lines=True, symbols=None, dim3d=False, color_by_point=None, series_name='Values', title=None, x_axis_title=None, y_axis_title=None, show_values=None, show_category_name=None, show_percent=None, background=None, legend_position='right', alt_text=None, x_axis_min=None, x_axis_max=None, y_axis_min=None, y_axis_max=None, x_axis_scale='linear', y_axis_scale='linear', axis_position='outside', series_transparency=None, line_width=1.5, font_name=None, font_color=0x334155, grid_color=0xD9DEE2, gridlines=True, marker_shape='circle', marker_size=None, label_font_size=None, label_color=None, label_position='auto', bubble_scale=50, secondary_y_axis_title=None, secondary_y_axis_min=None, secondary_y_axis_max=None); transparent background and no internal title are default; chart_type: area, bar, column, bubble, donut/doughnut, filled-radar, line, radar, pie, stock, xy/scatter",
             "deck.add_bar_chart(element_id, page, box, categories, values, colors=None, font_size=12, color=0x334155, baseline_color=0xCBD5E1, value_format='{value:g}', series_name='Values', title=None, x_axis_title=None, y_axis_title=None, show_values=True, show_legend=False)",
             "deck.add_line_chart(element_id, page, box, categories, values, color=0x2563EB, point_fill=0xFFFFFF, label_color=0x334155, font_size=12, value_format='{value:g}', series_name='Values', title=None, x_axis_title=None, y_axis_title=None, show_values=True, show_legend=False)",
             "deck.add_area_chart(element_id, page, box, categories, values=None, series=None, colors=None, font_size=10, show_legend=None, stacked=False, percent=False)",

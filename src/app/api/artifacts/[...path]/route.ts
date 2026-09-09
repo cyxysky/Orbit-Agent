@@ -37,19 +37,28 @@ export async function GET(request: NextRequest, context: RouteContext) {
       throw new ApiRequestError('Artifact not found', { code: 'not_found', status: 404 });
     }
 
-    const contentType = artifactContentType(filePath);
-    const range = requestedByteRange(request.headers.get('range'), fileStat.size);
+    const nativePreview = request.nextUrl.searchParams.get('preview') === 'pdf'
+      && /\.(pptx?|pptm|ppsx?|odp)$/i.test(filePath);
+    let previewPdf: Buffer | undefined;
+    if (nativePreview) {
+      const { readOfficePreviewPdf } = await import('@webpilot/capability-file/node/office');
+      previewPdf = await readOfficePreviewPdf({ absolutePath: filePath, extension: path.extname(filePath) });
+      if (!previewPdf) throw new ApiRequestError('Presentation preview is unavailable', { code: 'preview_unavailable', status: 503 });
+    }
+    const contentType = previewPdf ? 'application/pdf' : artifactContentType(filePath);
+    const size = previewPdf ? previewPdf.length : fileStat.size;
+    const range = requestedByteRange(request.headers.get('range'), size);
     if (range === null) {
       return new NextResponse(null, {
         status: 416,
-        headers: { 'Content-Range': `bytes */${fileStat.size}`, 'x-request-id': requestId },
+        headers: { 'Content-Range': `bytes */${size}`, 'x-request-id': requestId },
       });
     }
 
     const headers: Record<string, string> = {
       'Accept-Ranges': 'bytes',
       'Cache-Control': 'no-store',
-      'Content-Length': String(range ? range.end - range.start + 1 : fileStat.size),
+      'Content-Length': String(range ? range.end - range.start + 1 : size),
       'Content-Type': contentType,
       'X-Content-Type-Options': 'nosniff',
       'x-request-id': requestId,
@@ -57,14 +66,16 @@ export async function GET(request: NextRequest, context: RouteContext) {
     if (/^(text\/html|image\/svg\+xml)(?:;|$)/.test(contentType)) {
       headers['Content-Security-Policy'] = "sandbox; default-src 'none'; img-src data: https: http:; style-src 'unsafe-inline'";
     }
-    if (range) headers['Content-Range'] = `bytes ${range.start}-${range.end}/${fileStat.size}`;
+    if (range) headers['Content-Range'] = `bytes ${range.start}-${range.end}/${size}`;
     if (request.nextUrl.searchParams.get('download') === '1') {
-      const fileName = contentDispositionHeader(filePath);
+      const fileName = contentDispositionHeader(previewPdf ? filePath.replace(/\.[^.]+$/, '.pdf') : filePath);
       const asciiName = fileName.replace(/[^\x20-\x7E]/g, '_');
       headers['Content-Disposition'] = `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
     }
 
-    const body = Readable.toWeb(createReadStream(filePath, range || undefined)) as unknown as BodyInit;
+    const body = previewPdf
+      ? new Uint8Array(range ? previewPdf.subarray(range.start, range.end + 1) : previewPdf)
+      : Readable.toWeb(createReadStream(filePath, range || undefined)) as unknown as BodyInit;
     return new NextResponse(body, { headers, status: range ? 206 : 200 });
   } catch (error) {
     return apiError(request, error, {

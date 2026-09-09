@@ -19,7 +19,7 @@ npm install -D typescript tsx @types/node
 
 The first call only writes UTF-8 text; it needs no Office installation. `plan → generate → render` creates Office artifacts; read the package Skill and the plan's engine/API guidance before authoring. Local Office conversion needs LibreOffice; UNO authoring additionally needs a Python interpreter that can import `uno`. JavaScript authoring and conversion are separate requirements. Set `OFFICE_GENERATION_MODE` deliberately.
 
-`readSource(documentId)` reads generation code; `readContent(artifactId)` reads published content. `edit` uses the exact `patchBaseDigest` returned by `readSource`; render again after an edit. Enable visual input only when your host supplies `readFileVisuals` and actually passes images to the model. Attachments require `attachmentBindings` or a host `readFile` implementation.
+`readSource(documentId)` reads generation code; `readContent(artifactId)` reads published content. `edit` applies exact patches/replacements to the current source without a version parameter; render again after an edit. Enable visual input only when your host supplies `readFileVisuals` and actually passes images to the model. Attachments require `attachmentBindings` or a host `readFile` implementation.
 
 The default artifact URL is a server-local `file:` URL. Remote clients cannot download it. Supply `workspace.artifactUrl({ absolutePath, relativePath })` and an authenticated download route/object store that serves the corresponding bytes; generating a URL alone does not serve a file. Keep the same run ID while accessing a run's drafts and artifacts.
 
@@ -403,8 +403,8 @@ The model-facing actions deliberately use different names and identities:
 | Read an upload's content | `file({ action: 'readContent', attachmentId })` |
 | Inspect rendered pages | `visualIndex` then `visualRead`, using the current `artifactId` and returned `screenshotIds` |
 
-`readSource` returns `program` and `patchBaseDigest`; pass that exact digest as
-`edit.baseDigest`. `readContent` is not the generator source and cannot supply
+`readSource` returns `program` and informational source metadata. No source
+version hash is required for editing or replacement. `readContent` is not the generator source and cannot supply
 code to patch. Its limits count characters, not source lines; the default is
 8,000 characters, and an explicit smaller limit is honored. Page previews are
 opt-in (`includeVisuals: true`), not a side effect of ordinary text reads.
@@ -471,20 +471,34 @@ import { createNodeFileWorkspace } from '@webpilot/capability-file/node/workspac
 
 #### Safe source editing
 
-`edit` accepts either exact `replacements` or Codex-format `patch`, with the
-current `readSource.patchBaseDigest`. Both modes locate every target on the
+`edit` accepts either exact `replacements` or Codex-format `patch`, with
+`documentId` and an optional source-unit path. Both modes locate every target on the
 same original source snapshot. Targets must be unique and non-overlapping;
 whitespace and punctuation are never fuzzy-matched. Optional source-unit paths
 scope the edit. The entire batch commits or none of it does, including related
 helper/caller changes. Conflict results identify `failed` and withheld `blocked`
 hunks, with `changed=false` and `saved=false`.
 
-Stale revisions are rejected, not automatically rebased. A persisted receipt
+No model-supplied source version is checked. A persisted receipt
 deduplicates only the identical latest request at its exact resulting source
 revision. Finding the new text elsewhere is not evidence that an edit happened.
+Full replacement uses `generate` on the same `documentId`, without a replacement
+flag or version parameter. Prefer focused edits whenever they can implement the requested change.
 Validation-failed source remains an editable buffer: `saved=true` does not mean
 `validation=passed`. Structured model results preserve these states and the new
 `patchBaseDigest`, including conflict information from historical partial edits.
+
+New `plan` calls require `documentType`; omitted `documentId` is generated
+deterministically for retry stability, and omitted `fileName` uses the title in
+`intent` plus `.docx`, `.xlsx`, or `.pptx`. Specify an explicit name for PDF.
+Reuse the returned draft ID for subsequent reads, edits and rendering. Modifying
+an uploaded original also requires `operation: 'modify'` and `sourceAttachmentId`.
+`design.preserve` and `design.avoid` accept up to 8 strings of 320 characters each;
+semicolon/newline-separated strings are normalized to arrays before validation.
+
+`unoApi` and `jsApi` can be called before planning. Omit both `documentId` and
+`documentType` for a type index, or supply `documentType` to read unbound API
+documentation. A supplied draft ID selects its configured engine and type.
 
 UNO API lookup prioritizes exact versioned/unversioned module IDs. Unknown
 versions return the module index, not unrelated search matches. Keyword searches

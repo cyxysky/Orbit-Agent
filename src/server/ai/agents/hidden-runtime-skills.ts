@@ -159,9 +159,10 @@ export function requireHiddenRuntimeSkillRead(
       ok: false,
       code: skillContent ? 'RUNTIME_SKILL_CONTENT_RETURNED' : 'RUNTIME_SKILL_READ_REQUIRED',
       error: skillContent
-        ? `The Agent returned required runtime Skill ${requiredSkillId} instead of executing ${toolName}. Read it, then retry the tool in the next model step.`
+        ? `The complete current Skill ${requiredSkillId} is included below and satisfies the read prerequisite for the next model step. Apply it directly. Do NOT call skill or contextRead to read it again. ${toolName} was NOT executed; retry the original tool call in the next model step.`
         : `Read required runtime Skill ${requiredSkillId} before calling ${toolName}. The governed operation was not executed.`,
       requiredSkillId,
+      ...(skillContent ? { skillReadSatisfied: true, operationExecuted: false, nextAction: { tool: toolName, reuseOriginalInput: true } } : {}),
       ...(skillContent ? { skillContent } : {}),
     }, null, 2),
     failureCategory: 'skill-read-required',

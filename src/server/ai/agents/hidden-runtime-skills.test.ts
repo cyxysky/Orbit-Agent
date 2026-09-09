@@ -81,7 +81,7 @@ test('file and subagent runtime Skills carry the state, QA, and browser ownershi
   assert.match(fileArtifactRuntimeSkillContent, /documentId/);
   assert.match(fileArtifactRuntimeSkillContent, /exactly one current editable source/);
   assert.doesNotMatch(fileArtifactRuntimeSkillContent, /currentRevision|restoreRevision/);
-  assert.match(fileArtifactRuntimeSkillContent, /other source and render digests remain informational runtime metadata/);
+  assert.match(fileArtifactRuntimeSkillContent, /Source and render digests are informational runtime metadata/);
   assert.match(fileArtifactRuntimeSkillContent, /renderedDigest/);
   assert.match(fileArtifactRuntimeSkillContent, /UNO and JavaScript modes/);
   assert.match(fileArtifactRuntimeSkillContent, /single editable source buffer/);
@@ -105,9 +105,9 @@ test('file and subagent runtime Skills carry the state, QA, and browser ownershi
   assert.match(fileArtifactRuntimeSkillContent, /never calculate or emit hunk line counts/i);
   assert.match(fileArtifactRuntimeSkillContent, /retain the current source's original whitespace and indentation/);
   assert.match(fileArtifactRuntimeSkillContent, /guarded complete replacement is an exceptional last resort only/);
-  assert.match(fileArtifactRuntimeSkillContent, /optimistic-concurrency guard for edit/);
-  assert.match(fileArtifactRuntimeSkillContent, /baseDigest: string/);
-  assert.match(fileArtifactRuntimeSkillContent, /replaceExisting\?: boolean/);
+  assert.match(fileArtifactRuntimeSkillContent, /No source-version hash is required for edit or replacement/);
+  assert.doesNotMatch(fileArtifactRuntimeSkillContent, /baseDigest/);
+  assert.doesNotMatch(fileArtifactRuntimeSkillContent, /replaceExisting/);
   assert.match(fileArtifactRuntimeSkillContent, /replacement is truly unavoidable/);
   assert.doesNotMatch(fileArtifactRuntimeSkillContent, /restoreRevision\?:/);
   assert.match(fileArtifactRuntimeSkillContent, /patch: string/);

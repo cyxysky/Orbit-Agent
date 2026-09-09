@@ -63,7 +63,7 @@ test('stale tool-start snapshots cannot regress a completed realtime tool', () =
     steps: [{
       index: 4,
       status: 'running',
-      tools: [{ id: 'tool-1', name: 'file', ok: undefined }],
+      tools: [{ id: 'tool-1', name: 'file', ok: undefined, elapsedMs: 0 }],
     }],
   });
   assert.deepEqual(merged.steps[0].tools, [

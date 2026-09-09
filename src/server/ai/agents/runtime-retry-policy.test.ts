@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { ContextSummaryError } from './runtime-semantic-summary';
 import {
   classifyRuntimeRetry,
   parseRetryAfterMs,
@@ -64,6 +65,22 @@ test('only billing exhaustion and caller cancellation prevent request retries', 
   const controller = new AbortController();
   controller.abort();
   assert.equal(classifyRuntimeRetry(new Error('fetch failed'), controller.signal).retryable, false);
+});
+
+test('summary failures retain the retry policy and underlying provider cause', () => {
+  const unknown = new ContextSummaryError('上下文压缩请求失败，原始记录已保留：unknown error, 512 (1000)');
+  assert.equal(classifyRuntimeRetry(unknown).retryable, true);
+  assert.equal(classifyRuntimeRetry(unknown).category, 'unknown');
+  const network = new ContextSummaryError('上下文压缩请求失败，原始记录已保留', {
+    cause: Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }),
+  });
+  assert.equal(classifyRuntimeRetry(network).category, 'network');
+  assert.equal(classifyRuntimeRetry(network).retryable, true);
+  const provider = new ContextSummaryError('summary failed', { cause: { statusCode: 512 } });
+  assert.equal(classifyRuntimeRetry(provider).category, 'server-error');
+  const controller = new AbortController();
+  controller.abort();
+  assert.equal(classifyRuntimeRetry(unknown, controller.signal).retryable, false);
 });
 
 test('runtime retry accepts SDK error and other finish states', () => {

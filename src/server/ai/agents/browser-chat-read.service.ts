@@ -12,6 +12,8 @@ import { recoverOrphanedBrowserChatSession } from '@/server/ai/agents/browser-ch
 // Session list/detail reads use database projections rather than the in-memory
 // service list, so reconcile persisted `running` flags with the live registry.
 import { browserChatActiveMessages, normalizeBrowserChatModelContext, type BrowserChatModelContext } from '@/server/ai/agents/browser-chat-model-context';
+import { browserChatActiveContextUsage } from '@/server/ai/agents/browser-chat-context-usage';
+import { recoverBrowserChatToolContext } from './browser-chat-tool-context-recovery';
 import {
   estimateRuntimeMessageContext,
   runtimeContextWindowTokens,
@@ -182,7 +184,12 @@ function resolvedContextUsage(
     provider: session.modelProvider,
     model: session.model,
   });
-  const activeMessages = browserChatActiveMessages(normalizeBrowserChatModelContext(session.modelContext));
+  // The service already selected the current prepared-request snapshot. During
+  // tools, active history may temporarily contain a large, unprojected result.
+  if ((session.busy || session.status === 'running') && stored) return { ...stored, maxTokens: effectiveMaxTokens };
+  const context = normalizeBrowserChatModelContext(session.modelContext);
+  const activeMessages = browserChatActiveMessages(context);
+  if (activeMessages.length) return browserChatActiveContextUsage(context, effectiveMaxTokens, stored?.toolTokens);
   const source = activeMessages.length
     ? activeMessages
     : messages.map((message) => ({
@@ -271,7 +278,7 @@ export async function readBrowserChatSessionPage(sessionId: string, userId?: str
     contextUsage: resolvedContextUsage(persistedSession, messages.items),
     hasMessages: messages.items.length > 0 || session.hasMessages === true,
     messages: messages.items,
-    steps: activeSteps.map(compactStepForClient),
+    steps: recoverBrowserChatToolContext(activeSteps, activeLogs).map(compactStepForClient),
     logs: compactBrowserChatLogsForClient(activeLogs),
     outputCycles: activeRecords.outputCycles,
     subagents: activeRecords.subagents,
@@ -374,12 +381,17 @@ export async function readBrowserChatSessionLogs(
     persistedSteps,
     browserChatRecoveredToolSteps(messageId || '', recoveryLogs),
   );
+  const needsContextRecovery = steps.some((step) => step.tools?.some((tool) => tool.name !== 'contextCompression'
+    && tool.contextBefore?.requestId && !tool.contextAfter?.requestId));
+  const contextLogs = needsContextRecovery && messageId && !input.cursor
+    ? (await readBrowserChatLogsPage<BrowserChatLogRecord>(sessionId, { limit: 500, messageId })).items
+    : page.items;
   return {
     logs: compactBrowserChatLogsForClient(page.items),
     ...(messageId && !input.cursor ? {
       outputCycles: records.outputCycles,
       subagents: records.subagents,
-      steps: steps.map(compactStepForClient),
+      steps: recoverBrowserChatToolContext(steps, contextLogs).map(compactStepForClient),
     } : {}),
     history: { cursor: page.cursor, hasMore: page.hasMore },
   };

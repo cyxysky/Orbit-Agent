@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Check, Copy, X } from 'lucide-react';
+import { Check, Copy, Loader2, X } from 'lucide-react';
 import { formatToolPayload } from '@/lib/browser-chat-format';
 import { useI18n } from '@/i18n/I18nProvider';
 import type { StepExecutionResult } from '@/server/ai/schemas/runtime.schema';
@@ -82,6 +82,36 @@ function ToolOutputViewer({ payload, wrap }: { payload: string; wrap: boolean })
   );
 }
 
+function ToolOutputBody({ payload, wrap, loading, failed, label, onRetry }: {
+  payload?: string;
+  wrap: boolean;
+  loading?: boolean;
+  failed?: boolean;
+  label: string;
+  onRetry?: () => void;
+}) {
+  const { t } = useI18n();
+  const notice = (
+    <div className={`browser-chat-tool-output-notice${failed && !loading ? ' is-error' : ''}`} role={failed && !loading ? 'alert' : 'status'}>
+      {loading ? <Loader2 aria-hidden="true" className="spin" size={14} /> : null}
+      <span>{label}</span>
+      {failed && !loading && onRetry ? <button onClick={onRetry} type="button">{t('重试')}</button> : null}
+    </div>
+  );
+  return (
+    <div aria-busy={Boolean(loading)} className="browser-chat-tool-output-body">
+      {payload === undefined ? (
+        <div className="browser-chat-tool-output-empty">{notice}</div>
+      ) : (
+        <>
+          {loading || failed ? notice : null}
+          <ToolOutputViewer payload={payload} wrap={wrap} />
+        </>
+      )}
+    </div>
+  );
+}
+
 function toolInputPayload(tool: BrowserChatToolCall) {
   if (!tool.reason) return formatToolPayload(tool.input);
   const input = tool.input && typeof tool.input === 'object' && !Array.isArray(tool.input)
@@ -119,7 +149,10 @@ export function BrowserChatToolDialog({
   // them here so two calls that differ only by a missing reason do not look
   // identical in the diagnostics dialog.
   const inputPayload = toolInputPayload(detail.tool);
-  const displayedInputPayload = inputPayload || emptyPayloadLabel;
+  const inputPreviewPending = Boolean((loading || loadFailed) && /omitted from realtime payload|\[\d+ items omitted\]/.test(inputPayload || ''));
+  const displayedInputPayload = inputPreviewPending
+    ? t(loading ? '正在加载完整输入参数…' : '完整输入参数加载失败，请重试。')
+    : inputPayload || emptyPayloadLabel;
   const completeResult = detail.tool.rawResult ?? detail.tool.error ?? detail.tool.result;
   const hasActualResult = completeResult !== undefined && completeResult !== null && completeResult !== '';
   // Keep the complete persisted result while expanding any embedded JSON text
@@ -182,10 +215,17 @@ export function BrowserChatToolDialog({
                   <span className="browser-chat-tool-output-format">JSON</span>
                   <span>{t('自动换行')}</span>
                   <button aria-checked={wrapInput} aria-label={t('切换自动换行')} className="browser-chat-tool-wrap-toggle" onClick={() => setWrapInput((current) => !current)} role="switch" type="button"><span /></button>
-                  <button className="browser-chat-tool-copy-button" onClick={() => void copyPayload(displayedInputPayload, 'input')} type="button">{copiedPayload === 'input' ? <Check size={15} /> : <Copy size={15} />}{t(copiedPayload === 'input' ? '已复制' : '复制')}</button>
+                  <button className="browser-chat-tool-copy-button" disabled={inputPreviewPending} onClick={() => void copyPayload(displayedInputPayload, 'input')} type="button">{copiedPayload === 'input' ? <Check size={15} /> : <Copy size={15} />}{t(copiedPayload === 'input' ? '已复制' : '复制')}</button>
                 </div>
               </header>
-              <ToolOutputViewer payload={displayedInputPayload} wrap={wrapInput} />
+              <ToolOutputBody
+                payload={inputPreviewPending ? undefined : displayedInputPayload}
+                wrap={wrapInput}
+                loading={inputPreviewPending && loading}
+                failed={inputPreviewPending && loadFailed}
+                label={displayedInputPayload}
+                onRetry={onRetry}
+              />
             </section>
             <section className="browser-chat-tool-output-panel">
               <header className="browser-chat-tool-output-header">
@@ -197,9 +237,14 @@ export function BrowserChatToolDialog({
                   {hasActualResult ? <button className="browser-chat-tool-copy-button" onClick={() => void copyPayload(resultPayload, 'output')} type="button">{copiedPayload === 'output' ? <Check size={15} /> : <Copy size={15} />}{t(copiedPayload === 'output' ? '已复制' : '复制')}</button> : null}
                 </div>
               </header>
-              {loading && hasActualResult ? <p role="status">{t('正在加载完整执行结果…')}</p> : null}
-              {loadFailed ? <p role="alert">{t('完整执行结果加载失败，请重试。')} {onRetry ? <button onClick={onRetry} type="button">{t('重试')}</button> : null}</p> : null}
-              <ToolOutputViewer payload={hasActualResult ? resultPayload || emptyPayloadLabel : t(missingResultLabel)} wrap={wrapOutput} />
+              <ToolOutputBody
+                payload={hasActualResult ? resultPayload || emptyPayloadLabel : undefined}
+                wrap={wrapOutput}
+                loading={loading}
+                failed={loadFailed}
+                label={t(missingResultLabel)}
+                onRetry={onRetry}
+              />
             </section>
           </div>
         </div>

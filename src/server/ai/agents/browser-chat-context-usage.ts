@@ -1,3 +1,6 @@
+import { browserChatActiveMessages, type BrowserChatModelContext } from './browser-chat-model-context';
+import { estimateRuntimeMessageContext, estimateRuntimeTextTokens } from './runtime-context-budget';
+
 export type BrowserChatContextUsageSnapshot = {
   currentTokens: number;
   imageTokens: number;
@@ -5,6 +8,26 @@ export type BrowserChatContextUsageSnapshot = {
   textTokens: number;
   toolTokens: number;
 };
+
+/** Use the same saved request background for live, idle and restored sessions. */
+export function browserChatActiveContextUsage(
+  context: BrowserChatModelContext,
+  maxTokens: number,
+  fallbackToolTokens = 0,
+): BrowserChatContextUsageSnapshot {
+  const manifest = context.lastRequest;
+  const system = manifest?.systemRef ? context.records[manifest.systemRef]?.content : '';
+  const backgroundRef = context.backgroundRef || manifest?.backgroundRef;
+  const background = backgroundRef ? context.records[backgroundRef] : undefined;
+  const schema = manifest?.toolSchemaRef ? context.records[manifest.toolSchemaRef]?.content : undefined;
+  const estimated = estimateRuntimeMessageContext({
+    system: typeof system === 'string' ? system : '',
+    messages: [...(background ? [background] : []), ...browserChatActiveMessages(context)],
+  });
+  const toolTokens = typeof schema === 'string' ? estimateRuntimeTextTokens(schema) : Math.max(0, fallbackToolTokens);
+  return { currentTokens: estimated.totalTokens + toolTokens, imageTokens: estimated.imageTokens,
+    maxTokens, textTokens: estimated.textTokens, toolTokens };
+}
 
 export function browserChatContextUsageFromDebugRecord(
   record: Record<string, unknown>,

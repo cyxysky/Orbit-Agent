@@ -138,7 +138,6 @@ function createBrowserChatFileOperations(
         documentId: input.documentId,
         path: input.path,
         program: input.program,
-        baseDigest: input.baseDigest,
         patch: input.patch,
         replacements: input.replacements,
         render: input.render,

@@ -124,7 +124,7 @@ export async function createConfiguredMediaOperations(input: { context: Capabili
       await writeFile(destination, file.data, { signal: context.abortSignal });
       const artifactId = path.relative(root, destination).split(path.sep).join('/');
       const url = artifactApiUrl(destination, { artifactsRoot: root });
-      return { artifactId, fileName, mediaType: file.mediaType, url, downloadUrl: `${url}?download=1`, description: `Generated ${file.kind}` };
+      return { artifactId, fileName, mediaType: file.mediaType, url, downloadUrl: `${url}?download=1`, description: `Generated ${file.kind}, already saved. For document use, file plan/list exposes it in availableAssets (ref = artifactId). Use assetName directly; do not download it again.` };
     },
   });
   const processing: MediaOperations = ffmpegStaticPath ? createFfmpegMediaOperations({

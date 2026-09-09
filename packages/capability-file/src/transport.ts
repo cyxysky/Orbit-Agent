@@ -66,7 +66,7 @@ export function normalizeFileToolInput(value: unknown) {
     const inferred = documentTypeFromFileName(input.fileName);
     if (inferred) input.documentType = inferred;
   }
-  for (const key of ['render', 'includeVisuals', 'includeDiagnostics', 'replaceExisting']) {
+  for (const key of ['render', 'includeVisuals', 'includeDiagnostics']) {
     if (key in input) input[key] = booleanFromString(input[key]);
   }
   for (const key of ['limit', 'offset', 'startLine', 'endLine']) {

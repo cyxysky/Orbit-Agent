@@ -89,6 +89,10 @@ function mergeRealtimeStepTools(current: unknown[] = [], incoming: unknown[] = [
     for (const key of ['elapsedMs', 'error', 'rawResult', 'result'] as const) {
       if (previous[key] !== undefined && record[key] === undefined) next[key] = previous[key];
     }
+    for (const key of ['elapsedMs', 'aiRequestElapsedMs'] as const) {
+      if (typeof previous[key] === 'number' && Number.isFinite(previous[key])
+        && (record[key] === undefined || (typeof record[key] === 'number' && record[key] < previous[key]))) next[key] = previous[key];
+    }
     merged[index] = next;
   });
   return merged;
@@ -115,7 +119,9 @@ export function mergeBrowserChatRealtimeCollections<
     if (existing && existing.id === message.id && incomingTime < existingTime) continue;
     if (index >= 0) {
       const next = [...messages];
-      next[index] = message;
+      next[index] = existing?.id === message.id && existing.createdAt
+        ? { ...message, createdAt: existing.createdAt }
+        : message;
       messages = next;
       continue;
     }

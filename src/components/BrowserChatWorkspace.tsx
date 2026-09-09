@@ -140,6 +140,7 @@ import {
 import { browserChatSubagentRecordsForToolCall } from '@/components/browser-chat-subagent-model';
 import {
   browserChatToolContextTokenMetrics,
+  browserChatToolHasLegacyContextAfter,
   browserChatToolTimingMetrics,
 } from '@/components/browser-chat-tool-context';
 import { browserChatCurrentTurnAssistantMessageId } from '@/components/browser-chat-output-files-state';
@@ -310,6 +311,7 @@ type BrowserChatMessage = {
     label: string;
     updatedAt: string;
     startedAt?: string;
+    operationId?: string;
   };
   status?: 'queued' | 'running' | 'passed' | 'failed' | 'blocked' | 'interrupted';
 };
@@ -1016,6 +1018,7 @@ function browserChatToolLabel(name: string, input: unknown, t: (value: string) =
   const labels: Record<string, string> = {
     browserCode: '执行浏览器代码',
     contextCompression: '压缩上下文',
+    contextRead: '读取上下文',
     chart: '生成图表',
     codeSandbox: '代码沙箱',
     communication: '通信',
@@ -1065,6 +1068,7 @@ function browserChatToolMeta(name: string, input: unknown, t: (value: string, pa
       : toolInputValue(record, ['reason']) || String(record.action || 'Playwright');
   }
   if (name === 'browserCode') return toolInputValue(record, ['reason']) || 'Playwright';
+  if (name === 'contextRead') return toolInputValue(record, ['query']) || (record.ref ? t('读取历史原文') : t('查看历史记录'));
   if (name === 'contextCompression') {
     const before = typeof record.estimatedTokensBefore === 'number' ? Math.round(record.estimatedTokensBefore) : undefined;
     const after = typeof record.estimatedTokensAfter === 'number' ? Math.round(record.estimatedTokensAfter) : undefined;
@@ -1122,6 +1126,7 @@ function BrowserChatToolIcon({ input, name }: { input?: unknown; name: string })
   if (name === 'browser') return action === 'code' ? <Braces size={13} /> : <Globe size={13} />;
   if (name === 'browserCode') return <Braces size={13} />;
   if (name === 'contextCompression') return <Brain size={13} />;
+  if (name === 'contextRead') return <FileSearch size={14} />;
   if (name === 'codeSandbox') return <SquareTerminal size={13} />;
   if (name === 'connectors') return <Cable size={13} />;
   if (name === 'knowledge') return <BookOpen size={13} />;
@@ -2838,7 +2843,9 @@ function BrowserChatToolContextTokenInfo({ tool }: { tool: BrowserChatToolCall }
     ? undefined
     : t('调用前：{count} Token', { count: formatTokens(before) });
   const afterText = after === undefined
-    ? before === undefined ? undefined : t('等待下一次模型请求统计')
+    ? browserChatToolHasLegacyContextAfter(tool)
+      ? t('暂无可核对的调用后统计')
+      : before === undefined ? undefined : t('等待下一次模型请求统计')
     : t('调用后：{count} Token', { count: formatTokens(after) });
   const toolElapsedText = toolElapsedMs === undefined
     ? undefined
@@ -4219,7 +4226,10 @@ const BrowserChatProcessDisclosure = memo(function BrowserChatProcessDisclosure(
   const autoOpenedAtRef = useRef(autoOpen ? Date.now() : 0);
   const autoCloseTimerRef = useRef(0);
   const [liveNowMs, setLiveNowMs] = useState(() => Date.now());
-  const elapsed = formatBrowserChatElapsedTime(browserChatMessageElapsedMs(message, running ? liveNowMs : undefined));
+  const elapsed = formatBrowserChatElapsedTime(browserChatMessageElapsedMs(
+    running && message.activity?.startedAt ? { ...message, createdAt: message.activity.startedAt } : message,
+    running ? liveNowMs : undefined,
+  ));
   const setDisclosureExpanded = useCallback((nextExpanded: boolean) => {
     if (autoCloseTimerRef.current) window.clearTimeout(autoCloseTimerRef.current);
     autoCloseTimerRef.current = 0;
@@ -4705,7 +4715,9 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
             <BeautifulLoadingState
               className={`browser-chat-agent-thinking${hasHistoricalAiOutput || shouldShowStepTimeline ? ' is-continuation' : ''}`}
               detail={runningActivityLabel}
-              label={t('AI 正在处理当前请求')}
+              label={message.activity?.operationId?.startsWith('tool:') ? t('正在执行工具')
+                : message.activity?.operationId?.startsWith('compression:') ? t('正在压缩上下文')
+                  : t('AI 正在处理当前请求')}
               showElapsed
               startedAt={message.activity?.startedAt || message.createdAt}
             />

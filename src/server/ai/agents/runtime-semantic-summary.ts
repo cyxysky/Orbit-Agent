@@ -10,7 +10,7 @@ export function parseContextSummary(value: string | undefined): ContextSummary |
   catch { return undefined; }
 }
 export class ContextSummaryError extends Error {
-  constructor(message: string) { super(message); this.name = 'ContextSummaryError'; }
+  constructor(message: string, options?: ErrorOptions) { super(message, options); this.name = 'ContextSummaryError'; }
 }
 /** Summary input is bounded independently from the exact request/archive representation. */
 export function contextSummaryRecord(message: ModelMessage) {
@@ -55,7 +55,7 @@ export async function summarizeContextBatch(input: {
       raw = await input.generate(prompt + (attempt ? '\nPrevious output was invalid or too long. Return the specified JSON with concise text.' : ''), input.maxOutputTokens);
     } catch (error) {
       input.abortSignal?.throwIfAborted();
-      throw new ContextSummaryError(`上下文压缩请求失败，原始记录已保留：${error instanceof Error ? error.message : String(error)}`);
+      throw new ContextSummaryError(`上下文压缩请求失败，原始记录已保留：${error instanceof Error ? error.message : String(error)}`, { cause: error });
     }
     input.abortSignal?.throwIfAborted();
     const candidate = parseContextSummary(raw.trim().replace(/^```(?:json)?\s*|\s*```$/g, ''));

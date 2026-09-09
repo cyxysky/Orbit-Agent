@@ -11,7 +11,7 @@ import {
   type CapabilityToolSet,
 } from '@webpilot/capability-sdk';
 import { browserCapabilitySettings } from './settings.ts';
-import { browserRuntimeSkill, browserInteractiveQaSkill } from './runtime-skill.ts';
+import { browserRuntimeSkill, browserRuntimeReferenceSkills, browserInteractiveQaSkill } from './runtime-skill.ts';
 
 export * from './output-settings.ts';
 export * from './runtime-skill.ts';
@@ -196,7 +196,7 @@ export const browserCapabilityManifest = Object.freeze({
   permissions: ['browser:launch', 'browser:cdp', 'network:access', 'artifact:write'],
   runtimeRequirements: { node: '>=22.16', playwright: '>=1.60' },
   configuration: { settings: browserCapabilitySettings },
-  skills: [browserRuntimeSkill, browserInteractiveQaSkill],
+  skills: [browserRuntimeSkill, ...browserRuntimeReferenceSkills, browserInteractiveQaSkill],
 } satisfies CapabilityManifest);
 
 export function createBrowserTools(operations: BrowserCapabilityOperations): CapabilityToolSet {

@@ -7,18 +7,18 @@ export const browserCodeRuntimeSkillSummary = [
   '<system_skill>',
   `<id>${browserCodeRuntimeSkillId}</id>`,
   '<title>Browser Code Runtime</title>',
-  '<description>Required built-in API reference for the browser tool. Read this Skill successfully before the first browser action in every Agent run.</description>',
+  '<description>Compact required browser operating rules. Read once before the first browser action; load detailed API and interaction references only when needed.</description>',
   '<required>true</required>',
   '</system_skill>',
 ].join('\n');
 
-export const browserCodeRuntimeSkillContent = `# Browser Code Runtime
+const browserCodeRuntimeManual = `# Browser Code Runtime
 
 This Skill is the authoritative API reference and operating contract supplied by the browser package. The consuming Agent is responsible for loading it and deciding when the browser tool becomes available.
 
 ## Required state machine
 
-1. Before the first browser action, explicitly read this Skill. The Skill read and browser operation are separate model steps; the Agent host must reject an early browser call without executing it:
+1. Before the first browser action, read this Skill. Its complete current content supplied in a tool prerequisite response also satisfies the read; apply it and retry the original action without another Skill call. Otherwise read it explicitly in a separate model step:
 
 \`\`\`json
 { "action": "read", "skillId": "${browserCodeRuntimeSkillId}", "reason": "读取浏览器代码 API 与运行规范" }
@@ -446,6 +446,47 @@ For UI debugging, responsive layout review or browser/Electron acceptance tasks,
 ## Completion contract
 
 Playwright delivery alone is not business success. Before claiming completion, run a final read-only check for the requested URL, value, row/table state, toast, dialog, confirmation identifier, or other direct fact, plus \`page.activeSurface()\`. Report an unresolved failure or residual popup when it materially limits the outcome. Never describe a page as ready for a consequential final click if the latest verified state is on another page or no longer contains that control.
+`;
+
+const browserRuntimeCoreHeadings = new Set([
+  'Required state machine', 'Host tool boundary', 'Cell syntax and result contract',
+  'Failure recovery', 'Completion contract',
+]);
+const browserRuntimeSections = browserCodeRuntimeManual.split(/(?=^## )/m).slice(1).map((content) => ({
+  title: content.match(/^## (.+)/)![1], content: content.trim(),
+}));
+const browserRuntimeReferenceSections = browserRuntimeSections.filter(({ title }) => !browserRuntimeCoreHeadings.has(title)).map(({ title, content }) => {
+  const id = `system-browser-reference-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`;
+  const pages: string[] = [];
+  let remaining = content;
+  while (remaining.length > 9000) {
+    const newline = remaining.lastIndexOf('\n', 9000);
+    const end = newline > 4500 ? newline + 1 : 9000;
+    pages.push(remaining.slice(0, end));
+    remaining = remaining.slice(end);
+  }
+  if (remaining) pages.push(remaining);
+  return { id, title, pages };
+});
+
+export const browserRuntimeReferenceSkills: readonly CapabilitySkill[] = Object.freeze(
+  browserRuntimeReferenceSections.flatMap(({ id, title, pages }) => pages.map((content, index) => Object.freeze({
+    id: index ? `${id}-${index + 1}` : id,
+    title: `${title}${pages.length > 1 ? ` (${index + 1}/${pages.length})` : ''}`,
+    summary: '', required: false,
+    content: `# Browser reference: ${title} (${index + 1}/${pages.length})\nOptional reference excerpt. Follow the compact Browser Code Runtime rules and current tool schema.\n\n${content}\n\n${index + 1 < pages.length ? `Continuation, only if needed: skill action=read skillId=${id}-${index + 2}.` : 'End of this reference. Continue the user task; do not load unrelated references.'}`,
+  }))),
+);
+
+export const browserCodeRuntimeSkillContent = `# Browser Code Runtime
+
+These are the required operating rules. A successful current read satisfies the Skill prerequisite. Reuse it while present; do not repeatedly read this Skill or reconstruct the whole manual through contextRead. Detailed references below are optional, not further prerequisites.
+
+${browserRuntimeSections.filter(({ title }) => browserRuntimeCoreHeadings.has(title)).map(({ content }) => content).join('\n\n')}
+
+## References: read only for the current operation
+For unfamiliar runtime methods, read the API reference before calling them. Read popup/text/image/credential guidance when that kind of interaction is needed. Use skill action=read with the ID below. Longer references supply a continuation ID; stop when the needed information is found. Never load every reference just to begin browsing.
+${browserRuntimeReferenceSections.map(({ id, title }) => `- ${title}: ${id}`).join('\n')}
 `;
 
 export const browserRuntimeSkill = Object.freeze({

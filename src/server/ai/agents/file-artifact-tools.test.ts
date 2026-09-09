@@ -57,7 +57,6 @@ async function editDraftText(input: {
   return editUnoFileArtifact({
     documentId: input.documentId,
     path: input.path,
-    baseDigest: state.patchBaseDigest,
     patch: [
       '*** Begin Patch',
       '*** Update File: draft.py',
@@ -528,8 +527,7 @@ test('validates a complete UNO draft before render publishes the artifact', asyn
     const overwrite = await generateUnoFileArtifact({
       documentId: 'uno-report', program: wordProgram, render: false, runId: 'chat_test',
     });
-    assert.equal(overwrite.ok, false, overwrite.actual);
-    assert.equal(JSON.parse(overwrite.actual || '{}').code, 'DESTRUCTIVE_GENERATE_REQUIRES_CONFIRMATION');
+    assert.equal(overwrite.ok, true, overwrite.actual);
 
     const draft = await readUnoDraft({ documentId: 'uno-report', runId: 'chat_test' });
     assert.equal(draft.ok, true, draft.actual);
@@ -537,8 +535,6 @@ test('validates a complete UNO draft before render publishes the artifact', asyn
     const atomicallyReplaced = await generateUnoFileArtifact({
       documentId: 'uno-report',
       program: wordProgram.replace('Generated through the UNO worker', 'Generated through atomic replacement'),
-      replaceExisting: true,
-      baseDigest: draftPayload.patchBaseDigest,
       render: false,
       runId: 'chat_test',
     });
@@ -998,7 +994,6 @@ test('reads and edits one marked page unit without changing other source units',
     const edited = await editUnoFileArtifact({
       documentId: 'unit-workflow',
       path: 'pages/page-002',
-      baseDigest: unitPayload.patchBaseDigest,
       patch: [
         '*** Begin Patch',
         '*** Update File: draft.py',
@@ -1121,7 +1116,7 @@ test('recovers an interrupted validation checkpoint after a backend restart', as
   }
 });
 
-test('applies a Codex patch only against the latest source digest', async () => {
+test('applies a Codex patch without a source version parameter', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'webpilot-uno-editor-'));
   const previous = process.env.ARTIFACTS_DIR;
   process.env.ARTIFACTS_DIR = root;
@@ -1144,32 +1139,30 @@ test('applies a Codex patch only against the latest source digest', async () => 
     const current = await readUnoDraft({ documentId: 'editor-workflow', runId: 'chat_test' });
     assert.equal(current.ok, true, current.actual);
     assert.match(current.actual || '', /generate retry/);
-    const currentPayload = JSON.parse(current.actual || '{}') as { patchBaseDigest?: string };
     const stale = await editUnoFileArtifact({
       documentId: 'editor-workflow',
-      baseDigest: '0'.repeat(64),
+      ...{ baseDigest: 'legacy-value-is-ignored' },
       patch: [
         '*** Begin Patch',
         '*** Update File: draft.py',
         '@@',
-        '-def create_document(job):',
-        '+def create_document(job):',
+        "-    document.add_paragraph('body', 'generate retry')",
+        "+    document.add_paragraph('body', 'hash ignored')",
         '*** End Patch',
       ].join('\n'),
       runId: 'chat_test',
     });
-    assert.equal(stale.ok, false, stale.actual);
-    assert.equal(JSON.parse(stale.actual || '{}').code, 'PATCH_BASE_DIGEST_MISMATCH');
+    assert.equal(stale.ok, true, stale.actual);
+    assert.equal(JSON.parse(stale.actual || '{}').saved, true);
 
     const edited = await editUnoFileArtifact({
       documentId: 'editor-workflow',
-      baseDigest: currentPayload.patchBaseDigest,
       patch: [
         '*** Begin Patch',
         '*** Update File: draft.py',
         '@@',
         "     document = job.writer('document')",
-        "-    document.add_paragraph('body', 'generate retry')",
+        "-    document.add_paragraph('body', 'hash ignored')",
         "+    document.add_paragraph('body', 'targeted edit')",
         '     document.save()',
         '*** End Patch',
@@ -1178,12 +1171,8 @@ test('applies a Codex patch only against the latest source digest', async () => 
       runId: 'chat_test',
     });
     assert.equal(edited.ok, true, edited.actual);
-    const afterEdit = JSON.parse((await readUnoDraft({ documentId: 'editor-workflow', runId: 'chat_test' })).actual || '{}') as {
-      patchBaseDigest?: string;
-    };
     const unchanged = await editUnoFileArtifact({
       documentId: 'editor-workflow',
-      baseDigest: afterEdit.patchBaseDigest,
       patch: [
         '*** Begin Patch',
         '*** Update File: draft.py',

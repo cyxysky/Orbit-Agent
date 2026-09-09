@@ -106,6 +106,61 @@
   width: fit-content;
 }
 
+.browser-chat-tool-output-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  min-width: 0;
+}
+
+.browser-chat-tool-output-body > .browser-chat-tool-output-viewer {
+  flex: 1 1 0;
+}
+
+.browser-chat-tool-output-notice {
+  align-items: center;
+  color: var(--muted-strong);
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  font-size: 12px;
+  gap: 6px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.browser-chat-tool-output-notice > svg {
+  flex: 0 0 auto;
+}
+
+.browser-chat-tool-output-notice.is-error {
+  color: var(--danger);
+}
+
+.browser-chat-tool-output-notice > button {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  padding: 2px 8px;
+}
+
+.browser-chat-tool-output-empty {
+  align-items: center;
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  display: flex;
+  flex: 1 1 0;
+  justify-content: center;
+  min-height: 0;
+  overflow: auto;
+  padding: 20px;
+}
+
 .browser-chat-tool-io-grid {
   display: grid;
   flex: 1 1 auto;

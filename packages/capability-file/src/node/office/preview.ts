@@ -266,6 +266,35 @@ async function convertOfficeToPdf(absolutePath: string, extension: string, direc
   }
 }
 
+/** Reuse the same native PDF for browser display and tool visual verification. */
+export async function readOfficePreviewPdf(input: {
+  absolutePath: string; extension: string; buffer?: Buffer; previewRoot?: string;
+}) {
+  const extension = input.extension.toLowerCase();
+  if (!officeExtensions.has(extension)) return undefined;
+  const sourceBuffer = input.buffer || await readFile(input.absolutePath);
+  const environment = await officeRenderEnvironmentFingerprint();
+  const directory = previewDirectory({
+    cacheKey: `${createHash('sha256').update(sourceBuffer).digest('hex')}:${environment}`,
+    extension, root: input.previewRoot,
+  });
+  return withPreviewLock(directory, async () => {
+    // Convert the bytes used for the cache key, even if the source changes.
+    const snapshotPath = path.join(directory, `source${extension}`);
+    await mkdir(directory, { recursive: true });
+    try {
+      await access(path.join(directory, 'office-preview.pdf'), constants.R_OK);
+    } catch {
+      await writeCacheFile(snapshotPath, sourceBuffer);
+    }
+    try {
+      return await convertOfficeToPdf(snapshotPath, extension, directory);
+    } finally {
+      await unlink(snapshotPath).catch(() => undefined);
+    }
+  });
+}
+
 /** Associate an artifact with the PDF already exported by its UNO worker. */
 export async function registerOfficePreview(input: {
   absolutePath: string; previewPath: string; extension: string; previewRoot?: string;
@@ -391,22 +420,7 @@ export async function renderFilePreview(input: {
       return await renderSharedPdf(sourceBuffer, input.pages, input.previewRoot, 'pdf');
     }
     if (officeExtensions.has(extension)) {
-      const pdf = await withPreviewLock(directory, async () => {
-        // Convert the same byte snapshot used for the cache key, even if an
-        // upload/caller replaces the original file while this job is queued.
-        const snapshotPath = path.join(directory, `source${extension}`);
-        await mkdir(directory, { recursive: true });
-        try {
-          await access(path.join(directory, 'office-preview.pdf'), constants.R_OK);
-        } catch {
-          await writeCacheFile(snapshotPath, sourceBuffer);
-        }
-        try {
-          return await convertOfficeToPdf(snapshotPath, extension, directory);
-        } finally {
-          await unlink(snapshotPath).catch(() => undefined);
-        }
-      });
+      const pdf = await readOfficePreviewPdf({ ...input, extension, buffer: sourceBuffer });
       if (pdf) return await renderSharedPdf(pdf, input.pages, input.previewRoot, 'libreoffice-pdf');
       if (docxExtensions.has(extension)) {
         return await renderDocxFallback(await getSourceBuffer(), directory, input.pages, input.name);

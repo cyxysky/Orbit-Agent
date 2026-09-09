@@ -34,7 +34,7 @@ function ratio(value: unknown, fallback: number) {
   return Number.isFinite(number) && number >= 0.01 && number <= 0.99 ? number : fallback;
 }
 
-/** Profiles describe input budgeting only; they never inject output parameters into a request. */
+/** Context compression and the per-request output limit are independent settings. */
 export function runtimeContextProfile(input: RuntimeContextModel = {}) {
   const model = String(input.model || '').trim();
   const key = `${input.provider || ''}/${model}`;
@@ -49,15 +49,12 @@ export function runtimeContextProfile(input: RuntimeContextModel = {}) {
     const extra = JSON.parse(process.env[`${prefix}_EXTRA_REQUEST_PARAMETERS`] || '{}');
     requestedOutput = positive(extra.max_completion_tokens ?? extra.max_tokens, 0);
   } catch { /* Provider request validation owns malformed request parameters. */ }
-  const requestedReserveTokens = requestedOutput || Math.min(16384, Math.floor(windowTokens * 0.1));
-  const safetyTokens = Math.min(Math.max(1024, Math.floor(windowTokens * 0.05)), Math.floor(windowTokens * 0.1));
-  const outputReserveTokens = Math.min(requestedReserveTokens, windowTokens - safetyTokens - 1);
-  const inputBudgetTokens = Math.max(1, Math.min(Math.floor(windowTokens * 0.85), windowTokens - outputReserveTokens - safetyTokens));
+  const maxOutputTokens = requestedOutput || 16384;
   const compressionTriggerRatio = ratio(process.env.AI_CONTEXT_COMPRESSION_TRIGGER_RATIO, 0.85);
-  const compressionTriggerTokens = Math.max(1, Math.min(inputBudgetTokens, Math.floor(windowTokens * compressionTriggerRatio)));
+  const compressionTriggerTokens = Math.max(1, Math.floor(windowTokens * compressionTriggerRatio));
   const compressionTargetRatio = ratio(process.env.AI_CONTEXT_COMPRESSION_TARGET_RATIO, 0.25);
   return {
-    key, windowTokens, outputReserveTokens, inputBudgetTokens,
+    key, windowTokens, maxOutputTokens,
     compressionTriggerTokens, compressionTargetTokens: Math.max(1, Math.min(Math.floor(windowTokens * compressionTargetRatio), Math.floor(compressionTriggerTokens * 0.9))),
     imageTokens: positive(process.env.AI_IMAGE_CONTEXT_ESTIMATE_TOKENS, 1200),
     protocol: 'preserve-provider-reasoning-and-signatures' as const,

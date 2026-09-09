@@ -29,10 +29,16 @@ export function mergeBrowserChatToolDetail(detail: BrowserChatToolDetail, live: 
     tool: {
       ...detail.tool,
       ...live.tool,
+      input: detail.tool.input ?? live.tool.input,
+      elapsedMs: detail.tool.elapsedMs === undefined ? live.tool.elapsedMs : Math.max(detail.tool.elapsedMs, live.tool.elapsedMs ?? 0),
+      aiRequestElapsedMs: detail.tool.aiRequestElapsedMs === undefined ? live.tool.aiRequestElapsedMs : Math.max(detail.tool.aiRequestElapsedMs, live.tool.aiRequestElapsedMs ?? 0),
       ok: live.tool.ok ?? detail.tool.ok,
       rawResult: detail.tool.rawResult ?? live.tool.rawResult,
       result: detail.tool.result ?? live.tool.result,
       error: detail.tool.error ?? live.tool.error,
+      contextAfter: live.tool.contextAfter?.requestId ? live.tool.contextAfter
+        : detail.tool.contextAfter?.requestId ? detail.tool.contextAfter
+          : live.tool.contextAfter ?? detail.tool.contextAfter,
     },
   };
 }
@@ -91,6 +97,14 @@ export function buildAiCycleToolDetailMap(cycles: BrowserChatAiOutputCycle[], st
         && (typeof cycle.stepIndex !== 'number' || candidate.stepIndex === cycle.stepIndex)
       );
       const idMatches = aiTool.id ? persistedToolsById.get(aiTool.id) : undefined;
+      const legacyCompression = aiTool.name === 'contextCompression'
+        && aiTool.id === (cycle.sourceCycleId || cycle.id);
+      // Old completion events used their cycle ID instead of the execution ID.
+      // Pair each with its completed trace; separate compression runs stay separate.
+      const legacyMatches = legacyCompression ? persistedTools.filter((candidate) => (
+        belongsToCycle(candidate) && candidate.tool.ok === true
+        && (!cycle.messageId || candidate.step.messageId === cycle.messageId)
+      )) : [];
       const detail = idMatches
         ? [...idMatches].sort((left, right) => {
           const score = (candidate: BrowserChatToolDetail) => (
@@ -102,7 +116,7 @@ export function buildAiCycleToolDetailMap(cycles: BrowserChatAiOutputCycle[], st
         }).find((candidate) => (
           !consumedPersistedTools.has(candidate) && belongsToCycle(candidate)
         ))
-        : undefined;
+        : legacyMatches.find((candidate) => !consumedPersistedTools.has(candidate));
       if (detail) {
         details.set(aiCycleToolKey(cycle.id, aiToolIndex), detail);
         consumedPersistedTools.add(detail);

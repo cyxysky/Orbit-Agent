@@ -18,7 +18,7 @@ export const STALE_DRAFT_LOCK_MS = 10 * 60_000;
 
 export const sanitizeFileName = sanitizeNodeArtifactFileName;
 
-export function artifactDir(runId: string | undefined, kind: 'attachment-previews' | 'document-assets' | 'document-drafts' | 'downloads' | 'generated') {
+export function artifactDir(runId: string | undefined, kind: 'attachment-previews' | 'document-assets' | 'document-drafts' | 'downloads' | 'generated' | 'media') {
   return path.join(currentNodeFileWorkspaceHost().artifactsRoot, sanitizeFileName(runId, 'adhoc'), kind);
 }
 

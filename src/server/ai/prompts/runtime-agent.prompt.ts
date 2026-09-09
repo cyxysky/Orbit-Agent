@@ -5,7 +5,11 @@ export function currentRuntimeTimePromptLine(now = new Date()) {
     timeStyle: 'long',
     timeZone,
   }).format(now);
-  return `Current time: ${localTime} (${timeZone}; ISO ${now.toISOString()}).`;
+  return [
+    `Current time: ${localTime} (${timeZone}; ISO ${now.toISOString()}).`,
+    '这是运行时提供的真实当前时间，是“今天、今年、最近、未来”的唯一时间基准。训练数据截止日期、记忆中的年份、旧对话和网页发布时间都不能替代它；不要推测现在是哪一年，也不要为了确认此时间再搜索。',
+    '研究时先按上述当前日期检索最新已发布的资料，再补充所需历史对比。核对实际发布日期和数据覆盖期间，不要默认从训练记忆里的旧年份开始，也不要把尚未披露的年度或季度当成已发布。用户指定历史日期时按其指定日期分析。',
+  ].join('\n');
 }
 
 export function buildCodexObjectPrompt(
@@ -30,7 +34,7 @@ export function buildCodexObjectPrompt(
     answerAllowed ? '- In browser chat strict safety mode, important actions must still return the intended tool object; add params.requiresConfirmation=true and a concise Chinese params.confirmationMessage so the UI can pause with Confirm/Cancel buttons before execution. Do not ask the user to type confirmation text.' : '',
     '- Do not include separate state summaries, old tool params, or tool input JSON.',
     '- In message/reason/action, do not output coordinates, screenshot ids/file names, or tool input JSON as business meaning.',
-    browserStateGatePending ? '- If the request can be answered without the live browser, return type="answer" directly. Otherwise return type="browser" with params.action="state", "code", or "waitForHumanVerification". The execution layer runs a pending state prerequisite first and still executes the requested action in that same call. Use action="state" only when that state snapshot is itself the desired result.' : '',
+    browserStateGatePending ? '- Except for absolute, timeless common knowledge such as 1+1 or an explicit user scope restriction, search and verify current information with type="browser", params.action="code" before answering or performing subsequent analysis/content generation. Technology explanations, framework comparisons, product introductions, and professional knowledge require research even without a request for "latest" information. A text-only response or remembered answer does not waive web research. Read relevant pages and use their current evidence; a state snapshot alone is not research. The execution layer runs a pending state prerequisite first and still executes the requested action in that same call. Use action="state" only when that state snapshot is itself the desired result.' : '',
     browserCodeMode ? '- browser action="code" is the real browser inspection and operation entrypoint. It can navigate with page.goto(url), open tabs with browser.tabs.new(url), switch tabs, click observed links/controls, type, select, upload, and verify. Never claim navigation/clicking is unavailable, substitute file action=download for opening a page, or ask the user to navigate manually while browser action="code" is available unless an actual call proves the requested operation remains unavailable. Put one ordinary JavaScript cell in params.code.' : '',
     browserCodeMode ? '- The JavaScript kernel persists across browserCode calls but may be recycled. Prefer top-level var or fresh names for temporary bindings; save only compact non-secret JSON-safe values needed by later cells or turns with agent.state, and emit results with nodeRepl.write(<JSON-serializable value>). Never put Base64 image/download bytes or large extracted documents in agent.state; save them as workspace artifact files and retain only asset names/URLs/metadata. Once repeated rows or fields are exactly observed, update the deterministic batch in one bounded cell instead of spending one model cycle per item; wait for concrete DOM/navigation state instead of routine fixed waitForTimeout delays.' : '',
     browserCodeMode ? '- browserCode has an infrastructure watchdog that restarts an unresponsive JavaScript kernel. Keep each cell bounded. Locator/action operations default to 5000ms and navigation defaults to 30000ms, so a missing target fails the current cell without destroying persistent bindings. Add a longer explicit Playwright timeout only for a known slow transition.' : '',

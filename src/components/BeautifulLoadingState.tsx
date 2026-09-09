@@ -9,21 +9,22 @@ const DRIVE_DELAYS = Array.from({ length: 9 }, (_, index) => {
 });
 
 function useElapsedTime(enabled = true, startedAt?: number | string) {
-  const [elapsedMs, setElapsedMs] = useState(0);
+  const [fallbackStartedAt] = useState(() => Date.now());
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const parsedStartedAt = typeof startedAt === 'number' ? startedAt : Date.parse(startedAt || '');
+  const startedAtMs = Number.isFinite(parsedStartedAt) ? parsedStartedAt : fallbackStartedAt;
 
   useEffect(() => {
     if (!enabled) return undefined;
-    const parsedStartedAt = typeof startedAt === 'number' ? startedAt : Date.parse(startedAt || '');
-    const startedAtMs = Number.isFinite(parsedStartedAt) ? parsedStartedAt : Date.now();
-    const update = () => setElapsedMs(Math.max(0, Date.now() - startedAtMs));
+    const update = () => setNowMs(Date.now());
     update();
     const timer = window.setInterval(update, 100);
     return () => window.clearInterval(timer);
-  }, [enabled, startedAt]);
+  }, [enabled]);
 
   if (!enabled) return '';
 
-  const seconds = elapsedMs / 1_000;
+  const seconds = Math.max(0, nowMs - startedAtMs) / 1_000;
   if (seconds < 60) return `${seconds.toFixed(1)}s`;
   return `${Math.floor(seconds / 60)}m ${(seconds % 60).toFixed(1)}s`;
 }

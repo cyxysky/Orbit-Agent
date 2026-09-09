@@ -9,7 +9,7 @@ import {
   type CapabilityToolSet,
 } from '@webpilot/capability-sdk';
 import { fileCapabilitySettings } from './settings.ts';
-import { fileRuntimeSkill, fileDiagramReferenceSkills, fileAuthoringReferenceSkills } from './runtime-skill.ts';
+import { fileRuntimeSkill, fileRuntimeReferenceSkills, fileDiagramReferenceSkills, fileAuthoringReferenceSkills } from './runtime-skill.ts';
 import { createFileToolInput } from './schema.ts';
 import { fileActionInputIssues } from './action-guidance.ts';
 import { normalizeFileToolInput } from './transport.ts';
@@ -56,7 +56,7 @@ export const fileCapabilityManifest: CapabilityManifest = {
     },
   },
   configuration: { settings: fileCapabilitySettings },
-  skills: [fileRuntimeSkill, ...fileDiagramReferenceSkills, ...fileAuthoringReferenceSkills],
+  skills: [fileRuntimeSkill, ...fileRuntimeReferenceSkills, ...fileDiagramReferenceSkills, ...fileAuthoringReferenceSkills],
 };
 
 function isFileAction(value: string | undefined): value is FileAction {

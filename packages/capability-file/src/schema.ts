@@ -136,15 +136,15 @@ const fileToolShape = {
   sourceArtifactId: z.string().max(4_000).optional()
     .describe('For convert: exact artifact id of the existing Office file to export as PDF. Does not read or modify generation source.'),
   documentId: z.string().max(96).optional()
-    .describe('Draft identity for plan, readSource, generate, edit, render and API lookup. Copy from list/plan/render; never substitute artifactId, fileName, sourceFileName or a host path. New ids use 1-96 ASCII letters/numbers/dot/underscore/hyphen.'),
+    .describe('Required for readSource/generate/edit/render; copy from plan/list. Optional for a new plan (generated automatically) and unoApi/jsApi (unbound documentation reads). Re-plan an existing document using its returned id. New ids use 1-96 ASCII letters/numbers/dot/underscore/hyphen.'),
   fileName: z.string().max(180).optional()
-    .describe('For write/plan/download/convert: output name with extension. A name is not an artifactId or documentId. The bundled convert currently outputs PDF only; omit the name or use .pdf.'),
+    .describe('For write/plan/download/convert: output name with extension. Required for write; optional for plan, which derives it from the intent/title and documentType when omitted. A name is not an artifactId or documentId. The bundled convert outputs PDF only.'),
   content: z.string().max(1_000_000).optional()
     .describe('For write only: exact UTF-8 text to save as a downloadable file (Markdown, HTML, code, configuration, CSV, etc.). Preserves whitespace and empty strings. No Markdown fences unless part of the requested file. Does not execute code or render Office documents.'),
   fileType: z.string().regex(/^[a-z0-9]{1,10}$/).optional()
     .describe('For download: expected extension without a dot.'),
   documentType: z.enum(['word', 'spreadsheet', 'presentation']).optional()
-    .describe('Required for plan. Common Office extension aliases are normalized before validation.'),
+    .describe('Required for plan. Optional for unoApi/jsApi: choose word/spreadsheet/presentation to read that API without a documentId; omit both to get the document-type index. Common Office extension aliases are normalized before validation.'),
   operation: z.enum(['create', 'modify']).optional()
     .describe('For plan: create a new document or modify an attached existing Office document.'),
   sourceAttachmentId: z.string().max(160).optional()
@@ -166,21 +166,17 @@ const fileToolShape = {
   urlOrPath: z.string().max(8_000).optional()
     .describe('For download: real HTTP(S) file URL or page-relative URL path resolved against sourcePageUrl. Not an operating-system path. Local assets must be uploaded/host-bound attachments. Supply exactly one of urlOrPath/url/path.'),
   program: z.string().optional()
-    .describe('For generate: executable source for advanced/program workflows. Provide program or spec, never both. If a working source exists, prefer edit.'),
+    .describe('For generate: executable source, saved as the complete current source of documentId, replacing any existing source. Provide program or spec, never both. Prefer edit for revisions and repairs, including failed-validation drafts; regenerate only when targeted edits cannot implement the change.'),
   spec: semanticSpecSchema.optional()
     .describe('For generate: compact Word, spreadsheet, or presentation content using versioned themes and semantic templates. Provide spec or program, never both.'),
-  baseDigest: z.string().regex(/^[a-f0-9]{64}$/i).optional()
-    .describe('For edit/guarded full replacement: copy EXACTLY readSource.patchBaseDigest from the latest read of this document. Do not use sourceDigest, sourceUnitDigest, renderedDigest or an artifact id.'),
-  replaceExisting: z.boolean().optional()
-    .describe('Exceptional generate-only full replacement after reading the complete current source; ordinary revisions should use edit.'),
   patch: z.string().max(200_000).optional()
-    .describe("For edit, use patch OR replacements. Codex patch: Begin Patch, Update File: draft.py, @@ hunks, End Patch. Literal -old/+new markers are separate from ALL source indentation. Every target must match uniquely and exactly on the SAME pre-edit snapshot. Any conflict rejects the WHOLE call; no partial saves or automatic stale-version rebase. Prefer replacements for small fixes."),
+    .describe("For edit, use patch OR replacements. Codex patch: Begin Patch, Update File: draft.py, @@ hunks, End Patch. Literal -old/+new markers are separate from ALL source indentation. Every target must match uniquely and exactly in the current source. Any conflict rejects the WHOLE call; no partial saves or fuzzy matching. Prefer replacements for small fixes."),
   replacements: z.array(z.object({
     oldText: z.string().min(1).max(100_000).describe('Exact unique source substring copied from readSource.program, including ALL indentation; no diff markers or line numbers. Include surrounding code to disambiguate. Cannot be empty.'),
     newText: z.string().max(100_000).describe('Replacement source verbatim, preserving intended indentation. Empty string deletes oldText. For insertion include the old anchor in newText.'),
   }).strict()).min(1).max(50).optional()
     .refine((items) => !items || items.reduce((sum, item) => sum + item.oldText.length + item.newText.length, 0) <= 200_000, 'Replacement text exceeds 200000 characters')
-    .describe('Preferred for small/indentation repairs: unique exact oldText/newText pairs on the SAME pre-edit snapshot. All pairs commit together or NONE do; combine helper and caller changes in one call. No whitespace guessing. Missing oldText is a conflict, not proof of previous success. Use documentId and latest baseDigest; inspect saved and validation separately.'),
+    .describe('Preferred for small/indentation repairs: unique exact oldText/newText pairs on the current source. All pairs commit together or NONE do; combine helper and caller changes in one call. No whitespace guessing. Missing oldText is a conflict, not proof of previous success. Use documentId; inspect saved and validation separately.'),
   render: z.boolean().optional()
     .describe('Legacy generate/edit flag; use a separate action=render to publish. generate/edit create or validate source, not a deliverable download.'),
   includeVisuals: z.boolean().optional()
