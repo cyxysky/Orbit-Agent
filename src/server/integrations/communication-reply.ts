@@ -67,6 +67,6 @@ export function communicationReplyContents(message: BrowserChatMessage): Communi
       : message.status === 'interrupted' ? '本轮处理已停止。'
         : '本轮已完成，详细内容可在网页对话中查看。';
   }
-  if (message.parts?.some(part => part.type === 'data-chart' || part.type === 'data-ui')) text += '\n\n交互图表和卡片请在网页对话中查看。';
+  if (message.parts?.some(part => part.type === 'data-chart' || part.type === 'data-map' || part.type === 'data-ui')) text += '\n\n交互地图、图表和卡片请在网页对话中查看。';
   return [...splitCommunicationText(text.trim()).map(body => ({ format: 'markdown' as const, body })), ...files.values()];
 }

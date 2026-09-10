@@ -75,6 +75,11 @@
       "@webpilot/capability-chart": [
         "./packages/capability-chart/src/index.ts"
       ],
+      "@webpilot/capability-maps": ["./packages/capability-maps/src/index.ts"],
+      "@webpilot/capability-maps/core": ["./packages/capability-maps/src/core.ts"],
+      "@webpilot/capability-maps/node": ["./packages/capability-maps/src/node.ts"],
+      "@webpilot/capability-maps/react": ["./packages/capability-maps/src/react.tsx"],
+      "@webpilot/capability-maps/settings": ["./packages/capability-maps/src/settings.ts"],
       "@webpilot/capability-chart/node": [
         "./packages/capability-chart/src/node.ts"
       ],

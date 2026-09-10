@@ -144,7 +144,7 @@ export async function POST(request: NextRequest, context: BrowserChatSessionRout
               }
               continue;
             }
-            if (part.type === 'data-chart' || part.type === 'data-ui' || part.type === 'data-step' || part.type === 'data-activity') {
+            if (part.type === 'data-chart' || part.type === 'data-map' || part.type === 'data-ui' || part.type === 'data-step' || part.type === 'data-activity') {
               const key = `${part.type}:${part.id || ''}`;
               const signature = JSON.stringify(part.data);
               if (dataParts.get(key) === signature) continue;

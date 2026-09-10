@@ -184,6 +184,7 @@ export type BrowserChatAiOutputCycle = {
   output: BrowserChatAiOutputView;
   stepIndex?: number;
   agentStepIndex?: number;
+  streamingReasoningIndex?: number;
   sequence?: number;
   createdAt?: string;
   sourceCycleId?: string;

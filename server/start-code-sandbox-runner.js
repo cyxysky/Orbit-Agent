@@ -2,7 +2,7 @@
 const path = require('node:path');
 const { loadEnvConfig } = require('@next/env');
 
-// A standalone runner has its own lifecycle; starting Orbit does not start it.
+// Manual startup for a standalone runner; npm run dev manages enabled local runners.
 // Reuse the application's local connection settings without printing secrets.
 loadEnvConfig(path.resolve(__dirname, '..'), true);
 const runnerUrl = new URL(process.env.AGENT_CODE_SANDBOX_RUNNER_URL || 'http://127.0.0.1:18100');

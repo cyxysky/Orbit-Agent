@@ -14,6 +14,7 @@ const paths = {
   right: 'm10 6 6 6-6 6',
   refresh: 'M20 7v5h-5M4 17v-5h5M6 6a8 8 0 0 1 14 6M4 12a8 8 0 0 0 14 6',
   chart: 'M4 19V9m8 10V4m8 15v-7',
+  diagram: 'M8 3h8v5H8zM3 16h7v5H3zM14 16h7v5h-7zM12 8v4M6.5 16v-4h11v4',
   image: 'M3 3h18v18H3zM3 17l5-5 4 4 4-6 5 7M7 7h.01',
   check: 'm5 12 4 4L19 6',
 } as const;

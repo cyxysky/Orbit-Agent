@@ -2,6 +2,7 @@ import type { ModelProvider, ModelProviderSettings } from '@/server/ai/schemas/r
 import { normalizedModelCapabilities } from '@/lib/model-capabilities';
 import { browserCapabilitySettings } from '@webpilot/capability-browser/settings';
 import { chartCapabilitySettings } from '@webpilot/capability-chart/settings';
+import { mapsCapabilitySettings } from '@webpilot/capability-maps/settings';
 import { codeSandboxCapabilitySettings } from '@webpilot/capability-code-sandbox/settings';
 import { communicationCapabilitySettings } from '@webpilot/capability-communication/settings';
 import { computerCapabilitySettings } from '@webpilot/capability-computer/settings';
@@ -63,6 +64,7 @@ export type RuntimeEnvDefinition = {
 const capabilitySettingDefinitions: readonly CapabilitySettingDefinition[] = [
   ...browserCapabilitySettings,
   ...chartCapabilitySettings,
+  ...mapsCapabilitySettings,
   ...fileCapabilitySettings,
   ...codeSandboxCapabilitySettings,
   ...connectorsCapabilitySettings,

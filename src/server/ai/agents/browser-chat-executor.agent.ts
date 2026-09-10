@@ -7,6 +7,8 @@ import { jsonRecordFromUnknown, type CapabilityProgressEvent } from '@webpilot/c
 import { fileCapabilityManifest, fileCapabilityToolNames, type FileReadInput } from '@webpilot/capability-file';
 import { browserCapabilityManifest, browserCapabilityToolNames } from '@webpilot/capability-browser';
 import { chartCapabilityManifest, chartCapabilityToolNames } from '@webpilot/capability-chart';
+import { mapsCapabilityManifest } from '@webpilot/capability-maps';
+import { browserChatMapsCapability, executeBrowserChatMaps } from '@/server/capabilities/browser-chat-maps';
 import { EnvironmentCapabilityConfigStore, mountAISDKCapabilities } from '@webpilot/capability-adapter-ai-sdk';
 import type { AiRequestSnapshot, AiToolContextSnapshot, BrowserOperationRecord, StepExecutionResult, StepToolCall, VisualFrameRecord } from '@/server/ai/schemas/runtime.schema';
 import { getModel, getModelSettings } from '@/server/ai/model';
@@ -61,6 +63,7 @@ import {
   type BrowserChatFinalBlock,
 } from '@/lib/browser-chat-ui-message';
 import { containsPrivateToolProtocol, isBrowserChatDomObservationText, normalizeBrowserChatFinalReplyText } from './browser-chat-reply-text';
+import { createReasoningStreamObserver, type ReasoningStreamUpdate } from './browser-chat-reasoning-stream';
 import {
   formatFileArtifactResult,
 } from '@webpilot/capability-file/node/workspace';
@@ -150,6 +153,11 @@ export type BrowserChatTextStreamUpdate = {
   runtimeStepIndex: number;
   stepNumber: number;
   text: string;
+};
+
+export type BrowserChatReasoningStreamUpdate = ReasoningStreamUpdate & {
+  agentStepIndex: number;
+  runtimeStepIndex: number;
 };
 
 type ToolTrace = {
@@ -1472,6 +1480,7 @@ async function makeBrowserTools(
     ? new Set([
         ...(allowedCapabilityToolNames.has(browserCapabilityToolNames.browser) ? [browserCapabilityManifest.id] : []),
         ...(allowedCapabilityToolNames.has(chartCapabilityToolNames.chart) ? [chartCapabilityManifest.id] : []),
+        ...(allowedCapabilityToolNames.has('maps') ? [mapsCapabilityManifest.id] : []),
         ...(allowedCapabilityToolNames.has(fileCapabilityToolNames.file) ? [fileCapabilityManifest.id] : []),
         ...infrastructureProviders.filter((provider) => (
           (provider.manifest.skills || []).some((skill) => (
@@ -1492,6 +1501,7 @@ async function makeBrowserTools(
         imageInputAvailable,
       }),
       browserChatChartCapability,
+      browserChatMapsCapability,
       createBrowserChatFileCapability({
         attachmentBindings: referenceOptions?.attachmentBindings,
         currentPageUrl: () => session.currentUrl(),
@@ -1729,6 +1739,7 @@ function runtimePrompt(input: { runtimeRecord: BrowserChatRuntimeRecord; fileVis
     '- If agent.state tracks task stage, coverage, status, issues, or artifacts, update those records before the final answer so no pending/generated/failed field contradicts a complete claim. Do not set an overall complete/passed state while any required item remains pending, unsupported, failed, or unverified unless the user explicitly accepted a partial result.',
     `- Use chart when an Apache ECharts visualization materially improves the answer. Read Skill ${chartRuntimeSkillId} first and follow its indexed API guidance. After every successful create, reference the exact returned chartId from a finalResponse chart block. Never invent a chart id or use one from a failed call.`,
     '- Complete a text-only terminal response as ordinary assistant Markdown. Use finalResponse only when the response needs ordered chart or declarative UI blocks, or must explicitly report failed/blocked status. In finalResponse, use markdown blocks for prose, chart blocks for generated ECharts artifacts, and ui blocks for declarative cards/layout. The UI renders blocks in the exact array order.',
+    '- For real place searches, routes and interactive geographic maps use maps after reading system.maps. Reference the exact successful mapId in a finalResponse block {type:"map",mapId,title}. Include the returned Google Maps link when replying to external messaging clients. Never invent places or routes and never retry an unchanged failed maps request automatically.',
     '- Preserve Markdown block structure: separate heading markers (# through ######) from their content with a space, including numbered headings (### 1. Title). Put headings on their own lines. Put every list item on its own line, indent nested items under the parent content, and retain newlines and indentation in Markdown blocks. Never flatten child items into inline hyphens.',
     '- Defect reporting is a mandatory part of every interface or product testing task. As soon as live browser evidence reveals a real defect or reproducible product problem (including functional, data, interaction, visual/layout, or compatibility problems), proactively reproduce it, use browser action=code to emit a screenshot that visibly proves it, and call reportDefect in the immediately following model step with the exact screenshotFileNames returned by browser before continuing unrelated test cases. Never wait for the user to ask, defer reporting until the final answer, or merely describe the problem in test notes or the final report. Create one report for each unique confirmed problem. Investigate permission, configuration, version, requirement, and environment explanations first; report only an observed product problem, never speculation or expected behavior, and do not report duplicates. Recording a defect does not end the requested test unless its full scope is complete.',
     screenshotAvailable && input.fileVisualAvailable
@@ -2056,6 +2067,7 @@ async function executeRuntimeStep(input: {
   onDebug?: ExecutionDebug;
   onToolTrace?: (trace: ToolTrace, progress?: ToolTraceProgress) => void | Promise<void>;
   onTextStream?: (update: BrowserChatTextStreamUpdate) => void | Promise<void>;
+  onReasoningStream?: (update: BrowserChatReasoningStreamUpdate) => void | Promise<void>;
   contextRecords?: Record<string, ModelMessage>;
   onContextCheckpoint?: (update: { records: Record<string, ModelMessage>; manifest?: RuntimeContextManifest }) => void | Promise<void>;
   onTurnModelCheckpoint?: (messages: ModelMessage[]) => void | Promise<void>;
@@ -3059,6 +3071,11 @@ async function executeRuntimeStep(input: {
             doGenerate: runtimeModel.doGenerate.bind(runtimeModel),
             doStream: async (...args: Parameters<typeof runtimeModel.doStream>) => {
               const response = await runtimeModel.doStream(...args);
+              const reasoningStepIndex = retryAgentStepOffset + toolExecutionGate.stepNumber + 1;
+              const observeReasoning = input.onReasoningStream ? createReasoningStreamObserver(async update => {
+                ensureActive();
+                await input.onReasoningStream?.({ ...update, runtimeStepIndex: stepIndex, agentStepIndex: reasoningStepIndex });
+              }) : undefined;
               const messages = args[0].prompt;
               const generation = Object.fromEntries(Object.entries(args[0]).filter(([key]) => !['prompt', 'abortSignal', 'headers'].includes(key)));
               await onAttemptDebug?.({ phase: 'ai:runtime:request', stepIndex, message: '模型请求已发送',
@@ -3078,6 +3095,7 @@ async function executeRuntimeStep(input: {
                     if (part.type === 'reasoning-delta') await reportReceiving('推理');
                     else if (part.type === 'text-delta') await reportReceiving('正文');
                     else if (part.type === 'tool-input-start' || part.type === 'tool-input-delta' || part.type === 'tool-call') await reportReceiving('工具参数');
+                    await observeReasoning?.(part);
                     controller.enqueue(part);
                   },
                 })),
@@ -3521,6 +3539,7 @@ export async function executeInteractiveBrowserTurn(input: {
   getRuntimeOperationalContext?: () => BrowserChatOperationalContext | Promise<BrowserChatOperationalContext>;
   onProgress?: (step: StepExecutionResult) => void | Promise<void>;
   onTextStream?: (update: BrowserChatTextStreamUpdate) => void | Promise<void>;
+  onReasoningStream?: (update: BrowserChatReasoningStreamUpdate) => void | Promise<void>;
   onModelMessages?: (update: {
     activeMessages: ModelMessage[];
     turnMessages: ModelMessage[];
@@ -3637,6 +3656,7 @@ export async function executeInteractiveBrowserTurn(input: {
         memoryTools: input.memoryTools,
         useToolLoopAgent: input.useToolLoopAgent,
         onTextStream: input.onTextStream,
+        onReasoningStream: input.onReasoningStream,
         onTurnModelCheckpoint: async (messages) => {
           activeModelMessages = [...activeModelMessages, ...messages.slice(checkpointTurnMessageCount)];
           checkpointTurnMessageCount = messages.length;
@@ -4182,6 +4202,7 @@ async function executeCodexRuntimeObject(input: {
     reason: typeof normalizedParams.reason === 'string' ? normalizedParams.reason : undefined,
   };
     const runTool = async (toolCallId?: string) => {
+      if (type === 'maps') return executeBrowserChatMaps(runId, normalizedParams, { abortSignal, invocationId: toolCallId });
       if (type === 'chart') {
         return executeBrowserChatChart(runId, normalizedParams, {
           abortSignal,

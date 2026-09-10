@@ -225,10 +225,15 @@ export function normalizeBrowserChatMarkdown(markdown: string) {
 
 /** Only structured parts render charts; Markdown references remain ordinary text. */
 export function browserChatOrderedResponseParts(parts: BrowserChatUIMessagePart[] | undefined, fallbackText: string) {
-  const response = (parts || []).filter((part) => part.type === 'text' || part.type === 'data-chart' || part.type === 'data-ui');
+  const response = (parts || []).filter((part) => part.type === 'text' || part.type === 'data-chart' || part.type === 'data-map' || part.type === 'data-ui');
   const source = response.length ? response : [{ type: 'text' as const, text: fallbackText }];
   const renderedCharts = new Set<string>();
   return source.flatMap((part): BrowserChatUIMessagePart[] => {
+    if (part.type === 'data-map') {
+      if (renderedCharts.has(part.data.mapId)) return [];
+      renderedCharts.add(part.data.mapId);
+      return [part];
+    }
     if (part.type === 'data-chart') {
       if (renderedCharts.has(part.data.chartId)) return [];
       renderedCharts.add(part.data.chartId);

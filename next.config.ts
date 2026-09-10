@@ -42,6 +42,7 @@ export default function nextConfig(phase: string): NextConfig {
       '@webpilot/capability-adapter-mcp',
       '@webpilot/capability-browser',
       '@webpilot/capability-chart',
+      '@webpilot/capability-maps',
       '@webpilot/capability-file',
       '@webpilot/capability-code-sandbox',
       '@webpilot/capability-connectors',

@@ -15,6 +15,7 @@ const {
 const { createRealtimeRefreshHub } = require('./realtime-refresh-hub');
 const { startProcessMemoryMonitor } = require('./process-memory-monitor');
 const { applyOrbitEnvironment } = require('./orbit-environment');
+const { startDevelopmentCodeSandboxRunner } = require('./development-code-sandbox-runner');
 
 const DEVELOPMENT_CHILD_FLAG = '--development-child';
 const DEVELOPMENT_RESTART_EXIT_CODE = 77;
@@ -580,6 +581,9 @@ async function main() {
   // App modules may bundle another @next/env instance. Route all persisted
   // setting updates to the same snapshot used by this native Next server.
   globalThis[Symbol.for('webpilot.updateInitialRuntimeEnv')] = updateInitialEnv;
+  const codeSandboxRunner = dev && !runtimeChildMode
+    ? await startDevelopmentCodeSandboxRunner({ appDir })
+    : undefined;
   const memoryMonitor = startProcessMemoryMonitor();
   process.env.WEBPILOT_REALTIME_PUBLISH_TOKEN ||= randomBytes(32).toString('base64url');
   process.env.WEBPILOT_IDENTITY_HEADER_SECRET ||= randomBytes(32).toString('base64url');
@@ -733,6 +737,7 @@ async function main() {
   });
 
   const close = () => {
+    codeSandboxRunner?.stop();
     clearInterval(developmentMemoryTimer);
     memoryMonitor.stop();
     refreshHub.close();

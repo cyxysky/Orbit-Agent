@@ -20,6 +20,7 @@ import {
 import { resolveExternalIntegrations, type ResolvedExternalIntegration } from './external-integration-vault';
 import { closeUnusedWeComConnections, getWeComConnection } from './wecom-connections';
 import { communicationReplyContents, splitCommunicationText } from './communication-reply';
+import { communicationReplyWithChartImages } from './communication-chart-images';
 import { importCommunicationAttachments } from './communication-attachments';
 
 type Watcher = { item: CommunicationInbound; stop: () => void };
@@ -267,7 +268,14 @@ async function finish(conversation: CommunicationConversation, item: Communicati
   if (item.status !== 'running') return;
   await consumeCommunicationAttachments(item.attachmentMessageIds || []);
   state.watchers.get(item.id)?.stop(); state.watchers.delete(item.id);
-  item.replies = communicationReplyContents(message).map(content => ({ content, status: 'pending' }));
+  const contents = item.sessionId
+    ? await communicationReplyWithChartImages(message, item.sessionId, conversation.userId)
+    : communicationReplyContents(message);
+  // Export can outlive a deletion/cancellation; do not restore a cancelled reply.
+  const current = await readCommunicationInbound(item.id);
+  if (!current || current.status !== 'running') return;
+  item = current;
+  item.replies = contents.map(content => ({ content, status: 'pending' }));
   item.status = 'replying'; await saveCommunicationInbound(item);
   await deliver(conversation, item);
 }

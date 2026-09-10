@@ -10,6 +10,19 @@ import {
 import { asRecord } from './unknown-value';
 import { stripBrowserChatContextMarkers } from './browser-chat-visible-text';
 
+/** Keep streamed reasoning and text in one cycle without replacing each other. */
+export function mergeBrowserChatStreamPart(
+  previous: BrowserChatAiOutputView | undefined,
+  part: { kind: 'reasoning' | 'text'; index: number; text: string },
+): BrowserChatAiOutputView {
+  const output = previous || { parts: [], reasoning: [], texts: [], tools: [] };
+  const key = part.kind === 'reasoning' ? 'reasoning' : 'texts';
+  const values = [...output[key]];
+  values[part.index] = part.text;
+  const exists = output.parts.some(item => item.kind === part.kind && item.index === part.index);
+  return { ...output, [key]: values, parts: exists ? output.parts : [...output.parts, { kind: part.kind, index: part.index }] };
+}
+
 export function stringFromUnknown(value: unknown): string {
   if (typeof value === 'string') return stripAnsiControlCodes(value).trim();
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);

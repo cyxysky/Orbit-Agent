@@ -3,6 +3,7 @@ import type { CapabilitySkill } from '@webpilot/capability-sdk';
 import { browserCapabilityManifest } from '@webpilot/capability-browser';
 import { fileCapabilityManifest } from '@webpilot/capability-file';
 import { chartCapabilityManifest } from '@webpilot/capability-chart';
+import { mapsCapabilityManifest } from '@webpilot/capability-maps';
 import { codeSandboxCapabilityManifest } from '@webpilot/capability-code-sandbox';
 import { communicationCapabilityManifest } from '@webpilot/capability-communication';
 import { computerCapabilityManifest } from '@webpilot/capability-computer';
@@ -25,6 +26,7 @@ const capabilityRuntimeSkills = [
   browserCapabilityManifest,
   fileCapabilityManifest,
   chartCapabilityManifest,
+  mapsCapabilityManifest,
   codeSandboxCapabilityManifest,
   connectorsCapabilityManifest,
   knowledgeCapabilityManifest,

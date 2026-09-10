@@ -243,6 +243,7 @@ const settingsSectionIcons: Record<string, LucideIcon> = {
   '知识库': BookOpen,
   '媒体': ImageIcon,
   '图表': ChartNoAxesCombined,
+  '地图': Navigation,
   '脱敏策略': ShieldCheck,
   '脱敏模型': Brain,
   '推理服务': Server,
@@ -257,7 +258,7 @@ const integrationSettingsSections: Record<string, string> = {
   '数据': 'integration:data',
 };
 const browserRuntimeGroups = new Set(['浏览器 Agent']);
-const capabilityRuntimeGroups = new Set(['代码沙箱', '计算机', '文件能力', 'Git', '知识库', '媒体', '数据与文件', ...Object.keys(integrationSettingsSections)]);
+const capabilityRuntimeGroups = new Set(['代码沙箱', '计算机', '文件能力', 'Git', '知识库', '媒体', '地图', '数据与文件', ...Object.keys(integrationSettingsSections)]);
 
 function SettingsSecondaryNav({
   activeId,

@@ -61,7 +61,7 @@ const chartToolInputParser = z.object({
   description: z.string().trim().min(1).max(1_000).optional().describe('Accessible plain-language chart summary.'),
   height: z.number().int().min(240).max(720).optional().describe('Rendered height in pixels. Defaults to 380.'),
   renderer: z.enum(['canvas', 'svg']).optional().describe('ECharts renderer. Defaults to canvas.'),
-  option: z.record(z.string(), z.unknown()).optional().describe('For create/update: complete JSON option for the chosen engine. ECharts formatter must be a string template, never a function-source string; omit it for default tooltips. Read module three for 3D, or excalidraw for elements/appState/files.'),
+  option: z.record(z.string(), z.unknown()).optional().describe('For create/update: complete JSON option for the chosen engine. ECharts formatter must be a string template, never a function-source string; omit it for default tooltips. Read module three for 3D, or excalidraw for diagrams. Excalidraw: elements is an array; appState is an object; omit files unless using image elements. files is a resource object keyed by fileId, never a string or array.'),
   maps: z.array(z.object({
     name: z.string().trim().min(1).max(160),
     geoJson: z.union([z.record(z.string(), z.unknown()), z.string().min(1)]),
@@ -146,6 +146,7 @@ const apiModules: EChartsApiModule[] = [
     optionPaths: ['elements', 'appState', 'files'],
     notes: [
       'Set engine:"excalidraw" and option:{elements,appState?,files?}. This is not ECharts option or Mermaid source.',
+      'For a flowchart with only shapes, text and arrows, omit files entirely. files is an optional object keyed by image fileId, not an array or a string. Do not regenerate the scene to correct this optional field.',
       'Every element requires a stable unique id, type, and finite x/y/width/height. Use native rectangle/diamond/ellipse/text/arrow/line/freedraw/image/frame elements.',
       'Text requires text; fontSize/fontFamily/textAlign are optional. Lines/arrows require at least two relative points:[[x,y],...]; arrows may set endArrowhead:"arrow".',
       'Lay out coordinates explicitly. Use separate text elements, not skeleton label fields. The editor restores omitted native style defaults.',
@@ -158,7 +159,7 @@ const apiModules: EChartsApiModule[] = [
       { id: 'flow', type: 'arrow', x: 160, y: 40, width: 100, height: 0, points: [[0, 0], [100, 0]], endArrowhead: 'arrow' },
       { id: 'step-b', type: 'rectangle', x: 260, y: 0, width: 160, height: 80 },
       { id: 'label-b', type: 'text', x: 290, y: 25, width: 100, height: 25, text: 'Process', fontSize: 20 },
-    ], appState: { viewBackgroundColor: '#ffffff' }, files: {} } }],
+    ], appState: { viewBackgroundColor: '#ffffff' } } }],
   },
   {
     id: 'three', title: 'Three.js 3D 图表', summary: '原生三维柱状、散点、折线和网格曲面；旋转、缩放、全屏、下载与数据编辑。',

@@ -45,6 +45,11 @@ export type BrowserChatUINode = {
 
 export const browserChatFinalBlockSchema = z.discriminatedUnion('type', [
   z.object({
+    type: z.literal('map'),
+    mapId: z.string().regex(/^map_[a-f0-9]{24}$/),
+    title: z.string().trim().min(1).max(200).optional(),
+  }).strict(),
+  z.object({
     type: z.literal('markdown'),
     text: z.string().min(1).max(40_000),
   }).strict(),
@@ -79,6 +84,7 @@ export type BrowserChatUIMessageMetadata = {
 };
 
 export type BrowserChatUIDataTypes = {
+  map: { mapId: string; title?: string };
   chart: { chartId: string; title?: string };
   ui: { id?: string; tree: BrowserChatUINode };
   step: StepExecutionResult;
@@ -93,6 +99,7 @@ export type BrowserChatUIMessagePart = BrowserChatUIMessage['parts'][number];
 export function browserChatFinalBlocksToParts(blocks: BrowserChatFinalBlock[]): BrowserChatUIMessagePart[] {
   return blocks.map((block): BrowserChatUIMessagePart => {
     if (block.type === 'markdown') return { type: 'text', text: block.text };
+    if (block.type === 'map') return { type: 'data-map', id: block.mapId, data: { mapId: block.mapId, ...(block.title ? { title: block.title } : {}) } };
     if (block.type === 'chart') {
       return {
         type: 'data-chart',
@@ -112,6 +119,7 @@ export function browserChatFinalBlocksToText(blocks: BrowserChatFinalBlock[]) {
   return blocks.map((block) => {
     if (block.type === 'markdown') return block.text;
     if (block.type === 'chart') return block.chartId;
+    if (block.type === 'map') return block.mapId;
     return '';
   }).filter(Boolean).join('\n\n');
 }

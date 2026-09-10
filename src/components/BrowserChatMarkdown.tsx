@@ -23,6 +23,7 @@ import { browserChatHtmlSchema, rehypeBrowserChatSvgReferences } from './browser
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import { BrowserChatChart } from '@/components/BrowserChatChart';
+import { BrowserChatMap } from '@/components/BrowserChatMap';
 import { BrowserChatDataUI } from '@/components/BrowserChatDataUI';
 import {
   browserChatOrderedResponseParts,
@@ -341,6 +342,7 @@ export const BrowserChatOrderedResponse = memo(function BrowserChatOrderedRespon
   if (!responseParts.length) return null;
   return <div className="browser-chat-ordered-response">{responseParts.map((part, index) => {
     if (part.type === 'text') return <BrowserChatMarkdown key={`text:${index}`} markdown={part.text} />;
+    if (part.type === 'data-map') return <BrowserChatMap key={`${automationRunId || sessionId}:${part.data.mapId}`} mapId={part.data.mapId} title={part.data.title} sessionId={sessionId} automationRunId={automationRunId} />;
     if (part.type === 'data-chart') {
       return <BrowserChatChart chartId={part.data.chartId} key={part.id || `${part.data.chartId}:${index}`} sessionId={sessionId} automationRunId={automationRunId} />;
     }

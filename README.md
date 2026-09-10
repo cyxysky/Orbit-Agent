@@ -4,6 +4,8 @@ An agent workspace built with Next.js and AI SDK, with capabilities for browsers
 
 Orbit combines an Agent Harness for persistent sessions, context management, tool execution, and recovery with a workspace for reviewing results and controlling tasks.
 
+Google Maps is available as the independent `@webpilot/capability-maps` package for place searches, basic routes, and interactive chat maps. Configure separate browser/server keys under **设置 → 工具能力 → 地图**. See the [Google Maps setup guide](packages/capability-maps/README.md) for API enablement, key restrictions, usage limits, and examples.
+
 The product name is **Orbit**, with no brand prefix. Shared product metadata lives
 in `electron/product.json`. `ORBIT_BRAND_PREFIX` (empty by default) and
 `ORBIT_BRAND_TEXT` (`Orbit` by default) configure the initial sidebar name;
@@ -42,6 +44,15 @@ npm run dev
 
 Development uses Turbopack. The custom server prints the selected compiler at
 startup. For an explicit Webpack comparison, use `npm run dev -- --webpack`.
+
+When code sandbox is enabled with the `remote` backend and a loopback HTTP Runner
+address (for example `http://127.0.0.1:18100`), `npm run dev` starts the local Runner
+and waits for its health check. Set `AGENT_CODE_SANDBOX_RUNNER_TOKEN` first. An
+already healthy Runner is reused; only a Runner started by the dev server is
+stopped with it. Remote/container Runners and network-isolated Runners remain
+separately managed. After enabling the sandbox or changing its Runner connection
+settings, restart the dev server, or start the Runner manually in another terminal
+with `npm run code-sandbox:start`.
 Restart the development server after changing compiler configuration or updating
 Next.js. First-time route compilation and cached hot updates have different costs;
 compare both when checking development performance.
@@ -1322,3 +1333,21 @@ file-webpilot-adapter
 如果遇到摘要请求超时、网络失败或输入仍然过大，应明确报错并允许停止，原始历史不能丢失，不能显示“压缩成功”后又偷偷发送超限请求。
 
 记录问题时保留：**会话ID、操作顺序、实际回答、对应请求日志、压缩前后统计截图**。最优先测 **中止后换任务、自动压缩、压缩后事实与修正、多次压缩、刷新恢复**。
+
+已接入独立 maps 工具包，支持地点搜索、驾车／步行／骑行路线和交互地图卡片。目前还缺两把 Google Key。
+你需要这样配置：
+1. 在 Google Cloud Console 创建项目、开启结算，启用 Maps JavaScript API、Places API (New)、Routes API。
+2. 在“API 和服务 → 凭据”创建两把 Key：
+Key	API 限制	应用限制
+浏览器 Key	仅 Maps JavaScript API	网站来源
+服务端 Key	仅 Places API (New)、Routes API	服务器公网出口 IP
+
+
+浏览器 Key 的本地来源填写：
+http://127.0.0.1:3000/*
+http://localhost:3000/*
+上线后再添加实际域名。服务端 IP 填公网出口地址，不是 127.0.0.1。官方限制说明
+3. 用管理员账号进入项目的 设置 → 工具能力 → 地图，填写“Google 地图浏览器 Key”和“Google 地图服务端 Key”，保存即可。不用把 Key 发到聊天里。
+4. 在聊天工具面板开启“地图”，尝试：“搜索香港中环附近的咖啡店，并在地图上标记。”
+默认设置了每月搜索 4,500 次、路线 9,000 次的应用上限；地图点击后才加载。完整步骤见[配置说明](C:/Users/18367/Desktop/test/web-app-test/packages/capability-maps/README.md)。
+8 项针对性检查及模拟地图界面检查通过，真实 Google 调用待配置 Key 后验证。未运行 dev/build；全量类型检查仍有项目既有错误，本次地图改动无相关诊断。

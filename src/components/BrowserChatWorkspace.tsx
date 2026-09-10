@@ -1,6 +1,7 @@
 'use client';
 
 import { Dock, DockIcon } from '@/components/ui/dock';
+import { readBrowserChatToolPreferences, saveBrowserChatToolPreferences } from '@/lib/browser-chat-tool-preferences';
 
 import { parseMediaModelSelection } from '@/lib/model-selection';
 
@@ -37,6 +38,7 @@ import { Checkbox } from '@heroui/react/checkbox';
 import { Popover } from '@heroui/react/popover';
 import { HoverCard } from '@/components/HoverCard';
 import { BrowserChatToolsHelp } from '@/components/BrowserChatToolsHelp';
+import { BrowserChatReasoning } from '@/components/BrowserChatReasoning';
 import { normalizeDisabledBrowserChatTools } from '@/lib/browser-chat-tools';
 import { IconAction } from '@/components/ui/icon-action';
 import { CopyTextButton } from '@/components/ui/copy-text-button';
@@ -54,6 +56,7 @@ import {
   Bug,
   Cable,
   ChartNoAxesCombined,
+  MapPin,
   CircleAlert,
   CircleHelp,
   Clock3,
@@ -1024,6 +1027,7 @@ function browserChatToolLabel(name: string, input: unknown, t: (value: string) =
     contextCompression: '压缩上下文',
     contextRead: '读取上下文',
     chart: '生成图表',
+    maps: '地图',
     codeSandbox: '代码沙箱',
     communication: '通信',
     computer: '计算机',
@@ -1154,6 +1158,7 @@ function BrowserChatToolIcon({ input, name }: { input?: unknown; name: string })
   }
   if (name === 'workflow') return <Workflow size={13} />;
   if (name === 'chart') return <ChartNoAxesCombined size={13} />;
+  if (name === 'maps') return <MapPin size={13} />;
   if (name === 'skill') return <Sparkles size={13} />;
   if (name === 'memory') return <Brain size={13} />;
   if (name === 'reportDefect') return <Bug size={13} />;
@@ -1820,6 +1825,7 @@ function browserChatUIMessageText(message: BrowserChatUIMessage) {
   return message.parts.map((part) => {
     if (part.type === 'text') return part.text;
     if (part.type === 'data-chart') return part.data.chartId;
+    if (part.type === 'data-map') return part.data.mapId;
     return '';
   }).filter(Boolean).join('\n\n');
 }
@@ -3618,14 +3624,8 @@ const BrowserChatAiCycleLine = memo(function BrowserChatAiCycleLine({
       {orderedParts.map((entry, orderedIndex) => {
         if (entry.kind === 'reasoning') {
           return (
-            <details className="browser-chat-ai-line-collapse" key={`reasoning-${entry.part.index}-${orderedIndex}`}>
-              <summary className="browser-chat-ai-collapse-summary">
-                <Sparkles size={14} />
-                <span>{t('思维链')}</span>
-                <ChevronDown className="browser-chat-ai-tool-chevron" size={14} />
-              </summary>
-              <div className="browser-chat-ai-reasoning-text"><p>{entry.text}</p></div>
-            </details>
+            <BrowserChatReasoning key={`reasoning-${entry.part.index}-${orderedIndex}`} text={entry.text}
+              streaming={running && cycle.streamingReasoningIndex === entry.part.index} running={running} label={t('思维链')} />
           );
         }
         if (entry.kind === 'text') {
@@ -4652,7 +4652,7 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
   ));
   const hasFinalText = Boolean(finalText.trim());
   const hasStructuredResponse = Boolean(message.parts?.some((part) => (
-    part.type === 'text' || part.type === 'data-chart' || part.type === 'data-ui'
+    part.type === 'text' || part.type === 'data-chart' || part.type === 'data-map' || part.type === 'data-ui'
   )));
   const hasFinalResponse = hasFinalText || hasStructuredResponse;
   const hideManualVerificationStatusText = manualVerificationPaused && isBrowserChatManualVerificationStatusText(finalText);
@@ -5679,6 +5679,7 @@ function compactContextTokens(tokens: number) {
 }
 
 function BrowserChatSafetySelector({
+  userId,
   contextUsage,
   sessionId,
   disabledTools,
@@ -5687,6 +5688,7 @@ function BrowserChatSafetySelector({
   onSafetyModeChange,
   safetyMode,
 }: {
+  userId: string;
   contextUsage?: BrowserChatSession['contextUsage'];
   sessionId?: string;
   disabledTools: string[];
@@ -5719,7 +5721,7 @@ function BrowserChatSafetySelector({
         onPress={() => onSafetyModeChange(safetyMode === 'full' ? 'strict' : 'full')}
         variant="ghost"
       >
-        <ShieldCheck aria-hidden="true" size={18} />
+        <ShieldCheck aria-hidden="true" size={20} />
         <span>{safetyLabel}</span>
         <span
           aria-hidden="true"
@@ -5785,19 +5787,20 @@ function BrowserChatSafetySelector({
               className="browser-chat-context-ring"
               max={maxTokens}
               min={0}
-              size={22}
-              strokeWidth={2.4}
+              size={20}
+              strokeWidth={2}
               value={currentTokens}
             />
           </div>
         )}
       </HoverCard>
-      <BrowserChatToolsHelp sessionId={sessionId} disabledTools={disabledTools} onChange={onDisabledToolsChange} busy={disabled} />
+      <BrowserChatToolsHelp userId={userId} sessionId={sessionId} disabledTools={disabledTools} onChange={onDisabledToolsChange} busy={disabled} />
     </div>
   );
 }
 
 const BrowserChatComposer = memo(function BrowserChatComposer({
+  userId,
   attachments,
   sessionId,
   disabledTools,
@@ -5832,6 +5835,7 @@ const BrowserChatComposer = memo(function BrowserChatComposer({
 }: {
   attachments: BrowserChatAttachment[];
   sessionId?: string;
+  userId: string;
   disabledTools: string[];
   onDisabledToolsChange: (names: string[]) => void;
   availableSkills: SkillRecord[];
@@ -6523,9 +6527,10 @@ const BrowserChatComposer = memo(function BrowserChatComposer({
               onClick={() => imageInputRef.current?.click()}
               type="button"
             >
-              {uploadingImage ? <Loader2 className="spin" size={17} /> : <Paperclip size={20} />}
+              {uploadingImage ? <Loader2 className="spin" size={20} /> : <Paperclip size={20} />}
             </button>
             <BrowserChatSafetySelector
+              userId={userId}
               sessionId={sessionId}
               disabledTools={disabledTools}
               onDisabledToolsChange={onDisabledToolsChange}
@@ -8156,6 +8161,19 @@ export function BrowserChatWorkspace({
   } = useBrowserChatSessionPagination(browserChatApiUrl, applySessionListPage, t);
   const [safetyMode, setSafetyMode] = useState<BrowserChatSafetyMode>('strict');
   const [disabledTools, setDisabledTools] = useState<string[]>([]);
+  useEffect(() => {
+    if (!activeSessionIdRef.current) setDisabledTools(readBrowserChatToolPreferences(requestUserId).disabledTools);
+  }, [requestUserId]);
+  const changeDisabledTools = useCallback((names: string[]) => {
+    const next = normalizeDisabledBrowserChatTools(names);
+    saveBrowserChatToolPreferences(requestUserId, { disabledTools: next });
+    const targetSessionId = session?.id;
+    if ((activeSessionIdRef.current || undefined) === targetSessionId) setDisabledTools(next);
+    if (targetSessionId) {
+      setSession((current) => current?.id === targetSessionId ? { ...current, disabledTools: next } : current);
+      setSessions((current) => current.map((item) => item.id === targetSessionId ? { ...item, disabledTools: next } : item));
+    }
+  }, [requestUserId, session?.id]);
   const [modelProvider, setModelProvider] = useState<ModelProvider>(() => initialModelSelection.provider);
   const [modelId, setModelId] = useState(() => initialModelSelection.model);
   const [modelConfig, setModelConfig] = useState<BrowserChatModelConfig | null>(null);
@@ -9407,7 +9425,7 @@ export function BrowserChatWorkspace({
     setSessionMinimumLoadingElapsed(true);
     setMessageViewportReady(true);
     setSession(null);
-    setDisabledTools([]);
+    setDisabledTools(readBrowserChatToolPreferences(requestUserId).disabledTools);
     if (!mountedIdentityRef.current) {
       window.history.replaceState(null, '', browserChatSessionNavigationHref(window.location.href));
     }
@@ -9590,12 +9608,12 @@ export function BrowserChatWorkspace({
     releaseSessionRuntime(activeSessionIdRef.current);
     activeSessionIdRef.current = null;
     setSession(null);
-    setDisabledTools([]);
+    setDisabledTools(readBrowserChatToolPreferences(requestUserId).disabledTools);
     setMessageViewportReady(true);
     if (!mountedIdentityRef.current) {
       window.history.replaceState(null, '', browserChatSessionNavigationHref(window.location.href));
     }
-  }, [loadingSessionId, releaseSessionRuntime]);
+  }, [loadingSessionId, releaseSessionRuntime, requestUserId]);
 
   useEffect(() => {
     const handleTutorialRestart = () => {
@@ -10198,9 +10216,10 @@ export function BrowserChatWorkspace({
       <div className="browser-chat-composer-shell">
         <BrowserChatComposer
           key={`composer:${sessionUiKey}`}
+          userId={requestUserId}
           sessionId={session?.id}
           disabledTools={disabledTools}
-          onDisabledToolsChange={setDisabledTools}
+          onDisabledToolsChange={changeDisabledTools}
           attachments={attachments}
           availableSkills={skills}
           busy={busy}

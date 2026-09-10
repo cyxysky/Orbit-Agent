@@ -19,6 +19,8 @@ const MAX_CONCURRENCY = Math.max(1, Math.min(16, Number(process.env.CODE_SANDBOX
 const PYTHON_EXECUTABLE = process.platform === 'win32' ? 'python' : 'python3';
 const PYTHON_BIN_DIRECTORY = process.platform === 'win32' ? 'Scripts' : 'bin';
 const PYTHON_BINARY = process.platform === 'win32' ? 'python.exe' : 'python';
+// Managed development runners exit even if the parent is forcefully terminated.
+if (process.connected) process.once('disconnect', () => process.exit(0));
 const npmPackageSpec = /^(?:@[a-z0-9][a-z0-9._~-]*\/[a-z0-9][a-z0-9._~-]*|[a-z0-9][a-z0-9._~-]*)@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 const pythonPackageSpec = /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[A-Za-z0-9_,.-]+\])?==\d+(?:\.\d+)+(?:[A-Za-z0-9.+-]*)$/;
 

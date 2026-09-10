@@ -4,7 +4,7 @@ import { normalizeDisabledBrowserChatTools } from '@/lib/browser-chat-tools';
 // Internal instructions shared with the runtime tool definitions.
 export const runtimeBuiltinToolPrompts = {
   reportDefect: 'Proactively report one evidence-backed product defect or reproducible product problem found while testing the live interface. During a testing task, calling this tool is mandatory as soon as browser action=code has reproduced the issue and emitted at least one screenshot that visibly proves it; do not defer the report to the final answer or wait for the user to ask. Do not report speculation, expected behavior, environment/configuration/permission limitations, or the same issue twice. screenshotFileNames must exactly match the safe file names returned by a successful browser action=code call in this Agent run.',
-  finalResponse: 'Finish the request with ordered UI blocks. Use markdown for prose, chart for a successful chart id, and ui for declarative cards/layout. The client preserves this exact order in UIMessage.parts.',
+  finalResponse: 'Finish the request with ordered UI blocks. Use markdown for prose, chart for a successful chart id, map for a successful mapId, and ui for declarative cards/layout. The client preserves this exact order in UIMessage.parts.',
   skill: `Read a Skill by exact id. Hidden runtime Skills for this mode are ${hiddenRuntimeSkillIds().join(', ')}. A successful read can be reused while its exact current content remains in the active tool history; reread only when missing, compacted away, or changed.`,
 };
 
@@ -12,6 +12,7 @@ const help: Record<string, [string, string]> = {
   browser: ['浏览器', '搜索并读取网页、操作页面、检查界面和截图。'],
   file: ['文件', '读取和修改文件，生成 Word、Excel、PPT、PDF，以及 Markdown 等文本文件。'],
   chart: ['图表与画布', '创建和更新二维、三维图表，以及可编辑的 Excalidraw 画布。'],
+  maps: ['地图', '搜索 Google 地点，规划驾车、步行和骑行路线，并展示交互地图。'],
   codeSandbox: ['代码沙箱', '运行隔离的代码，计算数据、处理文件和生成程序产物。'],
   connectors: ['连接器', '调用已配置外部服务的接口和操作。'],
   knowledge: ['知识库', '保存、检索和维护可复用的参考资料。'],
@@ -25,6 +26,7 @@ const help: Record<string, [string, string]> = {
 
 // User-facing conversation starters; these are separate from model operating rules.
 const prompts: Record<string, string[]> = {
+  maps: ['搜索香港中环附近的咖啡店，并在地图上标记。', '规划从香港国际机场到中环的驾车路线。', '在地图上展示我提供的地点坐标。'],
   browser: [
     '搜索 Excalidraw 的官方网站，概括它的主要功能。',
     '打开我提供的网页，找到登录入口并检查登录流程。',

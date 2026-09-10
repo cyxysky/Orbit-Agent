@@ -16,7 +16,17 @@ export function normalizeExcalidrawOption(value: unknown): ExcalidrawScene {
   if (!object(value) || !Array.isArray(value.elements)) throw new Error('Excalidraw option.elements must be an array.');
   if (value.elements.length > 10000) throw new Error('Excalidraw supports at most 10000 elements per chart.');
   if (value.appState !== undefined && !object(value.appState)) throw new Error('Excalidraw appState must be an object.');
-  if (value.files !== undefined && !object(value.files)) throw new Error('Excalidraw files must be an object.');
+  // Text/shape-only scenes have no binary resources. Generated tool inputs use
+  // an empty string or empty array for this optional map; neither carries data.
+  // Image elements still require their actual resource below.
+  const emptyFiles = value.files === undefined
+    || (typeof value.files === 'string' && !value.files.trim())
+    || (Array.isArray(value.files) && value.files.length === 0);
+  const sourceFiles = emptyFiles ? {} : value.files;
+  if (!object(sourceFiles)) {
+    const received = Array.isArray(sourceFiles) ? 'array' : sourceFiles === null ? 'null' : typeof sourceFiles;
+    throw new Error(`Excalidraw option.files must be an object keyed by fileId; received ${received}. Omit files for a scene without images. For images, pass files: {"file-id": {"id":"file-id","mimeType":"image/png","dataURL":"data:image/png;base64,..."}}. Do not repeat the same invalid input.`);
+  }
   const ids = new Set<string>();
   const elements = value.elements.map((element, index) => {
     const label = `option.elements[${index}]`;
@@ -32,7 +42,7 @@ export function normalizeExcalidrawOption(value: unknown): ExcalidrawScene {
     return element;
   });
   const files: ExcalidrawScene['files'] = Object.create(null);
-  for (const [id, file] of Object.entries(value.files || {})) {
+  for (const [id, file] of Object.entries(sourceFiles)) {
     if (!object(file) || file.id !== id || typeof file.mimeType !== 'string' || !file.mimeType.startsWith('image/') || typeof file.dataURL !== 'string' || !file.dataURL.startsWith(`data:${file.mimeType};base64,`)) throw new Error(`option.files.${id} requires matching id, image mimeType and base64 dataURL.`);
     files[id] = file;
   }

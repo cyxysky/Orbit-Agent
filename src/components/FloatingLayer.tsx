@@ -25,12 +25,14 @@ type FloatingLayerProps = {
   ariaMultiselectable?: boolean;
   children: ReactNode;
   className: string;
+  dragHandleSelector?: string;
   gap?: number;
   id?: string;
   layerRef?: RefObject<HTMLDivElement | null>;
   matchAnchorWidth?: boolean;
   maxHeight?: number;
   onDismiss: () => void;
+  onDragStart?: () => void;
   onPointerEnter?: PointerEventHandler<HTMLDivElement>;
   onPointerLeave?: PointerEventHandler<HTMLDivElement>;
   placement?: FloatingLayerPlacement;
@@ -80,12 +82,14 @@ export function FloatingLayer({
   ariaLabel,
   children,
   className,
+  dragHandleSelector,
   gap = 6,
   id,
   layerRef,
   matchAnchorWidth = false,
   maxHeight = 520,
   onDismiss,
+  onDragStart,
   onPointerEnter,
   onPointerLeave,
   placement = 'auto',
@@ -100,6 +104,9 @@ export function FloatingLayer({
   const [portalReady, setPortalReady] = useState(false);
   const [layoutStyle, setLayoutStyle] = useState<CSSProperties>(hiddenLayoutStyle);
   const [resolvedPlacement, setResolvedPlacement] = useState<'bottom' | 'left' | 'right' | 'top'>('bottom');
+  const draggedPosition = useRef<{ left: number; top: number; height: number } | null>(null);
+  const dragGesture = useRef<{ pointerId: number; offsetX: number; offsetY: number } | null>(null);
+  const [dragging, setDragging] = useState(false);
 
   useEffect(() => {
     dismissRef.current = onDismiss;
@@ -110,7 +117,12 @@ export function FloatingLayer({
   }, []);
 
   useEffect(() => {
-    if (!present) setLayoutStyle(hiddenLayoutStyle);
+    if (!present) {
+      setLayoutStyle(hiddenLayoutStyle);
+      draggedPosition.current = null;
+      dragGesture.current = null;
+      setDragging(false);
+    }
   }, [present]);
 
   const setLayerNode = useCallback((node: HTMLDivElement | null) => {
@@ -146,20 +158,25 @@ export function FloatingLayer({
           ? 'bottom'
           : 'top';
     const horizontal = nextPlacement === 'left' || nextPlacement === 'right';
-    const availableHeight = Math.max(80, Math.min(maxHeight, horizontal ? bounds.height - floatingInset * 2 : nextPlacement === 'bottom' ? spaceBelow : spaceAbove));
-    const renderedHeight = Math.min(desiredHeight, availableHeight);
+    const detached = draggedPosition.current;
+    const availableHeight = detached
+      ? Math.max(0, Math.min(detached.height, bounds.height - floatingInset * 2))
+      : Math.max(80, Math.min(maxHeight, horizontal ? bounds.height - floatingInset * 2 : nextPlacement === 'bottom' ? spaceBelow : spaceAbove));
+    const renderedHeight = detached ? availableHeight : Math.min(desiredHeight, availableHeight);
     const preferredLeft = nextPlacement === 'right' ? anchorRect.right + gap
       : nextPlacement === 'left' ? anchorRect.left - width - gap
         : align === 'center' ? anchorRect.left + (anchorRect.width - width) / 2
           : align === 'start' ? anchorRect.left : anchorRect.right - width;
     const left = Math.min(
-      Math.max(preferredLeft, bounds.left + floatingInset),
+      Math.max(detached?.left ?? preferredLeft, bounds.left + floatingInset),
       Math.max(bounds.left + floatingInset, bounds.right - width - floatingInset),
     );
     const preferredTop = horizontal
       ? (align === 'center' ? anchorRect.top + (anchorRect.height - renderedHeight) / 2 : align === 'start' ? anchorRect.top : anchorRect.bottom - renderedHeight)
       : nextPlacement === 'bottom' ? anchorRect.bottom + gap : anchorRect.top - renderedHeight - gap;
-    const top = horizontal
+    const top = detached
+      ? Math.max(bounds.top + floatingInset, Math.min(detached.top, bounds.bottom - renderedHeight - floatingInset))
+      : horizontal
       ? Math.min(Math.max(preferredTop, bounds.top + floatingInset), bounds.bottom - renderedHeight - floatingInset)
       : nextPlacement === 'bottom'
         ? Math.min(preferredTop, bounds.bottom - renderedHeight - floatingInset)
@@ -172,6 +189,7 @@ export function FloatingLayer({
     const positionedTop = portalRect
       ? top - portalRect.top - portalTarget.clientTop + portalTarget.scrollTop
       : top;
+    if (detached) draggedPosition.current = { ...detached, left, top };
 
     setResolvedPlacement(nextPlacement);
     setLayoutStyle((current) => {
@@ -246,10 +264,39 @@ export function FloatingLayer({
     <div
       aria-label={ariaLabel}
       className={`ui-floating-layer ${className}`}
+      data-dragging={dragging || undefined}
       data-floating-placement={resolvedPlacement}
       id={id}
       onPointerEnter={onPointerEnter}
       onPointerLeave={onPointerLeave}
+      onPointerDown={(event) => {
+        if (!dragHandleSelector || event.button !== 0 || !event.isPrimary) return;
+        const target = event.target;
+        if (!(target instanceof Element) || !target.closest(dragHandleSelector)
+          || target.closest('button, input, textarea, select, a, [role="button"]')) return;
+        const rect = event.currentTarget.getBoundingClientRect();
+        draggedPosition.current = { left: rect.left, top: rect.top, height: rect.height };
+        dragGesture.current = { pointerId: event.pointerId, offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top };
+        event.currentTarget.setPointerCapture(event.pointerId);
+        event.preventDefault();
+        setDragging(true);
+        onDragStart?.();
+      }}
+      onPointerMove={(event) => {
+        const gesture = dragGesture.current;
+        const position = draggedPosition.current;
+        if (!gesture || !position || gesture.pointerId !== event.pointerId) return;
+        draggedPosition.current = { ...position, left: event.clientX - gesture.offsetX, top: event.clientY - gesture.offsetY };
+        updateLayout();
+      }}
+      onPointerUp={(event) => {
+        if (dragGesture.current?.pointerId !== event.pointerId) return;
+        dragGesture.current = null;
+        setDragging(false);
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+      }}
+      onPointerCancel={() => { dragGesture.current = null; setDragging(false); }}
+      onLostPointerCapture={() => { dragGesture.current = null; setDragging(false); }}
       ref={setLayerNode}
       role={role}
       aria-multiselectable={ariaMultiselectable}
