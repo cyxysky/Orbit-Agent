@@ -111,7 +111,7 @@ export function semanticGenerationPlan(
     } : {
       reason: operation === 'modify'
         ? 'Existing files preserve their original layout through the raw UNO editing workflow.'
-        : 'This workspace is configured for JavaScript program authoring.',
+        : generator === 'html' ? 'Author complete HTML in program; read jsApi for the HTML contract.' : 'This workspace uses JavaScript/ExcelJS for spreadsheets.',
     }),
   };
 }

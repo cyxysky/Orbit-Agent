@@ -1,56 +1,28 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useMemo, useSyncExternalStore } from 'react';
 import type { ChartRecord } from '@webpilot/capability-chart';
 import { ChartRenderer } from '@webpilot/capability-chart/react';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 import { useI18n } from '@/i18n/I18nProvider';
+import { browserChatChartStore } from './browser-chat-chart-store';
 
 export function BrowserChatChart({ chartId, sessionId, automationRunId }: { chartId: string; sessionId?: string; automationRunId?: string }) {
-  const { t } = useI18n();
-  const [record, setRecord] = useState<ChartRecord | null>(null);
-  const [error, setError] = useState('');
+  const { t, language } = useI18n();
   const endpoint = withWebPilotBasePath(automationRunId
     ? `/api/automation/runs/${encodeURIComponent(automationRunId)}/charts/${encodeURIComponent(chartId)}`
     : `/api/browser-chat/${encodeURIComponent(sessionId || '')}/charts/${encodeURIComponent(chartId)}`);
-  async function loadLatest() {
-    const response = await fetch(endpoint, { credentials: 'same-origin', cache: 'no-store' });
-    const payload = await response.json() as { chart?: ChartRecord; error?: string };
-    if (!response.ok || !payload.chart) throw new Error(payload.error || '图表读取失败。');
-    setRecord(payload.chart);
-    return payload.chart;
-  }
-
-  useEffect(() => {
-    setRecord(null);
-    setError('');
-    if (!sessionId && !automationRunId) {
-      setError('当前会话不可用，无法读取图表。');
-      return undefined;
-    }
-    const controller = new AbortController();
-    void fetch(endpoint, {
-      credentials: 'same-origin',
-      signal: controller.signal,
-    })
-      .then(async (response) => {
-        if (!response.ok) throw new Error('图表配置不存在或已失效。');
-        const payload = await response.json() as { chart?: ChartRecord };
-        if (!payload.chart) throw new Error('图表配置无效。');
-        setRecord(payload.chart);
-      })
-      .catch((reason) => {
-        if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : '图表读取失败。');
-      });
-    return () => controller.abort();
-  }, [chartId, sessionId, automationRunId, endpoint]);
+  const identity = `${automationRunId || sessionId}/${chartId}`;
+  const store = useMemo(() => browserChatChartStore(endpoint, identity), [endpoint, identity]);
+  const { record, error } = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getServerSnapshot);
 
   if (record) {
     return <ChartRenderer
       key={`${automationRunId || sessionId}/${chartId}`}
       chart={record}
       translate={t}
-      onReload={loadLatest}
+      excalidraw={{ assetPath: withWebPilotBasePath('/api/chart-assets/excalidraw/'), langCode: language === 'zh' ? 'zh-CN' : 'en' }}
+      onReload={store.load}
       onSave={automationRunId ? undefined : async (next, expectedRevision) => {
         const response = await fetch(endpoint, {
           method: 'PATCH', credentials: 'same-origin', headers: { 'content-type': 'application/json' },
@@ -58,8 +30,7 @@ export function BrowserChatChart({ chartId, sessionId, automationRunId }: { char
         });
         const payload = await response.json() as { chart?: ChartRecord; error?: string };
         if (!response.ok || !payload.chart) throw Object.assign(new Error(payload.error || '图表保存失败，请重试。'), { status: response.status });
-        setRecord(payload.chart);
-        return payload.chart;
+        return store.publish(payload.chart);
       }}
       classNames={{
         root: 'browser-chat-chart',

@@ -1,5 +1,11 @@
 # @webpilot/capability-file
 
+## JavaScript モード: Excel と HTML 文書
+
+`OFFICE_GENERATION_MODE=javascript` では XLSX は従来の ExcelJS を使用し、DOCX・PPTX・PDF は HTML ソースから生成します。計画は `generator:html` と `.html` ファイル名を返します。`jsApi(documentId)` で仕様を確認し、完全な HTML を `generate.program` に渡します。編集・保存・検証は同じ文書ワークフローです。
+
+PPTX は同じ寸法の `section[data-slide]` をページとして扱います。テキストと表は編集可能な Office オブジェクト、SVG・画像は画像素材になります。任意の CSS の完全な変換は保証しません。MD・TXT・HTML・JS・CSS・JSON・YAML・CSV 等は全モードで `file.write({fileName,content})` により UTF-8 のまま保存できます。HTML には Chromium、Office ファイルのプレビューには LibreOffice が必要です。既存ファイルの変更と明示的な UNO モードは UNO を使用します。
+
 [English](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
 
 ファイルの読み取りと公開、Office 文書の生成・編集、成果物ワークスペースの管理を行います。

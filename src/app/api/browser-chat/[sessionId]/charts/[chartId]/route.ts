@@ -1,8 +1,9 @@
+import { chartEngines } from '@webpilot/capability-chart';
 import { readBrowserChatChart, updateBrowserChatChart } from '@/server/capabilities/browser-chat-chart';
 import { ChartRevisionConflict, maxChartBytes, type ChartUpdateInput } from '@webpilot/capability-chart';
 import { z } from 'zod';
 import { readBrowserChatRuntimeState } from '@/server/ai/agents/browser-chat-read.service';
-import { requestApplicationUserId } from '@/server/auth/user-context';
+import { requestApplicationUserId, normalizeApplicationUserId } from '@/server/auth/user-context';
 import { ApiRequestError, apiError, apiJson } from '@/server/http/api-request';
 
 export const dynamic = 'force-dynamic';
@@ -30,7 +31,7 @@ const updateInput = z.object({
   option: z.record(z.string(), z.unknown()),
   title: z.string().max(200).optional(), description: z.string().max(1000).optional(),
   height: z.number().int().min(240).max(720).optional(),
-  engine: z.enum(['echarts', 'three']).optional(), renderer: z.enum(['canvas', 'svg']).optional(),
+  engine: z.enum(chartEngines).optional(), renderer: z.enum(['canvas', 'svg']).optional(),
   maps: z.array(z.object({ name: z.string().min(1).max(160), geoJson: z.union([z.record(z.string(), z.unknown()), z.string().min(1)]), specialAreas: z.record(z.string(), z.unknown()).optional() }).strict()).max(12).optional(),
 }).strict();
 
@@ -57,7 +58,7 @@ export async function PATCH(request: Request, context: RouteContext) {
     catch { throw new ApiRequestError('图表更新参数无效。', { code: 'invalid_request', status: 400 }); }
     const { expectedRevision, ...update } = input;
     let chart;
-    try { chart = await updateBrowserChatChart(sessionId, chartId, update as ChartUpdateInput, expectedRevision); }
+    try { chart = await updateBrowserChatChart(sessionId, chartId, update as ChartUpdateInput, expectedRevision, normalizeApplicationUserId(requestApplicationUserId(request))); }
     catch (error) {
       if (error instanceof ChartRevisionConflict) throw new ApiRequestError(error.message, { code: 'chart_revision_conflict', status: 409 });
       // Invalid chart data is actionable in the editor; storage failures remain server errors.

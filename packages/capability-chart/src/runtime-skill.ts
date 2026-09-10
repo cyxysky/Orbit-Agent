@@ -6,13 +6,13 @@ export const chartRuntimeSkillId = 'system-chart-runtime';
 export const chartRuntimeSkillSummary = [
   '<system_skill>',
   `<id>${chartRuntimeSkillId}</id>`,
-  '<title>ECharts and Three.js Chart Runtime</title>',
+  '<title>ECharts, Three.js and Excalidraw Chart Runtime</title>',
   '<description>Operating manual for creating, reading and updating persistent 2D/3D charts with fullscreen, downloads and manual data editing.</description>',
   '<required>true</required>',
   '</system_skill>',
 ].join('\n');
 
-export const chartRuntimeSkillContent = `# ECharts and Three.js Chart Runtime
+export const chartRuntimeSkillContent = `# ECharts, Three.js and Excalidraw Chart Runtime
 
 This Skill is authoritative for the chart model tool and is supplied by the chart package. The consuming Agent is responsible for loading it and deciding when the chart tool becomes available.
 
@@ -21,7 +21,7 @@ This Skill is authoritative for the chart model tool and is supplied by the char
 1. When a visual chart materially improves the answer, explicitly read this Skill and wait for that read to succeed before calling chart.
 2. Before creating a chart, call chart with action \`api\` and no query to read the compact API module index.
 3. Call action \`api\` again with the exact module id needed for the requested chart. Read more than one module when the design combines series, coordinates, datasets, maps, or interactions.
-4. Call action \`create\` with one complete JSON-serializable \`option\`. For 2D, engine defaults to \`echarts\` and loads the full ECharts package. For native 3D, read module \`three\`, set engine to \`three\`, and follow its separate data schema.
+4. Call action \`create\` with one complete JSON-serializable \`option\`. For 2D, engine defaults to \`echarts\` and loads the full ECharts package. For native 3D, read module \`three\`, set engine to \`three\`, and follow its separate data schema. For editable diagrams, read module \`excalidraw\`, set engine to \`excalidraw\`, and supply elements/appState/files.
 5. Read the successful result and copy its exact chartId into a \`finalResponse\` chart block at the intended response position.
 6. Never invent an identifier and never reference one after a failed call. Charts render only through structured chart blocks. Include each chartId once; do not also append it to a Markdown block.
 
@@ -174,7 +174,7 @@ finalResponse({
 
 export const chartCapabilityRuntimeSkill = Object.freeze({
   id: chartRuntimeSkillId,
-  title: 'ECharts and Three.js Chart Runtime',
+  title: 'ECharts, Three.js and Excalidraw Chart Runtime',
   summary: chartRuntimeSkillSummary,
   content: chartRuntimeSkillContent,
   required: true,

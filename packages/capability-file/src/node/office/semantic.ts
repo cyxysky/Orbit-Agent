@@ -2755,7 +2755,7 @@ function emitUnoSemanticProgram(
 
 export function compileOfficeSemanticDocument(
   input: OfficeSemanticDocumentInput & Required<Pick<OfficeDocumentSpec, 'documentType' | 'fileName'>>,
-  generator: 'javascript' | 'uno' = 'uno',
+  generator: 'javascript' | 'uno' | 'html' = 'uno',
 ) {
   const result = normalizeOfficeSemanticDocument(input);
   const errors = result.diagnostics.filter((diagnostic) => diagnostic.severity === 'error');

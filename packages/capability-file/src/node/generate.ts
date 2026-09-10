@@ -1,3 +1,4 @@
+import { generateHtmlOfficeDocument } from './office/html.ts';
 import path from 'node:path';
 import { stat } from 'node:fs/promises';
 import { fileFormatForExtension, generatedFileExtensions, normalizedFileExtension } from '../formats.ts';
@@ -91,7 +92,7 @@ export async function generateFileBuffer(input: (GeneratedFileInput | Pick<Offic
   program?: string;
   programPath?: string;
   assetsPath?: string;
-  generator?: 'javascript' | 'uno';
+  generator?: 'javascript' | 'uno' | 'html';
   requiredSourceAssetName?: string;
   abortSignal?: AbortSignal;
 }): Promise<GeneratedFileOutput> {
@@ -111,9 +112,10 @@ export async function generateFileBuffer(input: (GeneratedFileInput | Pick<Offic
     throw new Error('Office document generation requires a saved source draft (program/programPath) or a non-empty semantic document spec.');
   }
   validateOfficeTarget(input, extension);
-  const generator = input.generator || (semantic ? 'uno' : 'javascript');
+  const configured = input.generator || (semantic ? 'uno' : 'javascript');
+  const generator = configured === 'javascript' && extension !== '.xlsx' ? 'html' : configured;
   const source = input.programPath ? { sourcePath: input.programPath } : { sourceCode: semantic?.program || input.program };
-  const generated = generator === 'javascript' ? await generateOfficeJsProgramDocument({
+  const generated = generator === 'html' ? await generateHtmlOfficeDocument({ ...source, fileName: path.basename(input.fileName), documentType: input.documentType, assetsPath: input.assetsPath, abortSignal: input.abortSignal }) : generator === 'javascript' ? await generateOfficeJsProgramDocument({
     ...source,
     fileName: path.basename(input.fileName),
     documentType: input.documentType,
@@ -141,7 +143,7 @@ export async function generateFileToPaths(input: Pick<OfficeDocumentSpec, 'docum
   outputPath: string;
   previewPath: string;
   assetsPath?: string;
-  generator?: 'javascript' | 'uno';
+  generator?: 'javascript' | 'uno' | 'html';
   requiredSourceAssetName?: string;
   abortSignal?: AbortSignal;
   onProgress?: (progress: { phase: string; message: string; current?: number; total?: number }) => void | Promise<void>;
@@ -150,7 +152,8 @@ export async function generateFileToPaths(input: Pick<OfficeDocumentSpec, 'docum
   if (!extension || generatedTextExtensions.has(extension)) throw new Error('Path-based generation requires an Office or PDF target.');
   validateOfficeTarget(input, extension);
   if (Boolean(input.programPath) === Boolean(input.spec)) throw new Error('Path-based generation requires exactly one of programPath or spec.');
-  const generator = input.generator || (input.spec ? 'uno' : 'javascript');
+  const configured = input.generator || (input.spec ? 'uno' : 'javascript');
+  const generator = configured === 'javascript' && extension !== '.xlsx' ? 'html' : configured;
   if (input.spec?.documentType !== undefined && input.spec.documentType !== input.documentType) {
     throw new Error(`Semantic spec documentType=${input.spec.documentType} does not match output documentType=${input.documentType}.`);
   }
@@ -163,7 +166,9 @@ export async function generateFileToPaths(input: Pick<OfficeDocumentSpec, 'docum
     fileName: input.fileName,
   }, generator) : undefined;
   const source = input.programPath ? { sourcePath: input.programPath } : { sourceCode: semantic!.program };
-  const generated = generator === 'javascript'
+  const generated = generator === 'html'
+    ? await generateHtmlOfficeDocument({ ...source, fileName: path.basename(input.fileName), documentType: input.documentType, assetsPath: input.assetsPath, abortSignal: input.abortSignal, outputPath: input.outputPath, previewPath: input.previewPath, onProgress: input.onProgress })
+    : generator === 'javascript'
     ? await generateOfficeJsProgramDocument({
         ...source,
         fileName: path.basename(input.fileName),

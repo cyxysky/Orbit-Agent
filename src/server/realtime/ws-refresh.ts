@@ -4,6 +4,7 @@ export type RefreshEntityType =
   | 'automationCase'
   | 'automationRun'
   | 'automationSchedule'
+  | 'chart'
   | 'browserChatSession';
 
 export type RefreshWebSocketEvent = {

@@ -29,7 +29,7 @@ export function draftPath(runId: string | undefined, documentId: string) {
 export function draftProgramPath(runId: string | undefined, documentId: string, generator: OfficeDocumentDraft['generator'] = 'uno') {
   return path.join(
     artifactDir(runId, 'document-drafts'),
-    `${sanitizeFileName(documentId, 'document')}${generator === 'javascript' ? '.mjs' : '.py'}`,
+    `${sanitizeFileName(documentId, 'document')}${generator === 'html' ? '.html' : generator === 'javascript' ? '.mjs' : '.py'}`,
   );
 }
 

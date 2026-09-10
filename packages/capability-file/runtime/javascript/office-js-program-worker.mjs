@@ -3,8 +3,6 @@ import { createHash } from 'node:crypto';
 import { access, readdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import PptxGenJS from 'pptxgenjs';
-import * as docx from 'docx';
 import ExcelJS from 'exceljs';
 
 function value(name) {
@@ -59,8 +57,6 @@ async function main() {
       bytes: (await stat(path.join(assetsPath, item.name))).size,
     }))),
     writeOutput: async (bytes) => writeFile(outputPath, normalizeOutputBytes(bytes)),
-    PptxGenJS,
-    docx,
     ExcelJS,
   });
   progress('execute', '正在执行 JavaScript 文档脚本');

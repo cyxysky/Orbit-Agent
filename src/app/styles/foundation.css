@@ -1164,7 +1164,7 @@ input[type="checkbox"]:not([data-slot], [data-slot] *):focus-visible {
 }
 
 .browser-chat-chart.capability-chart-interactive.capability-chart-interactive,
-.browser-chat-chart:not(.capability-chart-interactive),
+.browser-chat-chart:not(.capability-chart-interactive):not(.capability-excalidraw),
 .browser-chat-html-card {
   background: color-mix(in srgb, var(--panel-warm) 42%, var(--background));
   border: 1px solid color-mix(in srgb, var(--border) 62%, transparent);

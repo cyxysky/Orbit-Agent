@@ -2,7 +2,7 @@ import { WSClient, type BaseMessage, type WsFrame } from '@wecom/aibot-node-sdk'
 import type { CommunicationMediaFormat, CommunicationMediaOperations } from './index.ts';
 import { CommunicationDeliveryError } from './index.ts';
 
-export const WECOM_BOT_RUNTIME_REVISION = 5;
+export const WECOM_BOT_RUNTIME_REVISION = 6;
 
 export type WeComInboundAttachment = {
   type: 'image' | 'file' | 'video';
@@ -70,7 +70,7 @@ export function createWeComBotConnection(input: { botId: string; secret: string 
   let rejected = 0;
   let lastReceivedAt = '';
   let lastMessageError = '';
-  const listeners = new Set<(message: WeComInboundMessage) => void>();
+  const listeners = new Set<(message: WeComInboundMessage, requestId: string) => void>();
   client.on('authenticated', () => { authenticated = true; error = ''; });
   client.on('disconnected', () => { authenticated = false; });
   client.on('error', () => { error = '机器人连接失败，请检查 Bot ID、Secret 和网络。'; });
@@ -97,7 +97,7 @@ export function createWeComBotConnection(input: { botId: string; secret: string 
       return;
     }
     lastMessageError = '';
-    for (const listener of listeners) listener(message);
+    for (const listener of listeners) listener(message, frame.headers.req_id);
   });
   function connect() {
     if (closed) throw new Error('机器人连接已关闭。');
@@ -162,7 +162,10 @@ export function createWeComBotConnection(input: { botId: string; secret: string 
       catch (cause) { throw new Error('企微附件下载或解密失败，请重新发送附件。', { cause }); }
     },
     get status() { return { connected: authenticated, error, received, rejected, lastReceivedAt, lastMessageError }; },
-    onMessage(listener: (message: WeComInboundMessage) => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    onMessage(listener: (message: WeComInboundMessage, requestId: string) => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    async replyStream(requestId: string, streamId: string, content: string, finish: boolean) {
+      return send(() => client.replyStream({ headers: { req_id: requestId } }, streamId, content, finish));
+    },
     async sendText(targetId: string, content: string) {
       return send(() => client.sendMessage(targetId, { msgtype: 'markdown', markdown: { content } }));
     },

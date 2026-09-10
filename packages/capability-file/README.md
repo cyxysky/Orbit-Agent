@@ -1,5 +1,33 @@
 # @webpilot/capability-file
 
+
+## JavaScript mode: HTML documents and Excel
+
+`OFFICE_GENERATION_MODE=javascript` (and auto for these extensions) now selects:
+
+| Output | Source and implementation |
+| --- | --- |
+| DOCX | Complete HTML in `program`; semantic paragraphs, lists, tables and images become native Word content. |
+| PPTX | Complete HTML in `program`; equal-sized `section[data-slide]` elements become slides with editable text, tables and solid shapes. |
+| PDF | Complete HTML in `program`; Chromium prints CSS, backgrounds and `@page` rules. |
+| XLSX | Existing `createDocument(job)` program using `job.ExcelJS`. |
+| MD, TXT, HTML, JS, CSS, JSON, YAML, CSV and other text | `file.write({fileName,content})` in every mode; exact UTF-8 bytes, no Office installation. |
+
+Settings retain the `javascript` value; plans return `generator:html` and a `.html`
+source filename for HTML targets. `jsApi(documentId)` returns the corresponding
+HTML contract. Use `generate(program)` then `readSource`, exact `edit` replacements
+and `render`; source, cache validation and final publication share one draft.
+Existing-file modification and explicitly selected UNO authoring continue through UNO.
+
+HTML is static. Relative assets resolve only inside the document asset workspace;
+remote images must be downloaded first. PPTX requires explicit slide dimensions
+(e.g. 1280x720); complex CSS artwork uses explicit images/SVG. DOCX maps semantic
+content rather than browser fixed-position layouts. Figures are embedded images,
+not native Office charts. HTML-to-Office is not arbitrary CSS-to-Office conversion.
+Chromium is required for HTML layout/PDF; LibreOffice is still required to reopen
+DOCX/PPTX/XLSX and create their verification previews. All dependencies are owned
+by this package. No model-authored JavaScript is executed for HTML documents.
+
 [English](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
 
 Read and publish files, generate and edit Office documents, and manage artifact workspaces.

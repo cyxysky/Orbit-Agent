@@ -31,10 +31,10 @@ import {
 import { browserCodeServiceFileDeliveryViolation } from './browser-chat-file-delivery';
 import { fileToolModelOutput } from './browser-chat-file-model-output';
 import { fileArtifactRuntimeSkillId } from '@webpilot/capability-file/runtime-skill';
+import { nativeRuntimeToolNames, normalizeDisabledCapabilityTools, runtimeBuiltinToolPrompts } from './runtime-tool-catalog';
 import {
   activeBrowserRuntimeSkillId,
   hiddenRuntimeSkillContent,
-  hiddenRuntimeSkillIds,
   requireHiddenRuntimeSkillRead,
   hiddenRuntimeSkillIdsReadFromTraces,
   hiddenRuntimeSkillIdsInModelContext,
@@ -1462,7 +1462,7 @@ async function makeBrowserTools(
     return queued;
   }
 
-  const allowedCapabilityToolNames = referenceOptions?.allowedToolTypes?.length
+  const allowedCapabilityToolNames = referenceOptions?.allowedToolTypes !== undefined
     ? new Set(referenceOptions.allowedToolTypes)
     : undefined;
   const infrastructureProviders = createAgentInfrastructureProviders({
@@ -1552,7 +1552,7 @@ async function makeBrowserTools(
 
   const sharedTools: ToolSet = {
     reportDefect: tool({
-      description: 'Proactively report one evidence-backed product defect or reproducible product problem found while testing the live interface. During a testing task, calling this tool is mandatory as soon as browser action=code has reproduced the issue and emitted at least one screenshot that visibly proves it; do not defer the report to the final answer or wait for the user to ask. Do not report speculation, expected behavior, environment/configuration/permission limitations, or the same issue twice. screenshotFileNames must exactly match the safe file names returned by a successful browser action=code call in this Agent run.',
+      description: runtimeBuiltinToolPrompts.reportDefect,
       inputSchema: withToolInputExamples(reportDefectInputSchema, [{
         problemDescription: '长表格向下滚动后，横向滚动条离开当前视口。',
         whyItIsAProblem: '用户无法在浏览表格中段时横向查看右侧列。',
@@ -1628,7 +1628,7 @@ async function makeBrowserTools(
     } : {}),
     ...capabilityTools,
     finalResponse: tool({
-      description: 'Finish the request with ordered UI blocks. Use markdown for prose, chart for a successful chart id, and ui for declarative cards/layout. The client preserves this exact order in UIMessage.parts.',
+      description: runtimeBuiltinToolPrompts.finalResponse,
       inputSchema: browserChatFinalResponseSchema,
       execute: (input, execution) => record('finalResponse', input, () => Promise.resolve({
         ok: true,
@@ -1636,7 +1636,7 @@ async function makeBrowserTools(
       }), execution),
     }),
     skill: tool({
-      description: `Read a Skill by exact id. Hidden runtime Skills for this mode are ${hiddenRuntimeSkillIds().join(', ')}. A successful read can be reused while its exact current content remains in the active tool history; reread only when missing, compacted away, or changed.`,
+      description: runtimeBuiltinToolPrompts.skill,
       inputSchema: withToolInputExamples(z.preprocess((value) => {
         if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
         const record = value as Record<string, unknown>;
@@ -1667,7 +1667,7 @@ async function makeBrowserTools(
 
   const tools = sharedTools;
   const allowedToolTypes = referenceOptions?.allowedToolTypes;
-  if (!allowedToolTypes?.length) return { tools, dispose: capabilityRuntime.dispose };
+  if (allowedToolTypes === undefined) return { tools, dispose: capabilityRuntime.dispose };
   const allowed = new Set(allowedToolTypes);
   return {
     tools: Object.fromEntries(Object.entries(tools).filter(([name]) => allowed.has(name))) as typeof tools,
@@ -1752,16 +1752,7 @@ function runtimePrompt(input: { runtimeRecord: BrowserChatRuntimeRecord; fileVis
 }
 
 function runtimeToolNames() {
-  return [
-    browserCapabilityToolNames.browser,
-    'reportDefect',
-    'subagent',
-    fileCapabilityToolNames.file,
-    chartCapabilityToolNames.chart,
-    ...agentInfrastructureToolNames,
-    'finalResponse',
-    'skill',
-  ];
+  return nativeRuntimeToolNames();
 }
 
 function isCodexProvider() {
@@ -2078,6 +2069,7 @@ async function executeRuntimeStep(input: {
   browserStatePreflightComplete?: boolean;
   requestToolConfirmation?: (request: BrowserToolConfirmationRequest) => Promise<BrowserToolConfirmationDecision>;
   allowedToolTypes?: string[];
+  disabledTools?: string[];
   runSubagents?: BrowserChatSubagentRunner;
   readSubagent?: BrowserChatSubagentReader;
   requiredSubagentUuid?: string;
@@ -2144,7 +2136,10 @@ async function executeRuntimeStep(input: {
         'Use these reference images as user-provided visual context. Do not confuse them with the live browser screenshot.',
       ].join('\n')
     : '';
-  const prompt = runtimePrompt({ runtimeRecord, fileVisualAvailable: Boolean(input.readFileVisuals) });
+  const disabledTools = normalizeDisabledCapabilityTools(input.disabledTools);
+  const prompt = [runtimePrompt({ runtimeRecord, fileVisualAvailable: Boolean(input.readFileVisuals) }),
+    disabledTools.length ? `User-disabled tools for this conversation: ${disabledTools.join(', ')}. This is an explicit user scope restriction. Do not call these tools or route their work through another tool or subagent to bypass the restriction. If one is necessary, explain the limitation. Browser research requirements apply only when the browser tool is enabled.` : '',
+  ].filter(Boolean).join('\n\n');
   let activeOperationalContext = input.operationalContext || '';
   let activeKnowledge: RuntimeKnowledgeBlock[] = [];
   let onKnowledgeSelected: BrowserChatOperationalContext['onKnowledgeSelected'];
@@ -2214,9 +2209,11 @@ async function executeRuntimeStep(input: {
       observationToolNames: new Set<string>(),
     });
     const requestedToolTypes = input.allowedToolTypes?.length ? new Set(input.allowedToolTypes) : undefined;
-    const allowedToolTypes = requestedToolTypes
+    const requestedAllowedToolTypes = requestedToolTypes
       ? runtimeTools.filter((toolType) => toolType === browserCapabilityToolNames.browser || toolType === 'skill' || toolType === contextReadToolName || requestedToolTypes.has(toolType))
       : runtimeTools;
+    const disabledToolNames = new Set(disabledTools);
+    const allowedToolTypes = requestedAllowedToolTypes.filter((name) => !disabledToolNames.has(name));
     const nativeToolsRef: { current?: RuntimeToolDefinitions } = {};
     const visualContext = new VisualContextManager();
     const publishToolTrace = async (trace: ToolTrace) => {
@@ -2433,7 +2430,7 @@ async function executeRuntimeStep(input: {
         ? stepAllowedToolTypes : requiredSubagentUuid ? ['subagent'] : Object.keys(nativeToolsRef.current || {});
       const stepTools = codexMode ? undefined : Object.fromEntries(Object.entries(nativeToolsRef.current || {})
         .filter(([name]) => availableStepNames.includes(name)).sort(([left], [right]) => left.localeCompare(right)));
-      const baseSystemPrompt = [currentRuntimeTimePromptLine(), codexMode ? buildCodexObjectPrompt(prompt, stepAllowedToolTypes) : prompt].join('\n\n');
+      const baseSystemPrompt = codexMode ? buildCodexObjectPrompt(prompt, stepAllowedToolTypes) : prompt;
       const agentStepIndex = retryAgentStepOffset + turnIndex + 1;
       const activeModelSettings = getModelSettings();
       const contextProfile = runtimeContextProfile(activeModelSettings);
@@ -2505,7 +2502,7 @@ async function executeRuntimeStep(input: {
       try {
         assembled = await assembleRuntimeContext({ messages: candidates,
           currentUserIndex: visibleIndexes.indexOf(source.indexOf(initialMessages[currentUserSourceIndex])), continuationSummary: continuationSummaryText,
-          system: requestSystemPrompt, tools: toolSchemaEstimateInput(stepTools), operationalContext, currentTimeLine: '', observations: appendedMessages,
+          system: requestSystemPrompt, tools: toolSchemaEstimateInput(stepTools), operationalContext, currentTimeLine: currentRuntimeTimePromptLine(), observations: appendedMessages,
           knowledge: activeKnowledge, contextWindowTokens: windowTokens,
           compressionTriggerTokens: thresholdTokens, compressionTargetTokens: targetTokens,
           generateSummary: generateContextSummary, abortSignal,
@@ -2645,6 +2642,7 @@ async function executeRuntimeStep(input: {
       const execution = await executeCodexRuntimeObject({
         session,
         runId: input.runId,
+        userId: input.userId,
         stepIndex,
         type: object.type,
         message: object.message || undefined,
@@ -3280,16 +3278,6 @@ async function executeRuntimeStep(input: {
         isRetry: attemptNumber > 1,
       },
     });
-    structuredLog({
-      event: 'ai.runtime.request.attempt_started',
-      operationId: executionIdentity.turnId,
-      attemptId: executionIdentity.attemptId,
-      attemptNumber,
-      attemptLimit: consecutiveFailureLimit,
-      isRetry: attemptNumber > 1,
-      provider: getModelSettings().provider,
-      model: getModelSettings().model,
-    });
   }
 
   while (true) {
@@ -3416,9 +3404,9 @@ async function executeRuntimeStep(input: {
           } : {}),
         },
       });
-      structuredLog({
-        event: willRetry ? 'ai.runtime.request.attempt_failed' : 'ai.runtime.request.failed',
-        level: willRetry ? 'info' : 'warn',
+      if (!willRetry) structuredLog({
+        event: 'ai.runtime.request.failed',
+        level: 'warn',
         operationId: executionIdentity.turnId,
         attemptId: executionIdentity.attemptId,
         attemptNumber,
@@ -3426,15 +3414,11 @@ async function executeRuntimeStep(input: {
         category: lastRetryDecision.category,
         reason: lastRetryDecision.reason,
         statusCode: lastRetryDecision.statusCode,
-        retryDelayMs: willRetry ? retryDelayMs : undefined,
-        nextAttemptNumber: willRetry ? attemptNumber + 1 : undefined,
         willRetry,
-        finalFailure: !willRetry,
+        finalFailure: true,
         provider: getModelSettings().provider,
         model: getModelSettings().model,
-        ...(willRetry
-          ? { errorMessage: infrastructureError(error) }
-          : { error }),
+        error,
       });
       if (!willRetry) break;
       retryingAfterFailure = true;
@@ -3562,6 +3546,7 @@ export async function executeInteractiveBrowserTurn(input: {
   credentialBindings?: BrowserCodeCredentialBinding[];
   ensureBrowserStarted?: () => Promise<void>;
   allowedToolTypes?: string[];
+  disabledTools?: string[];
   memoryTools?: ToolSet;
   useToolLoopAgent?: boolean;
 }): Promise<InteractiveBrowserTurnResult> {
@@ -3638,6 +3623,7 @@ export async function executeInteractiveBrowserTurn(input: {
         shouldContinue: input.shouldContinue,
         requestToolConfirmation: input.requestToolConfirmation,
         allowedToolTypes: requiredSubagentUuid ? [browserCapabilityToolNames.browser, 'subagent'] : input.allowedToolTypes,
+        disabledTools: input.disabledTools,
         requiredSubagentUuid,
         runSubagents: input.runSubagents,
         readSubagent: input.readSubagent,
@@ -4106,6 +4092,7 @@ export async function executeRecordedBrowserOperation(
 async function executeCodexRuntimeObject(input: {
   session: BrowserSession;
   runId: string;
+  userId?: string;
   stepIndex: number;
   type: string;
   message?: string;
@@ -4199,6 +4186,7 @@ async function executeCodexRuntimeObject(input: {
         return executeBrowserChatChart(runId, normalizedParams, {
           abortSignal,
           invocationId: toolCallId,
+          userId: input.userId,
         });
       }
       if (type === 'file') {

@@ -1,5 +1,13 @@
 # @webpilot/capability-file
 
+## JavaScript 模式：Excel 与 HTML 文档
+
+选择 JavaScript 模式后，XLSX 继续使用原有 ExcelJS 程序；DOCX、PPTX、PDF 使用完整 HTML 源码生成。设置值仍为 `javascript`，文档计划会返回实际引擎 `html` 和 `.html` 源码文件名。
+
+通过 `jsApi(documentId)` 读取 HTML 规则，将完整 HTML 放入 `generate.program`，之后沿用 `readSource → edit → render` 和视觉检查流程。PPTX 每页使用等尺寸的 `section[data-slide]`；正文、表格和简单色块保留为可编辑对象。DOCX 使用语义化段落和表格，PDF 使用 Chromium 排版。复杂图形可使用 SVG/图片；不承诺将任意 CSS 无损转换成 Office 对象。
+
+Markdown、TXT、HTML、JS、CSS、JSON、YAML、CSV 等文本文件在所有模式下都使用 `file.write({fileName,content})` 直接生成，保留原始 UTF-8 内容，无需 Office 引擎。HTML 排版需要 Chromium；DOCX、PPTX、XLSX 的重新打开和预览仍需要 LibreOffice。显式 UNO 模式及已有 Office 文件的保留式修改继续使用 UNO。
+
 [English](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
 
 读取和发布文件、生成与编辑 Office 文档，并管理文件产物工作区。

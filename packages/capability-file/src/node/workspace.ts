@@ -1,3 +1,4 @@
+import { htmlOfficeGuidance } from '../office/html.ts';
 import { recordOfficeVisualQaProgress, verifyCurrentUnoRenderedArtifact } from './workspace-visual-qa.ts';
 export { verifyCurrentUnoRenderedArtifact, recordOfficeVisualQaProgress } from './workspace-visual-qa.ts';
 import { officeValidationRepairHints, semanticGenerationPlan } from './workspace-result.ts';
@@ -225,11 +226,11 @@ function configuredOfficeGenerator(fileName: string, operation: 'create' | 'modi
   const extension = path.extname(fileName).toLowerCase();
   if (configured === 'javascript') {
     if (!javascriptOfficeExtensions.has(extension)) {
-      throw new Error('JavaScript Office generation supports .pptx, .docx, .xlsx, and PDF converted from the matching Office source. Select UNO mode for binary Office or OpenDocument output.');
+      throw new Error('JavaScript Office generation supports .pptx, .docx, .xlsx, and PDF from HTML. Select UNO mode for binary Office or OpenDocument output.');
     }
-    return 'javascript';
+    return extension === '.xlsx' ? 'javascript' : 'html';
   }
-  if (configured === 'auto' && javascriptOfficeExtensions.has(extension)) return 'javascript';
+  if (configured === 'auto' && javascriptOfficeExtensions.has(extension)) return extension === '.xlsx' ? 'javascript' : 'html';
   return 'uno';
 }
 
@@ -447,7 +448,7 @@ export type OfficeDraftCatalogEntry = {
   documentId: string;
   documentType: OfficeDocumentKind;
   fileName: string;
-  generator: 'javascript' | 'uno';
+  generator: 'javascript' | 'uno' | 'html';
   sourceDigest: string | null;
   validatedSourceDigest: string | null;
   validationStatus: OfficeDocumentDraft['validationStatus'] | null;
@@ -634,7 +635,7 @@ async function readUnoDraftUnlocked(input: ReadUnoDraftInput): Promise<FileArtif
         sourceIndexRecovery: sourceIndexError
           ? 'Source-unit markers are malformed. Read/edit by global startLine/endLine without path; repair the markers. The source buffer is still available and no render is required.'
           : undefined,
-        sourceLanguage: draft.generator === 'javascript' ? 'javascript' : 'python',
+        sourceLanguage: draft.generator === 'html' ? 'html' : draft.generator === 'javascript' ? 'javascript' : 'python',
         documentId: draft.documentId,
         sourceFileName: path.basename(draftProgramPath(input.runId, documentId, draft.generator)),
         // Recover the brief after compaction without replaying it on every bounded code read.
@@ -747,10 +748,10 @@ async function getUnoApiUnlocked(input: UnoApiInput): Promise<FileArtifactOperat
         actual: `Office draft ${documentId} is not planned. Provide documentType to inspect the unbound UNO catalog, or call action=plan first.`,
       };
     }
-    if (draft && (draft.generator || 'uno') === 'javascript') {
+    if (draft && (draft.generator || 'uno') !== 'uno') {
       return {
         ok: false,
-        actual: `Document ${documentId} uses JavaScript generation. UNO API guidance is unavailable for this draft; call action=jsApi for ${draft.documentType} instead.`,
+        actual: `Document ${documentId} uses HTML/JavaScript generation. UNO API guidance is unavailable for this draft; call action=jsApi for ${draft.documentType} instead.`,
       };
     }
     if (draft && input.documentType && input.documentType !== draft.documentType) {
@@ -814,6 +815,10 @@ export async function getOfficeJsApi(
     if (code !== 'ENOENT') return { ok: false, actual: `JavaScript Office API inspection failed: ${error instanceof Error ? error.message : String(error)}` };
   }
   if (!draft && !input.documentType) return { ok: false, actual: `Office draft ${documentId} is not planned. Provide documentType to read the unbound API, or call plan.` };
+  if (draft && input.documentType && input.documentType !== draft.documentType) return { ok: false, actual: 'documentType does not match the planned draft.' };
+  if (draft?.generator === 'html' || (!draft && input.documentType !== 'spreadsheet')) {
+    return { ok: true, actual: JSON.stringify({ kind: 'office-html-api', documentId: draft?.documentId, documentType: draft?.documentType || input.documentType, generator: 'html', ...htmlOfficeGuidance }) };
+  }
   if (draft && (draft.generator || 'uno') !== 'javascript') {
     return {
       ok: false,
@@ -832,31 +837,6 @@ export async function getOfficeJsApi(
   }
   const documentType = draft?.documentType || input.documentType!;
   const examples = {
-    presentation: `export async function createDocument(job) {
-  const pptx = new job.PptxGenJS();
-  pptx.layout = 'LAYOUT_WIDE';
-  const assets = await job.listAssets();
-  const exactImageName = 'replace-with-an-exact-name-from-availableAssets.png';
-  const image = assets.find((asset) => asset.name === exactImageName);
-  const slide = pptx.addSlide();
-  slide.addText('Title', { x: 0.7, y: 0.5, w: 12, h: 0.6, fontSize: 28, bold: true, margin: 0, breakLine: false, fit: 'shrink' });
-  if (image) slide.addImage({ path: await job.assetPath(image.name), x: 0.7, y: 1.4, w: 5.2, h: 3.2 });
-  await pptx.writeFile({ fileName: job.outputPath });
-}`,
-    word: `export async function createDocument(job) {
-  const { Document, Packer, PageBreak, Paragraph, Table, TableCell, TableRow, TextRun } = job.docx;
-  const table = new Table({ rows: [new TableRow({ children: [
-    new TableCell({ children: [new Paragraph('Item')] }),
-    new TableCell({ children: [new Paragraph('Value')] }),
-  ] })] });
-  const document = new Document({ sections: [{ children: [
-    new Paragraph({ children: [new TextRun({ text: 'Title', bold: true, size: 40 })] }),
-    table,
-    new Paragraph({ children: [new PageBreak()] }),
-    new Paragraph('Second page'),
-  ] }] });
-  await job.writeOutput(await Packer.toBuffer(document));
-}`,
     spreadsheet: `export async function createDocument(job) {
   const workbook = new job.ExcelJS.Workbook();
   const sheet = workbook.addWorksheet('Summary');
@@ -866,30 +846,10 @@ export async function getOfficeJsApi(
 }`,
   } as const;
   const recipes = {
-    assets: `const assets = await job.listAssets(); // [{ name, bytes }]
-const assetByName = new Map(assets.map((asset) => [asset.name, asset]));
-const exactName = 'copy-the-exact-availableAssets-name.png';
-if (!assetByName.has(exactName)) throw new Error('Missing asset: ' + exactName);
-const localPath = await job.assetPath(exactName);`,
-    presentationImage: `const slide = pptx.addSlide();
-slide.addImage({ path: await job.assetPath(exactName), x: 0.7, y: 1.2, w: 5.4, h: 3.4 });`,
-    wordImage: `import { readFile } from 'node:fs/promises';
-const { ImageRun, Paragraph } = job.docx;
-const imageBytes = await readFile(await job.assetPath(exactName));
-const imageParagraph = new Paragraph({ children: [new ImageRun({ data: imageBytes, transformation: { width: 640, height: 360 } })] });`,
-    wordTable: `const { Paragraph, Table, TableCell, TableRow } = job.docx;
-const table = new Table({ rows: [
-  new TableRow({ children: [
-    new TableCell({ children: [new Paragraph('Item')] }),
-    new TableCell({ children: [new Paragraph('Value')] }),
-  ] }),
-] });`,
-    wordPageBreak: `const { PageBreak, Paragraph } = job.docx;
-const pageBreak = new Paragraph({ children: [new PageBreak()] });`,
-    pdf: `// For a planned .pdf, author the planned Word/PowerPoint/Spreadsheet source normally.
-// job.outputPath already points to the correct temporary Office extension.
-// The server converts that Office output to PDF after createDocument returns.`,
+    assets: `const assets = await job.listAssets(); const localPath = await job.assetPath('exact-asset-name');`,
+    spreadsheet: examples.spreadsheet,
   };
+
   return {
     ok: true,
     actual: JSON.stringify({
@@ -898,29 +858,24 @@ const pageBreak = new Paragraph({ children: [new PageBreak()] });`,
       boundToPlannedDraft: Boolean(draft),
       documentType,
       libraries: {
-        presentation: 'pptxgenjs via job.PptxGenJS',
-        word: 'docx via job.docx',
+        presentation: 'HTML -> editable PPTX',
+        word: 'HTML -> native DOCX',
         spreadsheet: 'exceljs via job.ExcelJS',
       },
       rules: [
         'Export exactly one async or synchronous createDocument(job) function.',
         'Recommended workflow: action=generate may create a small runnable skeleton, then repeated action=edit calls can add pages, sections, assets, and layout incrementally. This is guidance, not a size restriction; a complete runnable initial program remains valid when appropriate.',
         'Source units and bounded reads are optional editing aids for large programs, never a validation requirement.',
-        'Write the final editable Office file to job.outputPath, or use await job.writeOutput(buffer) for docx buffers.',
+        'Write the XLSX workbook to job.outputPath with workbook.xlsx.writeFile(job.outputPath).',
         'job.listAssets() returns objects shaped exactly as { name, bytes }, never strings. Read asset.name; never call split() on an asset object.',
         'Use the exact availableAssets/listAssets name without URL encoding, decoding, basename guessing, or invented prefixes, then call await job.assetPath(exactName).',
-        'For DOCX images, read local bytes from await job.assetPath(exactName) and pass them to ImageRun. Do not pass a path string as ImageRun data.',
-        'DOCX Table.rows must contain TableRow instances, and each TableRow.children must contain TableCell instances; plain nested arrays are invalid.',
-        'Insert a DOCX page break with a PageBreak child inside a Paragraph.',
         'To inspect an already-downloaded image asset, call file action=readContent with its exact artifactId. To read generation code, use readSource + documentId instead.',
         'Do not fetch remote URLs from the draft; download assets with the file tool first.',
-        'JavaScript mode creates PPTX, DOCX, or XLSX directly. A .pdf target is supported by creating the matching Office source for documentType and converting it with local LibreOffice.',
-        'For PDF, still write to job.outputPath exactly as shown; its temporary extension is already the correct .pptx, .docx, or .xlsx source format.',
         'Existing-file modification remains UNO-based.',
         'Every action=edit applies source patch hunks before validation. Call readSource for one diagnostic-focused code window, then edit before reading another window. Combine only repairs whose exact source is already present.',
       ],
       recipes,
-      completeDocument: examples[documentType],
+      completeDocument: examples.spreadsheet,
     }),
   };
 }
@@ -1195,7 +1150,7 @@ async function generateValidatedDraftCandidate(input: {
   // workspace is only replaced after every validation gate succeeds.
   await input.onProgress?.({ phase: 'assets', message: '正在同步文件素材' });
   const assets = await syncDocumentAssets(input.runId, input.attachmentBindings);
-  const assetFingerprint = documentAssetsFingerprint(assets, await officeGenerationRuntimeFingerprint(), input.draft);
+  const assetFingerprint = documentAssetsFingerprint(assets, await officeGenerationRuntimeFingerprint(input.draft.generator), input.draft);
   const extension = path.extname(input.draft.fileName).toLowerCase();
   const cache = validationCachePaths(input.runId, input.draft, extension);
   try {
@@ -1229,7 +1184,7 @@ async function generateValidatedDraftCandidate(input: {
   await input.onProgress?.({ phase: 'execute', message: '正在执行文档脚本' });
   const candidateSourcePath = path.join(
     artifactDir(input.runId, 'document-drafts'),
-    `.candidate-${sanitizeFileName(input.draft.documentId, 'document')}-${randomUUID()}${input.draft.generator === 'javascript' ? '.mjs' : '.py'}`,
+    `.candidate-${sanitizeFileName(input.draft.documentId, 'document')}-${randomUUID()}${input.draft.generator === 'html' ? '.html' : input.draft.generator === 'javascript' ? '.mjs' : '.py'}`,
   );
   await writeFile(candidateSourcePath, input.draft.program, { encoding: 'utf8', flag: 'wx' });
   let cacheCompleted = false;
@@ -1497,7 +1452,7 @@ async function validateDraftSourceUnit(input: {
   const extension = path.extname(input.draft.fileName).toLowerCase();
   const suffix = randomUUID();
   const directory = artifactDir(input.runId, 'document-drafts');
-  const sourcePath = path.join(directory, `.unit-${suffix}${input.draft.generator === 'javascript' ? '.mjs' : '.py'}`);
+  const sourcePath = path.join(directory, `.unit-${suffix}${input.draft.generator === 'html' ? '.html' : input.draft.generator === 'javascript' ? '.mjs' : '.py'}`);
   const outputPath = path.join(directory, `.unit-${suffix}${extension}`);
   const previewPath = path.join(directory, `.unit-${suffix}.preview.pdf`);
   try {
@@ -1925,6 +1880,7 @@ async function planFileArtifactUnlocked(input: PlanArtifactInput): Promise<FileA
           sourceDocument: existing.sourceDocument,
           sourceFileName: path.basename(draftProgramPath(input.runId, existing.documentId, existing.generator)),
           sourceCharacters: existing.program?.length || 0,
+          sourceGuidance: (existing.generator === 'html' ? htmlOfficeGuidance : undefined),
           semanticGeneration: semanticGenerationPlan(existing.operation || 'create', existing.generator || 'uno', officeDesignGuidance(existing)),
           design: existing.design,
           designGuidance: officeDesignGuidance(existing),
@@ -1957,6 +1913,7 @@ async function planFileArtifactUnlocked(input: PlanArtifactInput): Promise<FileA
           sourceDocument: existing.sourceDocument,
           sourceFileName: path.basename(draftProgramPath(input.runId, existing.documentId, existing.generator)),
           sourceCharacters: 0,
+          sourceGuidance: (existing.generator === 'html' ? htmlOfficeGuidance : undefined),
           semanticGeneration: semanticGenerationPlan(existing.operation || 'create', existing.generator || 'uno', officeDesignGuidance(existing)),
           design: existing.design,
           designGuidance: officeDesignGuidance(existing),
@@ -1990,6 +1947,7 @@ async function planFileArtifactUnlocked(input: PlanArtifactInput): Promise<FileA
       sourceDocument: draft.sourceDocument,
       sourceFileName: path.basename(draftProgramPath(input.runId, draft.documentId, draft.generator)),
       sourceCharacters: 0,
+      sourceGuidance: draft.generator === 'html' ? htmlOfficeGuidance : undefined,
       semanticGeneration: semanticGenerationPlan(draft.operation || 'create', draft.generator || 'uno', officeDesignGuidance(draft)),
       design: draft.design,
       designGuidance: officeDesignGuidance(draft),

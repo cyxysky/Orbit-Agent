@@ -1,12 +1,13 @@
 {
   "name": "@webpilot/capability-chart",
   "version": "0.1.0",
-  "description": "Framework-neutral Apache ECharts capability with Node and React adapters.",
+  "description": "Framework-neutral ECharts, Three.js and Excalidraw capability with Node and React adapters.",
   "type": "module",
-  "sideEffects": false,
+  "sideEffects": ["**/*.css", "./dist/excalidraw-view.js"],
   "files": [
     "dist",
-    "README*.md", "MCP*.md"
+    "README*.md",
+    "MCP*.md"
   ],
   "exports": {
     ".": {
@@ -52,6 +53,7 @@
     "@codemirror/lint": "^6.9.7",
     "@codemirror/state": "^6.7.4",
     "@codemirror/view": "^6.43.11",
+    "@excalidraw/excalidraw": "^0.18.1",
     "@lezer/highlight": "^1.2.3",
     "@webpilot/capability-adapter-mcp": "0.1.0",
     "@webpilot/capability-sdk": "0.1.0",

@@ -8,6 +8,7 @@ import type { ChartSurface } from './three-renderer.ts';
 import { chartStyles } from './styles.ts';
 import { ChartIcon } from './icons.tsx';
 import { defaultChartTranslate, type ChartTranslate } from './i18n.ts';
+import { ExcalidrawRenderer } from './excalidraw-react.tsx';
 
 export type ChartRendererClassNames = { root?: string; canvas?: string; surface?: string; error?: string };
 
@@ -29,12 +30,21 @@ async function svgPng(svg: string, width: number, height: number) {
   } finally { URL.revokeObjectURL(url); }
 }
 
-export function ChartRenderer({ chart, classNames = {}, onSave, onReload, translate: t = defaultChartTranslate }: {
+export type ChartRendererProps = {
   chart: ChartRecord; classNames?: ChartRendererClassNames;
   translate?: ChartTranslate;
+  excalidraw?: { assetPath?: string; langCode?: string; theme?: 'light' | 'dark' };
   onSave?(next: ChartRecord, expectedRevision: number): Promise<ChartRecord>;
   onReload?(): Promise<ChartRecord>;
-}) {
+};
+
+export function ChartRenderer(props: ChartRendererProps) {
+  return props.chart.engine === 'excalidraw'
+    ? <ExcalidrawRenderer key={props.chart.chartId} {...props} />
+    : <DataChartRenderer {...props} />;
+}
+
+function DataChartRenderer({ chart, classNames = {}, onSave, onReload, translate: t = defaultChartTranslate }: ChartRendererProps) {
   const editableChart = useMemo(() => {
     if (chart.engine === 'three') return chart;
     try { return { ...chart, option: normalizeChartOption(chart.option, { invalidFormatters: 'omit' }) }; }

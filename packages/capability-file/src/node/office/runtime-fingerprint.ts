@@ -4,6 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { resolveLibreOfficeExecutable } from '../libreoffice.ts';
 import { resolveUnoProgramWorker } from './uno.ts';
+import { resolveOfficeJsProgramWorker } from './javascript.ts';
+import { htmlOfficeRuntimeSource } from './html.ts';
+import { chromium } from 'playwright';
+import type { OfficeDocumentDraft } from '../../office/types.ts';
 
 async function fileStamp(filePath: string) {
   const value = await stat(filePath).catch(() => undefined);
@@ -34,9 +38,13 @@ export async function officeRenderEnvironmentFingerprint() {
   })).digest('hex');
 }
 
-export async function officeGenerationRuntimeFingerprint() {
+export async function officeGenerationRuntimeFingerprint(generator: OfficeDocumentDraft['generator'] = 'uno') {
+  if (generator === 'html') {
+    const sources = htmlOfficeRuntimeSource();
+    return createHash('sha256').update(JSON.stringify({ sources, chromium: await fileStamp(chromium.executablePath()), environment: await officeRenderEnvironmentFingerprint() })).digest('hex');
+  }
   const [environment, worker] = await Promise.all([
-    officeRenderEnvironmentFingerprint(), resolveUnoProgramWorker(),
+    officeRenderEnvironmentFingerprint(), generator === 'javascript' ? resolveOfficeJsProgramWorker() : resolveUnoProgramWorker(),
   ]);
   return createHash('sha256').update(environment)
     .update(worker ? await readFile(worker) : 'no-uno-worker').digest('hex');

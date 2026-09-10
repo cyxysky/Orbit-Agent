@@ -81,7 +81,7 @@ function parseRefreshEvent(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   if (
     value.type !== 'refresh'
-    || !['automationCase', 'automationRun', 'automationSchedule', 'browserChatSession'].includes(String(value.entityType))
+    || !['automationCase', 'automationRun', 'automationSchedule', 'browserChatSession', 'chart'].includes(String(value.entityType))
     || typeof value.id !== 'string'
     || !value.id
     || typeof value.updatedAt !== 'string'

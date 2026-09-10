@@ -1,6 +1,7 @@
 import { link, mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import type {
   ChartArtifactStore,
 } from './index.ts';
@@ -16,6 +17,18 @@ import {
   type CreateChartRecordInput,
 } from './core.ts';
 import type { CapabilityRunContext } from '@webpilot/capability-sdk';
+
+/** Hosts may expose this as a static font endpoint for offline deployments. */
+export async function readExcalidrawFont(segments: string[]): Promise<Uint8Array | undefined> {
+  if (segments[0] !== 'fonts' || segments.length < 2 || segments.some((part) => !/^[a-zA-Z0-9_.-]+$/.test(part) || part === '.' || part === '..') || !segments.at(-1)?.endsWith('.woff2')) return undefined;
+  const entry = createRequire(import.meta.url).resolve('@excalidraw/excalidraw');
+  const filename = path.join(path.dirname(entry), ...segments);
+  try { return await readFile(filename); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
+}
 
 const chartIdPattern = /^chart_(\d{6})$/;
 

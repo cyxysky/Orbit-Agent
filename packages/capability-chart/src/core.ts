@@ -1,3 +1,7 @@
+import { normalizeExcalidrawOption } from './excalidraw-core.ts';
+export * from './excalidraw-core.ts';
+export const chartEngines = ['echarts', 'three', 'excalidraw'] as const;
+export type ChartEngine = typeof chartEngines[number];
 import { normalizeThreeChartOption } from './three-core.ts';
 export * from './three-core.ts';
 
@@ -17,7 +21,7 @@ export type ChartRecord = {
   renderer: 'canvas' | 'svg';
   title?: string;
   version: 2 | 3;
-  engine?: 'echarts' | 'three';
+  engine?: ChartEngine;
   revision?: number;
   updatedAt?: string;
 };
@@ -195,7 +199,7 @@ export function parseChartRecord(value: unknown, expectedChartId?: string): Char
   }
   if (record.title !== undefined && typeof record.title !== 'string') throw new Error('Chart artifact has an invalid title.');
   if (record.description !== undefined && typeof record.description !== 'string') throw new Error('Chart artifact has an invalid description.');
-  if (record.engine !== undefined && record.engine !== 'echarts' && record.engine !== 'three') throw new Error('Unknown chart engine.');
+  if (record.engine !== undefined && !chartEngines.includes(record.engine as ChartEngine)) throw new Error('Unknown chart engine.');
   if (record.revision !== undefined && (typeof record.revision !== 'number' || !Number.isSafeInteger(record.revision) || record.revision < 0)) throw new Error('Invalid chart revision.');
   return {
     chartId: record.chartId,
@@ -203,11 +207,11 @@ export function parseChartRecord(value: unknown, expectedChartId?: string): Char
     description: record.description,
     height: record.height,
     maps: normalizeChartMaps(record.maps),
-    option: record.engine === 'three' ? normalizeThreeChartOption(record.option) : normalizeChartOption(record.option, { invalidFormatters: 'omit' }),
+    option: normalizeEngineOption(record.engine as ChartEngine | undefined, record.option, { invalidFormatters: 'omit' }),
     renderer: record.renderer,
     title: record.title,
     version: record.version as 2 | 3,
-    engine: record.engine === 'three' ? 'three' : 'echarts',
+    engine: (record.engine as ChartEngine | undefined) || 'echarts',
     revision: typeof record.revision === 'number' ? record.revision : 0,
     updatedAt: typeof record.updatedAt === 'string' ? record.updatedAt : record.createdAt,
   };
@@ -220,9 +224,16 @@ export class ChartRevisionConflict extends Error {
 export type ChartUpdateInput = Pick<ChartRecord, 'option'> & Partial<Pick<ChartRecord, 'title' | 'description' | 'height' | 'renderer' | 'maps' | 'engine'>>;
 
 export function normalizeChartUpdate(previous: ChartRecord, input: ChartUpdateInput): ChartRecord {
-  if ((input.engine ?? previous.engine) !== 'three') normalizeChartOption(input.option ?? previous.option);
+  normalizeEngineOption(input.engine ?? previous.engine, input.option ?? previous.option);
   const next = parseChartRecord({ ...previous, ...input, chartId: previous.chartId, createdAt: previous.createdAt,
     version: 3, revision: (previous.revision || 0) + 1, updatedAt: new Date().toISOString() }, previous.chartId);
   if (new TextEncoder().encode(JSON.stringify(next)).byteLength > maxChartBytes) throw new Error('Chart configuration must be no larger than 4 MB.');
   return next;
+}
+
+export function normalizeEngineOption(engine: ChartEngine = 'echarts', value: unknown, options: { invalidFormatters?: 'reject' | 'omit' } = {}): Record<string, unknown> {
+  const normalizers = { echarts: normalizeChartOption, three: normalizeThreeChartOption, excalidraw: normalizeExcalidrawOption };
+  const normalize = normalizers[engine];
+  if (!normalize) throw new Error('Unknown chart engine.');
+  return normalize(value, options);
 }

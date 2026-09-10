@@ -62,7 +62,11 @@ export function communicationReplyContents(message: BrowserChatMessage): Communi
   if (replacements.length && ![...files.values()].some(content => content.format === 'image') && /!\[|<img\b/i.test(source)) {
     text += '\n\n回复中的图片没有对应的可发送产物，请在网页查看；未将图片链接当作已发送的图片。';
   }
-  if (!text.trim() && !files.size) text = message.status === 'failed' ? '本轮生成失败，请在网页对话中查看详情。' : '本轮已完成，详细内容可在网页对话中查看。';
+  if (!text.trim() && !files.size) {
+    text = message.status === 'failed' ? '本轮生成失败，请在网页对话中查看详情。'
+      : message.status === 'interrupted' ? '本轮处理已停止。'
+        : '本轮已完成，详细内容可在网页对话中查看。';
+  }
   if (message.parts?.some(part => part.type === 'data-chart' || part.type === 'data-ui')) text += '\n\n交互图表和卡片请在网页对话中查看。';
   return [...splitCommunicationText(text.trim()).map(body => ({ format: 'markdown' as const, body })), ...files.values()];
 }

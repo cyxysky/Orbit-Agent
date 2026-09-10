@@ -4,7 +4,7 @@ import {
   sendBrowserChatMessage,
   subscribeBrowserChatUIStream,
 } from '@/server/ai/agents/browser-chat.service';
-import type { BrowserChatUIMessage } from '@/lib/browser-chat-ui-message';
+import { browserChatExecutionParts, type BrowserChatUIMessage } from '@/lib/browser-chat-ui-message';
 import { sendBrowserChatMessageRequestSchema } from '@/server/http/browser-chat-request.schema';
 import { ApiRequestError, apiError, parseJsonRequest } from '@/server/http/api-request';
 import { requestApplicationUserId } from '@/server/auth/user-context';
@@ -36,7 +36,7 @@ export async function POST(request: NextRequest, context: BrowserChatSessionRout
         let messageMetadataSignature = '';
         let resolveTerminal: () => void = () => undefined;
         const terminal = new Promise<void>((resolve) => { resolveTerminal = resolve; });
-        const unsubscribe = subscribeBrowserChatUIStream(sessionId, clientMessageId, ({ message, outputCycles, subagents }) => {
+        const unsubscribe = subscribeBrowserChatUIStream(sessionId, clientMessageId, ({ message, outputCycles, steps, subagents }) => {
           if (!message || finished) return;
           const messageMetadata = {
             sessionId,
@@ -86,7 +86,14 @@ export async function POST(request: NextRequest, context: BrowserChatSessionRout
           }
 
           let textIndex = 0;
-          for (const part of message.parts || []) {
+          // The subscription supplies compact execution records. Raw message
+          // parts contain complete programs/results and would make the client
+          // clone the whole source history on every subsequent stream chunk.
+          const parts = [
+            ...browserChatExecutionParts(steps),
+            ...(message.parts || []).filter((part) => part.type !== 'dynamic-tool' && part.type !== 'data-step'),
+          ];
+          for (const part of parts) {
             if (part.type === 'text') {
               const textId = `text-${textIndex++}`;
               const previousText = textValues.get(textId);
@@ -186,6 +193,7 @@ export async function POST(request: NextRequest, context: BrowserChatSessionRout
             body.attachments,
             body.skillIds,
             userId,
+            body.disabledTools,
           );
           await terminal;
         } finally {

@@ -1,3 +1,4 @@
+import { assertHtmlOfficeSource } from '../../office/html.ts';
 import { execFile } from 'node:child_process';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -714,7 +715,11 @@ async function pythonDiagnostics(source: string): Promise<OfficeProgramDiagnosti
   }
 }
 
-export async function analyzeOfficeProgram(source: string, generator: 'javascript' | 'uno') {
+export async function analyzeOfficeProgram(source: string, generator: 'javascript' | 'uno' | 'html') {
+  if (generator === 'html') {
+    try { assertHtmlOfficeSource(source); return { diagnostics: [] as OfficeProgramDiagnostic[], passed: true }; }
+    catch (error) { return { diagnostics: [{ code: 'HTML_SOURCE_INVALID', message: error instanceof Error ? error.message : String(error), severity: 'error' as const }], passed: false }; }
+  }
   const rawDiagnostics = generator === 'javascript'
     ? javascriptDiagnostics(source)
     : await pythonDiagnostics(source);

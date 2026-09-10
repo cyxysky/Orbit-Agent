@@ -319,6 +319,7 @@ export function inferredCalcSourceUnits(source: string): ParsedSourceUnit[] {
 }
 
 export function sourceUnitsForDraft(source: string, draft: Pick<OfficeDocumentDraft, 'documentType' | 'generator'>) {
+  if (draft.generator === 'html') return []; // HTML is edited as one document; do not inject JS/Python unit markers.
   const explicit = parseSourceUnits(source);
   if (explicit.length) return explicit;
   if (draft.documentType === 'presentation') {

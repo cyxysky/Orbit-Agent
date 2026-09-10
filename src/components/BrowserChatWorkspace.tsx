@@ -36,6 +36,8 @@ import { Button } from '@heroui/react/button';
 import { Checkbox } from '@heroui/react/checkbox';
 import { Popover } from '@heroui/react/popover';
 import { HoverCard } from '@/components/HoverCard';
+import { BrowserChatToolsHelp } from '@/components/BrowserChatToolsHelp';
+import { normalizeDisabledBrowserChatTools } from '@/lib/browser-chat-tools';
 import { IconAction } from '@/components/ui/icon-action';
 import { CopyTextButton } from '@/components/ui/copy-text-button';
 import { TextArea } from '@heroui/react/textarea';
@@ -166,6 +168,7 @@ import {
   mergeBrowserChatRealtimeCollections,
   mergeBrowserChatRealtimeRecords,
   parseBrowserChatRealtimePatch,
+  shareBrowserChatValue,
 } from '@/components/browser-chat-realtime-model';
 import { parseJsonObjectText, stripAnsiControlCodes } from '@/lib/browser-chat-format';
 import {
@@ -399,6 +402,7 @@ type BrowserChatSession = {
   browserGroupId: string;
   targetUrl: string;
   safetyMode: BrowserChatSafetyMode;
+  disabledTools?: string[];
   modelProvider: ModelProvider;
   model: string;
   status: 'idle' | 'running' | 'closed' | 'error';
@@ -2732,13 +2736,15 @@ function confirmationScreenshotFromPendingLog(
 
 function toolUserActionForTool(logs: BrowserChatLogRecord[], stepIndex: number | undefined, toolName: string, toolInput: unknown) {
   if (stepIndex === undefined) return undefined;
-  const inputSignature = toolInputSignature(toolInput);
-  for (const log of [...logs].reverse()) {
+  let inputSignature: string | undefined;
+  for (let index = logs.length - 1; index >= 0; index -= 1) {
+    const log = logs[index];
     if (log.stepIndex !== stepIndex) continue;
     if (log.phase !== 'tool:confirmation:confirmed' && log.phase !== 'tool:confirmation:cancelled') continue;
     const details = parseJsonObjectText(log.details);
     const loggedToolName = typeof details?.toolName === 'string' ? details.toolName : '';
     if (loggedToolName && loggedToolName !== toolName) continue;
+    inputSignature ??= toolInputSignature(toolInput);
     const loggedInputSignature = typeof details?.inputSignature === 'string' ? details.inputSignature : '';
     if (!loggedInputSignature || loggedInputSignature !== inputSignature) continue;
     const confirmationId = typeof details?.confirmationId === 'string' ? details.confirmationId : '';
@@ -3544,6 +3550,25 @@ type BrowserChatAiCycleCommonProps = {
   toolDetails: Map<string, BrowserChatToolDetail>;
 };
 
+function sameAiCycleLineProps(
+  previous: BrowserChatAiCycleCommonProps & { cycle: BrowserChatAiOutputCycle },
+  next: BrowserChatAiCycleCommonProps & { cycle: BrowserChatAiOutputCycle },
+) {
+  for (const key of Object.keys(next) as Array<keyof typeof next>) {
+    if (key !== 'toolDetails' && previous[key] !== next[key]) return false;
+  }
+  return next.cycle.output.tools.every((_tool, index) => {
+    const key = aiCycleToolKey(next.cycle.id, index);
+    const before = previous.toolDetails.get(key);
+    const after = next.toolDetails.get(key);
+    return before === after || Boolean(before && after
+      && before.tool === after.tool && before.toolIndex === after.toolIndex
+      && before.stepIndex === after.stepIndex && before.step.status === after.step.status
+      && before.step.messageId === after.step.messageId
+      && before.confirmationScreenshotUrl === after.confirmationScreenshotUrl);
+  });
+}
+
 const BrowserChatAiCycleLine = memo(function BrowserChatAiCycleLine({
   cycle,
   logs,
@@ -3690,7 +3715,7 @@ const BrowserChatAiCycleLine = memo(function BrowserChatAiCycleLine({
       })}
     </div>
   );
-});
+}, sameAiCycleLineProps);
 
 const BrowserChatExecutedCycleGroup = memo(function BrowserChatExecutedCycleGroup({
   cycles,
@@ -4414,9 +4439,13 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
   const outputCycles = running ? liveOutputCycles : transientRecords?.outputCycles ?? liveOutputCycles;
   const steps = running ? liveSteps : transientRecords?.steps ?? liveSteps;
   const subagents = running ? liveSubagents : transientRecords?.subagents ?? liveSubagents;
+  const markdownArtifacts = useSharedBrowserChatValue(message.artifacts || emptyBrowserChatArtifacts);
+  const confirmationLogs = useSharedBrowserChatValue(useMemo(() => logs.filter((log) =>
+    log.phase.startsWith('tool:confirmation:')), [logs]));
+  const loadSubagentRecords = useCallback(() => { void loadHistoricalProcessRecords(); }, [loadHistoricalProcessRecords]);
   const selectTool = useCallback((detail: BrowserChatToolDetail) => {
     const confirmation = toolUserActionForTool(
-      logs,
+      confirmationLogs,
       detail.stepIndex,
       detail.tool.name,
       detail.tool.input,
@@ -4425,7 +4454,7 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
       ...detail,
       confirmationScreenshotUrl: confirmation?.screenshotUrl,
     });
-  }, [logs, onSelectTool]);
+  }, [confirmationLogs, onSelectTool]);
   const finalText = stringFromUnknown(message.content);
   const isInterruptedNotice = message.status === 'interrupted' && finalText === browserChatInterruptedReply;
   const displayFinalText = isInterruptedNotice ? t(finalText) : finalText;
@@ -4481,7 +4510,7 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
   const finalTextAnchoredToToolCycle = useMemo(() => (
     aiOutputCycles.some((cycle) => browserChatAiCycleAnchorsText(cycle, finalText))
   ), [aiOutputCycles, finalText]);
-  const pairedAiOutputCycles = useMemo(() => processAiOutputCycles.flatMap((cycle) => {
+  const pairedAiOutputCycles = useSharedBrowserChatValue(useMemo(() => processAiOutputCycles.flatMap((cycle) => {
     const hasVisibleNarrative = cycle.output.parts.some((part) => {
       if (part.kind === 'text') return Boolean(cycle.output.texts[part.index]?.trim());
       if (part.kind === 'reasoning') return Boolean(cycle.output.reasoning[part.index]?.trim());
@@ -4504,7 +4533,7 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
         },
       }];
     });
-  }), [processAiOutputCycles]);
+  }), [processAiOutputCycles]));
   const matchedAiCycleToolDetails = useMemo(() => (
     buildAiCycleToolDetailMap(pairedAiOutputCycles, steps, running)
   ), [pairedAiOutputCycles, running, steps]);
@@ -4644,8 +4673,8 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
           ? t('已中止')
           : t('已处理');
   const aiCycleCommonProps: BrowserChatAiCycleCommonProps = {
-    logs,
-    onLoadSubagentRecords: () => { void loadHistoricalProcessRecords(); },
+    logs: confirmationLogs,
+    onLoadSubagentRecords: loadSubagentRecords,
     onResumeHumanVerification,
     onSelectTool: selectTool,
     pendingToolConfirmation,
@@ -4658,7 +4687,7 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
   };
 
   return (
-    <BrowserChatMarkdownArtifactsContext.Provider value={message.artifacts || []}>
+    <BrowserChatMarkdownArtifactsContext.Provider value={markdownArtifacts}>
     <div className="browser-chat-agent-timeline">
       {hasProcessContent ? (
         <BrowserChatProcessDisclosure
@@ -4694,7 +4723,7 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
                 <div className={`browser-chat-agent-step${running && step.status === 'running' ? ' is-running' : ''}`} key={step.index}>
                   <BrowserChatStepToolCards
                     logs={logs}
-                    onLoadSubagentRecords={() => { void loadHistoricalProcessRecords(); }}
+                    onLoadSubagentRecords={loadSubagentRecords}
                     onResumeHumanVerification={onResumeHumanVerification}
                     onSelectTool={selectTool}
                     onlyPendingConfirmation={showPendingTimelineFallback}
@@ -4907,6 +4936,16 @@ const emptyBrowserChatSteps: StepExecutionResult[] = [];
 const emptyBrowserChatOutputCycles: BrowserChatAiOutputCycle[] = [];
 const emptyBrowserChatSubagents: BrowserChatSubagentRecord[] = [];
 const emptyBrowserChatLogRecords: BrowserChatLogRecord[] = [];
+const emptyBrowserChatArtifacts: NonNullable<BrowserChatMessage['artifacts']> = [];
+
+function useSharedBrowserChatValue<T>(value: T): T {
+  const previous = useRef(value);
+  return useMemo(() => {
+    const shared = shareBrowserChatValue(previous.current, value);
+    previous.current = shared;
+    return shared;
+  }, [value]);
+}
 
 function useBrowserChatRecordsByMessageId<TRecord extends { messageId?: string }>(records: TRecord[]) {
   const previousGroupsRef = useRef(new Map<string, TRecord[]>());
@@ -5441,13 +5480,12 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
         resizeObserver.observe(child);
       }
     };
-    const mutationObserver = new MutationObserver(() => {
-      syncObservedChildren();
-      scheduleScrollToBottom();
-    });
+    // ResizeObserver owns content-height changes. Watching every text mutation
+    // also observes elapsed timers and forces layout even when height is stable.
+    const mutationObserver = new MutationObserver(syncObservedChildren);
     scrollContainer.addEventListener('scroll', trackScrollPosition, { passive: true });
     syncObservedChildren();
-    mutationObserver.observe(messageList, { childList: true, characterData: true, subtree: true });
+    mutationObserver.observe(messageList, { childList: true });
     return () => {
       scrollContainer.removeEventListener('scroll', trackScrollPosition);
       mutationObserver.disconnect();
@@ -5642,11 +5680,17 @@ function compactContextTokens(tokens: number) {
 
 function BrowserChatSafetySelector({
   contextUsage,
+  sessionId,
+  disabledTools,
+  onDisabledToolsChange,
   disabled,
   onSafetyModeChange,
   safetyMode,
 }: {
   contextUsage?: BrowserChatSession['contextUsage'];
+  sessionId?: string;
+  disabledTools: string[];
+  onDisabledToolsChange: (names: string[]) => void;
   disabled: boolean;
   onSafetyModeChange: (mode: BrowserChatSafetyMode) => void;
   safetyMode: BrowserChatSafetyMode;
@@ -5748,13 +5792,16 @@ function BrowserChatSafetySelector({
           </div>
         )}
       </HoverCard>
-
+      <BrowserChatToolsHelp sessionId={sessionId} disabledTools={disabledTools} onChange={onDisabledToolsChange} busy={disabled} />
     </div>
   );
 }
 
 const BrowserChatComposer = memo(function BrowserChatComposer({
   attachments,
+  sessionId,
+  disabledTools,
+  onDisabledToolsChange,
   availableSkills,
   busy,
   contextUsage,
@@ -5784,6 +5831,9 @@ const BrowserChatComposer = memo(function BrowserChatComposer({
   uploadingImage,
 }: {
   attachments: BrowserChatAttachment[];
+  sessionId?: string;
+  disabledTools: string[];
+  onDisabledToolsChange: (names: string[]) => void;
   availableSkills: SkillRecord[];
   busy: boolean;
   contextUsage?: BrowserChatSession['contextUsage'];
@@ -6476,6 +6526,9 @@ const BrowserChatComposer = memo(function BrowserChatComposer({
               {uploadingImage ? <Loader2 className="spin" size={17} /> : <Paperclip size={20} />}
             </button>
             <BrowserChatSafetySelector
+              sessionId={sessionId}
+              disabledTools={disabledTools}
+              onDisabledToolsChange={onDisabledToolsChange}
               contextUsage={contextUsage}
               disabled={currentBusy || loading}
               onSafetyModeChange={onSafetyModeChange}
@@ -8102,6 +8155,7 @@ export function BrowserChatWorkspace({
     page: sessionListPage,
   } = useBrowserChatSessionPagination(browserChatApiUrl, applySessionListPage, t);
   const [safetyMode, setSafetyMode] = useState<BrowserChatSafetyMode>('strict');
+  const [disabledTools, setDisabledTools] = useState<string[]>([]);
   const [modelProvider, setModelProvider] = useState<ModelProvider>(() => initialModelSelection.provider);
   const [modelId, setModelId] = useState(() => initialModelSelection.model);
   const [modelConfig, setModelConfig] = useState<BrowserChatModelConfig | null>(null);
@@ -8195,12 +8249,13 @@ export function BrowserChatWorkspace({
   }, [uiChatTransport]);
   const currentUIChat = useMemo(() => uiChatForSession(session?.id || 'unbound'), [session?.id, uiChatForSession]);
   const {
-    messages: currentRequestUIMessages,
+    messages: receivedRequestUIMessages,
     status: currentUIMessageStatus,
   } = useChat<BrowserChatUIMessage>({
     chat: currentUIChat,
     throttle: 100,
   });
+  const currentRequestUIMessages = useSharedBrowserChatValue(receivedRequestUIMessages);
   const sessionUiKey = `${session?.userId || requestUserId}:${session?.id || 'new'}`;
   const selectedSessionRunning = isBrowserChatSessionRunning(session);
   const selectedRunningSession = selectedSessionRunning ? session : undefined;
@@ -8212,21 +8267,21 @@ export function BrowserChatWorkspace({
     () => new Set((session?.queuedTurns || []).map((turn) => turn.userMessageId)),
     [session?.queuedTurns],
   );
-  const steps = useMemo(() => {
+  const steps = useSharedBrowserChatValue(useMemo(() => {
     // Received evidence outlives the HTTP stream. A disconnected/finished
     // transport must not clear tools while the background turn is still active.
     return mergeBrowserChatRealtimeCollections({ messages: [], logs: [], steps: session?.steps || [] }, {
       steps: browserChatUIMessageSteps(currentRequestUIMessages, session?.id || ''),
     }).steps;
-  }, [currentRequestUIMessages, session?.id, session?.steps]);
+  }, [currentRequestUIMessages, session?.id, session?.steps]));
   const outputCycles = useMemo(() => appendMissingBrowserChatOutputCycles(
     session?.outputCycles,
     browserChatUIMessageOutputCycles(currentRequestUIMessages, session?.id || ''),
   ), [currentRequestUIMessages, session?.id, session?.outputCycles]);
-  const subagents = useMemo(() => mergeBrowserChatRealtimeSubagents(
+  const subagents = useSharedBrowserChatValue(useMemo(() => mergeBrowserChatRealtimeSubagents(
     session?.subagents,
     browserChatUIMessageSubagents(currentRequestUIMessages, session?.id || ''),
-  ), [currentRequestUIMessages, session?.id, session?.subagents]);
+  ), [currentRequestUIMessages, session?.id, session?.subagents]));
   const logs = useMemo(() => session?.logs || [], [session?.logs]);
   const generationSkillsById = useMemo(() => new Map(skills.map((skill) => [skill.id, skill])), [skills]);
   const liveToolDialog = useMemo(() => {
@@ -8252,11 +8307,11 @@ export function BrowserChatWorkspace({
       confirmationScreenshotUrl: confirmation?.screenshotUrl || toolDialog.confirmationScreenshotUrl,
     };
   }, [logs, steps, toolDialog]);
-  const visibleMessages = useMemo(() => overlayBrowserChatUIMessages(
+  const visibleMessages = useSharedBrowserChatValue(useMemo(() => overlayBrowserChatUIMessages(
     messages,
     currentRequestUIMessages,
     session?.id || '',
-  ), [currentRequestUIMessages, messages, session?.id]);
+  ), [currentRequestUIMessages, messages, session?.id]));
   const generatableMessageOptions = useMemo(() => visibleMessages.flatMap((message, messageIndex) => {
     if (message.role !== 'assistant' || message.status === 'running') return [];
     const declaredStepIndexes = new Set(message.stepIndexes || []);
@@ -8788,6 +8843,7 @@ export function BrowserChatWorkspace({
     const loadedSession = upsertSession(data.session as BrowserChatSession, { activate: shouldActivate });
     if (shouldActivate) {
       setSafetyMode(normalizeSafetyMode(loadedSession.safetyMode));
+      setDisabledTools(normalizeDisabledBrowserChatTools(loadedSession.disabledTools));
       const nextModel = resolveRuntimeModelSelection(modelConfig, {
         model: loadedSession.model,
         provider: loadedSession.modelProvider,
@@ -9006,7 +9062,7 @@ export function BrowserChatWorkspace({
     const response = await fetch(browserChatApiUrl('/api/browser-chat/create'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ safetyMode, modelProvider, model: modelId, targetUrl: requestedTargetUrl }),
+      body: JSON.stringify({ safetyMode, disabledTools, modelProvider, model: modelId, targetUrl: requestedTargetUrl }),
     });
     const data = await readApiJson<Record<string, unknown>>(response, '创建对话会话失败');
     const created = upsertSession(data.session as BrowserChatSession, { activate: true });
@@ -9174,7 +9230,7 @@ export function BrowserChatWorkspace({
           skillIds,
         },
       }, {
-        body: { safetyMode, modelProvider, model: modelId },
+        body: { safetyMode, disabledTools, modelProvider, model: modelId },
       }).catch((chatError) => {
         setError(chatError instanceof Error ? chatError.message : '发送消息失败');
         attachmentsRef.current = nextAttachments;
@@ -9351,6 +9407,7 @@ export function BrowserChatWorkspace({
     setSessionMinimumLoadingElapsed(true);
     setMessageViewportReady(true);
     setSession(null);
+    setDisabledTools([]);
     if (!mountedIdentityRef.current) {
       window.history.replaceState(null, '', browserChatSessionNavigationHref(window.location.href));
     }
@@ -9533,6 +9590,7 @@ export function BrowserChatWorkspace({
     releaseSessionRuntime(activeSessionIdRef.current);
     activeSessionIdRef.current = null;
     setSession(null);
+    setDisabledTools([]);
     setMessageViewportReady(true);
     if (!mountedIdentityRef.current) {
       window.history.replaceState(null, '', browserChatSessionNavigationHref(window.location.href));
@@ -10140,6 +10198,9 @@ export function BrowserChatWorkspace({
       <div className="browser-chat-composer-shell">
         <BrowserChatComposer
           key={`composer:${sessionUiKey}`}
+          sessionId={session?.id}
+          disabledTools={disabledTools}
+          onDisabledToolsChange={setDisabledTools}
           attachments={attachments}
           availableSkills={skills}
           busy={busy}

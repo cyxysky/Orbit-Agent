@@ -88,6 +88,22 @@ export function hiddenRuntimeSkillContent(skillId: string) {
   return hiddenRuntimeSkills[skillId as keyof typeof hiddenRuntimeSkills]?.content;
 }
 
+export function hiddenRuntimeToolCatalog() {
+  return toolCatalogFromSkills(Object.values(hiddenRuntimeSkills));
+}
+
+export function capabilityRuntimeToolCatalog() {
+  return toolCatalogFromSkills(capabilityRuntimeSkills);
+}
+
+function toolCatalogFromSkills(skills: readonly CapabilitySkill[]) {
+  return skills.flatMap((skill) => (skill.activation || []).map((activation) => ({
+    name: activation.toolName,
+    label: skill.summary.match(/<title>([\s\S]*?)<\/title>/)?.[1] || activation.toolName,
+    description: skill.summary.match(/<description>([\s\S]*?)<\/description>/)?.[1] || '',
+  })));
+}
+
 /** Reuse only full, current-version Skill text still present in tool evidence.
  * A summary, user assertion or previous read ID is not sufficient after compaction. */
 export function hiddenRuntimeSkillIdsInModelContext(messages: ReadonlyArray<{ role: string; content: unknown }>) {

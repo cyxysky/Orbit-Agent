@@ -25,6 +25,13 @@ const capabilitySource = process.env.WEBPILOT_CAPABILITY_SOURCE === 'npm' ? 'npm
 export default function nextConfig(phase: string): NextConfig {
   return {
     basePath,
+    outputFileTracingIncludes: {
+      '/api/chart-assets/excalidraw/*': [
+        './node_modules/@excalidraw/excalidraw/package.json',
+        './node_modules/@excalidraw/excalidraw/dist/prod/index.js',
+        './node_modules/@excalidraw/excalidraw/dist/prod/fonts/**/*',
+      ],
+    },
     typescript: {
       tsconfigPath: capabilitySource === 'npm' ? 'tsconfig.npm.json' : 'tsconfig.json',
     },

@@ -10,9 +10,10 @@ import {
 } from '@webpilot/capability-sdk';
 import {
   maxChartBytes,
+  chartEngines,
+  normalizeEngineOption,
+  type ChartEngine,
   normalizeChartMaps,
-  normalizeChartOption,
-  normalizeThreeChartOption,
   normalizeChartUpdate,
   ChartRevisionConflict,
   type ChartUpdateInput,
@@ -49,7 +50,7 @@ export interface ChartArtifactStore {
 
 const chartToolInputParser = z.object({
   action: z.enum(['api', 'create', 'read', 'update']).describe('Read API guidance, create a chart, read its latest saved data, or update it using expectedRevision.'),
-  engine: z.enum(['echarts', 'three']).optional().describe('Defaults to echarts. For native Three.js 3D charts read API module three.'),
+  engine: z.enum(chartEngines).optional().describe('Defaults to echarts. Read module three for 3D or excalidraw for editable diagrams.'),
   chartId: z.string().regex(/^chart_\d{6}$/).optional(),
   expectedRevision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER - 1).optional().describe('For update: revision returned by the latest read; prevents overwriting manual edits.'),
   reason: z.string().trim().min(1).max(300).describe('Concise reason for this tool call.'),
@@ -60,7 +61,7 @@ const chartToolInputParser = z.object({
   description: z.string().trim().min(1).max(1_000).optional().describe('Accessible plain-language chart summary.'),
   height: z.number().int().min(240).max(720).optional().describe('Rendered height in pixels. Defaults to 380.'),
   renderer: z.enum(['canvas', 'svg']).optional().describe('ECharts renderer. Defaults to canvas.'),
-  option: z.record(z.string(), z.unknown()).optional().describe('For create/update: complete JSON option for the chosen engine. ECharts formatter must be a string template, never a function-source string; omit it for default tooltips. Read the three API module for 3D schema.'),
+  option: z.record(z.string(), z.unknown()).optional().describe('For create/update: complete JSON option for the chosen engine. ECharts formatter must be a string template, never a function-source string; omit it for default tooltips. Read module three for 3D, or excalidraw for elements/appState/files.'),
   maps: z.array(z.object({
     name: z.string().trim().min(1).max(160),
     geoJson: z.union([z.record(z.string(), z.unknown()), z.string().min(1)]),
@@ -86,7 +87,7 @@ export const chartCapabilityManifest = Object.freeze({
   id: 'com.webpilot.chart',
   name: 'Chart',
   version: '0.1.0',
-  description: 'Create, read and update persistent ECharts and Three.js charts with interactive editing and export.',
+  description: 'Create, read and update persistent ECharts, Three.js and Excalidraw charts with interactive editing and export.',
   permissions: ['artifact:read', 'artifact:write', 'renderer:chart'],
   runtimeRequirements: {
     node: '>=22.16',
@@ -140,6 +141,25 @@ const seriesApiModules: EChartsApiModule[] = [
 ];
 
 const apiModules: EChartsApiModule[] = [
+  {
+    id: 'excalidraw', title: 'Excalidraw diagrams', summary: 'Editable flowcharts, architecture diagrams, wireframes and freehand drawings with versioned save and PNG/SVG/scene export.',
+    optionPaths: ['elements', 'appState', 'files'],
+    notes: [
+      'Set engine:"excalidraw" and option:{elements,appState?,files?}. This is not ECharts option or Mermaid source.',
+      'Every element requires a stable unique id, type, and finite x/y/width/height. Use native rectangle/diamond/ellipse/text/arrow/line/freedraw/image/frame elements.',
+      'Text requires text; fontSize/fontFamily/textAlign are optional. Lines/arrows require at least two relative points:[[x,y],...]; arrows may set endArrowhead:"arrow".',
+      'Lay out coordinates explicitly. Use separate text elements, not skeleton label fields. The editor restores omitted native style defaults.',
+      'Images require fileId and files[fileId]:{id,mimeType,dataURL,created}. Embed image bytes as a base64 data URL; the existing 4 MB document limit applies.',
+      'Read before updating. Preserve unchanged ids, bindings and files; pass the complete option and expectedRevision to protect manual edits.',
+    ],
+    examples: [{ action: 'create', engine: 'excalidraw', reason: 'Show the processing flow', title: 'Processing flow', height: 500, option: { elements: [
+      { id: 'step-a', type: 'rectangle', x: 0, y: 0, width: 160, height: 80, backgroundColor: '#dbeafe' },
+      { id: 'label-a', type: 'text', x: 40, y: 25, width: 80, height: 25, text: 'Input', fontSize: 20 },
+      { id: 'flow', type: 'arrow', x: 160, y: 40, width: 100, height: 0, points: [[0, 0], [100, 0]], endArrowhead: 'arrow' },
+      { id: 'step-b', type: 'rectangle', x: 260, y: 0, width: 160, height: 80 },
+      { id: 'label-b', type: 'text', x: 290, y: 25, width: 100, height: 25, text: 'Process', fontSize: 20 },
+    ], appState: { viewBackgroundColor: '#ffffff' }, files: {} } }],
+  },
   {
     id: 'three', title: 'Three.js 3D 图表', summary: '原生三维柱状、散点、折线和网格曲面；旋转、缩放、全屏、下载与数据编辑。',
     optionPaths: ['axes', 'series', 'background'],
@@ -305,7 +325,7 @@ export async function readChartApi(
       ok: true,
       summary: 'Apache ECharts API module index.',
       data: {
-        engine: 'Apache ECharts / Three.js',
+        engine: 'Apache ECharts / Three.js / Excalidraw',
         installedVersion: echartsVersion,
         instruction: '使用 chart action=api，并把某个 modules[].id 原样作为 query，再读取该模块的配置路径、注意事项和例子。读取足够信息后再调用 action=create。',
         kind: 'echarts-api-index',
@@ -331,9 +351,9 @@ export async function readChartApi(
     ok: true,
     summary: `Chart API module: ${apiModule.title}.`,
     data: {
-      createSignature: { action: 'create', engine: 'echarts | three (default echarts)', description: 'string?', height: 'number? (240..720)', maps: 'Array<{name, geoJson, specialAreas?}>?', option: query === 'three' ? 'ThreeChartOption (see module)' : 'EChartsOption', reason: 'string', renderer: 'canvas | svg?', title: 'string?' },
-      engine: query === 'three' ? 'Three.js' : 'Apache ECharts',
-      installedVersion: query === 'three' ? undefined : echartsVersion,
+      createSignature: { action: 'create', engine: 'echarts | three | excalidraw (default echarts)', description: 'string?', height: 'number? (240..720)', maps: 'Array<{name, geoJson, specialAreas?}>?', option: query === 'excalidraw' ? 'ExcalidrawScene (see module)' : query === 'three' ? 'ThreeChartOption (see module)' : 'EChartsOption', reason: 'string', renderer: 'canvas | svg?', title: 'string?' },
+      engine: query === 'excalidraw' ? 'Excalidraw' : query === 'three' ? 'Three.js' : 'Apache ECharts',
+      installedVersion: query === 'three' || query === 'excalidraw' ? undefined : echartsVersion,
       kind: 'echarts-api-module',
       module: apiModule,
     },
@@ -350,9 +370,9 @@ export async function createChart(store: ChartArtifactStore, input: {
   title?: unknown;
 }, options: { validateOption?: ChartOptionValidator } = {}): Promise<CapabilityResult<{ chartId: string }>> {
   try {
-    if (input.engine !== undefined && input.engine !== 'echarts' && input.engine !== 'three') throw new Error('Unknown chart engine.');
-    const engine = input.engine === 'three' ? 'three' : 'echarts';
-    const option = engine === 'three' ? normalizeThreeChartOption(input.option) : normalizeChartOption(input.option);
+    if (input.engine !== undefined && !chartEngines.includes(input.engine as ChartEngine)) throw new Error('Unknown chart engine.');
+    const engine = (input.engine as ChartEngine | undefined) || 'echarts';
+    const option = normalizeEngineOption(engine, input.option);
     const maps = normalizeChartMaps(input.maps);
     if (new TextEncoder().encode(JSON.stringify({ maps, option })).byteLength > maxChartBytes) {
       throw new Error('option and maps must be no larger than 4 MB in total.');
@@ -399,7 +419,7 @@ export async function updateChart(store: ChartArtifactStore, chartId: string, in
   if (!previous) return undefined;
   if ((previous.revision || 0) !== expectedRevision) throw new ChartRevisionConflict();
   const next = normalizeChartUpdate(previous, input);
-  if (next.engine !== 'three') await options.validateOption?.(next);
+  if (next.engine === 'echarts') await options.validateOption?.(next);
   return store.update(chartId, input, expectedRevision);
 }
 
@@ -421,7 +441,7 @@ export function createChartTool(
 ) {
   return defineCapabilityTool<ChartToolInput, Record<string, unknown> | { chartId: string }>({
     name: chartCapabilityToolNames.chart,
-    description: 'Create, read and update persistent ECharts or Three.js charts. Read the API index and relevant modules (three for 3D) before create. Users can edit data, go fullscreen and download charts. Read the latest chart before update and pass expectedRevision to preserve manual changes.',
+    description: 'Create, read and update persistent ECharts, Three.js or Excalidraw charts. Read the API index and relevant modules (three for 3D, excalidraw for diagrams) before create. Users can edit data, go fullscreen and download charts. Read the latest chart before update and pass expectedRevision to preserve manual changes.',
     input: chartToolInput,
     inputExamples: [
       { action: 'api', reason: '查看 ECharts API 模块索引' },

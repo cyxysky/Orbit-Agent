@@ -1,3 +1,27 @@
+/** Restore structural sharing after JSON transport / SDK structuredClone.
+ * Records are immutable JSON values; unchanged branches keep their identity.
+ */
+export function shareBrowserChatValue<T>(previous: T, incoming: T): T {
+  if (Object.is(previous, incoming)) return previous;
+  if (!previous || !incoming || typeof previous !== 'object' || typeof incoming !== 'object'
+    || Array.isArray(previous) !== Array.isArray(incoming)) return incoming;
+  const before = previous as Record<string, unknown>;
+  const after = incoming as Record<string, unknown>;
+  const keys = Object.keys(after);
+  let unchanged = keys.length === Object.keys(before).length;
+  let next = after;
+  for (const key of keys) {
+    const shared = shareBrowserChatValue(before[key], after[key]);
+    if (!Object.hasOwn(before, key) || shared !== before[key]) unchanged = false;
+    if (shared !== after[key]) {
+      if (next === after) next = Array.isArray(incoming)
+        ? [...incoming] as unknown as Record<string, unknown> : { ...after };
+      next[key] = shared;
+    }
+  }
+  return (unchanged ? previous : next) as T;
+}
+
 export type BrowserChatRealtimeCollectionPatch<
   TMessage extends { clientMessageId?: string; id: string; role?: string; createdAt?: string; updatedAt?: string },
   TStep extends { index: number },
@@ -93,7 +117,7 @@ function mergeRealtimeStepTools(current: unknown[] = [], incoming: unknown[] = [
       if (typeof previous[key] === 'number' && Number.isFinite(previous[key])
         && (record[key] === undefined || (typeof record[key] === 'number' && record[key] < previous[key]))) next[key] = previous[key];
     }
-    merged[index] = next;
+    merged[index] = shareBrowserChatValue(previous, next);
   });
   return merged;
 }
@@ -148,8 +172,10 @@ export function mergeBrowserChatRealtimeCollections<
     if (existing.tools || incoming.tools) {
       mergedStep.tools = mergeRealtimeStepTools(existing.tools, incoming.tools);
     }
+    const sharedStep = shareBrowserChatValue(existing, mergedStep);
+    if (sharedStep === existing) continue;
     const next = [...steps];
-    next[index] = mergedStep as TStep;
+    next[index] = sharedStep as TStep;
     steps = next;
   }
 

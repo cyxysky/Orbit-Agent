@@ -1,5 +1,6 @@
 import type { WeComBotConnection, WeComInboundMessage } from '@webpilot/capability-communication/node';
 import { createWeComMessageArguments } from '@webpilot/capability-communication/node';
+import { CommunicationDeliveryError } from '@webpilot/capability-communication';
 import {
   createBrowserChatSession, deleteBrowserChatSession, getBrowserChatSession,
   sendBrowserChatMessage, subscribeBrowserChatUIStream,
@@ -35,6 +36,41 @@ const state: Runtime = ((globalThis as typeof globalThis & { __orbitCommunicatio
   receivers: new Map(), watchers: new Map(), scheduled: new Set(), queues: new Map(),
 });
 
+// End the placeholder before WeCom's six-minute stream window expires.
+const streamLoadingTimeoutMs = 5 * 60_000;
+const streamLifetimeMs = 6 * 60_000;
+const streamTimers = ((globalThis as typeof globalThis & {
+  __orbitCommunicationStreamTimers?: Map<string, ReturnType<typeof setTimeout>>;
+}).__orbitCommunicationStreamTimers ??= new Map());
+
+function clearStreamTimer(id: string) {
+  clearTimeout(streamTimers.get(id));
+  streamTimers.delete(id);
+}
+
+function hasUnfinishedStream(item: CommunicationInbound) {
+  return item.replyStream?.status === 'opening' || item.replyStream?.status === 'open';
+}
+
+function scheduleStreamTimeout(item: CommunicationInbound) {
+  if (!item.replyStream || !hasUnfinishedStream(item) || streamTimers.has(item.id)) return;
+  const timer = setTimeout(() => {
+    void enqueue(item.conversationId, async () => {
+      try {
+        const latest = await readCommunicationInbound(item.id);
+        if (!latest || !hasUnfinishedStream(latest)) return;
+        const conversation = await readCommunicationConversation(latest.conversationId);
+        if (!conversation) return;
+        await sendReplyText(conversation, latest, latest.noticeSent
+          ? `对话 ${latest.sessionId || ''} 仍在等待操作确认，请在网页对话中处理。`
+          : '任务仍在处理中，完成后会另行发送结果，你也可以在网页对话中查看进度。');
+      } finally { clearStreamTimer(item.id); }
+    }).catch(() => console.error('[communication] 未能结束企微等待提示。'));
+  }, Math.max(0, item.replyStream.startedAt + streamLoadingTimeoutMs - Date.now()));
+  timer.unref?.();
+  streamTimers.set(item.id, timer);
+}
+
 function failureMessage(error: unknown) {
   const value = error as { errcode?: unknown; message?: unknown; errmsg?: unknown } | undefined;
   if (typeof value?.errcode === 'number') return `企业微信返回错误码 ${value.errcode}。`;
@@ -51,22 +87,45 @@ function enqueue(key: string, work: () => Promise<void>) {
   return next;
 }
 
-async function receive(integration: ResolvedExternalIntegration, message: WeComInboundMessage) {
+async function receive(integration: ResolvedExternalIntegration, message: WeComInboundMessage, requestId: string) {
   const userId = integration.configuration.ownerUserId;
   if (!userId) return;
   const conversationId = communicationId(integration.id, message.botId, userId, message.target.kind, message.target.id);
-  await enqueue(conversationId, async () => {
+  // Receipt acknowledgement must not wait behind attachment downloads or delivery.
+  await enqueue(`receive:${conversationId}`, async () => {
     let conversation = await readCommunicationConversation(conversationId);
     if (!conversation) {
       conversation = { id: conversationId, integrationId: integration.id, botId: message.botId, userId, target: message.target, sessions: [] };
+      await saveCommunicationConversation(conversation);
     }
-    await saveCommunicationConversation(conversation);
     if (integration.configuration.receiveMessages === 'true') {
-      await receiveCommunicationMessage({
-        id: communicationId(integration.id, message.botId, message.id), conversationId,
+      const id = communicationId(integration.id, message.botId, message.id);
+      if (await readCommunicationInbound(id)) return;
+      const item: CommunicationInbound = {
+        id, conversationId,
         text: message.text, senderId: message.senderId, status: 'received',
         media: message.media,
-      });
+      };
+      const stream: NonNullable<CommunicationInbound['replyStream']> = {
+        requestId, id: communicationId('stream', id), startedAt: Date.now(), status: 'opening',
+      };
+      item.replyStream = stream;
+      state.scheduled.add(id);
+      try {
+        await receiveCommunicationMessage(item);
+        try {
+          // An empty unfinished stream lets the client render its native loading.
+          await getWeComConnection(integration).replyStream(requestId, stream.id, '', false);
+          stream.status = 'open';
+        } catch (error) {
+          // A lost acknowledgement may still have created the bubble; close the same ID later.
+          if (error instanceof CommunicationDeliveryError && error.outcome === 'not-sent') stream.status = 'unavailable';
+          stream.error = failureMessage(error);
+          console.warn('[communication] 企微等待提示未确认，任务将继续处理。');
+        }
+        await saveCommunicationInbound(item);
+        scheduleStreamTimeout(item);
+      } finally { state.scheduled.delete(id); }
     }
   });
   void tick();
@@ -88,15 +147,14 @@ async function reconcileConnections() {
     if (receiver?.bot === bot) continue;
     receiver?.stop();
     const stop = integration.configuration.ownerUserId
-      ? bot.onMessage(message => { void receive(integration, message).catch(() => console.error('[communication] 无法持久化企微消息。')); })
+      ? bot.onMessage((message, requestId) => { void receive(integration, message, requestId).catch(() => console.error('[communication] 无法持久化企微消息。')); })
       : () => {};
     state.receivers.set(integration.id, { integration, bot, stop });
     bot.connect();
   }
   for (const [id, watcher] of state.watchers) {
     if (watcher.item.sessionId && !await readBrowserChatSessionOwner(watcher.item.sessionId)) {
-      watcher.stop(); state.watchers.delete(id);
-      watcher.item.status = 'cancelled'; await saveCommunicationInbound(watcher.item);
+      await enqueue(watcher.item.conversationId, () => cancelItem(id));
     }
   }
   state.lastRefresh = Date.now();
@@ -114,6 +172,45 @@ function receiverFor(conversation: CommunicationConversation) {
   return receiver;
 }
 
+/** Only the first text closes the stream; later chunks and media remain separate messages. */
+async function sendReplyText(conversation: CommunicationConversation, item: CommunicationInbound, text: string) {
+  const receiver = receiverFor(conversation);
+  if (!receiver) throw new Error('企微接收渠道已停用或连接配置已变更。');
+  const stream = item.replyStream;
+  clearStreamTimer(item.id);
+  if (stream && hasUnfinishedStream(item)) {
+    // Persist the attempt before sending. An ambiguous receipt must not replay a final result.
+    stream.status = 'unavailable';
+    await saveCommunicationInbound(item);
+    if (Date.now() - stream.startedAt < streamLifetimeMs) {
+      try {
+        await receiver.bot.replyStream(stream.requestId, stream.id, text, true);
+        stream.status = 'finished';
+        delete stream.error;
+        await saveCommunicationInbound(item);
+        return;
+      } catch (error) {
+        stream.error = failureMessage(error);
+        await saveCommunicationInbound(item);
+        // Only an explicit rejection permits resending the content as a new message.
+        if (!(error instanceof CommunicationDeliveryError && error.outcome === 'not-sent')) throw error;
+      }
+    }
+  }
+  await receiver.bot.sendText(conversation.target.id, text);
+}
+
+async function cancelItem(id: string) {
+  state.watchers.get(id)?.stop(); state.watchers.delete(id);
+  const item = await readCommunicationInbound(id);
+  if (!item || !['received', 'running', 'replying'].includes(item.status)) return;
+  item.status = 'cancelled';
+  await saveCommunicationInbound(item);
+  const conversation = await readCommunicationConversation(item.conversationId);
+  if (conversation) await sendReplyText(conversation, item, '对话已删除，本轮处理已取消。').catch(() => {});
+  clearStreamTimer(id);
+}
+
 async function replyText(item: CommunicationInbound, text: string) {
   item.replies = splitCommunicationText(text).map(body => ({ content: { format: 'markdown', body }, status: 'pending' }));
   item.status = 'replying';
@@ -127,7 +224,7 @@ async function deliver(conversation: CommunicationConversation, item: Communicat
   if (item.replies?.some(reply => reply.status === 'sending')) {
     item.status = 'failed'; item.error = '回复发送结果未确认，未自动重发。';
     await saveCommunicationInbound(item);
-    await receiver.bot.sendText(conversation.target.id, `上一条回复的送达状态未能确认，未自动重发。请在网页查看对话 ${item.sessionId || ''}。`).catch(() => {});
+    await sendReplyText(conversation, item, `上一条回复的送达状态未能确认，未自动重发。请在网页查看对话 ${item.sessionId || ''}。`).catch(() => {});
     return;
   }
   try {
@@ -136,12 +233,12 @@ async function deliver(conversation: CommunicationConversation, item: Communicat
       if (item.sessionId) {
         const latest = await readCommunicationConversation(conversation.id);
         if (!latest?.sessions.some(session => session.id === item.sessionId)) {
-          item.status = 'cancelled'; await saveCommunicationInbound(item); return;
+          await cancelItem(item.id); return;
         }
       }
       if ('body' in reply.content) {
         reply.status = 'sending'; await saveCommunicationInbound(item);
-        await receiver.bot.sendText(conversation.target.id, reply.content.body);
+        await sendReplyText(conversation, item, reply.content.body);
       } else {
         const context = { invocationId: item.id };
         const args = await createWeComMessageArguments({
@@ -154,11 +251,12 @@ async function deliver(conversation: CommunicationConversation, item: Communicat
       }
       reply.status = 'sent'; await saveCommunicationInbound(item);
     }
+    if (hasUnfinishedStream(item)) await sendReplyText(conversation, item, '本轮处理已完成。');
     item.status = 'done'; await saveCommunicationInbound(item);
   } catch (error) {
     item.status = 'failed'; item.error = failureMessage(error);
     await saveCommunicationInbound(item);
-    await receiver.bot.sendText(conversation.target.id, `本轮回复未完整送达：${item.error}\n请在网页查看对话 ${item.sessionId || ''}，未自动重复发送。`).catch(() => {});
+    await sendReplyText(conversation, item, `本轮回复未完整送达：${item.error}\n请在网页查看对话 ${item.sessionId || ''}，未自动重复发送。`).catch(() => {});
   }
 }
 
@@ -189,7 +287,7 @@ function watch(conversation: CommunicationConversation, item: CommunicationInbou
         latest.noticeSent = true;
         item.noticeSent = true;
         await saveCommunicationInbound(latest);
-        await receiverFor(conversation)?.bot.sendText(conversation.target.id,
+        await sendReplyText(conversation, latest,
           `对话 ${latest.sessionId} 有操作需要确认，请在网页对话中处理，确认后会继续回复。`);
       }).catch(() => {});
     }
@@ -236,8 +334,8 @@ async function processReceived(conversation: CommunicationConversation, item: Co
         else {
           for (const [key, watcher] of state.watchers) {
             if (watcher.item.sessionId !== id) continue;
-            watcher.stop(); state.watchers.delete(key); watcher.item.status = 'cancelled';
-            await saveCommunicationInbound(watcher.item);
+            if (watcher.item.conversationId === conversation.id) await cancelItem(key);
+            else void enqueue(watcher.item.conversationId, () => cancelItem(key)).catch(() => {});
           }
           await deleteBrowserChatSession(id, conversation.userId);
           await cancelCommunicationAttachments(id);
@@ -272,7 +370,7 @@ async function processReceived(conversation: CommunicationConversation, item: Co
   if (!item.text.trim()) {
     item.status = 'waiting';
     await saveCommunicationInbound(item);
-    await receiver.bot.sendText(conversation.target.id, `已收到 ${item.attachments?.length || 0} 个附件，请继续发送文字说明要如何处理。`).catch(() => {});
+    await sendReplyText(conversation, item, `已收到 ${item.attachments?.length || 0} 个附件，请继续发送文字说明要如何处理。`).catch(() => {});
     return;
   }
   item.attachments = attachments;
@@ -286,7 +384,7 @@ async function processReceived(conversation: CommunicationConversation, item: Co
     if (attachments.length) {
       item.status = 'waiting';
       await saveCommunicationInbound(item);
-      await receiver.bot.sendText(conversation.target.id, `本轮未能开始：${failureMessage(error)}\n附件已保留，处理原因后可重新发送文字说明。`).catch(() => {});
+      await sendReplyText(conversation, item, `本轮未能开始：${failureMessage(error)}\n附件已保留，处理原因后可重新发送文字说明。`).catch(() => {});
     } else {
       await replyText(item, `本轮消息未能开始执行：${failureMessage(error)}\n请在网页对话 ${sessionId} 查看模型配置或消息队列状态。`);
       await deliver(conversation, item);
@@ -303,6 +401,7 @@ async function processItem(id: string) {
   if (!item || !['received', 'running', 'replying'].includes(item.status)) return;
   const conversation = await readCommunicationConversation(item.conversationId);
   if (!conversation || !receiverFor(conversation)) return;
+  scheduleStreamTimeout(item);
   if (item.status === 'received') return processReceived(conversation, item);
   if (item.status === 'replying') return deliver(conversation, item);
   // Recover completed output after restart. Do not repeat interrupted tools.
@@ -334,7 +433,8 @@ async function tick() {
           if (!latest || !['received', 'running', 'replying'].includes(latest.status)) return;
           latest.status = 'failed'; latest.error = failureMessage(error); await saveCommunicationInbound(latest);
           const conversation = await readCommunicationConversation(latest.conversationId);
-          if (conversation) await receiverFor(conversation)?.bot.sendText(conversation.target.id, `消息处理失败：${latest.error}`).catch(() => {});
+          state.watchers.get(item.id)?.stop(); state.watchers.delete(item.id);
+          if (conversation) await sendReplyText(conversation, latest, `消息处理失败：${latest.error}`).catch(() => {});
         }
       }).finally(() => { state.scheduled.delete(item.id); }).catch(() => console.error('[communication] 无法保存接收任务状态。'));
     }

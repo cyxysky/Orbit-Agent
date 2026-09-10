@@ -2,7 +2,30 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
 
-Create, persist and edit ECharts/Three.js chart records; optionally render them in React.
+Create, persist and edit ECharts, Three.js and Excalidraw records; optionally render them in React.
+
+## Excalidraw diagrams
+
+Read `chart({action:"api",query:"excalidraw",reason:"Read diagram schema"})`,
+then create with `engine:"excalidraw"` and `option:{elements,appState,files}`.
+Native elements need stable IDs, type and x/y/width/height; text needs `text`,
+and lines/arrows need relative `points`. The API module includes a complete example.
+Read and update use the same chart store and `expectedRevision` as other engines.
+Images are embedded in `files`; the complete record retains the 4 MB limit.
+
+`ChartRenderer` loads the editor only on the client. It supports edit/save/cancel,
+reload after conflicts, fullscreen, PNG/SVG and editable `.excalidraw` downloads.
+Without `onSave`, edits stay on the current page until downloaded. The package owns
+its editor and CSS; it makes no persistence requests and imports no host UI code.
+Pass `excalidraw={{assetPath:'/chart-assets/',langCode:'en',theme:'light'}}` to
+configure resources and appearance. Excalidraw's asset path is window-global;
+all editors on the same page should use the same path.
+
+For offline hosting, serve the upstream `dist/prod/fonts/` directory below
+`assetPath + 'fonts/'`, or expose `readExcalidrawFont(segments)` from the Node entry.
+The host must include these upstream font files in its deployment. Orbit supplies
+a local font endpoint and standalone tracing. Real-time multiplayer synchronization
+is not included. Excalidraw is distributed under its upstream MIT license.
 
 This README is a complete integration entrypoint. Follow steps 1–4 for any TypeScript Agent framework, or use the AI SDK/MCP routes below. All named source files are created in **your consuming project**, not inside this package.
 

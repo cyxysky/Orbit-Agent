@@ -7,7 +7,8 @@ function restoreCollapsedMarkdownBlocks(value: string) {
       const after = source.slice(offset + match.length).trimStart();
       return before.endsWith('|') && after.startsWith('|') ? match : '\n\n---\n\n';
     })
-    .replace(/([^\n|])[ \t]+(?=#{1,6}[ \t]+[^|\n])/g, '$1\n\n')
+    .replace(/([^\n|#])[ \t]*(?=#{2,6}[ \t]+[^|\n])/g, '$1\n\n')
+    .replace(/([^\n|])[ \t]+(?=#[ \t]+[^|\n])/g, '$1\n\n')
     .replace(/^.*\|[ \t]+\|[ \t]*:?-{3,}.*$/gm, (line) => line.replace(/\|[ \t]+\|/g, '|\n|'))
     .replace(/(^|\n)([^\n|]*\S)[ \t]+(?=\|[^\n]+\|\n\|[ \t]*:?-{3,})/g, '$1$2\n\n')
     .replace(/(^|\n)(\*\*[^*\n]{1,120}\*\*)[ \t]*(?=\|[^\n]+\|\n\|[ \t]*:?-{3,})/g, '$1$2\n\n')
@@ -19,8 +20,17 @@ function pipeRowCells(value: string) {
   const trimmed = value.trim().replace(/^[-*+][ \t]+/, '');
   if (!/[|｜]/.test(trimmed)) return undefined;
   const body = trimmed.replace(/^[|｜]/, '').replace(/[|｜]$/, '');
-  const cells = body.split(/[|｜]/).map((cell) => cell.trim());
-  if (cells.length < 2 || cells.some((cell) => !cell)) return undefined;
+  const cells: string[] = [];
+  let start = 0;
+  for (let index = 0; index < body.length; index += 1) {
+    if (body[index] !== '|' && body[index] !== '｜') continue;
+    let escapes = 0;
+    for (let cursor = index - 1; cursor >= 0 && body[cursor] === '\\'; cursor -= 1) escapes += 1;
+    if (escapes % 2) continue;
+    cells.push(body.slice(start, index).trim()); start = index + 1;
+  }
+  cells.push(body.slice(start).trim());
+  if (cells.length < 2 || cells.every((cell) => !cell)) return undefined;
   return cells;
 }
 
@@ -57,7 +67,7 @@ function normalizeLoosePipeTables(value: string) {
     while (delimiterIndex < lines.length && !lines[delimiterIndex].trim()) delimiterIndex += 1;
     const delimiterCells = pipeRowCells(lines[delimiterIndex] || '');
     if (delimiterCells?.length === firstCells.length && isPipeDelimiterRow(delimiterCells)) {
-      normalized.push(...lines.slice(index, delimiterIndex + 1));
+      normalized.push(lines[index], lines[delimiterIndex]);
       index = delimiterIndex + 1;
       while (index < lines.length) {
         const cells = pipeRowCells(lines[index]);
@@ -132,9 +142,28 @@ function normalizeMarkdownSegment(value: string) {
 
 function normalizeFencedCodeBoundaries(value: string) {
   return value
-    .replace(/([^\n])[ \t]*(```(?:[a-z0-9_+-]+)?[ \t]*\n)/gi, '$1\n$2')
-    .replace(/([^\n])[ \t]*(```[ \t]*)(?=\n|$)/g, '$1\n$2')
+    .replace(/([^\n`])[ \t]*(`{3,}(?!`)(?:[a-z0-9_+-]+)?[ \t]*\n)/gi, '$1\n$2')
+    .replace(/([^\n`])[ \t]*(`{3,}(?!`)[ \t]*)(?=\n|$)/g, '$1\n$2')
     .replace(/(^|\n)(```[ \t]*)(?=#{1,6}[ \t]+|---(?:[ \t]|$))/g, '$1$2\n\n');
+}
+
+function mapMarkdownProse(value: string, transform: (prose: string) => string) {
+  const opening = /^ {0,3}(`{3,}|~{3,})[^\n]*(?:\n|$)/gm;
+  const result: string[] = [];
+  let offset = 0;
+  for (let match = opening.exec(value); match; match = opening.exec(value)) {
+    result.push(transform(value.slice(offset, match.index)));
+    const fence = match[1];
+    const closing = new RegExp(`^ {0,3}${fence[0]}{${fence.length},}[ \\t]*(?=\\n|$)`, 'gm');
+    closing.lastIndex = opening.lastIndex;
+    const end = closing.exec(value);
+    offset = end ? end.index + end[0].length : value.length;
+    result.push(value.slice(match.index, offset));
+    opening.lastIndex = offset;
+    if (!end) break;
+  }
+  result.push(transform(value.slice(offset)));
+  return result.join('');
 }
 
 type MarkdownAstNode = {
@@ -181,10 +210,16 @@ export function remarkBrowserChatCjkStrong() {
 }
 
 export function normalizeBrowserChatMarkdown(markdown: string) {
-  return normalizeFencedCodeBoundaries(markdown)
-    .split(/(```[\s\S]*?```|`[^`\n]*`)/g)
-    .map((part) => (part.startsWith('`') ? part : normalizeMarkdownSegment(part)))
-    .join('')
+  // Inline code belongs to its surrounding block. Normalizing either side
+  // separately turns a single table into fragments and invents new headers.
+  const normalizeProse = (prose: string) => {
+    let marker = '\uE000code';
+    while (prose.includes(marker)) marker += '_';
+    const code: string[] = [];
+    const masked = prose.replace(/(`+)(?!`)([^\n]*?)\1(?!`)/g, (match) => `${marker}${code.push(match) - 1}\uE001`);
+    return normalizeMarkdownSegment(masked).replace(new RegExp(`${marker}(\\d+)\uE001`, 'g'), (_match, index: string) => code[Number(index)]);
+  };
+  return mapMarkdownProse(mapMarkdownProse(markdown.replace(/\r\n?/g, '\n'), normalizeFencedCodeBoundaries), normalizeProse)
     .replace(/^(?:[ \t]*\n)+|(?:\n[ \t]*)+$/g, '');
 }
 

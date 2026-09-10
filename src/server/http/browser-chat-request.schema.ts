@@ -16,6 +16,7 @@ export const browserChatAttachmentSchema = z.object({
 
 const browserChatSettingsSchema = z.object({
   safetyMode: z.enum(['strict', 'full']).default('strict'),
+  disabledTools: z.array(text(80)).max(64).optional(),
   modelProvider: optionalText(120),
   model: optionalText(240),
 });

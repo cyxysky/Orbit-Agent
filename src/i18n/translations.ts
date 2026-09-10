@@ -1048,6 +1048,8 @@ const en: Record<string, string> = {
   'LibreOffice Python 路径': 'LibreOffice Python path',
   '可选的 PyUNO Python 可执行文件绝对路径。Windows 默认使用 LibreOffice 自带的 python.exe；仅在自动搜索失败时配置。': 'Optional absolute path to the PyUNO Python executable. On Windows, LibreOffice\'s bundled python.exe is used by default; configure this only when automatic detection fails.',
   'Office 文件生成模式': 'Office file generation mode',
+  'JavaScript（Excel / HTML 文档）': 'JavaScript (Excel / HTML documents)',
+  'JavaScript 模式：Excel 使用原有引擎，Word、PowerPoint、PDF 从 HTML 生成。Markdown 等文本文件可直接生成。': 'JavaScript mode: Excel uses the existing engine; Word, PowerPoint and PDF are generated from HTML. Markdown and other text files can be generated directly.',
   'LibreOffice UNO 通过统一的高层封装创建或修改 PPT、Word、Excel 文件；模型不直接操作 UNO 对象。JavaScript 模式保留用于显式选择 PptxGenJS、docx 或 ExcelJS。': 'LibreOffice UNO creates or edits PowerPoint, Word, and Excel files through one high-level facade; the model never manipulates raw UNO objects. JavaScript mode remains available when PptxGenJS, docx, or ExcelJS is selected explicitly.',
   'LibreOffice 高层封装（默认）': 'LibreOffice high-level facade (default)',
   'JavaScript Office 库': 'JavaScript Office libraries',

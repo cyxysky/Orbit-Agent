@@ -19,6 +19,11 @@ export type CommunicationInbound = {
   attachments?: BrowserChatAttachment[];
   attachmentMessageIds?: string[];
   noticeSent?: boolean;
+  replyStream?: {
+    requestId: string; id: string; startedAt: number;
+    status: 'opening' | 'open' | 'finished' | 'unavailable';
+    error?: string;
+  };
 };
 export function communicationId(...parts: string[]) { return createHash('sha256').update(JSON.stringify(parts)).digest('hex'); }
 export async function readCommunicationConversation(id: string) {

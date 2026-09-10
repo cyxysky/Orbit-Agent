@@ -166,7 +166,7 @@ const fileToolShape = {
   urlOrPath: z.string().max(8_000).optional()
     .describe('For download: real HTTP(S) file URL or page-relative URL path resolved against sourcePageUrl. Not an operating-system path. Local assets must be uploaded/host-bound attachments. Supply exactly one of urlOrPath/url/path.'),
   program: z.string().optional()
-    .describe('For generate: executable source, saved as the complete current source of documentId, replacing any existing source. Provide program or spec, never both. Prefer edit for revisions and repairs, including failed-validation drafts; regenerate only when targeted edits cannot implement the change.'),
+    .describe('For generate: complete HTML when plan.generator=html; executable Python/JavaScript for UNO/ExcelJS drafts. Saved as the complete current source of documentId. Provide program or spec, never both; HTML requires program. Prefer edit for revisions and repairs.'),
   spec: semanticSpecSchema.optional()
     .describe('For generate: compact Word, spreadsheet, or presentation content using versioned themes and semantic templates. Provide spec or program, never both.'),
   patch: z.string().max(200_000).optional()

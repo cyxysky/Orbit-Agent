@@ -163,6 +163,74 @@ def presentation_text_line_count(value, width, font_size, padding=0):
     return max(1, sum(max(1, int(math.ceil(units / units_per_line))) for units in presentation_text_units(value)))
 
 
+def presentation_chart_background(page, area):
+    """Resolve painted surfaces beneath a chart, including shape-based backgrounds.
+
+    Sample the chart footprint in paint order. Keep gradient endpoints as well
+    as their midpoint so a dark/light gradient is not mistaken for a solid fill.
+    Transparent cards compose with the surfaces underneath them.
+    """
+    def blend(foreground, underneath, opacity):
+        return sum(round(((foreground >> shift) & 255) * opacity
+                         + ((underneath >> shift) & 255) * (1 - opacity)) << shift
+                   for shift in (16, 8, 0))
+
+    def paint(surface, underneath):
+        style = getattr(getattr(surface, 'FillStyle', None), 'value', 'NONE')
+        opacity = 1 - max(0, min(100, float(getattr(surface, 'FillTransparence', 0)))) / 100
+        if style == 'SOLID':
+            colors = [office_color(surface.FillColor)]
+        elif style == 'GRADIENT':
+            gradient = surface.FillGradient
+            start = blend(gradient.StartColor, 0, gradient.StartIntensity / 100)
+            end = blend(gradient.EndColor, 0, gradient.EndIntensity / 100)
+            colors = [start, blend(start, end, .5), end]
+        else:
+            return underneath
+        if opacity == 1:
+            return colors
+        painted = sorted(set(blend(color, base, opacity) for base in underneath for color in colors),
+                         key=lambda color: sum(((color >> shift) & 255) * weight
+                                               for shift, weight in ((16, .2126), (8, .7152), (0, .0722))))
+        # Bound work for many stacked translucent gradients while retaining
+        # the darkest, lightest and intermediate representative surfaces.
+        return painted if len(painted) <= 9 else [painted[round(i * (len(painted) - 1) / 8)] for i in range(9)]
+
+    base = [0xFFFFFF]
+    master = getattr(page, 'MasterPage', None)
+    if master is not None:
+        base = paint(getattr(master, 'Background', None), base)
+    base = paint(getattr(page, 'Background', None), base)
+    layers = []
+    if master is not None and getattr(page, 'IsBackgroundObjectsVisible', True):
+        layers.extend(sorted((master.getByIndex(i) for i in range(master.getCount())),
+                             key=lambda shape: getattr(shape, 'ZOrder', 0)))
+    layers.extend(sorted((page.getByIndex(i) for i in range(page.getCount())),
+                         key=lambda shape: getattr(shape, 'ZOrder', 0)))
+    samples = []
+    for fy in (.05, .5, .95):
+        for fx in (.05, .5, .95):
+            x, y = area['x'] + area['width'] * fx, area['y'] + area['height'] * fy
+            colors = base
+            for shape in layers:
+                rectangle = shape.supportsService('com.sun.star.drawing.RectangleShape')
+                ellipse = shape.supportsService('com.sun.star.drawing.EllipseShape')
+                if not (rectangle or ellipse) or not getattr(shape, 'Visible', True):
+                    continue
+                pos, extent = shape.Position, shape.Size
+                dx, dy = x - pos.X - extent.Width / 2, y - pos.Y - extent.Height / 2
+                angle = math.radians(float(getattr(shape, 'RotateAngle', 0)) / 100)
+                local_x, local_y = dx * math.cos(angle) - dy * math.sin(angle), dx * math.sin(angle) + dy * math.cos(angle)
+                if extent.Width <= 0 or extent.Height <= 0:
+                    continue
+                nx, ny = local_x * 2 / extent.Width, local_y * 2 / extent.Height
+                if abs(nx) > 1 or abs(ny) > 1 or (ellipse and nx * nx + ny * ny > 1):
+                    continue
+                colors = paint(shape, colors)
+            samples.extend(colors)
+    return tuple(dict.fromkeys(samples))
+
+
 def chart_contrast_color(fill, preferred=None, transparency=0, background=0xFFFFFF):
     """Keep a requested label color only when its actual contrast is readable."""
     def luminance(channels):
@@ -174,11 +242,15 @@ def chart_contrast_color(fill, preferred=None, transparency=0, background=0xFFFF
         return [((color >> shift) & 255) / 255 for shift in (16, 8, 0)]
 
     alpha = min(1, max(0, float(transparency) / 100))
-    fill_luminance = luminance([a * (1 - alpha) + b * alpha for a, b in zip(channels(fill), channels(background))])
+    fills = fill if isinstance(fill, (tuple, list)) else (fill,)
+    backgrounds = background if isinstance(background, (tuple, list)) else (background,)
+    fill_luminances = [luminance([a * (1 - alpha) + b * alpha for a, b in zip(channels(color), channels(base))])
+                       for color in fills for base in backgrounds]
 
     def contrast(color):
         text_luminance = luminance(channels(color))
-        return (max(fill_luminance, text_luminance) + .05) / (min(fill_luminance, text_luminance) + .05)
+        return min((max(value, text_luminance) + .05) / (min(value, text_luminance) + .05)
+                   for value in fill_luminances)
 
     if preferred is not None and contrast(preferred) >= 4.5:
         return office_color(preferred)
@@ -694,7 +766,7 @@ def _patch_pptx_chart_callout_lines(entries, chart_path, xml, request):
             f'<a:off x="{round(left * width * 360)}" y="{round(top * height * 360)}"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm>'
             '<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="0" t="0" r="w" b="h"/>'
             f'<a:pathLst><a:path w="21600" h="21600" fill="none">{path_xml}</a:path></a:pathLst></a:custGeom><a:noFill/>'
-            f'<a:ln w="6350" cap="flat"><a:solidFill><a:srgbClr val="{color:06X}"><a:alpha val="65000"/></a:srgbClr></a:solidFill>'
+            f'<a:ln w="9525" cap="flat"><a:solidFill><a:srgbClr val="{color:06X}"/></a:solidFill>'
             '<a:prstDash val="solid"/><a:headEnd type="none"/><a:tailEnd type="none"/></a:ln>'
             '</cdr:spPr></cdr:sp></cdr:relSizeAnchor>'
         )
@@ -789,14 +861,12 @@ def _patch_pptx_chart_style(job, entries):
                     properties = '<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr>' + fill + '</a:defRPr></a:pPr><a:endParaRPr/></a:p></c:txPr>'
                     return re.sub(r'(?=<c:(?:dLblPos|showLegendKey|showVal|showCatName|showSerName|showPercent|showBubbleSize|separator|extLst)\b|</c:dLbl>)', lambda _: properties, block, count=1)
                 series_xml = re.sub(r'<c:dLbl\b[^>]*>.*?</c:dLbl>', point_label, match.group(0), flags=re.DOTALL)
-                if positions:
-                    def leader_lines(labels):
-                        block = re.sub(r'<c:showLeaderLines\b[^>]*/>', '', labels.group(0))
-                        # Native doughnut leaders join the center of the ring;
-                        # the explicit chart drawing starts at its outer edge.
-                        enabled = '0' if request.get('pieLeaderLines') else '1'
-                        return re.sub(r'(?=<c:(?:leaderLines|extLst)\b|</c:dLbls>)', f'<c:showLeaderLines val="{enabled}"/>', block, count=1)
-                    series_xml = re.sub(r'<c:dLbls\b[^>]*>.*?</c:dLbls>', leader_lines, series_xml, flags=re.DOTALL)
+                def leader_lines(labels):
+                    block = re.sub(r'<c:showLeaderLines\b[^>]*/>|<c:leaderLines\b[^>]*(?:/>|>.*?</c:leaderLines>)', '', labels.group(0), flags=re.DOTALL)
+                    # Only pie callouts need guides; their explicit drawing
+                    # starts at the sector edge and has a contrast-aware color.
+                    return re.sub(r'(?=<c:extLst\b|</c:dLbls>)', '<c:showLeaderLines val="0"/>', block, count=1)
+                series_xml = re.sub(r'<c:dLbls\b[^>]*>.*?</c:dLbls>', leader_lines, series_xml, flags=re.DOTALL)
                 return series_xml
             if request.get('dataLabelColors'):
                 xml = re.sub(r'<c:ser\b[^>]*>.*?</c:ser>', label_series, xml, flags=re.DOTALL)
@@ -4816,7 +4886,7 @@ class PresentationLayout(OfficeUnitConversion):
                   x_axis_min=None, x_axis_max=None, y_axis_min=None, y_axis_max=None,
                   x_axis_scale='linear', y_axis_scale='linear', axis_position='outside',
                   series_transparency=None, line_width=1.5, font_name=None,
-                  font_color=0x334155, grid_color=0xD9DEE2, gridlines=True,
+                  font_color=0x334155, grid_color=0xD9DEE2, gridlines=None,
                   marker_shape='circle', marker_size=None, label_font_size=None,
                   label_color=None, label_position='auto', bubble_scale=50,
                   secondary_y_axis_title=None, secondary_y_axis_min=None, secondary_y_axis_max=None):
@@ -4902,8 +4972,10 @@ class PresentationLayout(OfficeUnitConversion):
             show_values = normalized in ('bar', 'column') and point_count <= 8 and len(series or [None]) == 1
         if show_category_name is None:
             show_category_name = normalized in ('pie', 'donut', 'doughnut') and not bool(show_legend) and not (show_values or show_percent)
-        chart_background = background if background is not None else getattr(page, 'FillColor', 0xFFFFFF)
+        chart_background = background if background is not None else presentation_chart_background(page, self._rect(box))
         font_color = chart_contrast_color(chart_background, preferred=font_color)
+        if gridlines is None:
+            gridlines = service_name != 'BarDiagram'
         small_slice_legend = False
         if service_name in ('PieDiagram', 'DonutDiagram'):
             pie_rows = self._chart_series(categories, values, series, series_name)[2]
@@ -4922,7 +4994,7 @@ class PresentationLayout(OfficeUnitConversion):
                         if show_values:
                             parts.append(f'{float(value):g}')
                         if show_percent and total > 0:
-                            parts.append(f'{100 * abs(float(value)) / total:.4g}%')
+                            parts.append(f'{100 * abs(float(value)) / total:.2f}%')
                         legend_labels.append(' · '.join(parts))
                     categories = legend_labels
                     show_category_name = False
@@ -5102,8 +5174,8 @@ class PresentationLayout(OfficeUnitConversion):
                     locale = uno.createUnoStruct('com.sun.star.lang.Locale')
                     locale.Language = 'en'
                     locale.Country = 'US'
-                    key = formats.queryKey('0.##%', locale, True)
-                    item.PercentageNumberFormat = formats.addNew('0.##%', locale) if key < 0 else key
+                    key = formats.queryKey('0.00%', locale, True)
+                    item.PercentageNumberFormat = formats.addNew('0.00%', locale) if key < 0 else key
                 apply_text_font(item, font_name=font_name or _CJK_FONT, font_size=font_size)
                 item.CharColor = chart_contrast_color(chart_background, preferred=label_color if label_color is not None else font_color)
                 item.TextWordWrap = False
@@ -5138,7 +5210,7 @@ class PresentationLayout(OfficeUnitConversion):
                     raise ValueError('CHART_STYLE_INVALID: point_colors must contain exactly one color per observation; use series.color for a group color.')
                 point_palette = self._chart_palette(len(point_values), authored.get('point_colors') or colors) if color_points or authored.get('point_colors') else [final_palette[series_index]] * len(point_values)
                 for leader in leaders:
-                    leader['color'] = office_color(point_palette[leader['index']])
+                    leader['color'] = chart_contrast_color(chart_background, preferred=point_palette[leader['index']])
                 if service_name in ('PieDiagram', 'DonutDiagram', 'BubbleDiagram', 'XYDiagram'):
                     for point_index, point_color in enumerate(point_palette):
                         data_point = item.getDataPointByIndex(point_index)
@@ -5167,9 +5239,8 @@ class PresentationLayout(OfficeUnitConversion):
                                 position.Primary, position.Secondary = custom_offset
                                 data_point.CustomLabelPosition = position
                             if show_percent and total > 0:
-                                percentage = abs(float(point_values[point_index])) / total * 100
-                                decimals = next((digits for digits in range(7) if abs(percentage - round(percentage, digits)) < 1e-8), 6)
-                                resolved_label_formats[point_index] = '0' + ('.' + '0' * decimals if decimals else '') + '%'
+                                resolved_label_formats[point_index] = '0.00%'
+                                data_point.PercentageNumberFormat = item.PercentageNumberFormat
                             resolved_color = chart_contrast_color(
                                 chart_background if outside else point_color,
                                 preferred=label_color if label_color is not None else font_color if outside else None,
@@ -5181,7 +5252,7 @@ class PresentationLayout(OfficeUnitConversion):
                             if float(point_values[point_index]) == 0:
                                 data_point.Label = uno.createUnoStruct('com.sun.star.chart2.DataPointLabel')
                     if service_name in ('PieDiagram', 'DonutDiagram'):
-                        item.ShowCustomLeaderLines = True
+                        item.ShowCustomLeaderLines = False
                     if service_name == 'BubbleDiagram':
                         item.BorderColor = 0xFFFFFF
                         item.BorderStyle = uno.Enum('com.sun.star.drawing.LineStyle', 'SOLID')
@@ -6954,7 +7025,7 @@ def facade_value_schemas(document_type):
                 'pointTupleCompatibility': "Scatter also accepts values=[[x,y], ...], bubble values=[[x,y,size], ...]. Do not combine tuple values and named role arrays. Prefer named arrays in new code.",
                 'axisBounds': 'Optional numeric x_axis_min/x_axis_max/y_axis_min/y_axis_max control visible axis bounds; each minimum must be below its maximum. For bubbles near plot edges, expand the axis range and chart box, not x/y/sizes data. Data overlap can be intrinsic; never move samples or change relative sizes to disguise it.',
                 'axisScales': "scatter/bubble accept x_axis_scale='linear'|'log10' and y_axis_scale='linear'|'log10'. Log scales preserve stored data and require all values/bounds positive; explicitly label the scale. axis_position='outside' (default) keeps axes/ticks on plot edges; 'zero' requests internal zero crossing. x/y titles and bounds refer to physical horizontal/vertical axes, including bar.",
-                'appearance': "font_name, font_color, grid_color, gridlines=True, line_width=1.5 (pt), series_transparency=0..100. title=None suppresses the internal title, including for single series. symbols=None enables marks only for line/scatter; stock always suppresses marks. marker_shape='circle' (also square/diamond/triangle/none); marker_size is diameter in points, default 3 for lines and 4 for scatter. Filled-radar defaults to 45% transparency; bubbles to 30% with an outline. bubble_scale=50 sets PPTX bubble area display scale (1..300%); LibreOffice preview uses its own native maximum size, so inspect both overlap and axis padding. Dense line/area/radar/scatter/bubble/stock families default show_values=False. Use shared theme helpers.",
+                'appearance': "font_name, font_color, grid_color, gridlines=None, line_width=1.5 (pt), series_transparency=0..100. title=None suppresses the internal title, including for single series. symbols=None enables marks only for line/scatter; stock always suppresses marks. marker_shape='circle' (also square/diamond/triangle/none); marker_size is diameter in points, default 3 for lines and 4 for scatter. Filled-radar defaults to 45% transparency; bubbles to 30% with an outline. bubble_scale=50 sets PPTX bubble area display scale (1..300%); LibreOffice preview uses its own native maximum size, so inspect both overlap and axis padding. Bar/column gridlines default off; set gridlines=True explicitly when needed. Pie/donut percentages use two decimal places; callout lines follow the actual background contrast. Dense line/area/radar/scatter/bubble/stock families default show_values=False. Use shared theme helpers.",
                 'dataLabels': "label_font_size=1..72pt, label_color, label_position='auto'|'inside'|'outside'. Labels enforce readable contrast (>=4.5:1), including when an explicit label_color is unsuitable, accounting for mark transparency. Every nonzero pie/donut sector keeps its requested numeric label: small sectors automatically use staggered outside labels and editable 0.5pt elbow lines from the outer sector edge, with short horizontal tails and matching sector colors, even if label_position='inside'. Exact fractions such as 0.8% and 0.2% are preserved. The legend supplements labels, never replaces them; requested category/value/percent combinations remain in legend text. Large labels remain in their sectors unless outside is requested. Bar labels fit/stagger without deleting values. Widen the plot if labels still collide; do not hide requested values or alter source data.",
                 'chartTypes': ['area', 'bar', 'column', 'bubble', 'donut', 'doughnut', 'filled-radar', 'line', 'pie', 'radar', 'scatter', 'stock'],
                 'labelRule': 'Category charts require semantic categories; scatter/bubble use numeric X and may pass categories=[]. Supply meaningful series names, axis units and appropriate labels. Pie/donut: legend + percent-only OR category-only without legend, never multiple label modes.',
@@ -7814,7 +7885,7 @@ details.getCellByPosition(0, 0).String = 'Detail' ''',
             "deck.add_image_contain(element_id, page, asset_name, box, padding=0, layout_role='content', allow_overlap=False)",
             "deck.add_text_link(element_id, page, text, box, url=None, target_slide_id=None, font_size=18, color=0x2563EB, bold=False, italic=False, align='LEFT', font_name=None, min_font_size=None, padding=0, valign='CENTER', layout_role='content', allow_overlap=False)",
             "deck.add_native_table(element_id, page, box, rows, column_weights=None, header_fill=0x0F172A, header_color=0xFFFFFF, body_fill=0xF8FAFC, alternate_fill=0xFFFFFF, body_color=0x1E293B, font_size=11, font_name=None, first_column_align='LEFT')",
-            "deck.add_chart(element_id, page, box, chart_type, categories, values=None, series=None, colors=None, font_size=12, show_legend=None, stacked=False, percent=False, vertical=None, lines=True, symbols=None, dim3d=False, color_by_point=None, series_name='Values', title=None, x_axis_title=None, y_axis_title=None, show_values=None, show_category_name=None, show_percent=None, background=None, legend_position='right', alt_text=None, x_axis_min=None, x_axis_max=None, y_axis_min=None, y_axis_max=None, x_axis_scale='linear', y_axis_scale='linear', axis_position='outside', series_transparency=None, line_width=1.5, font_name=None, font_color=0x334155, grid_color=0xD9DEE2, gridlines=True, marker_shape='circle', marker_size=None, label_font_size=None, label_color=None, label_position='auto', bubble_scale=50, secondary_y_axis_title=None, secondary_y_axis_min=None, secondary_y_axis_max=None); transparent background and no internal title are default; chart_type: area, bar, column, bubble, donut/doughnut, filled-radar, line, radar, pie, stock, xy/scatter",
+            "deck.add_chart(element_id, page, box, chart_type, categories, values=None, series=None, colors=None, font_size=12, show_legend=None, stacked=False, percent=False, vertical=None, lines=True, symbols=None, dim3d=False, color_by_point=None, series_name='Values', title=None, x_axis_title=None, y_axis_title=None, show_values=None, show_category_name=None, show_percent=None, background=None, legend_position='right', alt_text=None, x_axis_min=None, x_axis_max=None, y_axis_min=None, y_axis_max=None, x_axis_scale='linear', y_axis_scale='linear', axis_position='outside', series_transparency=None, line_width=1.5, font_name=None, font_color=0x334155, grid_color=0xD9DEE2, gridlines=None, marker_shape='circle', marker_size=None, label_font_size=None, label_color=None, label_position='auto', bubble_scale=50, secondary_y_axis_title=None, secondary_y_axis_min=None, secondary_y_axis_max=None); transparent background and no internal title are default; chart_type: area, bar, column, bubble, donut/doughnut, filled-radar, line, radar, pie, stock, xy/scatter",
             "deck.add_bar_chart(element_id, page, box, categories, values, colors=None, font_size=12, color=0x334155, baseline_color=0xCBD5E1, value_format='{value:g}', series_name='Values', title=None, x_axis_title=None, y_axis_title=None, show_values=True, show_legend=False)",
             "deck.add_line_chart(element_id, page, box, categories, values, color=0x2563EB, point_fill=0xFFFFFF, label_color=0x334155, font_size=12, value_format='{value:g}', series_name='Values', title=None, x_axis_title=None, y_axis_title=None, show_values=True, show_legend=False)",
             "deck.add_area_chart(element_id, page, box, categories, values=None, series=None, colors=None, font_size=10, show_legend=None, stacked=False, percent=False)",

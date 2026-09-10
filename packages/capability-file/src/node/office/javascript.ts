@@ -2,7 +2,7 @@ import { CapabilityTaskQueue } from '@webpilot/capability-sdk';
 import { runCapabilityProcess } from '@webpilot/capability-sdk/node';
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
-import { access, copyFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -106,18 +106,12 @@ export async function generateOfficeJsProgramDocument(input: {
   const sourceCode = input.sourceCode ?? await readFile(input.sourcePath!, 'utf8');
   assertControlledOfficeJsProgram(sourceCode);
   const requestedExtension = path.extname(input.fileName).toLowerCase();
-  const officeExtension = { presentation: '.pptx', word: '.docx', spreadsheet: '.xlsx' }[input.documentType];
-  if (requestedExtension !== officeExtension && requestedExtension !== '.pdf') {
-    throw new Error(`JavaScript ${input.documentType} generation requires ${officeExtension} or .pdf output.`);
-  }
-  // The JavaScript libraries author an editable Office source. PDF delivery is
-  // a two-stage pipeline: author the matching Office format, then let the local
-  // LibreOffice installation render that exact file to PDF.
-  const outputExtension = requestedExtension === '.pdf' ? officeExtension : requestedExtension;
+  if (input.documentType !== 'spreadsheet' || requestedExtension !== '.xlsx') throw new Error('JavaScript program authoring is for XLSX only. Use HTML source for DOCX, PPTX and PDF.');
+  const outputExtension = '.xlsx';
   const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'webpilot-office-js-'));
   try {
     const programPath = input.sourcePath || path.join(temporaryDirectory, 'draft.mjs');
-    const authoredPath = requestedExtension === '.pdf' || !input.outputPath
+    const authoredPath = !input.outputPath
       ? path.join(temporaryDirectory, `output${outputExtension}`)
       : input.outputPath;
     if (!input.sourcePath) await writeFile(programPath, sourceCode, 'utf8');
@@ -148,10 +142,9 @@ export async function generateOfficeJsProgramDocument(input: {
     });
     if (!wrotePreview && !previewPdf) throw new Error('LibreOffice is required to reopen and preview JavaScript-generated Office files.');
     await input.onProgress?.({ phase: 'visual', message: '文档验证完成，预览已生成' });
-    if (requestedExtension === '.pdf' && input.outputPath) await copyFile(previewPath, input.outputPath);
-    const deliveredPath = input.outputPath || (requestedExtension === '.pdf' ? previewPath : authoredPath);
+    const deliveredPath = input.outputPath || authoredPath;
     return {
-      buffer: input.outputPath ? undefined : requestedExtension === '.pdf' ? previewPdf : await readFile(authoredPath),
+      buffer: input.outputPath ? undefined : await readFile(authoredPath),
       outputPath: deliveredPath,
       previewPdf,
       previewPath,
@@ -159,7 +152,7 @@ export async function generateOfficeJsProgramDocument(input: {
         ...report,
         requestedExtension,
         authoredExtension: outputExtension,
-        convertedToPdf: requestedExtension === '.pdf',
+        convertedToPdf: false,
       },
     };
   } finally {

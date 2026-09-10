@@ -299,7 +299,7 @@ export type OfficeDocumentDraft = {
   /** Create a new file or modify a user-supplied Office document in place. */
   operation?: 'create' | 'modify';
   /** Program runtime selected when the workspace is planned. Existing-file modification always uses UNO. */
-  generator?: 'javascript' | 'uno';
+  generator?: 'javascript' | 'uno' | 'html';
   /** Metadata for a compact semantic spec compiled into the ordinary executable draft pipeline. */
   semantic?: {
     diagnostics: OfficeLayoutDiagnostic[];

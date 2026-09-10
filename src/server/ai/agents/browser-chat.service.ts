@@ -9,6 +9,7 @@ import type {
 } from '@webpilot/capability-browser/node';
 import { createWebPilotBrowserSession } from '@/server/capabilities/webpilot-browser';
 import { normalizeApplicationUserId } from '@/server/auth/user-context';
+import { normalizeDisabledCapabilityTools } from './runtime-tool-catalog';
 import { readBrowserDomainCookies } from '@/server/credentials/browser-domain-cookie-vault';
 import { incrementMetric, structuredLog } from '@/server/observability/runtime-observability';
 import { archiveAiOperationsChatSession } from '@/server/observability/ai-operations-chat-archive';
@@ -227,6 +228,7 @@ export type BrowserChatQueuedTurn = {
   id: string;
   userMessageId: string;
   safetyMode: BrowserChatSafetyMode;
+  disabledTools?: string[];
   modelProvider: ModelProvider;
   model: string;
   queuedAt: string;
@@ -254,6 +256,7 @@ export type BrowserChatSessionSnapshot = {
   targetUrl: string;
   noVncUrl?: string;
   safetyMode: BrowserChatSafetyMode;
+  disabledTools?: string[];
   modelProvider: ModelProvider;
   model: string;
   status: 'idle' | 'running' | 'closed' | 'error';
@@ -2042,6 +2045,7 @@ function sessionSnapshotHeader(
     targetUrl: session.targetUrl,
     noVncUrl: browserChatNoVncUrl(session),
     safetyMode: normalizeSafetyMode(session.safetyMode),
+    disabledTools: normalizeDisabledCapabilityTools(session.disabledTools),
     modelProvider: normalizeModelProvider(session.modelProvider),
     model: session.model,
     status: session.status,
@@ -2509,6 +2513,7 @@ function recordFromSnapshot(
     tabs: session.tabs || [],
     targetUrl: exportableTargetUrl(session.targetUrl),
     safetyMode: normalizeSafetyMode(session.safetyMode),
+    disabledTools: normalizeDisabledCapabilityTools(session.disabledTools),
     modelProvider: modelSettings.provider,
     model: modelSettings.model,
     messages,
@@ -3401,6 +3406,7 @@ export async function createBrowserChatSession(input: {
   selectRuntime?: boolean;
   targetUrl?: string;
   safetyMode?: BrowserChatSafetyMode;
+  disabledTools?: string[];
   modelProvider?: unknown;
   model?: unknown;
   title?: string;
@@ -3416,6 +3422,7 @@ export async function createBrowserChatSession(input: {
     browserGroupId: '',
     targetUrl: exportableTargetUrl(input.targetUrl || ''),
     safetyMode: normalizeSafetyMode(input.safetyMode),
+    disabledTools: normalizeDisabledCapabilityTools(input.disabledTools),
     modelProvider: modelSettings.provider,
     model: modelSettings.model,
     status: 'idle',
@@ -3527,6 +3534,17 @@ export async function updateBrowserChatSessionTitle(sessionId: string, title: st
   session.updatedAt = now();
   persistAndNotify(session.id);
   return clientSnapshot(session);
+}
+
+export async function updateBrowserChatSessionTools(sessionId: string, disabledTools: string[], userId?: string | number) {
+  const session = await hydrateSession(sessionId);
+  if (!session || !sessionBelongsToUser(session, userId)) return undefined;
+  if (browserChatSessionHasActiveRuntimeWork(session)) throw new ApiRequestError('请等待当前执行结束后调整工具。', { status: 409, code: 'session_busy' });
+  session.disabledTools = normalizeDisabledCapabilityTools(disabledTools);
+  session.updatedAt = now();
+  persistAndNotify(session.id);
+  if (!await persistBrowserChatCheckpoint(session.id)) throw new Error('无法保存工具设置。');
+  return session.disabledTools;
 }
 
 export async function listBrowserChatSessions(input: { userId?: string | number } = {}) {
@@ -3999,6 +4017,7 @@ async function startNextQueuedBrowserChatTurn(session: BrowserChatSessionRecord)
   cancelOrphanToolConfirmationsForSession(session.id);
   transitionBrowserChatSession(session, { type: 'confirmationCleared' });
   session.safetyMode = normalizeSafetyMode(queued.safetyMode);
+  session.disabledTools = normalizeDisabledCapabilityTools(queued.disabledTools);
   const modelSettings = await browserChatModelSettings(queued.modelProvider, queued.model);
   session.modelProvider = modelSettings.provider;
   session.model = modelSettings.model;
@@ -4083,6 +4102,7 @@ export async function sendBrowserChatMessage(
   attachmentsInput?: unknown,
   skillIdsInput?: unknown,
   userId?: string | number,
+  disabledTools?: string[],
 ) {
   const session = await hydrateSession(sessionId);
   if (!session) throw new Error('Browser chat session not found');
@@ -4106,6 +4126,7 @@ export async function sendBrowserChatMessage(
     return clientSnapshot(session);
   }
   const requestedSafetyMode = normalizeSafetyMode(safetyMode ?? session.safetyMode);
+  const requestedDisabledTools = normalizeDisabledCapabilityTools(disabledTools ?? session.disabledTools);
   const requestedModelSettings = await browserChatModelSettings(modelProvider ?? session.modelProvider, model ?? session.model);
   if (attachments.some(isBrowserChatImageAttachment) && !requestedModelSettings.supportsImageInput) {
     throw new ApiRequestError(
@@ -4142,6 +4163,7 @@ export async function sendBrowserChatMessage(
       id: id('queued_turn'),
       userMessageId: userMessage.id,
       safetyMode: requestedSafetyMode,
+      disabledTools: requestedDisabledTools,
       modelProvider: requestedModelSettings.provider,
       model: requestedModelSettings.model,
       queuedAt,
@@ -4160,6 +4182,7 @@ export async function sendBrowserChatMessage(
   cancelOrphanToolConfirmationsForSession(session.id);
   transitionBrowserChatSession(session, { type: 'confirmationCleared' });
   session.safetyMode = requestedSafetyMode;
+  session.disabledTools = requestedDisabledTools;
   const modelSettings = requestedModelSettings;
   session.modelProvider = modelSettings.provider;
   session.model = modelSettings.model;
@@ -5419,6 +5442,7 @@ async function executeBrowserChatSubagentBatch(input: {
         ...browserChatBranchContextOptions(session, task.id, ownsTask),
         completedSteps: [],
         safetyMode: session.safetyMode,
+        disabledTools: session.disabledTools,
         useToolLoopAgent: true,
         credentialBindings: initialRuntimeContext.credentialBindings,
         getRuntimeOperationalContext,
@@ -5659,6 +5683,7 @@ async function resumeBlockedBrowserChatSubagent(input: {
       ...browserChatBranchContextOptions(session, binding.id, ownsTurn),
       completedSteps: binding.steps,
       safetyMode: session.safetyMode,
+      disabledTools: session.disabledTools,
       useToolLoopAgent: true,
       credentialBindings: initialRuntimeContext.credentialBindings,
       getRuntimeOperationalContext,
@@ -5885,6 +5910,7 @@ async function runBrowserChatMessage(
         continuationSummary: session.modelContext.continuationSummary,
         completedSteps: session.steps,
         safetyMode: session.safetyMode,
+        disabledTools: session.disabledTools,
         memoryTools: createPersonalMemoryTools({
           userId: session.userId,
           getCurrentUrl: () => browserChatMemoryUrl(browser, session),

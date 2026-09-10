@@ -8,6 +8,7 @@ export type RealtimeRefreshEvent = {
     | 'automationCase'
     | 'automationRun'
     | 'automationSchedule'
+    | 'chart'
     | 'browserChatSession';
   id: string;
   updatedAt: string;

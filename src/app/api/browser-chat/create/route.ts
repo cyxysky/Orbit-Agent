@@ -20,6 +20,7 @@ export async function POST(request: NextRequest) {
       const session = await createBrowserChatSession({
         targetUrl: body.targetUrl,
         safetyMode: body.safetyMode,
+        disabledTools: body.disabledTools,
         modelProvider: body.modelProvider,
         model: body.model,
         title: body.title,
