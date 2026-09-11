@@ -9,6 +9,7 @@ import type {
 } from '../office/types.ts';
 import { inspectDocxTemplateBuffer } from './office/docx-template.ts';
 import { renderFilePreview } from './office/preview.ts';
+import { createFileVisualIndex, fileVisualScreenshotId as screenshotId } from './visual-index.ts';
 import { extractFileTextInWorker, type FileTextSelection } from './text-extraction.ts';
 
 export type FileReadableAttachment = {
@@ -254,10 +255,6 @@ export async function readFileAttachment(input: FileTextSelection & {
   }
 }
 
-function screenshotId(pageNumber: number) {
-  return `screenshot-${String(pageNumber).padStart(4, '0')}`;
-}
-
 function screenshotPage(value: string) {
   const match = /^screenshot-(\d{1,8})$/i.exec(value.trim());
   if (!match) return undefined;
@@ -334,21 +331,21 @@ export async function readFileVisuals(input: {
           reviews,
           ...(deckReview ? { deckReview } : {}),
           instruction: reviews.some((review) => review.status === 'failed') || deckReview?.status === 'failed'
-            ? 'Fix every reported issue, render a replacement artifact, and restart visual QA from index.'
+            ? 'Fix every reported issue, render a replacement artifact, and restart visualRead using the new render result visualIndex and its exact artifactId/screenshotIds.'
             : 'Continue reading and reporting unreviewed pages until every indexed page has an evidence-backed passed review, then submit a passed deckReview comparing cross-page consistency.',
         }),
       };
     }
     const requestedScreenshotIds = Array.from(new Set((request.screenshotIds || []).map((value) => value.trim()).filter(Boolean)));
     if (request.action === 'read' && !requestedScreenshotIds.length) {
-      return { ok: false, actual: 'file action=visualRead requires at least one screenshotId returned by action=visualIndex.' };
+      return { ok: false, actual: 'file action=visualRead requires at least one screenshotId from render.visualIndex or action=visualIndex.' };
     }
     if (requestedScreenshotIds.length > 8) {
       return { ok: false, actual: 'file action=visualRead accepts at most 8 screenshotIds per call. Read larger documents in ordered batches.' };
     }
     const requestedPages = requestedScreenshotIds.map(screenshotPage);
     if (request.action === 'read' && requestedPages.some((page) => page === undefined)) {
-      return { ok: false, actual: 'file action=visualRead received an invalid screenshotId. Use the exact screenshot-NNNN ids returned by action=visualIndex.' };
+      return { ok: false, actual: 'file action=visualRead received an invalid screenshotId. Use the exact screenshot-NNNN ids from render.visualIndex or action=visualIndex.' };
     }
 
     const visuals = await renderFilePreview({
@@ -368,29 +365,15 @@ export async function readFileVisuals(input: {
     }
 
     if (request.action === 'index') {
-      const offset = Math.min(Math.max(0, Math.floor(request.offset || 0)), screenshotCount);
-      const limit = Math.min(Math.max(1, Math.floor(request.limit || 100)), 200);
-      const end = Math.min(screenshotCount, offset + limit);
-      const screenshots = Array.from({ length: end - offset }, (_, index) => {
-        const pageNumber = offset + index + 1;
-        return { screenshotId: screenshotId(pageNumber), pageNumber };
-      });
       return {
         ok: true,
-        actual: JSON.stringify({
-          kind: 'file-visual-index',
+        actual: JSON.stringify(createFileVisualIndex({
           artifactId: request.artifactId,
           fileName: attachment.name,
-          screenshotCount,
-          screenshots,
-          offset,
-          nextOffset: end < screenshotCount ? end : null,
-          renderer: visuals.renderer,
-          warning: visuals.warning,
-          automaticChecks: visuals.automaticChecks || [],
-          automaticCheckScope: 'render-integrity-only: dimensions and near-blank detection; this is not a visual-quality verdict',
-          instruction: 'Call file action=visualRead with one to eight exact screenshotIds. Continue in ordered batches until every required page has been inspected.',
-        }),
+          preview: visuals,
+          offset: request.offset,
+          limit: request.limit,
+        })),
       };
     }
 

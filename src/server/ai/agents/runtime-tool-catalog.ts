@@ -4,7 +4,7 @@ import { normalizeDisabledBrowserChatTools } from '@/lib/browser-chat-tools';
 // Internal instructions shared with the runtime tool definitions.
 export const runtimeBuiltinToolPrompts = {
   reportDefect: 'Proactively report one evidence-backed product defect or reproducible product problem found while testing the live interface. During a testing task, calling this tool is mandatory as soon as browser action=code has reproduced the issue and emitted at least one screenshot that visibly proves it; do not defer the report to the final answer or wait for the user to ask. Do not report speculation, expected behavior, environment/configuration/permission limitations, or the same issue twice. screenshotFileNames must exactly match the safe file names returned by a successful browser action=code call in this Agent run.',
-  finalResponse: 'Finish the request with ordered UI blocks. Use markdown for prose, chart for a successful chart id, map for a successful mapId, and ui for declarative cards/layout. The client preserves this exact order in UIMessage.parts.',
+  finalResponse: 'Finish the request with ordered registered response blocks. Every block has type and params, validated by the selected type schema. Copy content[].block from successful capability results. Use core.markdown with params.text for prose and core.ui with params.tree for declarative layouts. The client preserves array order.',
   skill: `Read a Skill by exact id. Hidden runtime Skills for this mode are ${hiddenRuntimeSkillIds().join(', ')}. A successful read can be reused while its exact current content remains in the active tool history; reread only when missing, compacted away, or changed.`,
 };
 

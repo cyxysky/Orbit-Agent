@@ -67,7 +67,7 @@ Do not guess returned identities. Copy \`documentId\`, \`artifactId\`, screensho
 | Find/resume authored work | list | Draft documentIds and workflow state; no file contents |
 | Read/edit generation code | readSource + documentId | Exact program window + patchBaseDigest; no page images |
 | Inspect Excel cells / Word text / PDF text | readContent + artifactId OR attachmentId | Parsed file content; no generation source |
-| See rendered page layout | visualIndex then visualRead + artifactId | Indexed page images, not code or editable objects |
+| See rendered page layout | render.visualIndex.nextRead, or visualIndex when no index is available | Indexed page images, not code or editable objects |
 | Fix a visible defect | readSource → edit → render | Changes the same draft, then publishes its validated result |
 | Import an existing Office file for editing | plan(operation=modify, sourceAttachmentId) | An editing workspace; later program opens the mounted original |
 | Fetch an existing asset | download + HTTP(S) URL or page-relative URL path + fileType | Saved asset and exact artifactId/asset name; not an OS file reader |
@@ -324,7 +324,7 @@ A verified reference run delivered an 18-slide Impress deck, a 12-page Writer re
 - Keep Calc chart anchors inside each sheet's print area and validate that the complete source range, title row, and last category are included.
 - A layout diagnostic identifies a leaf element or a primary collision source. Repair that concrete call site first. Change a shared helper only when the intended change is valid for every caller and the whole dependent layout is deliberately reflowed.
 - Keep long artifacts compact and data-driven through high-level facade calls and content arrays. Prefer focused Codex-format patches for local defects; use the guarded generate replacement when the draft genuinely needs a complete architectural rewrite.
-- Generate/edit performs structural UNO validation without attaching page screenshots to every repair call. A patch scoped by \`path\` to one page or sheet is validated as that exact source unit; final render still performs full-document validation. Use the returned validation state and diagnostics to choose the next operation. Render creates indexed previews but does not attach the whole document to the model; only bounded \`file action=visualRead\` batches add page-image context.
+- Generate/edit performs structural UNO validation without attaching page screenshots to every repair call. A patch scoped by \`path\` to one page or sheet is validated as that exact source unit; final render still performs full-document validation. Use the returned validation state and diagnostics to choose the next operation. Render returns \`visualIndex\` containing the artifactId, total screenshotCount, screenshot IDs/page numbers, nextOffset, and a ready-to-use nextRead request. Reuse this index and call visualRead directly; do not call visualIndex again for entries already returned. Only bounded \`file action=visualRead\` batches add page-image context.
 - The runtime may retry a disposed/startup-failed bridge once with an isolated LibreOffice profile. When bounded recovery is exhausted, preserve the source and stop unchanged render calls until runtime recovery is confirmed. Do not classify arbitrary NoneType errors as bridge failures or conclude that the unexecuted source is valid.
 
 ## file call examples
@@ -441,6 +441,8 @@ file({
 
 \`visualIndex\`, \`visualRead\`, and \`visualReport\` exist on \`file\` only when the host initializes the capability with visual input enabled and supplies page-image reading.
 
+When render returns \`visualIndex\`, start with \`file(renderResult.visualIndex.nextRead)\`. The embedded index uses the same contract as action=visualIndex: up to 100 entries by default, with nextOffset for more pages. Call visualIndex only when no current index is available (for example a downloaded/converted artifact or after context loss), or to fetch additional entries with nextOffset. After editing and rerendering, replace the old artifactId and screenshot list with the new render result. An index contains identifiers, not reviewed image evidence.
+
 \`\`\`ts
 type FileVisualInput =
   | {
@@ -454,7 +456,7 @@ type FileVisualInput =
       action: "visualRead";
       reason?: string;
       artifactId: string;
-      screenshotIds: string[]; // one to eight exact ids from index
+      screenshotIds: string[]; // one to eight exact ids from render.visualIndex or visualIndex
     }
   | {
       action: "visualReport";
@@ -504,6 +506,8 @@ type FileVisualInput =
       }; // required for final completion after all pages are reviewed
     };
 \`\`\`
+
+For an artifact without a current index, or to paginate beyond the render result:
 
 \`\`\`js
 file({
@@ -577,7 +581,7 @@ file({
 4. Call action=generate with exactly one of spec or program to create the initial editable source. A failed generate may still return a saved source and patchBaseDigest, so inspect the result before choosing the next action.
 5. When a usable source already exists, prefer action=edit on that same documentId for repairs and revisions. If no source checkpoint was created, correct the input and retry generate. Use generate for full replacement only when bounded edits cannot coherently implement the requested change, after understanding the current structure. Never reconstruct a large source through consecutive reads just to replace it.
 6. Call action=render only after the current source passes validation and the complete requested content is present; render publishes that exact source.
-7. After render, inspect the latest artifact when visual QA is available. Do not rewrite it speculatively. If the user request, validator, or visual inspection reveals a concrete issue, read and edit the same documentId and render again; otherwise return the artifact in finalResponse.
+7. After render, use its visualIndex.nextRead to inspect the latest artifact directly when visual QA is available; do not retrieve the same screenshot list again. Do not rewrite it speculatively. If the user request, validator, or visual inspection reveals a concrete issue, read and edit the same documentId and render again; otherwise return the artifact in finalResponse.
 
 Use action=readSource whenever the exact current source, workflow checkpoint, or validation diagnostics are needed. Use action=download for an existing URL/path and action=convert to convert an existing Office artifact identified by sourceArtifactId. For web research, browser action=code may locate and verify a direct asset URL, but it must not fetch or save that asset locally; pass the direct URL to file action=download, then use the exact returned artifact name in Office source. Use readContent to inspect downloaded image artifacts when authoritative pixel dimensions or aspect ratio are needed.
 
@@ -640,7 +644,7 @@ Treat automaticValidation.formatChecks and generationDiagnostics.featureCounts a
 
 For a vision-capable model initialized with visual file actions, visual QA is a mandatory delivery gate:
 
-1. Call file action=visualIndex with the exact latest Artifact ID.
+1. Reuse the latest render result's visualIndex and nextRead. Call file action=visualIndex with the exact latest Artifact ID only if the index is unavailable or nextOffset indicates additional entries.
 2. Read every screenshot id in returned order, in bounded batches, and actually inspect every attached page image. Inspect each page in three passes: identify its visible content and intended reading order; scan the four edges and every object boundary for clipping/overlap; then judge composition, hierarchy, typography, color, chart semantics, and image treatment.
 3. Call file action=visualReport with an evidence-backed passed or failed review for every page that was read. Submit small batches (normally 2–4 pages) after inspection rather than repeatedly regenerating one full-deck report. Successful batches are retained for the same artifact; a schema-rejected batch saves nothing, so correct and resend only that uncommitted batch. Every page requires a concrete, page-specific observation that names visible anchors and their locations (for example the title, chart, table, image, footer, or empty region), plus checks for overlap, clipping, alignment, spacing, typography, contrast, visual hierarchy, chart/table legibility, and image quality. A bare \`passed\`, a generic paraphrase of the rubric, an empty issue list, or a visualRead alone never proves visual quality. Inspect the actual pixels at a useful size; do not infer quality from successful rendering or the absence of validator errors.
 4. Inspect aesthetic and semantic defects even when geometry is valid: tiny or inconsistent type, weak hierarchy, unbalanced whitespace, overly sparse or crowded composition, uneven component rhythm, default gray chart chrome, poor chart labeling, inconsistent margins, stretched/soft images, or an awkward visual focal point. On every chart, a reader must be able to identify what each bar, line, point, or sector represents without guessing: reject placeholder categories such as 1/2/3, generic-only names such as Values or Series 1 when meaning is not otherwise explicit, missing or unreadable legends/axis labels/data labels, and labels that do not match the visualized data. For every content image, verify that its subject is identified by nearby content or a caption and that an alt/source attribution is present where the task requires it. Failed reviews must identify the exact visible region and defect.
@@ -720,7 +724,7 @@ Read this compact Skill once before the first file call, then use file in a late
 - Generated media is already saved locally and automatically available to document authoring; do not call download, browser fetch or codeSandbox to download it again, and do not turn application-relative URLs into invented absolute URLs. plan/list returns availableAssets; match the media artifactId to ref, then use the exact assetName in Office source. If the draft already exists, use list to find newly generated assets and edit that draft. Do not re-plan or regenerate just to add images.
 - Design for the user's audience, content and requested format. For complex creation/edits, consult the relevant design/editing reference below; for simple reading, skip authoring references.
 - Before authoring native PPT charts, query presentation.chart for current data roles and style controls. Verify label contrast/overlap, small round markers, compatible axes, bubble grouping/colors/area, and arrow direction; short headings must not split words. Apply these same visual checks with the JavaScript engine.
-- If visual actions are advertised and rendered review is needed, visualIndex then targeted visualRead, repair the same source, render again, and report evidence with visualReport. Never claim to have viewed pixels or passed QA without actual evidence. Deliver the exact returned downloadUrl.
+- If visual actions are advertised and rendered review is needed, use render.visualIndex.nextRead for targeted visualRead, repair the same source, render again, and report evidence with visualReport. Request visualIndex only for missing index entries. Never claim to have viewed pixels or passed QA without actual evidence. Deliver the exact returned downloadUrl.
 
 ## Bounded recovery
 - Inspect saved/editStatus/validation before retrying: validation-failed source can already be saved. Do not replay applied edits. Read only the affected source region and relevant API/error reference.

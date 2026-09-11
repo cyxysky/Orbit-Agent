@@ -1,4 +1,4 @@
-import { mediaModelSelectionId, parseMediaModelSelection, mediaModelTypeDefinitions, resolveMediaTypeSelection, mediaConfigurationForProviders } from '@webpilot/capability-media/model-settings';
+import { parseMediaModelSelection, mediaModelTypeDefinitions, mediaConfigurationForProviders } from '@webpilot/capability-media/model-settings';
 export { mediaModelSelectionId, parseMediaModelSelection } from '@webpilot/capability-media/model-settings';
 import {
   defaultModelByProvider,
@@ -130,20 +130,32 @@ export function modelSelectionDiagnosticLabel(
   config: RuntimeModelConfig | null | undefined,
   input: { model?: unknown; provider?: unknown },
 ) {
-  if (config && !enabledModelProviders(config).length) return '尚未启用模型服务商';
   const selection = resolveRuntimeModelSelection(config, input);
   const providerLabel = (provider: string) => config?.providers[provider as ModelProvider]?.displayName?.trim() || modelProviderDefinition(provider as ModelProvider).label;
-  const language = `对话模型：${selection.model}\n供应商：${providerLabel(selection.provider)}`;
+  const language = config && !enabledModelProviders(config).length ? '尚未启用模型服务商' : `对话模型：${selection.model}\n供应商：${providerLabel(selection.provider)}`;
+  const media = mediaModelsForConfig(config);
   return [language, ...mediaModelTypeDefinitions.map(({ id, label }) => {
-    const current = resolveMediaTypeSelection(mediaProvidersForConfig(config), id, config?.mediaSelections);
-    return current ? `${label}：${current.model}\n供应商：${providerLabel(current.provider)}` : `${label}：未配置`;
+    const current = media.models.find((model) => model.id === media.defaults[id]);
+    return current ? `${label}：${current.name}\n供应商：${providerLabel(parseModelSelectionValue(current.id).provider)}` : `${label}：未配置`;
   })].join('\n\n');
 }
 
 export function modelSelectionOptionsForConfig(config: RuntimeModelConfig | null | undefined, input: { model?: unknown; provider?: unknown } = {}): RuntimeModelOption[] {
-  if (!config) return [];
   const language = resolveRuntimeModelSelection(config, input);
-  return modelProviderDefinitionsForConfig(config.providers, config.providerOrder).flatMap((provider) => {
+  const media = mediaModelsForConfig(config);
+  const mediaOptions: RuntimeModelOption[] = media.models.filter((model) => model.enabled).map((model) => {
+    const { provider } = parseModelSelectionValue(model.id);
+    const providerLabel = config?.providers[provider]?.displayName?.trim() || modelProviderDefinition(provider).label;
+    return {
+      group: `${providerLabel} / ${modelTypeLabels[model.kind]}`,
+      label: model.name,
+      selectedLabel: `${providerLabel} - ${modelTypeLabels[model.kind]} - ${model.name}`,
+      selected: media.defaults[model.kind] === model.id,
+      value: model.id,
+    };
+  });
+  if (!config) return mediaOptions;
+  return [...modelProviderDefinitionsForConfig(config.providers, config.providerOrder).flatMap((provider) => {
     if (!isModelProviderEnabled(config, provider.value)) return [];
     const models = modelsForProvider(config, provider.value);
     const providerLabel = config.providers?.[provider.value]?.displayName?.trim() || provider.label;
@@ -153,13 +165,6 @@ export function modelSelectionOptionsForConfig(config: RuntimeModelConfig | null
       selected: provider.value === language.provider && model === language.model,
       selectedLabel: `${providerLabel} - ${model}`,
       value: modelSelectionValue(provider.value, model),
-    })), ...mediaModelTypeDefinitions.flatMap(({ id: kind }) => (config.providers[provider.value]?.media?.[kind]?.models || [])
-      .map((model) => ({
-        group: `${providerLabel} / ${modelTypeLabels[kind]}`,
-        label: model,
-        selectedLabel: `${providerLabel} - ${modelTypeLabels[kind]} - ${model}`,
-        selected: (() => { const current = resolveMediaTypeSelection(mediaProvidersForConfig(config), kind, config.mediaSelections); return current?.provider === provider.value && current.model === model; })(),
-        value: modelSelectionValue(provider.value, mediaModelSelectionId(kind, model)),
-      })))];
-  });
+    }))];
+  }), ...mediaOptions];
 }

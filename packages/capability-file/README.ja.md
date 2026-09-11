@@ -25,6 +25,8 @@ npm install -D typescript tsx @types/node
 
 最初の呼び出しは UTF-8 テキストを書き込むだけなので Office のインストールは不要です。Office の生成は `plan → generate → render` の順に行い、作成前に Skill と plan が返すエンジン/API の説明を読みます。ローカルの Office 変換には LibreOffice、UNO による作成にはさらに `import uno` が可能な Python が必要です。JavaScript による作成とファイル変換の要件は別です。`OFFICE_GENERATION_MODE` を明示的に設定してください。
 
+画像プレビューが有効な場合、`render` は現在の `artifactId`、総ページ数、スクリーンショット ID とページ番号、`nextOffset`、そのまま呼び出せる `nextRead` を含む `visualIndex` を返します。同じ一覧を再取得せずに `visualRead` を実行できます。既定では最初の 100 件を返し、追加の一覧や失われた索引が必要な場合だけ `visualIndex` を呼びます。再描画後は新しい結果の ID を使います。一覧の取得だけで画像の確認や品質検証が完了したことにはなりません。
+
 `readSource(documentId)` は生成コード、`readContent(artifactId)` は公開済みの内容を読みます。`edit` には `readSource` が返した正確な `patchBaseDigest` を渡し、編集後に再度 render します。ホストが `readFileVisuals` を提供し、画像を実際にモデルへ渡す場合だけ画像入力を有効にします。添付ファイルには `attachmentBindings` またはホストの `readFile` 実装が必要です。
 
 既定の成果物 URL はサーバーローカルの `file:` URL です。リモートクライアントはダウンロードできません。`workspace.artifactUrl({ absolutePath, relativePath })` と、対応するバイト列を配信する認証付きルートまたはオブジェクトストレージを用意します。URL の生成だけではファイルは配信されません。同じ実行の下書きや成果物を扱う間は run ID を維持してください。

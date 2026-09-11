@@ -52,7 +52,7 @@ function safeAttributionUrl(value?: string) {
   try { const url = new URL(value || ''); return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : undefined; } catch { return undefined; }
 }
 
-/** No host renderer registry is needed: mount this component and supply a loader. */
+/** The package response adapter binds this view to a host-provided resource loader. */
 export function GoogleMapRenderer({ title = 'Google 地图', load, className = '' }: {
   title?: string; load: (signal: AbortSignal) => Promise<GoogleMapPayload>; className?: string;
 }) {

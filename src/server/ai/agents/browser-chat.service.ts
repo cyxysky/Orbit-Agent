@@ -1,3 +1,4 @@
+import { markdownBlock } from '@webpilot/capability-response';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -1727,7 +1728,7 @@ function conversationFileRegistry(
   if (!lines.length) return '';
   return [
     '[Conversation file registry — persistent runtime metadata]',
-    'For generation code or layout repair, use sourceRead (readSource + documentId). For Excel cell data/Word text/PDF text, use contentRead (readContent + artifactId/attachmentId). These are different objects: file content is NOT its generator source. For page images use visualIndex/visualRead + artifactId. Never guess a host path. plan returns exact asset names for job.asset_path(name).',
+    'For generation code or layout repair, use sourceRead (readSource + documentId). For Excel cell data/Word text/PDF text, use contentRead (readContent + artifactId/attachmentId). These are different objects: file content is NOT its generator source. For page images, use render.visualIndex.nextRead directly; call visualIndex only for missing index entries. Never guess a host path. plan returns exact asset names for job.asset_path(name).',
     ...lines.slice(0, 200),
   ].join('\n');
 }
@@ -2138,7 +2139,7 @@ function browserChatAssistantParts(
   const finalParts = blocks?.length
     ? browserChatFinalBlocksToParts(blocks)
     : message.content.trim()
-      ? [{ type: 'text' as const, text: message.content }]
+      ? browserChatFinalBlocksToParts([markdownBlock(message.content)])
       : [];
   return message.status === 'running' || message.status === 'queued'
     ? [...finalParts, ...executionParts]

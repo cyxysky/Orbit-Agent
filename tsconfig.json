@@ -75,11 +75,21 @@
       "@webpilot/capability-chart": [
         "./packages/capability-chart/src/index.ts"
       ],
-      "@webpilot/capability-maps": ["./packages/capability-maps/src/index.ts"],
-      "@webpilot/capability-maps/core": ["./packages/capability-maps/src/core.ts"],
-      "@webpilot/capability-maps/node": ["./packages/capability-maps/src/node.ts"],
-      "@webpilot/capability-maps/react": ["./packages/capability-maps/src/react.tsx"],
-      "@webpilot/capability-maps/settings": ["./packages/capability-maps/src/settings.ts"],
+      "@webpilot/capability-maps": [
+        "./packages/capability-maps/src/index.ts"
+      ],
+      "@webpilot/capability-maps/core": [
+        "./packages/capability-maps/src/core.ts"
+      ],
+      "@webpilot/capability-maps/node": [
+        "./packages/capability-maps/src/node.ts"
+      ],
+      "@webpilot/capability-maps/react": [
+        "./packages/capability-maps/src/react.tsx"
+      ],
+      "@webpilot/capability-maps/settings": [
+        "./packages/capability-maps/src/settings.ts"
+      ],
       "@webpilot/capability-chart/node": [
         "./packages/capability-chart/src/node.ts"
       ],
@@ -164,7 +174,9 @@
       "@webpilot/capability-media/node": [
         "./packages/capability-media/src/node.ts"
       ],
-      "@webpilot/capability-media/model-settings": ["./packages/capability-media/src/model-settings.ts"],
+      "@webpilot/capability-media/model-settings": [
+        "./packages/capability-media/src/model-settings.ts"
+      ],
       "@webpilot/capability-media/models": [
         "./packages/capability-media/src/models.ts"
       ],
@@ -296,6 +308,30 @@
       ],
       "@webpilot/capability-sensitive-data/settings": [
         "./packages/capability-sensitive-data/src/settings.ts"
+      ],
+      "@webpilot/capability-response": [
+        "./packages/capability-response/src/index.ts"
+      ],
+      "@webpilot/capability-response/react": [
+        "./packages/capability-response/src/react.tsx"
+      ],
+      "@webpilot/capability-chart/response": [
+        "./packages/capability-chart/src/response.ts"
+      ],
+      "@webpilot/capability-chart/response-react": [
+        "./packages/capability-chart/src/response-react.tsx"
+      ],
+      "@webpilot/capability-chart/response-node": [
+        "./packages/capability-chart/src/response-node.ts"
+      ],
+      "@webpilot/capability-maps/response": [
+        "./packages/capability-maps/src/response.ts"
+      ],
+      "@webpilot/capability-maps/response-react": [
+        "./packages/capability-maps/src/response-react.tsx"
+      ],
+      "@webpilot/capability-maps/response-node": [
+        "./packages/capability-maps/src/response-node.ts"
       ]
     }
   },

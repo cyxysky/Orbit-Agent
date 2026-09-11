@@ -4,6 +4,7 @@ import type { CommunicationContent } from '@webpilot/capability-communication';
 import { artifactContentType } from '@webpilot/capability-file';
 import { browserChatArtifactIdFromUrl } from '@/lib/browser-chat-artifacts';
 import type { BrowserChatMessage } from '@/server/ai/agents/browser-chat.service';
+import { responseRegistry } from '@/lib/response-registry';
 
 export function splitCommunicationText(value: string, limit = 18_000) {
   const chunks: string[] = [];
@@ -20,7 +21,8 @@ export function splitCommunicationText(value: string, limit = 18_000) {
 
 /** Keep rendered text and deliver output files as typed media, never as localhost links. */
 export function communicationReplyContents(message: BrowserChatMessage): CommunicationContent[] {
-  const source = message.content || message.parts?.flatMap(part => part.type === 'text' ? [part.text] : []).join('\n\n') || '';
+  const source = message.content || message.parts?.flatMap(part => part.type === 'text' ? [part.text]
+    : part.type === 'data-response' ? [responseRegistry.toText(part.data)] : []).join('\n\n') || '';
   const tree = fromMarkdown(source);
   const definitions = new Map<string, string>();
   const walk = (node: Root | RootContent, visit: (node: Root | RootContent) => void) => {
@@ -67,6 +69,5 @@ export function communicationReplyContents(message: BrowserChatMessage): Communi
       : message.status === 'interrupted' ? '本轮处理已停止。'
         : '本轮已完成，详细内容可在网页对话中查看。';
   }
-  if (message.parts?.some(part => part.type === 'data-chart' || part.type === 'data-map' || part.type === 'data-ui')) text += '\n\n交互地图、图表和卡片请在网页对话中查看。';
   return [...splitCommunicationText(text.trim()).map(body => ({ format: 'markdown' as const, body })), ...files.values()];
 }

@@ -180,7 +180,7 @@ const fileToolShape = {
   render: z.boolean().optional()
     .describe('Legacy generate/edit flag; use a separate action=render to publish. generate/edit create or validate source, not a deliverable download.'),
   includeVisuals: z.boolean().optional()
-    .describe('For readContent only: false by default; true explicitly attaches rendered pages. Text reading is not visual QA. Prefer visualIndex + visualRead for page inspection.'),
+    .describe('For readContent only: false by default; true explicitly attaches rendered pages. Text reading is not visual QA. For page inspection, use visualRead with render.visualIndex; request visualIndex only if no current index is available.'),
   offset: z.number().int().min(0).optional()
     .describe('readContent: zero-based character offset. visualIndex: zero-based screenshot-list offset. Never a source line number.'),
   sheet: z.string().trim().min(1).max(200).optional().describe('readContent: exact spreadsheet worksheet name.'),
@@ -232,7 +232,7 @@ const visualQaIssuesSchema = z.array(z.object({
 
 const fileVisualToolShape = {
   screenshotIds: z.array(z.string().min(1).max(40)).min(1).max(8).optional()
-    .describe('For visualRead: one to eight exact screenshot ids returned by visualIndex.'),
+    .describe('For visualRead: one to eight exact screenshot ids from render.visualIndex or action=visualIndex. Prefer render.visualIndex.nextRead without repeating the index call.'),
   reviews: z.array(z.object({
     screenshotId: z.string().min(1).max(40),
     status: z.enum(['failed', 'passed']),

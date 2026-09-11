@@ -4,6 +4,7 @@ import type { CapabilityExecutionContext } from '@webpilot/capability-sdk';
 import type { MediaArtifact } from './index.ts';
 import type { MediaGenerationInput, MediaGenerationOperations } from './generation.ts';
 import { mediaModelDriver, resolveMediaModel, type MediaModelConfig, type MediaModelConfiguration, type MediaModelKind } from './models.ts';
+import type { CodexImageOptions } from './codex-cli.ts';
 
 export type MediaGenerationFile = { data: Uint8Array; mediaType: string };
 export type AiSdkMediaOperationsOptions = {
@@ -13,6 +14,7 @@ export type AiSdkMediaOperationsOptions = {
   readSource(ref: string, context: CapabilityExecutionContext): Promise<Uint8Array>;
   publishArtifact(file: MediaGenerationFile & { kind: MediaModelKind; modelRef: string }, context: CapabilityExecutionContext): Promise<MediaArtifact>;
   fetch?: typeof globalThis.fetch;
+  codex?: CodexImageOptions;
 };
 
 function parameters(model: MediaModelConfig) {
@@ -148,9 +150,13 @@ function minimaxImageModel(model: MediaModelConfig, fetcher: typeof globalThis.f
   };
 }
 
-async function loadModels(model: MediaModelConfig, fetch: typeof globalThis.fetch) {
+async function loadModels(model: MediaModelConfig, fetch: typeof globalThis.fetch, codex?: CodexImageOptions) {
   const settings = { apiKey: model.apiKey || '', baseURL: (model.baseURL || mediaModelDriver(model.driver).baseURL).replace(/\/+$/, ''), fetch };
   switch (model.driver) {
+    case 'codex': {
+      const { createCodexImageModel } = await import('./codex-cli.ts');
+      return { image: () => createCodexImageModel(model, codex) };
+    }
     case 'minimax': return { image: () => minimaxImageModel(model, fetch) };
     case 'openai': {
       const { createOpenAI } = await import('@ai-sdk/openai');
@@ -189,7 +195,7 @@ export function createAiSdkMediaGenerationOperations(options: AiSdkMediaOperatio
     const signal = AbortSignal.any([AbortSignal.timeout(model.timeoutMs), ...(context.abortSignal ? [context.abortSignal] : [])]);
     const execution = { ...context, abortSignal: signal };
     await context.reportProgress?.({ phase: 'generating', message: `Generating ${kind} with ${model.name}.` });
-    const models = await loadModels(model, modelFetch(model, options.fetch || globalThis.fetch, signal));
+    const models = await loadModels(model, modelFetch(model, options.fetch || globalThis.fetch, signal), options.codex);
     const namespace = model.driver === 'openai-compatible' ? kind === 'speech' ? 'openai' : 'compatible' : model.driver;
     const providerOptions = { [namespace]: parameters(model) };
     const size = request.size || model.size || undefined;

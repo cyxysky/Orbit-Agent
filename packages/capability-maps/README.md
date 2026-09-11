@@ -85,3 +85,8 @@ import { GoogleMapRenderer } from '@webpilot/capability-maps/react';
 - 超时：分别检查浏览器访问 `maps.googleapis.com`、`maps.gstatic.com` 以及服务端访问 `places.googleapis.com`、`routes.googleapis.com` 的网络。
 
 [Google 项目与 Key 设置](https://developers.google.com/maps/documentation/javascript/get-api-key) · [密钥限制](https://developers.google.com/maps/api-security-best-practices) · [全球价格表](https://developers.google.com/maps/billing-and-pricing/pricing) · [成本控制](https://developers.google.com/maps/billing-and-pricing/manage-costs) · [Places 政策](https://developers.google.com/maps/documentation/places/web-service/policies) · [Routes 政策](https://developers.google.com/maps/documentation/routes/policies)
+
+
+## Registered response integration
+
+This package exports `/response` (types and parameter schemas), `/response-react` (component registrations), and `/response-node` (resource/export handlers). See [the response integration guide](../capability-response/README.md). Register these at host assembly; copy successful tool result `content[].block` into the structured reply.

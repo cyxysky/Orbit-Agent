@@ -1,3 +1,4 @@
+import { chartResponses, chartResponseBlock } from './response.ts';
 import { z } from 'zod';
 import {
   defineCapabilityInput,
@@ -89,6 +90,7 @@ export const chartCapabilityManifest = Object.freeze({
   version: '0.1.0',
   description: 'Create, read and update persistent ECharts, Three.js and Excalidraw charts with interactive editing and export.',
   permissions: ['artifact:read', 'artifact:write', 'renderer:chart'],
+  responses: chartResponses,
   runtimeRequirements: {
     node: '>=22.16',
   },
@@ -395,11 +397,7 @@ export async function createChart(store: ChartArtifactStore, input: {
       ok: true,
       summary: `Chart ${record.chartId} created.`,
       data: { chartId: record.chartId },
-      content: [{
-        type: 'ui',
-        renderer: `com.webpilot.chart/${engine}`,
-        resourceId: record.chartId,
-      }],
+      content: [{ type: 'response', block: chartResponseBlock(record) }],
     };
   } catch (error) {
     return {
@@ -430,7 +428,7 @@ async function readOrUpdateChart(store: ChartArtifactStore, input: ChartToolInpu
     const chart = input.action === 'read' ? await store.read(input.chartId!) : await updateChart(store, input.chartId!, update, input.expectedRevision!, options);
     if (!chart) return { ok: false, error: { code: 'chart-not-found', message: 'Chart not found.' } };
     return { ok: true, summary: `Chart ${chart.chartId} ${input.action === 'read' ? 'read' : 'updated'} at revision ${chart.revision || 0}.`, data: { chartId: chart.chartId, chart, revision: chart.revision || 0 },
-      content: input.action === 'update' ? [{ type: 'ui', renderer: `com.webpilot.chart/${chart.engine || 'echarts'}`, resourceId: chart.chartId }] : undefined };
+      content: [{ type: 'response', block: chartResponseBlock(chart) }] };
   } catch (error) {
     return { ok: false, error: { code: error instanceof ChartRevisionConflict ? 'chart-revision-conflict' : 'chart-operation-failed', message: error instanceof Error ? error.message : String(error) } };
   }

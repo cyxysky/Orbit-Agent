@@ -1,3 +1,6 @@
+import { ResponseRegistry } from './response.ts';
+export * from './response.ts';
+import type { ResponseBlock, ResponseDefinition } from './response.ts';
 import { disposeOnce } from './execution.ts';
 export { CapabilityTaskQueue, type CapabilityTaskOptions } from './task-queue.ts';
 export { readBoundedResponseText } from './http.ts';
@@ -13,7 +16,7 @@ export type CapabilityContent =
   | { type: 'text'; text: string }
   | { type: 'image'; artifactId: string; mediaType?: string; data?: string }
   | { type: 'artifact'; artifactId: string; downloadUrl?: string; mediaType?: string }
-  | { type: 'ui'; renderer: string; resourceId: string };
+  | { type: 'response'; block: ResponseBlock };
 
 export type CapabilityResult<TData = unknown> =
   | {
@@ -137,6 +140,7 @@ export type CapabilityManifest = {
   runtimeRequirements?: Readonly<Record<string, unknown>>;
   configuration?: CapabilityConfigurationDefinition;
   skills?: readonly CapabilitySkill[];
+  responses?: readonly ResponseDefinition[];
 };
 
 export type CapabilityRunContext = {
@@ -189,11 +193,13 @@ export type CapabilityRunSnapshot = {
 
 export class CapabilityRegistry {
   readonly #providers = new Map<string, CapabilityProvider>();
+  readonly #responses = new ResponseRegistry();
 
   register(provider: CapabilityProvider) {
     const id = provider.manifest.id.trim();
     if (!id) throw new Error('Capability manifest id is required.');
     if (this.#providers.has(id)) throw new Error(`Capability ${id} is already registered.`);
+    this.#responses.register(provider.manifest.responses || []);
     this.#providers.set(id, provider);
     return this;
   }

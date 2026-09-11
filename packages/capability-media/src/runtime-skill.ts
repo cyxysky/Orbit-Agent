@@ -6,7 +6,7 @@ export const mediaRuntimeSkill = Object.freeze({
   content: `# Media Runtime
 
 - Inspect the source before choosing OCR, transcription, or frame extraction. Use the smallest adequate page, time, language, and frame scope. Preserve timestamps and source references. OCR/transcription are probabilistic; flag uncertain names, numbers and inaudible text.
-- Use listModels to discover configured image, video, and speech models. modelRef is the returned configuration id; omit it to use the selected model of that type. Host-selected models are independent of the language model and take precedence over modelRef. Never invent model ids or API endpoints.
+- Use listModels to discover built-in and configured image, video, and speech models. modelRef is the returned configuration id; omit it to use the selected model of that type. Host-selected models are independent of the language model and take precedence over modelRef. The built-in Codex CLI image model uses local login and requires no API configuration; it supports reference images but not masks. Never invent model ids or API endpoints.
 - generateImage accepts prompt, optional sourceRefs and maskRef for editing, size and count. generateVideo accepts prompt, at most one starting image in sourceRefs, duration, size and aspectRatio. generateSpeech converts exact prompt text into speech with optional voice, language and outputFormat; it does not generate music or sound effects.
 - Reference inputs must be registered attachment ids or artifact URLs. Credentials and service paths belong to host settings, never tool arguments.
 - Video generation waits for completion. Do not resubmit a timed-out generation automatically: the remote job may still run.

@@ -55,7 +55,7 @@ import { WorkspaceSidebarArchiveRow } from '@/components/WorkspaceSidebarArchive
 import { useWorkspaceBrand } from '@/brand/WorkspaceBrandProvider';
 import { ExternalIntegrationSettings } from '@/components/ExternalIntegrationSettings';
 import { ModelTypeSettings } from '@/components/ModelTypeSettings';
-import { createMediaTypeSettings, normalizeProviderMediaSettings, mediaSettingFields, mediaModelTypeDefinitions, type MediaTypeSettings } from '@webpilot/capability-media/model-settings';
+import { builtInMediaModels, createMediaTypeSettings, normalizeProviderMediaSettings, mediaSettingFields, mediaModelTypeDefinitions, type MediaTypeSettings } from '@webpilot/capability-media/model-settings';
 import { mediaModelDrivers, mediaModelDriver, type MediaModelKind, type MediaModelDriver } from '@webpilot/capability-media/models';
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, arrayMove, rectSortingStrategy, sortableKeyboardCoordinates, useSortable } from '@dnd-kit/sortable';
@@ -2394,6 +2394,7 @@ export function EnvironmentSettings({
   const activeProviderDefaultModel = activeProviderSettings.defaultModel || activeProviderSettings.model || '';
   const activeProviderEnabled = activeProviderSettings.enabled === true;
   const activeMediaKind = modelKind === 'language' ? undefined : modelKind;
+  const activeBuiltInMedia = builtInMediaModels.filter((item) => item.provider === activeProvider && item.configuration.kind === activeMediaKind);
   const activeMediaSettings = activeMediaKind ? createMediaTypeSettings(activeProvider, activeMediaKind, activeProviderSettings.media?.[activeMediaKind]) : undefined;
 
   function updateMediaSettings(patch: Partial<MediaTypeSettings>) {
@@ -2433,7 +2434,7 @@ export function EnvironmentSettings({
     const driver = mediaModelDriver(settings.driver);
     return <>
       {mediaSettingRow('接口协议', '选择供应商实际使用的协议；自定义服务地址和路径不会转换请求或响应格式。', <CustomSelect value={settings.driver} options={mediaModelDrivers.filter((item) => item.models[activeMediaKind]).map((item) => ({ label: item.label, value: item.id }))} onChange={(driver) => updateMediaSettings({ driver: driver as MediaModelDriver, baseURL: '', paths: {}, parameters: [] })} />)}
-      {mediaSettingRow('服务地址', '填写当前类型的 API 基础地址，与其他类型独立。', <AppInput aria-label={t('服务地址')} value={settings.baseURL} placeholder={driver.baseURL} onChange={(event) => updateMediaSettings({ baseURL: event.target.value })} />)}
+      {!driver.localAuth && mediaSettingRow('服务地址', '填写当前类型的 API 基础地址，与其他类型独立。', <AppInput aria-label={t('服务地址')} value={settings.baseURL} placeholder={driver.baseURL} onChange={(event) => updateMediaSettings({ baseURL: event.target.value })} />)}
       {(driver.models[activeMediaKind]?.routes || []).map((route) => <div key={route.key}>{mediaSettingRow(route.label, '留空使用供应商默认路径；自定义路径以 / 开头，并保留占位符。', <AppInput aria-label={t(route.label)} value={settings.paths[route.key] || ''} placeholder={route.path} onChange={(event) => updateMediaSettings({ paths: { ...settings.paths, [route.key]: event.target.value } })} />)}</div>)}
       {renderMediaFields('connection')}
       {mediaSettingRow('额外请求参数', '填写当前类型 AI SDK 支持的参数名和值。', <div className="settings-extra-parameters-control">
@@ -2827,7 +2828,12 @@ export function EnvironmentSettings({
                   <button key={item.id} type="button" role="tab" aria-selected={modelKind === item.id} className={modelKind === item.id ? 'active' : ''} onClick={() => setModelKind(item.id)}>{t(item.label)}</button>
                 ))}
               </div>
-              <ModelTypeSettings
+              {activeBuiltInMedia.length ? activeBuiltInMedia.map((item) => (
+                <div className="settings-row" key={item.configuration.id}>
+                  <div><strong>{t(item.configuration.name)}</strong><span>{t(item.description)}</span></div>
+                  <span>{t('本地登录，无需 Key')}</span>
+                </div>
+              )) : <ModelTypeSettings
                 key={activeProvider + modelKind}
                 provider={activeProvider}
                 enabled={activeProviderEnabled}
@@ -2925,7 +2931,7 @@ export function EnvironmentSettings({
                 </> : renderMediaConnection()}
               >
                 {renderMediaGenerationParameters()}
-              </ModelTypeSettings>
+              </ModelTypeSettings>}
                 </div>
               </div>
             </section>

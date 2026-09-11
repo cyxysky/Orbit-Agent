@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 
 const packages = [
   '@webpilot/capability-sdk',
+  '@webpilot/capability-response',
   '@webpilot/capability-host',
   '@webpilot/capability-adapter-ai-sdk',
   '@webpilot/capability-adapter-mcp',

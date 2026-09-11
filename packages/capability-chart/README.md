@@ -365,3 +365,8 @@ row-major `grid: { rows, columns }`. Read `chart({ action: 'api', query: 'three'
 reason: 'Read 3D schema' })` for the full schema. The optional Three.js peer is
 required by React consumers; it loads only when displaying 3D. WebGL2 is required.
 Simple ECharts bar/line/scatter options also offer a non-persistent 3D preview.
+
+
+## Registered response integration
+
+This package exports `/response` (types and parameter schemas), `/response-react` (component registrations), and `/response-node` (resource/export handlers). See [the response integration guide](../capability-response/README.md). Register these at host assembly; copy successful tool result `content[].block` into the structured reply.

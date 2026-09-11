@@ -4,6 +4,7 @@
   "private": true,
   "workspaces": [
     "packages/capability-sdk",
+    "packages/capability-response",
     "packages/capability-host",
     "packages/capability-adapter-ai-sdk",
     "packages/capability-adapter-mcp",
@@ -40,7 +41,7 @@
     "desktop:installer": "npm run desktop:prepare && electron-builder --win nsis",
     "desktop:portable": "npm run desktop:prepare && electron-builder --win portable",
     "start": "node server/webpilot-server.js",
-    "capabilities:build": "npm run build --workspace @webpilot/capability-sdk && npm run build --workspace @webpilot/capability-host && npm run build --workspace @webpilot/capability-adapter-ai-sdk && npm run build --workspace @webpilot/capability-adapter-mcp && npm run build --workspace @webpilot/capability-browser && npm run build --workspace @webpilot/capability-chart && npm run build --workspace @webpilot/capability-maps && npm run build --workspace @webpilot/capability-file && npm run build --workspace @webpilot/capability-code-sandbox && npm run build --workspace @webpilot/capability-connectors && npm run build --workspace @webpilot/capability-knowledge && npm run build --workspace @webpilot/capability-data && npm run build --workspace @webpilot/capability-media && npm run build --workspace @webpilot/capability-communication && npm run build --workspace @webpilot/capability-git && npm run build --workspace @webpilot/capability-computer && npm run build --workspace @webpilot/capability-workflow && npm run build --workspace @webpilot/capability-sensitive-data",
+    "capabilities:build": "npm run build --workspace @webpilot/capability-sdk && npm run build --workspace @webpilot/capability-response && npm run build --workspace @webpilot/capability-host && npm run build --workspace @webpilot/capability-adapter-ai-sdk && npm run build --workspace @webpilot/capability-adapter-mcp && npm run build --workspace @webpilot/capability-browser && npm run build --workspace @webpilot/capability-chart && npm run build --workspace @webpilot/capability-maps && npm run build --workspace @webpilot/capability-file && npm run build --workspace @webpilot/capability-code-sandbox && npm run build --workspace @webpilot/capability-connectors && npm run build --workspace @webpilot/capability-knowledge && npm run build --workspace @webpilot/capability-data && npm run build --workspace @webpilot/capability-media && npm run build --workspace @webpilot/capability-communication && npm run build --workspace @webpilot/capability-git && npm run build --workspace @webpilot/capability-computer && npm run build --workspace @webpilot/capability-workflow && npm run build --workspace @webpilot/capability-sensitive-data",
     "capabilities:publish": "node scripts/publish-capabilities.mjs",
     "capabilities:publish:dry-run": "node scripts/publish-capabilities.mjs --dry-run",
     "check:responsive": "node scripts/check-responsive-ui.mjs",
@@ -131,7 +132,8 @@
     "tailwind-merge": "^3.6.0",
     "three": "~0.184.0",
     "typeorm": "^1.1.1",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "@webpilot/capability-response": "0.1.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.8",

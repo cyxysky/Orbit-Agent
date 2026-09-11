@@ -1,7 +1,13 @@
 'use client';
 
+import { RegisteredResponse } from '@webpilot/capability-response/react';
+import { responseRenderers } from './response-renderers';
+import { createResponseContext } from './response-context';
+import { useI18n } from '@/i18n/I18nProvider';
+
 import {
   Children,
+  Fragment,
   isValidElement,
   createContext,
   memo,
@@ -13,6 +19,7 @@ import {
   useRef,
 } from 'react';
 import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown';
+import { browserChatMarkdownBlocks } from './browser-chat-markdown-blocks';
 import { resolveBrowserChatArtifactReference, type BrowserChatArtifactSummary } from '@/lib/browser-chat-artifacts';
 import { BrowserChatCodeBlock } from '@/components/BrowserChatCodeBlock';
 import { PixelImage } from '@/components/ui/pixel-image';
@@ -22,9 +29,6 @@ import rehypeSanitize from 'rehype-sanitize';
 import { browserChatHtmlSchema, rehypeBrowserChatSvgReferences } from './browser-chat-html';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
-import { BrowserChatChart } from '@/components/BrowserChatChart';
-import { BrowserChatMap } from '@/components/BrowserChatMap';
-import { BrowserChatDataUI } from '@/components/BrowserChatDataUI';
 import {
   browserChatOrderedResponseParts,
   normalizeBrowserChatMarkdown,
@@ -312,19 +316,30 @@ const markdownComponents: Components = {
   td: ({ children, style }) => <td className="table__cell" style={style}>{children}</td>,
 };
 
-export const BrowserChatMarkdown = memo(function BrowserChatMarkdown({ markdown }: { markdown: string }) {
+const BrowserChatMarkdownBlock = memo(function BrowserChatMarkdownBlock({ markdown }: { markdown: string }) {
   const artifacts = useContext(BrowserChatMarkdownArtifactsContext);
-  const normalizedMarkdown = useMemo(() => normalizeBrowserChatMarkdown(markdown), [markdown]);
+  return (
+    <ReactMarkdown
+      urlTransform={(url, key) => defaultUrlTransform(resolveBrowserChatArtifactReference(url, artifacts, key === 'src'))}
+      rehypePlugins={[rehypeRaw, [rehypeSanitize, browserChatHtmlSchema], rehypeBrowserChatSvgReferences, rehypeKatex]}
+      remarkPlugins={[remarkGfm, remarkMath, remarkBrowserChatCjkStrong]}
+      components={markdownComponents}
+    >
+      {markdown}
+    </ReactMarkdown>
+  );
+});
+
+export const BrowserChatMarkdown = memo(function BrowserChatMarkdown({ markdown }: { markdown: string }) {
+  const blocks = useMemo(() => browserChatMarkdownBlocks(normalizeBrowserChatMarkdown(markdown)), [markdown]);
   return (
     <div className="browser-chat-agent-markdown">
-        <ReactMarkdown
-          urlTransform={(url, key) => defaultUrlTransform(resolveBrowserChatArtifactReference(url, artifacts, key === 'src'))}
-          rehypePlugins={[rehypeRaw, [rehypeSanitize, browserChatHtmlSchema], rehypeBrowserChatSvgReferences, rehypeKatex]}
-          remarkPlugins={[remarkGfm, remarkMath, remarkBrowserChatCjkStrong]}
-          components={markdownComponents}
-        >
-          {normalizedMarkdown}
-        </ReactMarkdown>
+      {blocks.map((block, index) => (
+        <Fragment key={index}>
+          {index > 0 ? '\n' : null}
+          <BrowserChatMarkdownBlock markdown={block} />
+        </Fragment>
+      ))}
     </div>
   );
 });
@@ -338,21 +353,18 @@ export const BrowserChatOrderedResponse = memo(function BrowserChatOrderedRespon
 }) {
   const sessionId = useContext(BrowserChatSessionIdContext);
   const automationRunId = useContext(BrowserChatAutomationRunIdContext);
+  const { t, language } = useI18n();
+  const responseContext = useMemo(() => createResponseContext({
+    sessionId, automationRunId, translate: t, locale: language,
+    renderMarkdown: text => <BrowserChatMarkdown markdown={text} />,
+  }), [sessionId, automationRunId, t, language]);
   const responseParts = useMemo(() => browserChatOrderedResponseParts(parts, fallbackText), [parts, fallbackText]);
   if (!responseParts.length) return null;
   return <div className="browser-chat-ordered-response">{responseParts.map((part, index) => {
     if (part.type === 'text') return <BrowserChatMarkdown key={`text:${index}`} markdown={part.text} />;
-    if (part.type === 'data-map') return <BrowserChatMap key={`${automationRunId || sessionId}:${part.data.mapId}`} mapId={part.data.mapId} title={part.data.title} sessionId={sessionId} automationRunId={automationRunId} />;
-    if (part.type === 'data-chart') {
-      return <BrowserChatChart chartId={part.data.chartId} key={part.id || `${part.data.chartId}:${index}`} sessionId={sessionId} automationRunId={automationRunId} />;
-    }
-    if (part.type === 'data-ui') {
-      return <BrowserChatDataUI
-        key={part.id || `ui:${index}`}
-        renderMarkdown={(markdown) => <BrowserChatMarkdown markdown={markdown} />}
-        tree={part.data.tree}
-      />;
-    }
+    if (part.type === 'data-response') return <RegisteredResponse
+      key={`${automationRunId || sessionId}:${part.id || index}:${part.data.type}`}
+      block={part.data} registry={responseRenderers} context={responseContext} />;
     return null;
   })}</div>;
 });

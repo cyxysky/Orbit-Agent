@@ -1,0 +1,43 @@
+{
+  "name": "@webpilot/capability-response",
+  "version": "0.1.0",
+  "description": "Registered structured responses, default content types and React rendering adapter.",
+  "type": "module",
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./react": {
+      "types": "./dist/react.d.ts",
+      "import": "./dist/react.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@webpilot/capability-sdk": "0.1.0",
+    "zod": "^4.4.3"
+  },
+  "peerDependencies": {
+    "react": ">=19.0.0 <20"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=22.16"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

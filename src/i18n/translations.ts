@@ -3,6 +3,8 @@ import type { Language } from '@/i18n/language';
 export type { Language } from '@/i18n/language';
 
 const en: Record<string, string> = {
+  'Codex CLI（内置）': 'Codex CLI (built-in)',
+  '内置图片生成，复用本机 Codex 登录，无需配置 Key、地址或模型。': 'Built-in image generation using local Codex login. No key, URL, or model configuration required.',
   '代码、文件、桌面、连接器、通信和数据': 'Code, files, desktop, connectors, messaging, and data',
   '未命名群聊': 'Unnamed group',
   '单聊直接发送，群聊中 @机器人。支持 /start、/delete、/list、/select id；对话归属保存此配置的网页账号，以完全模式运行，无需逐次确认工具操作。': 'Send directly in single chats or mention the bot in groups. Supports /start, /delete, /list, and /select id. Conversations belong to the web account that saved this configuration and run in full mode without per-tool confirmation.',

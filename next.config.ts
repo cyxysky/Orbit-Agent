@@ -37,6 +37,7 @@ export default function nextConfig(phase: string): NextConfig {
     },
     transpilePackages: [
       '@webpilot/capability-sdk',
+      '@webpilot/capability-response',
       '@webpilot/capability-host',
       '@webpilot/capability-adapter-ai-sdk',
       '@webpilot/capability-adapter-mcp',

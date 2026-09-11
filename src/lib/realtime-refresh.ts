@@ -4,12 +4,7 @@ import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 
 export type RealtimeRefreshEvent = {
   type: 'refresh';
-  entityType:
-    | 'automationCase'
-    | 'automationRun'
-    | 'automationSchedule'
-    | 'chart'
-    | 'browserChatSession';
+  entityType: string;
   id: string;
   updatedAt: string;
   version: number;

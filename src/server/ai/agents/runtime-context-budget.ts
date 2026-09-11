@@ -49,7 +49,7 @@ export function runtimeContextProfile(input: RuntimeContextModel = {}) {
     const extra = JSON.parse(process.env[`${prefix}_EXTRA_REQUEST_PARAMETERS`] || '{}');
     requestedOutput = positive(extra.max_completion_tokens ?? extra.max_tokens, 0);
   } catch { /* Provider request validation owns malformed request parameters. */ }
-  const maxOutputTokens = requestedOutput || 16384;
+  const maxOutputTokens = requestedOutput || undefined;
   const compressionTriggerRatio = ratio(process.env.AI_CONTEXT_COMPRESSION_TRIGGER_RATIO, 0.85);
   const compressionTriggerTokens = Math.max(1, Math.floor(windowTokens * compressionTriggerRatio));
   const compressionTargetRatio = ratio(process.env.AI_CONTEXT_COMPRESSION_TARGET_RATIO, 0.25);

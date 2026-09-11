@@ -6,7 +6,7 @@ Use this reference for PDF layout, pagination and delivery review. Keep the exis
 
 ## Content and appearance need different evidence
 
-Use file.readContent with artifactId/attachmentId and contentPages for text, values and citations. Extracted text does not establish reading order, font fidelity, table alignment or whether a label is visible. For appearance, use file.visualIndex and file.visualRead on the actual rendered artifact. A preview of another draft or the source Office file cannot verify the final PDF.
+Use file.readContent with artifactId/attachmentId and contentPages for text, values and citations. Extracted text does not establish reading order, font fidelity, table alignment or whether a label is visible. For appearance, use file.visualRead on the actual rendered artifact with the screenshot IDs and nextRead request returned in render.visualIndex; request file.visualIndex only when the current index is missing or more index entries are needed. A preview of another draft or the source Office file cannot verify the final PDF.
 
 Create PDFs through the existing plan/generate/render or supported convert path. Edit the source draft and render again. Reuse the documentId and current artifact/version. Do not write HTML or plain text with a .pdf suffix, invoke unavailable Python libraries, or invent a converter.
 

@@ -17,8 +17,11 @@ function restoreCollapsedMarkdownBlocks(value: string) {
 }
 
 function pipeRowCells(value: string) {
-  const trimmed = value.trim().replace(/^[-*+][ \t]+/, '');
-  if (!/[|｜]/.test(trimmed)) return undefined;
+  // Only repair explicitly enclosed, top-level table rows. Pipes inside
+  // prose, lists, blockquotes, or indented code are ordinary content;
+  // matching column counts alone do not establish a table.
+  if (!/^ {0,3}[|｜].*[|｜][ \t]*$/.test(value)) return undefined;
+  const trimmed = value.trim();
   const body = trimmed.replace(/^[|｜]/, '').replace(/[|｜]$/, '');
   const cells: string[] = [];
   let start = 0;
@@ -223,22 +226,8 @@ export function normalizeBrowserChatMarkdown(markdown: string) {
     .replace(/^(?:[ \t]*\n)+|(?:\n[ \t]*)+$/g, '');
 }
 
-/** Only structured parts render charts; Markdown references remain ordinary text. */
-export function browserChatOrderedResponseParts(parts: BrowserChatUIMessagePart[] | undefined, fallbackText: string) {
-  const response = (parts || []).filter((part) => part.type === 'text' || part.type === 'data-chart' || part.type === 'data-map' || part.type === 'data-ui');
-  const source = response.length ? response : [{ type: 'text' as const, text: fallbackText }];
-  const renderedCharts = new Set<string>();
-  return source.flatMap((part): BrowserChatUIMessagePart[] => {
-    if (part.type === 'data-map') {
-      if (renderedCharts.has(part.data.mapId)) return [];
-      renderedCharts.add(part.data.mapId);
-      return [part];
-    }
-    if (part.type === 'data-chart') {
-      if (renderedCharts.has(part.data.chartId)) return [];
-      renderedCharts.add(part.data.chartId);
-      return [part];
-    }
-    return [part];
-  });
+/** Response blocks preserve their array position, including repeated views of one resource. */
+export function browserChatOrderedResponseParts(parts: BrowserChatUIMessagePart[] | undefined, fallbackText: string): BrowserChatUIMessagePart[] {
+  const response = (parts || []).filter(part => part.type === 'text' || part.type === 'data-response');
+  return response.length ? response : [{ type: 'text', text: fallbackText }];
 }

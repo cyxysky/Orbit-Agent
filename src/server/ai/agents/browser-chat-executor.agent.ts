@@ -1,7 +1,10 @@
+import { responseRegistry } from '@/lib/response-registry';
+import { markdownBlock } from '@webpilot/capability-response';
+import type { StructuredResponse } from '@webpilot/capability-sdk';
 import { randomUUID } from 'node:crypto';
 import { assembleRuntimeContext, createRuntimeContextReadTool, contextReadToolName, runtimeContextMessageRef, type RuntimeContextManifest } from './runtime-context-assembler';
 import { runtimeKnowledgeMessage, type RuntimeKnowledgeBlock } from './runtime-knowledge-context';
-import { generateText, hasToolCall, parsePartialJson, streamText, ToolLoopAgent, tool, type ModelMessage, type StopCondition, type ToolCallRepairFunction, type ToolSet } from 'ai';
+import { generateText, jsonSchema, hasToolCall, parsePartialJson, streamText, ToolLoopAgent, tool, type ModelMessage, type StopCondition, type ToolCallRepairFunction, type ToolSet } from 'ai';
 import { z } from 'zod';
 import { jsonRecordFromUnknown, type CapabilityProgressEvent } from '@webpilot/capability-sdk';
 import { fileCapabilityManifest, fileCapabilityToolNames, type FileReadInput } from '@webpilot/capability-file';
@@ -769,21 +772,6 @@ function finalResponseFromText(value: string) {
   }
 }
 
-function partialFinalResponseBlocks(value: unknown) {
-  const response = recordFromUnknown(value);
-  if (!Array.isArray(response.blocks)) return [];
-  return response.blocks.flatMap((block): BrowserChatFinalBlock[] => {
-    const candidate = recordFromUnknown(block);
-    if (candidate.type === 'markdown' && typeof candidate.text === 'string' && candidate.text) {
-      return [{ type: 'markdown', text: candidate.text }];
-    }
-    const parsed = browserChatFinalResponseSchema.safeParse({
-      status: 'passed',
-      blocks: [block],
-    });
-    return parsed.success ? [parsed.data.blocks[0]] : [];
-  });
-}
 
 function subagentUuidsFromToolResult(result?: BrowserActionResult) {
   if (!result?.ok) return [];
@@ -1560,6 +1548,13 @@ async function makeBrowserTools(
     toModelOutput: fileToolModelOutput,
   };
 
+  const responseInput = responseRegistry.forTools(new Set(Object.keys(capabilityRuntime.tools))).input();
+  const finalResponseInputSchema = jsonSchema<StructuredResponse>(responseInput.jsonSchema, {
+    validate(value) {
+      try { return { success: true, value: responseInput.parse(value) }; }
+      catch (error) { return { success: false, error: error instanceof Error ? error : new Error(String(error)) }; }
+    },
+  });
   const sharedTools: ToolSet = {
     reportDefect: tool({
       description: runtimeBuiltinToolPrompts.reportDefect,
@@ -1639,7 +1634,7 @@ async function makeBrowserTools(
     ...capabilityTools,
     finalResponse: tool({
       description: runtimeBuiltinToolPrompts.finalResponse,
-      inputSchema: browserChatFinalResponseSchema,
+      inputSchema: finalResponseInputSchema,
       execute: (input, execution) => record('finalResponse', input, () => Promise.resolve({
         ok: true,
         actual: JSON.stringify({ accepted: true, blockCount: input.blocks.length }),
@@ -1737,13 +1732,13 @@ function runtimePrompt(input: { runtimeRecord: BrowserChatRuntimeRecord; fileVis
     '- The Playwright/test browser is server-side. Never use page.evaluate Blob/object URLs, window.open, HTML download attributes, or a page download click as proof that a file reached the user browser. Delivery requires a successful file action=write/download/convert/render with a current-session Artifact download URL. write publishes literal text/code content directly; generate/edit success alone only saves and validates Office source. Include every delivered URL in the final answer and never label another file successful.',
     '- Copy every delivered Artifact downloadUrl exactly from the successful tool result. Never construct, absolutize, repair, or infer an Artifact URL from a sessionId, artifactId, hostname, or file name, and never call a URL an absolute filesystem path. Before finalizing Office/PDF work, reconcile the original requirements with automaticValidation.formatChecks, validation issues, and visual-QA scope. Visual QA proves page layout only; it does not prove requested native charts, formulas, images, comments, footnotes, or other semantic features. A missing, zero-count, unsupported, failed, or unverified required feature must be reported as a limitation, never as fully passed.',
     '- If agent.state tracks task stage, coverage, status, issues, or artifacts, update those records before the final answer so no pending/generated/failed field contradicts a complete claim. Do not set an overall complete/passed state while any required item remains pending, unsupported, failed, or unverified unless the user explicitly accepted a partial result.',
-    `- Use chart when an Apache ECharts visualization materially improves the answer. Read Skill ${chartRuntimeSkillId} first and follow its indexed API guidance. After every successful create, reference the exact returned chartId from a finalResponse chart block. Never invent a chart id or use one from a failed call.`,
-    '- Complete a text-only terminal response as ordinary assistant Markdown. Use finalResponse only when the response needs ordered chart or declarative UI blocks, or must explicitly report failed/blocked status. In finalResponse, use markdown blocks for prose, chart blocks for generated ECharts artifacts, and ui blocks for declarative cards/layout. The UI renders blocks in the exact array order.',
-    '- For real place searches, routes and interactive geographic maps use maps after reading system.maps. Reference the exact successful mapId in a finalResponse block {type:"map",mapId,title}. Include the returned Google Maps link when replying to external messaging clients. Never invent places or routes and never retry an unchanged failed maps request automatically.',
+    `- Use chart when an Apache ECharts visualization materially improves the answer. Read Skill ${chartRuntimeSkillId} first and follow its indexed API guidance. After every successful create, copy the exact returned content[].block into finalResponse.blocks. Never invent a chart id or use one from a failed call.`,
+    '- Complete a text-only terminal response as ordinary assistant Markdown. Use finalResponse for ordered registered response blocks or an explicit failed/blocked status. Every block has {type,params}. For prose use {type:"core.markdown",params:{text:"..."}}. For generated content copy the exact successful tool result content[].block. For declarative cards use core.ui with params.tree. Use only the registered types and parameters shown in the tool schema. The UI renders blocks in the exact array order.',
+    '- For real place searches, routes and interactive geographic maps use maps after reading system.maps. Copy the exact successful maps result content[].block into finalResponse.blocks. Include the returned Google Maps link when replying to external messaging clients. Never invent places or routes and never retry an unchanged failed maps request automatically.',
     '- Preserve Markdown block structure: separate heading markers (# through ######) from their content with a space, including numbered headings (### 1. Title). Put headings on their own lines. Put every list item on its own line, indent nested items under the parent content, and retain newlines and indentation in Markdown blocks. Never flatten child items into inline hyphens.',
     '- Defect reporting is a mandatory part of every interface or product testing task. As soon as live browser evidence reveals a real defect or reproducible product problem (including functional, data, interaction, visual/layout, or compatibility problems), proactively reproduce it, use browser action=code to emit a screenshot that visibly proves it, and call reportDefect in the immediately following model step with the exact screenshotFileNames returned by browser before continuing unrelated test cases. Never wait for the user to ask, defer reporting until the final answer, or merely describe the problem in test notes or the final report. Create one report for each unique confirmed problem. Investigate permission, configuration, version, requirement, and environment explanations first; report only an observed product problem, never speculation or expected behavior, and do not report duplicates. Recording a defect does not end the requested test unless its full scope is complete.',
     screenshotAvailable && input.fileVisualAvailable
-      ? `- Read ${fileArtifactRuntimeSkillId} before file visual actions and follow its current-artifact review guidance with visualIndex, visualRead, and visualReport. Report the actual review coverage in the final response.`
+      ? `- Read ${fileArtifactRuntimeSkillId} before file visual actions. Reuse render.visualIndex.nextRead to inspect the current artifact directly; call visualIndex only for missing index entries. Follow the Skill's visualRead/visualReport guidance and report actual review coverage in the final response.`
       : screenshotAvailable
         ? '- A successful render is only a candidate. Inspect every returned preview and generationDiagnostics for clipping, overlap, hidden text, word/character wrapping, unexpectedly wrapped titles, covered captions, off-canvas content, empty pages, image distortion, broken tables/charts, contrast, and alignment. If a defect exists, read the exact current source, apply one Codex-format patch with its patchBaseDigest, render again, and inspect the replacement preview. Do not claim full visual verification when a complete screenshot-by-screenshot review was unavailable.'
       : '- This selected model has no image input. A successful document render is structural verification only; do not claim that you saw, inspected, confirmed, or corrected a visual layout, preview, overlap, contrast, clipping, or image quality. Do not request preview screenshots and do not describe visual defects as observed evidence. State the verification boundary accurately if it matters to the user.',
@@ -1758,7 +1753,7 @@ function runtimePrompt(input: { runtimeRecord: BrowserChatRuntimeRecord; fileVis
     customPrompt,
     '',
     '回答前再次检查联网要求：除 1+1 这类绝对常识，以及用户明确禁止联网或限制本轮操作范围外，必须先实际调用 browser 工具搜索并读取相关网页，再使用核实的信息回答或继续制作内容。技术原理、框架对比、产品介绍等都需要搜索，即使你认为自己知道答案、用户只要求几句话，也不能直接凭记忆作答。没有执行搜索时，下一步应调用浏览器，不应直接给出结论。已经取得的本任务有效网页证据可以复用。',
-    'After satisfying the research requirement, return a text-only final answer directly as Chinese Markdown. When chart/UI blocks or an explicit failed/blocked status are required, call finalResponse and put user-facing prose in its Markdown blocks. Never return standalone JSON as assistant text.',
+    'After satisfying the research requirement, return a text-only final answer directly as Chinese Markdown. When chart/UI blocks or an explicit failed/blocked status are required, call finalResponse and put user-facing prose in core.markdown blocks with params.text. Never return standalone JSON as assistant text.',
   ].filter(Boolean).join('\n');
 }
 
@@ -2780,6 +2775,7 @@ async function executeRuntimeStep(input: {
       },
     });
     const browserTools = browserToolRuntime.tools;
+    const activeResponses = responseRegistry.forTools(new Set(Object.keys(browserTools)));
     const allowedToolNameSet = new Set(allowedToolTypes);
     const allowedExternalTools = Object.fromEntries(
       Object.entries(externalTools).filter(([name]) => allowedToolNameSet.has(name)),
@@ -3150,11 +3146,11 @@ async function executeRuntimeStep(input: {
               streamedToolInput.json += chunk.delta;
               if (streamedToolInput.toolName !== 'finalResponse') return;
               const partial = await parsePartialJson(streamedToolInput.json);
-              await publishFinalBlocks(partialFinalResponseBlocks(partial.value), toolExecutionGate.stepNumber);
+              await publishFinalBlocks(activeResponses.partial(partial.value), toolExecutionGate.stepNumber);
               return;
             }
             if (chunk.type === 'tool-call' && chunk.toolName === 'finalResponse') {
-              await publishFinalBlocks(partialFinalResponseBlocks(chunk.input), toolExecutionGate.stepNumber);
+              await publishFinalBlocks(activeResponses.partial(chunk.input), toolExecutionGate.stepNumber);
               return;
             }
             if (chunk.type !== 'text-delta' || !chunk.text) return;
@@ -3743,7 +3739,7 @@ export async function executeInteractiveBrowserTurn(input: {
       });
       finalStatus = 'failed';
       reply = userFacingRecoverableRuntimeError(error);
-      finalBlocks = [{ type: 'markdown', text: reply }];
+      finalBlocks = [markdownBlock(reply)];
       activeModelMessages = appendTerminalBrowserChatTurn(
         activeModelMessages,
         input.modelInstruction || input.instruction,
@@ -3802,7 +3798,7 @@ export async function executeInteractiveBrowserTurn(input: {
     if (actionResult.responseFinished && browserChatReply) {
       await persistCompletedToolStep();
       reply = browserChatReply;
-      finalBlocks = [{ type: 'markdown', text: reply }];
+      finalBlocks = [markdownBlock(reply)];
       finalStatus = actionResult.responseStatus === 'blocked'
         ? 'blocked'
         : actionResult.responseStatus === 'failed'
@@ -3816,7 +3812,7 @@ export async function executeInteractiveBrowserTurn(input: {
       if (runningIndex >= 0) steps.splice(runningIndex, 1);
       if (actionResult.responseFinished) {
         reply = aiSdkFinishMessage(actionResult.finishReason);
-        finalBlocks = [{ type: 'markdown', text: reply }];
+        finalBlocks = [markdownBlock(reply)];
         finalStatus = actionResult.responseStatus === 'blocked'
           ? 'blocked'
           : actionResult.responseStatus === 'failed'
@@ -3848,7 +3844,7 @@ export async function executeInteractiveBrowserTurn(input: {
     }
     if (actionResult.responseFinished) {
       reply = aiSdkFinishMessage(actionResult.finishReason);
-      finalBlocks = [{ type: 'markdown', text: reply }];
+      finalBlocks = [markdownBlock(reply)];
       finalStatus = actionResult.responseStatus === 'blocked'
         ? 'blocked'
         : actionResult.responseStatus === 'failed'
@@ -3860,7 +3856,7 @@ export async function executeInteractiveBrowserTurn(input: {
     if (lastTool && isBrowserHumanVerificationCall(lastTool.name, lastTool.input)) {
       finalStatus = 'blocked';
       if (!reply) reply = browserChatReplyFromDecision(decision);
-      finalBlocks = [{ type: 'markdown', text: reply }];
+      finalBlocks = [markdownBlock(reply)];
       endedWithFinalAnswer = true;
       break;
     }
@@ -3874,12 +3870,10 @@ export async function executeInteractiveBrowserTurn(input: {
     })));
   reply = repairFileArtifactDownloadLinks(reply, completedTools);
   if (finalBlocks.length) {
-    finalBlocks = finalBlocks.map((block) => block.type === 'markdown'
-      ? { ...block, text: repairFileArtifactDownloadLinks(block.text, completedTools) }
-      : block);
+    finalBlocks = finalBlocks.map(block => responseRegistry.mapText(block, text => repairFileArtifactDownloadLinks(text, completedTools)));
     reply = browserChatFinalBlocksToText(finalBlocks);
   } else if (reply) {
-    finalBlocks = [{ type: 'markdown', text: reply }];
+    finalBlocks = [markdownBlock(reply)];
   }
   ensureActive();
   return {
@@ -4163,7 +4157,10 @@ async function executeCodexRuntimeObject(input: {
   }
 
   if (type === 'finalResponse') {
-    const parsed = browserChatFinalResponseSchema.safeParse(params);
+    const parsed = (() => {
+      try { return { success: true as const, data: responseRegistry.forTools(new Set(allowedTypes)).parseResponse(params) }; }
+      catch (error) { return { success: false as const, error: { issues: [{ path: [] as string[], message: error instanceof Error ? error.message : String(error) }] } }; }
+    })();
     if (!parsed.success) {
       return {
         text: `finalResponse input is invalid: ${parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; ')}`,

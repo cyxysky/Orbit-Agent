@@ -6,6 +6,8 @@ Inspect media, extract frames, and connect host-selected OCR, transcription and 
 
 This README is a complete integration entrypoint. Follow steps 1–4 for any TypeScript Agent framework, or use the AI SDK/MCP routes below. All named source files are created in **your consuming project**, not inside this package.
 
+`mediaConfigurationForProviders` includes Codex CLI as the default image model, independent of language providers. It reuses local Codex login without API keys, URLs, or model configuration; explicit media selections take precedence. Install `ai-sdk-provider-codex-cli` and a Codex CLI with native image generation. The adapter discovers the CLI default model, supports reference-image edits, and saves outputs through the normal artifact publisher. Masks are unsupported. CLI/account availability and generation errors are returned directly; no automatic provider fallback occurs.
+
 ## 1. Install and prepare
 
 Use Node.js >=22.16 and ESM TypeScript. These examples match the 0.1.0 workspace contracts. Install matching Capability versions from your configured npm registry. If a version is unpublished, obtain the matching release tarballs/workspace packages from the maintainer; a registry 404 is not a runtime failure. Do not mix unrelated releases. For a new project:

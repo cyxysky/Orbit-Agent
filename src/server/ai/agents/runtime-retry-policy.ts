@@ -176,6 +176,11 @@ export function classifyRuntimeRetry(error: unknown, signal?: AbortSignal): Runt
   if (signal?.aborted) {
     return { category: 'aborted', reason: 'request was aborted', retryable: false, statusCode };
   }
+  if (name === 'AI_InvalidToolInputSchemaError'
+    || ((statusCode === undefined || statusCode === 400 || statusCode === 422)
+      && /\binvalid (?:json )?schema\b|\bschema\b.{0,160}\b(?:must|required|invalid|unsupported|not supported)\b/i.test(message))) {
+    return { category: 'invalid-request', reason: 'request schema is invalid; correct the schema before retrying', retryable: false, statusCode };
+  }
   if (statusCode === 402 || isProviderBillingLimitMessage(message)
     || /\b(insufficient balance|payment required|billing quota)\b/.test(normalizedMessage)
     || records.some((record) => [record.code, record.type].some((value) =>

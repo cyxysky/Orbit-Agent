@@ -77,7 +77,7 @@ export function fileActionInputIssues(input: FileToolInput) {
   }
   if (['visualIndex', 'visualRead', 'visualReport'].includes(action || '')) {
     forbid(['documentId', 'attachmentId', 'startLine', 'endLine', 'pages'],
-      'Visual actions inspect a rendered artifactId, not source or worksheet IDs. visualIndex returns screenshotIds; visualRead uses those exact IDs.');
+      'Visual actions inspect a rendered artifactId, not source or worksheet IDs. Reuse render.visualIndex screenshotIds directly in visualRead; call visualIndex only for missing index entries.');
   }
   return issues;
 }

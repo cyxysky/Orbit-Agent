@@ -22,8 +22,8 @@ This Skill is authoritative for the chart model tool and is supplied by the char
 2. Before creating a chart, call chart with action \`api\` and no query to read the compact API module index.
 3. Call action \`api\` again with the exact module id needed for the requested chart. Read more than one module when the design combines series, coordinates, datasets, maps, or interactions.
 4. Call action \`create\` with one complete JSON-serializable \`option\`. For 2D, engine defaults to \`echarts\` and loads the full ECharts package. For native 3D, read module \`three\`, set engine to \`three\`, and follow its separate data schema. For editable diagrams, read module \`excalidraw\`, set engine to \`excalidraw\`, and supply elements plus optional appState. Omit files when there are no images; image resources use an object keyed by fileId, never a string or array.
-5. Read the successful result and copy its exact chartId into a \`finalResponse\` chart block at the intended response position.
-6. Never invent an identifier and never reference one after a failed call. Charts render only through structured chart blocks. Include each chartId once; do not also append it to a Markdown block.
+5. Read the successful result and copy its exact content[].block into \`finalResponse.blocks\` at the intended response position.
+6. Never invent an identifier and never reference one after a failed call. Charts render through registered response blocks with type and params. Include each chartId once; do not also append it to a Markdown block.
 
 Markdown never renders charts. Identifiers such as \`chart_000001\`, including standalone lines and code examples, remain ordinary text.
 

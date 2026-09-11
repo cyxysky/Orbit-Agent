@@ -4,18 +4,65 @@
   "description": "Google Maps place search, routes and interactive React maps for agent hosts.",
   "type": "module",
   "sideEffects": false,
-  "files": ["dist", "README.md"],
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
-    "./core": { "types": "./dist/core.d.ts", "import": "./dist/core.js" },
-    "./node": { "types": "./dist/node.d.ts", "import": "./dist/node.js" },
-    "./react": { "types": "./dist/react.d.ts", "import": "./dist/react.js" },
-    "./settings": { "types": "./dist/settings.d.ts", "import": "./dist/settings.js" }
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./core": {
+      "types": "./dist/core.d.ts",
+      "import": "./dist/core.js"
+    },
+    "./node": {
+      "types": "./dist/node.d.ts",
+      "import": "./dist/node.js"
+    },
+    "./react": {
+      "types": "./dist/react.d.ts",
+      "import": "./dist/react.js"
+    },
+    "./settings": {
+      "types": "./dist/settings.d.ts",
+      "import": "./dist/settings.js"
+    },
+    "./response": {
+      "types": "./dist/response.d.ts",
+      "import": "./dist/response.js"
+    },
+    "./response-react": {
+      "types": "./dist/response-react.d.ts",
+      "import": "./dist/response-react.js"
+    },
+    "./response-node": {
+      "types": "./dist/response-node.d.ts",
+      "import": "./dist/response-node.js"
+    }
   },
-  "scripts": { "build": "tsc -p tsconfig.build.json", "prepack": "npm run build" },
-  "dependencies": { "@webpilot/capability-sdk": "0.1.0", "zod": "^4.4.3" },
-  "peerDependencies": { "react": ">=19.0.0 <20" },
-  "peerDependenciesMeta": { "react": { "optional": true } },
-  "engines": { "node": ">=22.16" },
-  "publishConfig": { "access": "public" }
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@webpilot/capability-sdk": "0.1.0",
+    "zod": "^4.4.3",
+    "@webpilot/capability-response": "0.1.0"
+  },
+  "peerDependencies": {
+    "react": ">=19.0.0 <20"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=22.16"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
 }

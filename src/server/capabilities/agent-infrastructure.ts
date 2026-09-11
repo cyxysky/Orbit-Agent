@@ -1,4 +1,5 @@
 import { mediaModelsForConfig } from '@/lib/model-selection';
+import { resolveCodexCliPath } from '@/server/ai/codex-cli';
 import { randomUUID } from 'node:crypto';
 import { copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -105,6 +106,7 @@ export async function createConfiguredMediaOperations(input: { context: Capabili
   const configuration = mediaModelsForConfig(await store.getModelConfig());
   const generation = createAiSdkMediaGenerationOperations({
     configuration,
+    codex: { codexPath: resolveCodexCliPath(process.env.CODEX_PATH, process.cwd()) },
     selectedModels: configuration.defaults,
     async readSource(ref, context) {
       context.abortSignal?.throwIfAborted();

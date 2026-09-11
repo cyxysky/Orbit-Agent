@@ -1,11 +1,11 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { existsSync } from 'node:fs';
-import path from 'node:path';
+import { resolveCodexCliPath } from './codex-cli';
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import type { generateText } from 'ai';
 import { isOpenAICompatibleProvider, normalizeMiniMaxOpenAIBaseURL, openAICompatibleProviderIndex } from '@/config/settings';
 import { ensureAiSdkTelemetryRegistered } from '@/server/ai/ai-sdk-telemetry';
 import { filterSensitiveData } from '@/server/capabilities/sensitive-data';
+import { normalizeToolInputSchemas } from '@/server/ai/tool-input-schema';
 
 ensureAiSdkTelemetryRegistered();
 
@@ -55,33 +55,6 @@ const modelSettingsStorage = ((globalThis as typeof globalThis & {
   __webPilotModelSettingsStorage?: AsyncLocalStorage<ModelSettingsOverride>;
 }).__webPilotModelSettingsStorage ??= new AsyncLocalStorage<ModelSettingsOverride>());
 
-function resolveCodexCliPath(configuredPath: string | undefined, projectRoot: string) {
-  const value = String(configuredPath || '').trim();
-  if (value) {
-    const expandedPath = value.replace(/^\[project\](?=$|[\\/])/i, projectRoot);
-    if (expandedPath !== value || path.isAbsolute(expandedPath)) {
-      return path.normalize(expandedPath);
-    }
-    if (expandedPath.startsWith('.') || /[\\/]/.test(expandedPath)) {
-      return path.resolve(projectRoot, expandedPath);
-    }
-    return expandedPath;
-  }
-
-  // Next.js can rewrite createRequire(import.meta.url).resolve() inside the
-  // provider to a literal "[project]" path. Supplying the optional local CLI
-  // entry explicitly bypasses that bundled resolver while retaining the PATH
-  // fallback when the optional dependency is not installed.
-  const localCliPath = path.join(
-    projectRoot,
-    'node_modules',
-    '@openai',
-    'codex',
-    'bin',
-    'codex.js',
-  );
-  return existsSync(localCliPath) ? localCliPath : undefined;
-}
 
 function optionalEnvironmentValue(name: string) {
   const value = String(process.env[name] || '').trim();
@@ -139,8 +112,14 @@ function lazyLanguageModel(
     provider,
     modelId,
     supportedUrls: {},
-    doGenerate: async (options) => (await loadModel()).doGenerate(await filterSensitiveData(options)),
-    doStream: async (options) => (await loadModel()).doStream(await filterSensitiveData(options)),
+    doGenerate: async (options) => {
+      const prepared = normalizeToolInputSchemas(await filterSensitiveData(options));
+      return (await loadModel()).doGenerate(prepared);
+    },
+    doStream: async (options) => {
+      const prepared = normalizeToolInputSchemas(await filterSensitiveData(options));
+      return (await loadModel()).doStream(prepared);
+    },
   } satisfies GenerateTextModel;
 }
 

@@ -1,3 +1,5 @@
+import type { ResponseBlock, StructuredResponse } from '@webpilot/capability-sdk';
+import { responseRegistry } from '@/lib/response-registry';
 import type { DynamicToolUIPart, UIMessage } from 'ai';
 import { z } from 'zod';
 import type {
@@ -6,72 +8,17 @@ import type {
   StepExecutionResult,
 } from '@/server/ai/schemas/runtime.schema';
 
-const browserChatUIValueSchema: z.ZodType<unknown> = z.lazy(() => z.union([
-  z.string(),
-  z.number(),
-  z.boolean(),
-  z.null(),
-  z.array(browserChatUIValueSchema).max(100),
-  z.record(z.string(), browserChatUIValueSchema),
-]));
-
-export const browserChatUINodeSchema: z.ZodType<BrowserChatUINode> = z.lazy(() => z.object({
-  type: z.enum([
-    'card',
-    'stack',
-    'row',
-    'grid',
-    'text',
-    'markdown',
-    'heading',
-    'badge',
-    'time',
-    'stat',
-    'progress',
-    'divider',
-    'keyValue',
-    'timeline',
-    'link',
-  ]).describe('Declarative primitive. Compose time cards with card/stack/time; metrics with grid/stat/progress; details with keyValue/timeline.'),
-  props: z.record(z.string(), browserChatUIValueSchema).optional().describe('Primitive props: title/description; text/tone; columns; label/value/detail; locale/timeZone/dateStyle/timeStyle; items[{label,value}]; href.'),
-  children: z.array(z.union([z.string().max(10_000), browserChatUINodeSchema])).max(100).optional(),
-}).strict());
-
-export type BrowserChatUINode = {
-  type: 'card' | 'stack' | 'row' | 'grid' | 'text' | 'markdown' | 'heading' | 'badge' | 'time' | 'stat' | 'progress' | 'divider' | 'keyValue' | 'timeline' | 'link';
-  props?: Record<string, unknown>;
-  children?: Array<string | BrowserChatUINode>;
-};
-
-export const browserChatFinalBlockSchema = z.discriminatedUnion('type', [
-  z.object({
-    type: z.literal('map'),
-    mapId: z.string().regex(/^map_[a-f0-9]{24}$/),
-    title: z.string().trim().min(1).max(200).optional(),
-  }).strict(),
-  z.object({
-    type: z.literal('markdown'),
-    text: z.string().min(1).max(40_000),
-  }).strict(),
-  z.object({
-    type: z.literal('chart'),
-    chartId: z.string().regex(/^chart_\d{6}$/),
-    title: z.string().trim().min(1).max(200).optional(),
-  }).strict(),
-  z.object({
-    type: z.literal('ui'),
-    id: z.string().trim().min(1).max(120).optional(),
-    tree: browserChatUINodeSchema,
-  }).strict(),
-]);
-
-export const browserChatFinalResponseSchema = z.object({
-  status: z.enum(['passed', 'failed', 'blocked']).default('passed'),
-  blocks: z.array(browserChatFinalBlockSchema).min(1).max(64),
+// Persist the envelope independently of installed packages, so one missing renderer
+// cannot prevent a whole historical automation run from loading.
+export const browserChatFinalBlockSchema = z.object({
+  type: z.string().min(1).max(160), params: z.record(z.string(), z.unknown()),
 }).strict();
-
-export type BrowserChatFinalBlock = z.infer<typeof browserChatFinalBlockSchema>;
-export type BrowserChatFinalResponse = z.infer<typeof browserChatFinalResponseSchema>;
+export const browserChatFinalResponseSchema = z.unknown().transform((value, context): StructuredResponse => {
+  try { return responseRegistry.parseResponse(value); }
+  catch (error) { context.addIssue({ code: 'custom', message: error instanceof Error ? error.message : String(error) }); return z.NEVER; }
+});
+export type BrowserChatFinalBlock = ResponseBlock;
+export type BrowserChatFinalResponse = StructuredResponse;
 
 export type BrowserChatUIMessageMetadata = {
   sessionId: string;
@@ -84,9 +31,7 @@ export type BrowserChatUIMessageMetadata = {
 };
 
 export type BrowserChatUIDataTypes = {
-  map: { mapId: string; title?: string };
-  chart: { chartId: string; title?: string };
-  ui: { id?: string; tree: BrowserChatUINode };
+  response: ResponseBlock;
   step: StepExecutionResult;
   outputCycle: BrowserChatAiOutputCycle;
   subagent: BrowserChatSubagentRecord;
@@ -97,31 +42,11 @@ export type BrowserChatUIMessage = UIMessage<BrowserChatUIMessageMetadata, Brows
 export type BrowserChatUIMessagePart = BrowserChatUIMessage['parts'][number];
 
 export function browserChatFinalBlocksToParts(blocks: BrowserChatFinalBlock[]): BrowserChatUIMessagePart[] {
-  return blocks.map((block): BrowserChatUIMessagePart => {
-    if (block.type === 'markdown') return { type: 'text', text: block.text };
-    if (block.type === 'map') return { type: 'data-map', id: block.mapId, data: { mapId: block.mapId, ...(block.title ? { title: block.title } : {}) } };
-    if (block.type === 'chart') {
-      return {
-        type: 'data-chart',
-        id: block.chartId,
-        data: { chartId: block.chartId, ...(block.title ? { title: block.title } : {}) },
-      };
-    }
-    return {
-      type: 'data-ui',
-      id: block.id,
-      data: { id: block.id, tree: block.tree },
-    };
-  });
+  return blocks.map((block, index) => ({ type: 'data-response', id: `response:${index}`, data: block }));
 }
 
 export function browserChatFinalBlocksToText(blocks: BrowserChatFinalBlock[]) {
-  return blocks.map((block) => {
-    if (block.type === 'markdown') return block.text;
-    if (block.type === 'chart') return block.chartId;
-    if (block.type === 'map') return block.mapId;
-    return '';
-  }).filter(Boolean).join('\n\n');
+  return blocks.map(block => responseRegistry.toText(block)).filter(Boolean).join('\n\n');
 }
 
 export function browserChatToolPartFromStep(

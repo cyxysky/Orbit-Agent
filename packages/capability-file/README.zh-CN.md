@@ -27,6 +27,8 @@ npm install -D typescript tsx @types/node
 
 首次调用只写入 UTF-8 文本，不需要安装 Office。Office 生成流程为 `plan → generate → render`；编写前应读取包的 Skill 及 plan 返回的引擎/API 指引。本地 Office 转换需要 LibreOffice，UNO 编写还需要能够 `import uno` 的 Python。JavaScript 编写与文件转换是不同的运行需求；请明确设置 `OFFICE_GENERATION_MODE`。
 
+启用视觉预览时，`render` 直接返回 `visualIndex`：当前 `artifactId`、截图总数、截图 ID/页码清单、分页 `nextOffset` 和可直接调用的 `nextRead`。模型可立即调用 `visualRead`，无需再获取同一份截图列表。默认返回前 100 条，更多条目或缺失索引才调用 `visualIndex`。重新渲染后使用新结果中的 ID；清单本身不代表已查看或验收截图。
+
 `readSource(documentId)` 读取生成代码，`readContent(artifactId)` 读取发布后的内容。`edit` 必须使用 `readSource` 返回的准确 `patchBaseDigest`，修改后重新 render。只有宿主提供 `readFileVisuals` 且确实向模型传递图片时才启用视觉输入。附件需要 `attachmentBindings` 或宿主实现的 `readFile`。
 
 默认产物 URL 是服务端本地 `file:` 地址，远程客户端无法下载。应提供 `workspace.artifactUrl({ absolutePath, relativePath })`，并实现对应的鉴权下载路由或对象存储；仅生成 URL 并不会自动提供文件服务。访问同一轮运行的草稿和产物时保持 run ID 一致。

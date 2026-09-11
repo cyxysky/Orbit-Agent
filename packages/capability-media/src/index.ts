@@ -50,14 +50,14 @@ export type MediaToolInput = z.infer<typeof parser>;
 export const mediaToolInput = defineCapabilityInput<MediaToolInput>(z.toJSONSchema(parser) as Readonly<Record<string, unknown>>, (value) => parser.parse(value));
 export const mediaCapabilityManifest = Object.freeze({
   schemaVersion: 1, id: 'com.webpilot.media', name: 'Media', version: '0.1.0',
-  description: 'Inspect media and generate images, videos, and speech through independently configured model providers.',
+  description: 'Inspect media and generate images, videos, and speech through built-in or configured model providers.',
   permissions: ['artifact:read', 'artifact:write', 'media:process', 'model:media'],
   runtimeRequirements: { node: '>=22.16' }, configuration: { settings: mediaCapabilitySettings }, skills: [mediaRuntimeSkill],
 } satisfies CapabilityManifest);
 
 export function createMediaTool(operations: MediaOperations, configuration: CapabilityRunContext['configuration']) {
   return defineCapabilityTool<MediaToolInput, unknown>({
-    name: 'media', description: 'List configured image/video/speech models; generate or edit images, generate videos or text-to-speech audio; inspect media, extract video frames, run OCR or transcription. Generation returns saved artifacts.',
+    name: 'media', description: 'List built-in and configured image/video/speech models; generate or edit images, generate videos or text-to-speech audio; inspect media, extract video frames, run OCR or transcription. Generation returns saved artifacts.',
     input: mediaToolInput, policy: { concurrency: 'serial', concurrencyGroup: 'media-processing', permissions: mediaCapabilityManifest.permissions },
     async execute(input, context) {
       try {

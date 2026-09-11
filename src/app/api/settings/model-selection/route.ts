@@ -1,4 +1,4 @@
-import { modelsForProvider, parseMediaModelSelection } from '@/lib/model-selection';
+import { mediaModelsForConfig, modelSelectionValue, modelsForProvider, parseMediaModelSelection } from '@/lib/model-selection';
 import { NextRequest } from 'next/server';
 import { z } from 'zod';
 import { modelProviderDefinition, isModelProvider } from '@/config/settings';
@@ -31,26 +31,36 @@ export async function POST(request: NextRequest) {
       userId,
     }, async () => {
       const saved = await store.getModelConfig();
+      const media = parseMediaModelSelection(selection.model);
+      if (media) {
+        const id = modelSelectionValue(selection.provider, selection.model);
+        const valid = mediaModelsForConfig(saved).models.some((model) => model.id === id && model.enabled && model.kind === media.kind);
+        if (!valid) throw new ApiRequestError('所选模型不存在或尚未启用。', { status: 400 });
+        await store.saveModelConfig({
+          provider: saved?.provider || 'openrouter',
+          providers: saved?.providers || {},
+          mediaSelections: { ...saved?.mediaSelections, [media.kind]: { provider: selection.provider, model: media.id } },
+        });
+        await store.applyRuntimeEnv();
+        return apiJson(request, { ok: true, ...await readModelSettingsState() });
+      }
       const definition = modelProviderDefinition(selection.provider);
       const currentProvider = saved?.providers?.[selection.provider];
       if (currentProvider?.enabled !== true) {
         throw new ApiRequestError('该模型服务商尚未启用。', { code: 'model_provider_disabled', status: 400 });
       }
-      const media = parseMediaModelSelection(selection.model);
-      const valid = media
-        ? currentProvider.media?.[media.kind]?.models.includes(media.id)
-        : modelsForProvider(saved, selection.provider).includes(selection.model);
+      const valid = modelsForProvider(saved, selection.provider).includes(selection.model);
       if (!valid) throw new ApiRequestError('所选模型不存在或尚未启用。', { status: 400 });
       await store.saveModelConfig({
-        provider: media ? saved!.provider : selection.provider,
-        mediaSelections: media ? { ...saved?.mediaSelections, [media.kind]: { provider: selection.provider, model: media.id } } : saved?.mediaSelections,
+        provider: selection.provider,
+        mediaSelections: saved?.mediaSelections,
         providers: {
           ...(saved?.providers || {}),
           [selection.provider]: {
             ...currentProvider,
             enabled: true,
             baseURL: currentProvider?.baseURL ?? definition.defaultBaseURL ?? '',
-            selectedModel: media ? currentProvider.selectedModel : selection.model,
+            selectedModel: selection.model,
           },
         },
       });

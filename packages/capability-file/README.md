@@ -429,7 +429,7 @@ The model-facing actions deliberately use different names and identities:
 | Read generation code | `file({ action: 'readSource', documentId, startLine: 1, endLine: 80 })` |
 | Read Excel cells / Word text / PDF text | `file({ action: 'readContent', artifactId, offset: 0, limit: 2000 })` |
 | Read an upload's content | `file({ action: 'readContent', attachmentId })` |
-| Inspect rendered pages | `visualIndex` then `visualRead`, using the current `artifactId` and returned `screenshotIds` |
+| Inspect rendered pages | Use `render.visualIndex.nextRead` directly; call `visualIndex` only for a missing index or additional entries |
 
 `readSource` returns `program` and informational source metadata. No source
 version hash is required for editing or replacement. `readContent` is not the generator source and cannot supply

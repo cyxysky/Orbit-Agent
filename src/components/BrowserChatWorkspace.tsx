@@ -1,5 +1,7 @@
 'use client';
 
+import { responseRegistry } from '@/lib/response-registry';
+
 import { Dock, DockIcon } from '@/components/ui/dock';
 import { readBrowserChatToolPreferences, saveBrowserChatToolPreferences } from '@/lib/browser-chat-tool-preferences';
 
@@ -238,7 +240,6 @@ import {
   normalizeBrowserChatMessageRunStates,
   browserChatTerminalAnswerCycleIndex,
   buildBrowserChatAiCycleRenderEntries,
-  buildBrowserChatLogIndex,
   buildBrowserChatMessageRenderEntries,
   browserChatAssistantMessageHasVisibleText as modelBrowserChatAssistantMessageHasVisibleText,
   browserChatLogsForMessage,
@@ -1131,8 +1132,7 @@ function isSubagentSpawnTool(name: string, input: unknown) {
 function BrowserChatToolIcon({ input, name }: { input?: unknown; name: string }) {
   const lower = name.toLowerCase();
   const action = toolInputValue(asRecord(input), ['action']);
-  if (name === 'browser') return action === 'code' ? <Braces size={13} /> : <Globe size={13} />;
-  if (name === 'browserCode') return <Braces size={13} />;
+  if (name === 'browser' || name === 'browserCode') return <Globe size={13} />;
   if (name === 'contextCompression') return <Brain size={13} />;
   if (name === 'contextRead') return <FileSearch size={14} />;
   if (name === 'codeSandbox') return <SquareTerminal size={13} />;
@@ -1824,8 +1824,7 @@ function normalizeToolConfirmation(value?: BrowserChatToolConfirmation): Browser
 function browserChatUIMessageText(message: BrowserChatUIMessage) {
   return message.parts.map((part) => {
     if (part.type === 'text') return part.text;
-    if (part.type === 'data-chart') return part.data.chartId;
-    if (part.type === 'data-map') return part.data.mapId;
+    if (part.type === 'data-response') return responseRegistry.toText(part.data);
     return '';
   }).filter(Boolean).join('\n\n');
 }
@@ -4464,13 +4463,13 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
       : part)
     : message.parts;
   const textStreaming = browserChatMessageIsTextStreaming(message);
-  const normalizedFinalText = finalText.replace(/\s+/g, ' ').trim();
+  const normalizedFinalText = useMemo(() => finalText.replace(/\s+/g, ' ').trim(), [finalText]);
   const rawAiOutputCycles = useMemo(() => (
     sortBrowserChatAiOutputCycles(outputCycles.filter((cycle) => !cycle.subagentId))
   ), [outputCycles]);
   const aiOutputCycles = useMemo(() => rawAiOutputCycles
     .map((cycle) => {
-      if (showReasoning) return cycle;
+      if (showReasoning || (!cycle.output.reasoning.length && !cycle.output.parts.some((part) => part.kind === 'reasoning'))) return cycle;
       return {
         ...cycle,
         output: {
@@ -4483,9 +4482,9 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
       };
     })
     .filter((cycle) => hasAiOutputView(cycle.output)), [rawAiOutputCycles, showReasoning]);
-  const terminalAnswerCycleIndex = message.status === 'passed'
+  const terminalAnswerCycleIndex = useMemo(() => message.status === 'passed'
     ? browserChatTerminalAnswerCycleIndex(aiOutputCycles)
-    : -1;
+    : -1, [aiOutputCycles, message.status]);
   const processAiOutputCycles = useMemo(() => {
     if (!normalizedFinalText) return aiOutputCycles;
     return aiOutputCycles.map((cycle, cycleIndex) => {
@@ -4495,6 +4494,7 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
           ? ''
           : text
       ));
+      if (texts.every((text, index) => text === cycle.output.texts[index])) return cycle;
       return {
         ...cycle,
         output: {
@@ -4537,21 +4537,21 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
   const matchedAiCycleToolDetails = useMemo(() => (
     buildAiCycleToolDetailMap(pairedAiOutputCycles, steps, running)
   ), [pairedAiOutputCycles, running, steps]);
-  const aiCycleRepresentedToolKeys = new Set([...matchedAiCycleToolDetails.values()].map((detail) => (
+  const aiCycleRepresentedToolKeys = useMemo(() => new Set([...matchedAiCycleToolDetails.values()].map((detail) => (
     detail.toolIndex >= 0 ? `${detail.stepIndex}:${detail.toolIndex}` : ''
-  )).filter(Boolean));
+  )).filter(Boolean)), [matchedAiCycleToolDetails]);
   const waitingForTool = running && steps.some((step) => step.status === 'running' && !(step.tools || []).length);
-  const timelineSteps = steps.filter((step) => (step.tools || []).length || (running && step.status === 'running'));
+  const timelineSteps = useMemo(() => steps.filter((step) => (step.tools || []).length || (running && step.status === 'running')), [running, steps]);
   // Persisted step traces are the source of truth. Keep every trace that could not
   // be matched to an AI output cycle, including tools that have only just started,
   // so the card is rendered before execution finishes.
-  const unrepresentedTimelineEntries = timelineSteps.flatMap((step): BrowserChatTimelineStepEntry[] => {
+  const unrepresentedTimelineEntries = useMemo(() => timelineSteps.flatMap((step): BrowserChatTimelineStepEntry[] => {
     const visibleToolIndexes = (step.tools || []).flatMap((_tool, toolIndex) => (
       !aiCycleRepresentedToolKeys.has(`${step.index}:${toolIndex}`) ? [toolIndex] : []
     ));
     if (visibleToolIndexes.length) return [{ step, visibleToolIndexes }];
     return [];
-  });
+  }), [aiCycleRepresentedToolKeys, timelineSteps]);
   const hasPendingConfirmation = Boolean(pendingToolConfirmation);
   const hasSubagentPendingConfirmation = Boolean(
     pendingToolConfirmation?.subagentId
@@ -4572,7 +4572,7 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
   const showPendingTimelineFallback = hasPendingConfirmation
     && !hasSubagentPendingConfirmation
     && !aiCyclesContainPendingConfirmation;
-  const splitTimelineEntries = unrepresentedTimelineEntries.map(({ step, visibleToolIndexes }) => {
+  const splitTimelineEntries = useMemo(() => unrepresentedTimelineEntries.map(({ step, visibleToolIndexes }) => {
     const currentToolIndexes: number[] = [];
     const historicalToolIndexes: number[] = [];
     for (const toolIndex of visibleToolIndexes || []) {
@@ -4589,17 +4589,17 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
       else historicalToolIndexes.push(toolIndex);
     }
     return { currentToolIndexes, historicalToolIndexes, step };
-  });
-  const currentTimelineEntries: BrowserChatTimelineStepEntry[] = splitTimelineEntries.flatMap((entry) => (
+  }), [pendingToolConfirmation, running, showPendingTimelineFallback, unrepresentedTimelineEntries]);
+  const currentTimelineEntries = useMemo(() => splitTimelineEntries.flatMap((entry): BrowserChatTimelineStepEntry[] => (
     entry.currentToolIndexes.length
       ? [{ step: entry.step, visibleToolIndexes: entry.currentToolIndexes }]
       : []
-  ));
-  const historicalTimelineEntries: BrowserChatTimelineStepEntry[] = splitTimelineEntries.flatMap((entry) => (
+  )), [splitTimelineEntries]);
+  const historicalTimelineEntries = useMemo(() => splitTimelineEntries.flatMap((entry): BrowserChatTimelineStepEntry[] => (
     entry.historicalToolIndexes.length
       ? [{ step: entry.step, visibleToolIndexes: entry.historicalToolIndexes }]
       : []
-  ));
+  )), [splitTimelineEntries]);
   const syntheticHistoricalOutput = useMemo(() => {
     const cycles: BrowserChatAiOutputCycle[] = [];
     const toolDetails: Array<[string, BrowserChatToolDetail]> = [];
@@ -4652,7 +4652,7 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
   ));
   const hasFinalText = Boolean(finalText.trim());
   const hasStructuredResponse = Boolean(message.parts?.some((part) => (
-    part.type === 'text' || part.type === 'data-chart' || part.type === 'data-map' || part.type === 'data-ui'
+    part.type === 'text' || part.type === 'data-response'
   )));
   const hasFinalResponse = hasFinalText || hasStructuredResponse;
   const hideManualVerificationStatusText = manualVerificationPaused && isBrowserChatManualVerificationStatusText(finalText);
@@ -8292,10 +8292,10 @@ export function BrowserChatWorkspace({
       steps: browserChatUIMessageSteps(currentRequestUIMessages, session?.id || ''),
     }).steps;
   }, [currentRequestUIMessages, session?.id, session?.steps]));
-  const outputCycles = useMemo(() => appendMissingBrowserChatOutputCycles(
+  const outputCycles = useSharedBrowserChatValue(useMemo(() => appendMissingBrowserChatOutputCycles(
     session?.outputCycles,
     browserChatUIMessageOutputCycles(currentRequestUIMessages, session?.id || ''),
-  ), [currentRequestUIMessages, session?.id, session?.outputCycles]);
+  ), [currentRequestUIMessages, session?.id, session?.outputCycles]));
   const subagents = useSharedBrowserChatValue(useMemo(() => mergeBrowserChatRealtimeSubagents(
     session?.subagents,
     browserChatUIMessageSubagents(currentRequestUIMessages, session?.id || ''),
@@ -8330,7 +8330,8 @@ export function BrowserChatWorkspace({
     currentRequestUIMessages,
     session?.id || '',
   ), [currentRequestUIMessages, messages, session?.id]));
-  const generatableMessageOptions = useMemo(() => visibleMessages.flatMap((message, messageIndex) => {
+  const messageGenerationOpen = Boolean(messageGenerationDialog);
+  const generatableMessageOptions = useMemo(() => !messageGenerationOpen ? [] : visibleMessages.flatMap((message, messageIndex) => {
     if (message.role !== 'assistant' || message.status === 'running') return [];
     const declaredStepIndexes = new Set(message.stepIndexes || []);
     const ownedSteps = steps.filter((step) => (
@@ -8357,7 +8358,7 @@ export function BrowserChatWorkspace({
       }),
       stepCount: knownStepIndexes.size,
     }];
-  }), [generationSkillsById, steps, t, visibleMessages]);
+  }), [generationSkillsById, messageGenerationOpen, steps, t, visibleMessages]);
   const selectedGenerationMessageIdSet = useMemo(
     () => new Set(messageGenerationDialog?.selectedMessageIds || []),
     [messageGenerationDialog?.selectedMessageIds],
@@ -8478,7 +8479,8 @@ export function BrowserChatWorkspace({
   }, [selectedSessionRunning, session]);
 
   const stepsByIndex = useMemo(() => new Map(steps.map((step) => [step.index, step])), [steps]);
-  const logIndex = useMemo(() => buildBrowserChatLogIndex(logs), [logs]);
+  const logsByMessageId = useBrowserChatRecordsByMessageId(logs);
+  const logIndex = useMemo(() => ({ byMessageId: logsByMessageId }), [logsByMessageId]);
   const logDialogMessage = useMemo(
     () => messages.find((item) => item.id === logDialogMessageId),
     [logDialogMessageId, messages],

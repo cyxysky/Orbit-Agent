@@ -29,6 +29,7 @@ import { validateOfficeRendererMatrix } from './office/render-validation.ts';
 import { analyzeOfficeProgram, diagnoseOfficeProgramRuntimeError, type OfficeProgramDiagnostic } from './office/program-analysis.ts';
 import type { OfficeDocumentDraft, OfficeDocumentKind, OfficeSemanticDocumentInput } from '../office/types.ts';
 import { registerOfficePreview, type FilePreviewResult } from './office/preview.ts';
+import { createFileVisualIndex } from './visual-index.ts';
 import { officeGenerationRuntimeFingerprint } from './office/runtime-fingerprint.ts';
 import { beginOfficeValidation, currentUnoWorkerDigest, officeValidationEvidence } from './office/validation-evidence.ts';
 import { compileOfficeSemanticDocument } from './office/semantic.ts';
@@ -1687,7 +1688,9 @@ async function renderDraft(input: {
       : undefined;
     if (needsOfficePreview
       && (!visualVerification?.imagePaths.length
-        || visualVerification.renderer !== 'pdf')) {
+        || visualVerification.renderer !== 'pdf'
+        || !Number.isSafeInteger(visualVerification.pageCount)
+        || Number(visualVerification.pageCount) < 1)) {
       throw new Error(`visual quality gate failed: ${visualVerification?.warning || 'LibreOffice produced no page previews'}`);
     }
 
@@ -1729,6 +1732,15 @@ async function renderDraft(input: {
       input.draft.visualQaDeckReview = undefined;
       input.draft.visualQaPageDigests = [];
     }
+    const visualIndex = visualVerification ? createFileVisualIndex({
+      artifactId: artifact.artifactId,
+      fileName: target.fileName,
+      preview: visualVerification,
+    }) : undefined;
+    if (visualIndex) {
+      input.draft.visualQaArtifactId = artifact.artifactId;
+      input.draft.visualQaPageCount = visualIndex.screenshotCount;
+    }
     input.draft.workflow = {
       state: visualVerification && input.draft.visualQaDigest !== digest ? 'qa-pending' : 'completed',
       checkpointAt: new Date().toISOString(),
@@ -1743,6 +1755,7 @@ async function renderDraft(input: {
         documentId: input.draft.documentId,
         sourceRead: { action: 'readSource', documentId: input.draft.documentId },
         contentRead: { action: 'readContent', artifactId: artifact.artifactId, includeVisuals: false },
+        visualIndex,
         sourceDigest: digest,
         validationEvidence: officeValidationEvidence(input.draft, await currentUnoWorkerDigest()),
         renderedDigest: digest,
