@@ -1,10 +1,23 @@
 # @webpilot/capability-browser
 
+The persistent browserCode Node kernel uses one memory policy for recycling and
+the child V8 limit. `maxHeapBytes` / `AI_BROWSER_CODE_KERNEL_MAX_HEAP_MB` sets the
+between-cell recycle threshold (default 256 MiB); the old-space limit is twice
+that threshold, with a 256 MiB minimum (default 512 MiB). RSS recycling defaults to
+the hard heap limit plus 256 MiB and can be set with `maxRssBytes` /
+`AI_BROWSER_CODE_KERNEL_MAX_RSS_MB`. Recycling happens after a cell returns, so
+temporary allocations have headroom. It discards kernel variables, not browser
+pages. An in-cell OOM reports `kernelReset.reason=out-of-memory`; the browser tool
+classifies it as `browser-kernel-out-of-memory`. An interrupted running action keeps
+`outcome=unknown`, `requiresStateRefresh=true`, and `safeToRetry=false`, including
+when a click already completed. Read state before deciding whether any action is
+still needed; never replay the failed cell automatically.
+
 [English](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
 
 Control a Playwright browser with a persistent JavaScript environment and page observations.
 
-`BrowserSession.executeBrowserCode()` returns `{ ok, summary, data, ... }`: `data.result` is the cell output, `data.executionState` describes execution, and `data.domChanges` contains incremental page changes. Read these objects directly; the complete payload appears only in `data`. For results returned by `createNodeBrowserCapability`, first unwrap the Capability envelope with `browserOperationFromCapabilityResult` from `@webpilot/capability-browser`. Use `summary` for status text.
+`BrowserSession.executeBrowserCode()` returns `{ ok, summary, data, ... }`: `data.result` is the cell output, `data.executionState` describes failed or interrupted execution, and `data.domChanges` contains incremental page changes only when `needChange: true` is supplied. `needChange` defaults to false, skipping the delta read and output; it applies to the current cell, not previous cells. Read these objects directly; the complete payload appears only in `data`. For results returned by `createNodeBrowserCapability`, first unwrap the Capability envelope with `browserOperationFromCapabilityResult` from `@webpilot/capability-browser`. Use `summary` for status text.
 
 This README is a complete integration entrypoint. Follow steps 1–4 for any TypeScript Agent framework, or use the AI SDK/MCP routes below. All named source files are created in **your consuming project**, not inside this package.
 
@@ -315,7 +328,7 @@ immutable capture. Keep the selection unchanged; cursors expire after two minute
 navigation, a new capture, or a code action. `capturedAt` describes historical
 capture time, so re-check live locators before acting on a continuation page.
 
-Code results include `executionState`: attempted actions, completed Playwright calls,
+Failed code results include `executionState`: attempted actions, completed Playwright calls,
 execution phase, outcome and `requiresStateRefresh`. A timeout/abort/crash has an
 unknown outcome once execution started; read live state before retrying. A completed
 Playwright call alone is not proof that the application's business operation succeeded.

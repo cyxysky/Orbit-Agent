@@ -4,6 +4,52 @@
 
 Adapt Capability providers to AI SDK 7 tools and Agent instructions.
 
+## Registered output
+
+Mount once per response/turn. Package output schemas are collected from provider
+manifests; supply only additional host types through `responses`.
+
+```ts
+import { ToolLoopAgent } from 'ai';
+import { coreResponses } from '@webpilot/capability-response';
+import { mountAISDKCapabilities } from '@webpilot/capability-adapter-ai-sdk';
+
+// providers, model, prompt and trustedContext are supplied by the consuming host.
+const runtime = await mountAISDKCapabilities({
+  providers, context: trustedContext, responses: coreResponses, maxSteps: 20,
+});
+try {
+  const agent = new ToolLoopAgent({ model, ...runtime.agentOptions });
+  await agent.generate({ prompt });
+  const response = runtime.responseSession.finish();
+  // Persist/send response.blocks in your message transport, then render by type.
+} finally {
+  await runtime.dispose();
+}
+```
+
+The adapter collects successful standard tool results and automatically adds
+`finalResponse` when response types exist. That tool's schema and instructions come
+from `runtime.responses`. Its name is reserved in this mode. `agentOptions.stopWhen`
+ends on an accepted response or `maxSteps` (default 20); preserve it when spreading
+options. Invalid final arguments remain correctable by the model. Streaming hosts
+call `finish` after consuming the stream. On failed/blocked exits pass the matching
+fallback status; an accepted structured response takes precedence over fallback.
+`agentOptions.toolChoice` stays `auto`: Thinking providers can reject both required
+and named tool choices. Every normal answer, including prose, must still use
+finalResponse. `finish()` rejects a missing final call at the host boundary;
+ordinary text cannot silently pass. A host can request a bounded correction using
+the existing transcript without repeating completed operations.
+The host still owns UI registration, resource endpoints, persistence and delivery.
+
+For an already mounted capability runtime, create a new SDK `ResponseSession` per
+turn, pass it as `toAISDKToolSet(snapshot, { responseSession })`, register
+`createAISDKResponseTool(responseSession)` and stop when `responseSession.accepted`.
+Do not share a response session across users or turns. `adapter.decodeResponseResult`
+decodes a custom result envelope when `adapter.execute` wraps the canonical result.
+`createAISDKResponseTool(session, { description, onAccept })` supports host tracing;
+the callback must throw on failure, and the session accepts only after it succeeds.
+
 This README is a complete integration entrypoint. Follow steps 1–4 for any TypeScript Agent framework, or use the AI SDK/MCP routes below. All named source files are created in **your consuming project**, not inside this package.
 
 ## 1. Install and prepare
@@ -193,7 +239,7 @@ Use a chat-completions-compatible provider that supports tools. Set `AGENT_MODEL
 
 ```ts
 import { randomUUID } from 'node:crypto';
-import { ToolLoopAgent, stepCountIs } from 'ai';
+import { ToolLoopAgent } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { mountAISDKCapabilities, EnvironmentCapabilityConfigStore } from '@webpilot/capability-adapter-ai-sdk';
 import { providers, configurations, cleanup } from './provider.js';
@@ -210,7 +256,7 @@ process.once('SIGINT', cancel);
 let runtime: Awaited<ReturnType<typeof mountAISDKCapabilities>> | undefined;
 try {
   runtime = await mountAISDKCapabilities({
-    providers, configurations,
+    providers, configurations, maxSteps: 10,
     context: { runId: randomUUID(), abortSignal: abort.signal },
     configStore: new EnvironmentCapabilityConfigStore(process.env),
     skills: { mode: 'eager' },
@@ -220,7 +266,7 @@ try {
     } },
   });
   const agent = new ToolLoopAgent({ model: modelProvider.chatModel(modelId),
-    ...runtime.agentOptions, stopWhen: stepCountIs(10) });
+    ...runtime.agentOptions });
   const result = await agent.generate({
     prompt: process.argv[2] || 'Describe the available tools and their intended usage.',
     abortSignal: abort.signal,

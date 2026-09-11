@@ -4,7 +4,7 @@
 
 永続的な JavaScript 環境とページ観測を通じて Playwright ブラウザーを操作します。
 
-`BrowserSession.executeBrowserCode()` は `{ ok, summary, data, ... }` を返します。`data.result` はコードの出力、`data.executionState` は実行状態、`data.domChanges` はページの差分です。これらのオブジェクトを直接読み取ってください。完全な内容は `data` にのみ保持されます。`createNodeBrowserCapability` の戻り値は、まず `@webpilot/capability-browser` の `browserOperationFromCapabilityResult` で Capability のラッパーを取り除きます。状態表示には `summary` を使います。
+`BrowserSession.executeBrowserCode()` は `{ ok, summary, data, ... }` を返します。`data.result` はコードの出力、失敗時のみ `data.executionState` に実行状態を返します。`needChange: true` を指定した場合のみ、今回のセルの差分を読み取り、`data.domChanges` に返します。`needChange` の既定値は false で、過去のセルの差分は取得しません。これらのオブジェクトを直接読み取ってください。完全な内容は `data` にのみ保持されます。`createNodeBrowserCapability` の戻り値は、まず `@webpilot/capability-browser` の `browserOperationFromCapabilityResult` で Capability のラッパーを取り除きます。状態表示には `summary` を使います。
 
 この README は完全な接続の入口です。任意の TypeScript Agent フレームワークでは手順 1–4、または後述の AI SDK/MCP を使います。例にあるファイルはすべて**利用側のプロジェクト**に作成し、このパッケージ内には作りません。
 
@@ -289,4 +289,4 @@ try {
 
 専用の `/mcp` は `browser.open`、`browser.code`、`browser.snapshot`、`browser.close` と明示的な `browserSessionId` を使います。このチュートリアルの汎用 Provider は単一の `browser` ツールを公開します。両者のスキーマを混在させないでください。複数リクエストにまたがるリモートセッションには MCP.md のステートフル HTTP 例または stdio を使います。リクエスト単位の簡易 HTTP Handler はメモリ内のセッション管理を保持しません。
 
-任意の system-browser-interactive-qa Skill が manifest に含まれ、主 Skill は UI デバッグ・受入確認をその参照に誘導します。永続セッションでの反復、機能の事後条件、画像確認、viewport 証拠を扱います。state/browser.snapshot は scope=active/all、正確な frame、一意 selector、query、maxOutputChars に対応します。nextCursor は同じ不変観測を継続し、選択条件を変えず、2 分・遷移・新観測・code 操作で失効します。capturedAt は過去の時刻なので操作前に現在の locator を確認します。結果は executionState と requiresStateRefresh を含み、中断/タイムアウト/クラッシュでは一部実行済みの場合があり、kernelReset で JavaScript 変数は失われます。
+任意の system-browser-interactive-qa Skill が manifest に含まれ、主 Skill は UI デバッグ・受入確認をその参照に誘導します。永続セッションでの反復、機能の事後条件、画像確認、viewport 証拠を扱います。state/browser.snapshot は scope=active/all、正確な frame、一意 selector、query、maxOutputChars に対応します。nextCursor は同じ不変観測を継続し、選択条件を変えず、2 分・遷移・新観測・code 操作で失効します。capturedAt は過去の時刻なので操作前に現在の locator を確認します。失敗結果は executionState と requiresStateRefresh を含み、中断/タイムアウト/クラッシュでは一部実行済みの場合があり、kernelReset で JavaScript 変数は失われます。

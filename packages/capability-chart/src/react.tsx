@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { echartsMapDefinition, echartsToThree, normalizeChartOption, normalizeChartUpdate, type ChartRecord } from './core.ts';
+import { echartsToThree, normalizeChartOption, normalizeChartUpdate, type ChartRecord } from './core.ts';
 import { ChartDataEditor } from './data-editor.tsx';
 import { chartDataTables, tableCsv } from './editor-core.ts';
 import type { ChartSurface } from './three-renderer.ts';
@@ -9,6 +9,7 @@ import { chartStyles } from './styles.ts';
 import { ChartIcon } from './icons.tsx';
 import { defaultChartTranslate, type ChartTranslate } from './i18n.ts';
 import { ExcalidrawRenderer } from './excalidraw-react.tsx';
+export { exportChartPng } from './png.ts';
 
 export type ChartRendererClassNames = { root?: string; canvas?: string; surface?: string; error?: string };
 
@@ -17,17 +18,6 @@ function download(data: Blob | string, name: string) {
   const anchor = document.createElement('a'); anchor.href = url; anchor.download = name;
   document.body.append(anchor); anchor.click(); anchor.remove();
   if (typeof data !== 'string') setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
-async function svgPng(svg: string, width: number, height: number) {
-  const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
-  try {
-    const image = new Image(); image.src = url; await image.decode();
-    const canvas = document.createElement('canvas'); canvas.width = width * 2; canvas.height = height * 2;
-    const context = canvas.getContext('2d'); if (!context) throw new Error('浏览器无法导出 PNG。');
-    context.fillStyle = '#ffffff'; context.fillRect(0, 0, canvas.width, canvas.height);
-    context.drawImage(image, 0, 0, canvas.width, canvas.height); return canvas.toDataURL('image/png');
-  } finally { URL.revokeObjectURL(url); }
 }
 
 export type ChartRendererProps = {
@@ -112,21 +102,13 @@ function DataChartRenderer({ chart, classNames = {}, onSave, onReload, translate
         if (disposed) return;
         instance = createThreeChart(surface, threeOption!, (message) => { if (!disposed) setError(message); }, t);
       } else {
-        const echarts = await import('echarts');
+        const { createEChartsChart } = await import('./echarts-renderer.ts');
         if (disposed) return;
-        const view = echarts.init(surface, undefined, { renderer });
-        const apply = (record: ChartRecord) => {
-          for (const map of record.maps || []) echarts.registerMap(map.name, echartsMapDefinition(map) as unknown as Parameters<typeof echarts.registerMap>[1], map.specialAreas as Parameters<typeof echarts.registerMap>[2]);
-          view.setOption(normalizeChartOption(record.option, { invalidFormatters: 'omit' }), { lazyUpdate: false, notMerge: true });
-        };
-        try { apply(latestChartRef.current); }
+        const view = createEChartsChart(surface, renderer);
+        try { view.apply(latestChartRef.current); }
         catch (reason) { view.dispose(); throw reason; }
-        applyOptionRef.current = apply;
-        instance = {
-          dispose: () => view.dispose(), resize: () => view.resize(),
-          png: () => renderer === 'svg' ? svgPng(view.renderToSVGString(), view.getWidth(), view.getHeight()) : Promise.resolve(view.getDataURL({ type: 'png', pixelRatio: 2, backgroundColor: '#ffffff' })),
-          svg: renderer === 'svg' ? () => view.renderToSVGString() : undefined,
-        };
+        applyOptionRef.current = view.apply;
+        instance = view;
       }
       if (disposed) { instance?.dispose(); return; }
       instanceRef.current = instance!;

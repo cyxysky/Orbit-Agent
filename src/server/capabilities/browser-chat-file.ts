@@ -70,12 +70,7 @@ function createBrowserChatFileOperations(
         }), 'file-read-failed');
       }
       if (!options.readFile) return unavailable('file action=read is unavailable in this runtime.');
-      const includeVisuals = options.visualInputAvailable
-        && (input.includeVisuals ?? (
-          input.offset === undefined
-          || input.offset === 0
-          || Boolean(input.pages?.length)
-        ));
+      const includeVisuals = options.visualInputAvailable && input.includeVisuals === true;
       return browserActionResultToCapabilityResult(await options.readFile({
         attachmentId: input.attachmentId,
         artifactId: input.artifactId,

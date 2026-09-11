@@ -38,7 +38,7 @@ export function createNodeBrowserOperations(
     ? options.credentials()
     : options.credentials;
   const execute = async (
-    input: { code: string; maxOutputChars?: number },
+    input: { code: string; needChange?: boolean; maxOutputChars?: number },
     context: CapabilityExecutionContext,
   ) => {
     const violation = options.validateCode?.(input.code);
@@ -52,6 +52,7 @@ export function createNodeBrowserOperations(
     await ensureStarted();
     return browserOperationToCapabilityResult(await options.session.executeBrowserCode({
       code: input.code,
+      needChange: input.needChange,
       maxOutputChars: input.maxOutputChars,
       attachments: options.attachments,
       credentials: credentials(),

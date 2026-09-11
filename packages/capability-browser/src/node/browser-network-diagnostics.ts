@@ -1,5 +1,5 @@
 import type { Page, Request, Response } from 'playwright';
-import type { BrowserActionResult, BrowserDependencyFailure } from './browser-session.ts';
+import type { BrowserActionResult } from './browser-session.ts';
 import { compactDiagnosticText, shouldIgnoreNetworkFailure } from './browser-session-diagnostics.ts';
 
 type HttpRequestRecord = {
@@ -23,8 +23,6 @@ export class BrowserNetworkDiagnostics {
   private httpRequestByRequest = new WeakMap<Request, HttpRequestRecord>();
   private httpRequestById = new Map<string, Request>();
   private httpRequestSequence = 0;
-  private pendingBrowserCodeDependencyFailures = new Map<Request, BrowserDependencyFailure>();
-  private deliveredBrowserCodeDependencyRequests = new WeakSet<Request>();
   private listeners = new Map<Page, () => void>();
 
   constructor(private configuredValue: (name: string) => string | undefined,
@@ -33,8 +31,6 @@ export class BrowserNetworkDiagnostics {
   records(page: Page): readonly HttpRequestRecord[] { return this.httpRequestsByPage.get(page) || []; }
   errors() { return [...this.networkErrors]; }
   private forgetRequest(id: string) {
-    const request = this.httpRequestById.get(id);
-    if (request) this.pendingBrowserCodeDependencyFailures.delete(request);
     this.httpRequestById.delete(id);
   }
   attach(page: Page) {
@@ -48,9 +44,6 @@ export class BrowserNetworkDiagnostics {
       record.status = response.status();
       record.statusText = response.statusText();
       record.ok = response.ok();
-      if (record.status === 408 || record.status === 429 || record.status >= 500) {
-        this.queueBrowserCodeDependencyFailure(request, record);
-      }
     };
     const onRequestFailed = (request: Request) => {
       const record = this.httpRequestByRequest.get(request) || this.recordHttpRequest(page, request);
@@ -63,7 +56,6 @@ export class BrowserNetworkDiagnostics {
       this.networkErrors.push(message);
       if (this.networkErrors.length > 200) this.networkErrors.splice(0, this.networkErrors.length - 200);
       this.recordDomChangeError(page, 'network', message);
-      this.queueBrowserCodeDependencyFailure(request, record);
     };
 
     const close = () => this.detach(page);
@@ -79,7 +71,7 @@ export class BrowserNetworkDiagnostics {
   }
   dispose() {
     for (const page of this.listeners.keys()) this.detach(page);
-    this.httpRequestById.clear(); this.pendingBrowserCodeDependencyFailures.clear(); this.networkErrors = [];
+    this.httpRequestById.clear(); this.networkErrors = [];
   }
   private recordHttpRequest(page: Page, request: Request) {
     const existing = this.httpRequestByRequest.get(request);
@@ -104,42 +96,6 @@ export class BrowserNetworkDiagnostics {
     this.httpRequestByRequest.set(request, record);
     this.httpRequestById.set(record.id, request);
     return record;
-  }
-
-  private dependencyFailureFromHttpRecord(record: HttpRequestRecord): BrowserDependencyFailure {
-    let url = record.url;
-    let path = record.url;
-    try {
-      const parsed = new URL(record.url);
-      url = `${parsed.pathname}${parsed.search}`;
-      path = parsed.pathname;
-    } catch {
-      path = record.url.split('?')[0] || record.url;
-    }
-    return {
-      category: record.failed ? 'network_error' : 'external_service',
-      key: `${record.method.toUpperCase()}:${path}`,
-      method: record.method.toUpperCase(),
-      ...(record.status !== undefined ? { status: record.status } : {}),
-      ...(record.errorText ? { errorText: record.errorText } : {}),
-      url,
-    };
-  }
-
-  private queueBrowserCodeDependencyFailure(request: Request, record: HttpRequestRecord) {
-    if (
-      !this.httpRequestById.has(record.id)
-      || this.deliveredBrowserCodeDependencyRequests.has(request)
-      || this.pendingBrowserCodeDependencyFailures.has(request)
-    ) return;
-    this.pendingBrowserCodeDependencyFailures.set(request, this.dependencyFailureFromHttpRecord(record));
-  }
-
-  drainDependencyFailures() {
-    const failures = [...this.pendingBrowserCodeDependencyFailures.entries()];
-    this.pendingBrowserCodeDependencyFailures.clear();
-    for (const [request] of failures) this.deliveredBrowserCodeDependencyRequests.add(request);
-    return failures.map(([, failure]) => failure);
   }
 
   async read(page: Page, options: { ids?: string[] } = {}): Promise<BrowserActionResult> {

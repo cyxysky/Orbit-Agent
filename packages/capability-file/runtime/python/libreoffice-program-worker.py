@@ -8910,6 +8910,9 @@ def document_attribute_error(error, program):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--program')
+    parser.add_argument('--read-input')
+    parser.add_argument('--read-selection')
+    parser.add_argument('--read-result')
     parser.add_argument('--output')
     parser.add_argument('--preview')
     parser.add_argument('--assets')
@@ -8925,6 +8928,37 @@ def main():
     parser.add_argument('--uno-pipe')
     args = parser.parse_args()
     soffice, profile = Path(args.soffice).resolve(), Path(args.profile).resolve()
+    if args.read_input:
+        from office_content_reader import extract_document
+        if not args.read_result or not args.read_selection or not args.expected_source_digest:
+            raise ValueError('read-result, read-selection and expected-source-digest are required for content reading')
+        source = Path(args.read_input).resolve()
+        if hashlib.sha256(source.read_bytes()).hexdigest() != args.expected_source_digest:
+            raise ValueError('File changed during extraction. Read the current revision again.')
+        selection = json.loads(Path(args.read_selection).read_text(encoding='utf-8'))
+        process = desktop = document = None
+        try:
+            emit_progress('read-content', 'Loading the document in read-only mode')
+            process, context, desktop = connect_office(soffice, profile, args.uno_pipe)
+            document = desktop.loadComponentFromURL(source.as_uri(), '_blank', 0, (
+                property_value('Hidden', True), property_value('ReadOnly', True),
+                property_value('Silent', True),
+                property_value('MacroExecutionMode', uno.getConstantByName('com.sun.star.document.MacroExecMode.NEVER_EXECUTE')),
+                property_value('UpdateDocMode', uno.getConstantByName('com.sun.star.document.UpdateDocMode.NO_UPDATE')),
+            ))
+            if document is None or not document.supportsService(expected_service(args.document_type)):
+                raise ValueError(f'LibreOffice could not load this file as {args.document_type}')
+            report = extract_document(document, args.document_type, selection, emit_progress)
+            Path(args.read_result).write_text(json.dumps(report, ensure_ascii=False, allow_nan=False), encoding='utf-8')
+            print(json.dumps({'parser': report['parser'], 'blockCount': len(report['blocks'])}))
+        except Exception as error:
+            # Report cleanly closed document/selection errors without forcing
+            # the host to restart its healthy shared Office process.
+            print(json.dumps({'error': str(error), 'errorType': type(error).__name__}))
+        finally:
+            close_component(document)
+            shutdown_office(process, desktop)
+        return
     if args.inspect_target:
         print(json.dumps(inspect_uno_api(soffice, profile, args.document_type, args.inspect_target, args.api_query, args.api_offset, args.api_limit), ensure_ascii=False))
         return

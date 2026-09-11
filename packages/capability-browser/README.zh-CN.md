@@ -4,7 +4,7 @@
 
 通过持久化 JavaScript 环境和页面观察控制 Playwright 浏览器。
 
-`BrowserSession.executeBrowserCode()` 返回 `{ ok, summary, data, ... }`：`data.result` 是代码输出，`data.executionState` 是执行状态，`data.domChanges` 是页面增量变化。直接读取这些对象；完整内容仅保留在 `data` 中。对于 `createNodeBrowserCapability` 返回的结果，先使用 `@webpilot/capability-browser` 导出的 `browserOperationFromCapabilityResult` 解开 Capability 外层结构。状态文案读取 `summary`。
+`BrowserSession.executeBrowserCode()` 返回 `{ ok, summary, data, ... }`：`data.result` 是代码输出，失败时才返回 `data.executionState` 执行状态。只有传入 `needChange: true` 才读取并返回 `data.domChanges`（本次调用的页面增量变化）；`needChange` 默认为 false，不补取之前调用的变化。直接读取这些对象；完整内容仅保留在 `data` 中。对于 `createNodeBrowserCapability` 返回的结果，先使用 `@webpilot/capability-browser` 导出的 `browserOperationFromCapabilityResult` 解开 Capability 外层结构。状态文案读取 `summary`。
 
 本 README 是完整接入入口。任意 TypeScript Agent 框架可按步骤 1–4 接入，也可选择下方 AI SDK/MCP 路线。示例中的命名文件全部创建在**你的使用方项目**中，不是在本包目录中。
 
@@ -289,4 +289,4 @@ try {
 
 专用 `/mcp` 入口通过 `browser.open`、`browser.code`、`browser.snapshot`、`browser.close` 和显式 `browserSessionId` 管理会话；本教程的通用 Provider 暴露单个 `browser` 工具，两套参数不能混用。跨请求的远程浏览器会话应使用 MCP.md 中的有状态 HTTP 示例或 stdio；便捷的按请求 HTTP Handler 不会跨请求保留这个内存会话管理器。
 
-可选 system-browser-interactive-qa Skill 随 manifest 发布，主 Skill 会把 UI 调试和验收任务路由到该参考，覆盖持久会话迭代、功能后置条件、视觉检查和视口证据。state/browser.snapshot 支持 scope=active/all、准确 frame、唯一 selector、query、maxOutputChars。nextCursor 继续同一份不可变观察，保持选择条件不变；两分钟、导航、新观察或 code 操作后过期。capturedAt 是历史时间，操作前重新核实实时定位器。执行结果包含 executionState 和 requiresStateRefresh；超时/取消/崩溃可能已执行部分动作，kernelReset 会清空 JavaScript 变量。
+可选 system-browser-interactive-qa Skill 随 manifest 发布，主 Skill 会把 UI 调试和验收任务路由到该参考，覆盖持久会话迭代、功能后置条件、视觉检查和视口证据。state/browser.snapshot 支持 scope=active/all、准确 frame、唯一 selector、query、maxOutputChars。nextCursor 继续同一份不可变观察，保持选择条件不变；两分钟、导航、新观察或 code 操作后过期。capturedAt 是历史时间，操作前重新核实实时定位器。失败结果包含 executionState 和 requiresStateRefresh；超时/取消/崩溃可能已执行部分动作，kernelReset 会清空 JavaScript 变量。

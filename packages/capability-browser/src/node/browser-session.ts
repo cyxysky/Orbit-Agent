@@ -150,8 +150,6 @@ export type BrowserActionResult = {
   liveControl?: BrowserLiveNativeControl;
   /** Native select menu mirrored into the remote live-preview surface. */
   liveSelect?: BrowserLiveSelectMenu;
-  /** Undelivered page dependency failures observed since the previous browserCode result. */
-  dependencyFailures?: BrowserDependencyFailure[];
   /** Snapshot/observation that owns any DOM refs returned with this result. */
   snapshotId?: string;
   /** Click-specific timing breakdown for diagnosing browser action latency. */
@@ -194,15 +192,6 @@ export type BrowserStateSnapshot = {
   activePage: { url: string; title: string };
   pageState: string;
   truncated?: boolean;
-};
-
-export type BrowserDependencyFailure = {
-  category: 'external_service' | 'network_error';
-  key: string;
-  method: string;
-  status?: number;
-  errorText?: string;
-  url: string;
 };
 
 export type BrowserClickTiming = {
@@ -3442,7 +3431,6 @@ export class BrowserSession {
 
 
 
-  private drainBrowserCodeDependencyFailures() { return this.networkDiagnostics.drainDependencyFailures(); }
 
   // 获取当前可用页面；如果活动页关闭，会从浏览器上下文中寻找替代页面。
   private get activePage() {
@@ -4210,6 +4198,7 @@ export class BrowserSession {
 
   async executeBrowserCode(input: {
     code: string;
+    needChange?: boolean;
     runId: string;
     stepIndex: number;
     maxOutputChars?: number;
@@ -4327,11 +4316,8 @@ export class BrowserSession {
       tabChanged: execution.activity?.tabChanged === true || finalPage !== page || pagesCreatedDuringExecution.size > 0,
       ...(execution.activity?.verification ? { verification: execution.activity.verification } : {}),
     };
-    const shouldReadDomChanges = inferredActivity.actions.length > 0
-      || inferredActivity.navigationChanged
-      || inferredActivity.tabChanged;
     let domChanges: BrowserActionResult['domChanges'];
-    if (shouldReadDomChanges && !finalPage.isClosed()) {
+    if (input.needChange === true && !finalPage.isClosed()) {
       try {
         domChanges = (await this.readDomChanges()).domChanges;
       } catch {
@@ -4359,20 +4345,17 @@ export class BrowserSession {
     const actualDomChanges = domChanges
       ? { ...domChanges, observation: undefined }
       : undefined;
-    const dependencyFailures = this.drainBrowserCodeDependencyFailures();
     const reportedFailure = execution.ok
       ? browserCodeReportedFailure(execution.value)
       : undefined;
     const effectiveOk = execution.ok && !reportedFailure;
     const effectiveError = execution.error || reportedFailure;
     const payload = {
-      ok: effectiveOk,
       result: execution.value ?? null,
-      error: effectiveError ?? null,
-      aborted: execution.aborted === true,
-      elapsedMs: execution.elapsedMs,
-      executionState: execution.executionState,
-      downloads: downloaded,
+      ...(effectiveError ? { error: effectiveError } : {}),
+      ...(execution.aborted === true ? { aborted: true } : {}),
+      ...(!effectiveOk && execution.executionState ? { executionState: execution.executionState } : {}),
+      ...(downloaded.length ? { downloads: downloaded } : {}),
       ...(execution.kernelReset ? {
         kernelReset: {
           ...execution.kernelReset,
@@ -4382,20 +4365,20 @@ export class BrowserSession {
       finalPage: { url: finalUrl, title: finalTitle },
       ...(inferredActivity.verification ? { verification: inferredActivity.verification } : {}),
       ...(actualDomChanges ? { domChanges: actualDomChanges } : {}),
-      images: emittedImagePaths.map((filePath) => ({ fileName: path.basename(filePath) })),
-      imageErrors: emittedImageErrors,
+      ...(emittedImagePaths.length ? { images: emittedImagePaths.map((filePath) => ({ fileName: path.basename(filePath) })) } : {}),
+      ...(emittedImageErrors.length ? { imageErrors: emittedImageErrors } : {}),
     };
     const result: BrowserActionResult = {
       ok: effectiveOk,
-      ...(!effectiveOk ? { failureCategory: reportedFailure ? 'browser-result-failed' : `browser-${execution.executionState?.status || 'code-failed'}` } : {}),
+      ...(!effectiveOk ? { failureCategory: reportedFailure ? 'browser-result-failed'
+        : execution.kernelReset?.reason === 'out-of-memory' ? 'browser-kernel-out-of-memory'
+          : `browser-${execution.executionState?.status || 'code-failed'}` } : {}),
       data: payload,
       summary: effectiveOk
-        ? `browserCode completed in ${execution.elapsedMs}ms at ${finalUrl || 'the active page'}.`
+        ? `browserCode completed in ${execution.elapsedMs}ms.`
         : effectiveError || 'browserCode execution failed.',
-      referenceImagePath: emittedImagePaths[0],
-      referenceImagePaths: emittedImagePaths,
+      ...(emittedImagePaths.length ? { referenceImagePath: emittedImagePaths[0], referenceImagePaths: emittedImagePaths } : {}),
       verification: inferredActivity.verification,
-      ...(dependencyFailures.length ? { dependencyFailures } : {}),
     };
     return result;
 

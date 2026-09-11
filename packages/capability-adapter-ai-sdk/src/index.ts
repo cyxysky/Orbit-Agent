@@ -1,4 +1,4 @@
-import { jsonSchema, tool, type ToolExecutionOptions, type ToolSet } from 'ai';
+import { jsonSchema, stepCountIs, tool, type ToolExecutionOptions, type ToolSet } from 'ai';
 import {
   mountCapabilities,
   type CapabilitySkillInstructionMode,
@@ -8,6 +8,8 @@ import {
 import {
   capabilitySkillReadJsonSchema,
   createCapabilityExecutor,
+  ResponseSession,
+  type StructuredResponse,
   type CapabilityExecutionPolicyOptions,
   type CapabilityExecutionContext,
   type CapabilityRunSnapshot,
@@ -39,6 +41,9 @@ export type AISDKCapabilitySkillOptions = {
 };
 
 export type AISDKCapabilityAdapterOptions = {
+  responseSession?: ResponseSession;
+  /** Only needed when execute wraps the standard result in a host-specific envelope. */
+  decodeResponseResult?: (result: unknown) => unknown;
   policy?: CapabilityExecutionPolicyOptions;
   abortSignal?: AbortSignal;
   metadata?: Readonly<Record<string, unknown>>;
@@ -124,10 +129,12 @@ export function toAISDKToolSet(
           abortSignal: signals.length ? AbortSignal.any(signals) : undefined,
           metadata: options.metadata,
         };
-        return executeCapability(resolvedTool, context, (context) => {
+        const result = await executeCapability(resolvedTool, context, (context) => {
           const invoke = () => resolvedTool.tool.execute(input, context);
           return options.execute ? options.execute({ resolvedTool, input, context, execution, invoke }) : invoke();
         });
+        options.responseSession?.observe(publicName, options.decodeResponseResult ? options.decodeResponseResult(result) : result);
+        return result;
       },
     }),
   ] as const);
@@ -143,20 +150,50 @@ export function toAISDKToolSet(
 }
 
 export type MountAISDKCapabilitiesOptions = MountCapabilitiesOptions & {
+  /** Maximum model steps for agentOptions; finalResponse also terminates the loop. */
+  maxSteps?: number;
   instructions?: string;
-  adapter?: Omit<AISDKCapabilityAdapterOptions, 'skills'>;
+  adapter?: Omit<AISDKCapabilityAdapterOptions, 'skills' | 'responseSession'>;
   skills?: AISDKCapabilitySkillOptions;
 };
 
 export type MountedAISDKCapabilities = Omit<MountedCapabilities, 'tools'> & {
+  responseSession: ResponseSession;
   tools: ToolSet;
   instructions: string;
   agentOptions: {
     tools: ToolSet;
     instructions: string;
+    stopWhen: ReturnType<typeof stepCountIs>[];
+    toolChoice: 'auto';
   };
   snapshot: MountedCapabilities;
 };
+
+/** Framework wiring only; schema, validation and assembly belong to the SDK session. */
+export function createAISDKResponseTool(session: ResponseSession, options: {
+  description?: string;
+  onAccept?: (response: StructuredResponse, execution: ToolExecutionOptions<unknown>) => Promise<unknown>;
+} = {}) {
+  const input = session.registry.input();
+  return tool({
+    description: [options.description || 'Deliver the final ordered response. Do not call other tools after this.',
+      session.registry.modelInstructions()].join('\n'),
+    inputSchema: jsonSchema<StructuredResponse>(input.jsonSchema, {
+      validate(value) {
+        try { return { success: true, value: input.parse(value) }; }
+        catch (error) { return { success: false, error: error instanceof Error ? error : new Error(String(error)) }; }
+      },
+    }),
+    execute: async (value, execution) => {
+      const response = input.parse(value);
+      const result = options.onAccept ? await options.onAccept(response, execution)
+        : { accepted: true, blockCount: response.blocks.length };
+      session.accept(response);
+      return result;
+    },
+  });
+}
 
 /** One-call Capability mounting for AI SDK ToolLoopAgent and streamText. */
 export async function mountAISDKCapabilities(
@@ -165,23 +202,37 @@ export async function mountAISDKCapabilities(
   const mounted = await mountCapabilities(options);
   const skills = { ...options.skills, mode: options.skills?.mode || 'lazy' };
   try {
-    const tools = toAISDKToolSet(mounted, { ...options.adapter, skills });
+    const maxSteps = options.maxSteps ?? 20;
+    if (!Number.isSafeInteger(maxSteps) || maxSteps < 1) throw new Error('maxSteps must be a positive integer.');
+    const responseSession = new ResponseSession(mounted.responses);
+    const tools = toAISDKToolSet(mounted, { ...options.adapter, skills, responseSession });
+    const hasResponses = mounted.responses.definitions().length > 0;
+    if (hasResponses) {
+      if (tools.finalResponse) throw new Error('Capability tool name collides with finalResponse.');
+      tools.finalResponse = createAISDKResponseTool(responseSession);
+    }
+    const stopWhen = [stepCountIs(maxSteps), ...(hasResponses ? [() => responseSession.accepted] : [])];
     const capabilityInstructions = mounted.skillCatalog.instructions(skills.mode, {
       skillToolName: skills.toolName,
     });
-    const instructions = [options.instructions, capabilityInstructions]
+    const instructions = [options.instructions, capabilityInstructions,
+      hasResponses ? mounted.responses.modelInstructions() : '']
       .map((value) => value?.trim())
       .filter(Boolean)
       .join('\n\n');
     return Object.freeze({
       abortSignal: mounted.abortSignal,
+      responses: mounted.responses,
+      responseSession,
       manifests: mounted.manifests,
       skills: mounted.skills,
       configurations: mounted.configurations,
       skillCatalog: mounted.skillCatalog,
       tools,
       instructions,
-      agentOptions: Object.freeze({ tools, instructions }),
+      // Thinking providers may reject required/named tool choice. Enforce terminal
+      // delivery in ResponseSession, independently of provider request options.
+      agentOptions: Object.freeze({ tools, instructions, stopWhen, toolChoice: 'auto' }),
       snapshot: mounted,
       dispose: mounted.dispose,
     });

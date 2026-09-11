@@ -191,7 +191,7 @@ npm install @webpilot/capability-adapter-ai-sdk "ai@>=7 <8" @ai-sdk/openai-compa
 
 ```ts
 import { randomUUID } from 'node:crypto';
-import { ToolLoopAgent, stepCountIs } from 'ai';
+import { ToolLoopAgent } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { mountAISDKCapabilities, EnvironmentCapabilityConfigStore } from '@webpilot/capability-adapter-ai-sdk';
 import { providers, configurations, cleanup } from './provider.js';
@@ -208,7 +208,7 @@ process.once('SIGINT', cancel);
 let runtime: Awaited<ReturnType<typeof mountAISDKCapabilities>> | undefined;
 try {
   runtime = await mountAISDKCapabilities({
-    providers, configurations,
+    providers, configurations, maxSteps: 10,
     context: { runId: randomUUID(), abortSignal: abort.signal },
     configStore: new EnvironmentCapabilityConfigStore(process.env),
     skills: { mode: 'eager' },
@@ -218,7 +218,7 @@ try {
     } },
   });
   const agent = new ToolLoopAgent({ model: modelProvider.chatModel(modelId),
-    ...runtime.agentOptions, stopWhen: stepCountIs(10) });
+    ...runtime.agentOptions });
   const result = await agent.generate({
     prompt: process.argv[2] || 'Describe the available tools and their intended usage.',
     abortSignal: abort.signal,
@@ -273,3 +273,54 @@ try {
 - [capability-data](../capability-data/README.zh-CN.md)
 - [capability-media](../capability-media/README.zh-CN.md)
 - [capability-code-sandbox](../capability-code-sandbox/README.zh-CN.md)
+
+## 跨框架结构化回复接入
+
+`mountCapabilities()` 现在从启用的 Provider manifest 自动汇总 `responses`，
+按本轮实际可用工具过滤后，通过 `mounted.responses` 暴露目录。
+宿主的 Markdown/UI 类型通过 `responses: coreResponses` 传入；不要再次传入
+已经由 Provider manifest 声明的 chart/maps 等类型，以免重复注册。
+
+通用框架只需要连接以下接口，不需要自己实现图表判断和去重：
+
+```ts
+import { ResponseSession } from '@webpilot/capability-sdk';
+import { markdownBlock } from '@webpilot/capability-response';
+
+const session = new ResponseSession(mounted.responses);
+const input = session.registry.input();
+// 将 input.jsonSchema 注册成框架的 finalResponse 工具输入；
+// 将 session.registry.modelInstructions() 加入模型指令。
+
+// 每次工具执行结束，把完整标准 CapabilityResult 交给通用层：
+session.observe(toolName, result);
+
+// finalResponse 的执行回调；格式无效会抛错，让模型修正：
+session.accept(finalArguments);
+
+// session.accepted 为 true 时结束循环，同时保留框架原有步数限制。
+// 所有正常终答都必须通过工具 accept；生成/流式消费结束后统一组装：
+const output = session.finish();
+// 通过宿主消息协议保存/发送 output.status 和 output.blocks。
+```
+
+上面 `mounted`、`toolName`、`result` 和 `finalArguments` 是宿主
+相应阶段的变量。每轮回复使用独立 session，轮内所有工具共享；保留底层运行时跨轮
+使用时，也必须新建回复 session。失败/阻塞退出可向 finish 传入对应 status；已接受
+的结构化回复优先于后备状态和文本。只有宿主明确以 failed/blocked 结束时，才允许
+没有 accept 的 finish；正常终答（包括纯文字）缺少工具调用会被拒绝。
+
+通用层负责校验、收集和按注册资源标识去重，保留显式顺序及重复视图，补齐遗漏块。
+它只读取标准工具结果对象；宿主自行解开自己的 JSON/网络包装，不从正文寻找编号。
+主应用和第三方框架共用这套规则。
+
+AI SDK 使用 `mountAISDKCapabilities({ responses: coreResponses, ... })` 时，
+工具收集和 finalResponse 注册自动完成。生成结束后调用返回的
+`responseSession.finish(...)`，并保留 `agentOptions.stopWhen`：有效终答或
+`maxSteps` 步结束，默认 20 步；无效 finalResponse 不会触发终答停止。
+自行组合底层适配器时，把新 session 传给 `toAISDKToolSet` 的 responseSession，
+并添加 `createAISDKResponseTool(session)` 和相同停止条件。
+
+React 宿主一次性注册包的 `/response-react`，统一使用 RegisteredResponse 展示；
+`/response-node` 连接宿主的存储和资源读写。非 React 宿主编写自己的 UI 适配器，
+仍沿用 `{type, params}`。仅文本的宿主可以使用 toText 或处理器的 export。

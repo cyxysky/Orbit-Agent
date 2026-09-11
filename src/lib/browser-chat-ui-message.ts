@@ -1,5 +1,6 @@
 import type { ResponseBlock, StructuredResponse } from '@webpilot/capability-sdk';
 import { responseRegistry } from '@/lib/response-registry';
+import { browserChatCapabilityResult } from './browser-chat-capability-result';
 import type { DynamicToolUIPart, UIMessage } from 'ai';
 import { z } from 'zod';
 import type {
@@ -61,7 +62,12 @@ export function browserChatToolPartFromStep(
     toolCallId: tool.id || `step-${step.index}-tool-${toolIndex}`,
     input: tool.input,
   };
-  if (tool.ok === true) return { ...base, state: 'output-available', output: tool.result ?? null };
+  if (tool.ok === true) {
+    const responses = responseRegistry.toolBlocks(tool.name, browserChatCapabilityResult(tool.rawResult ?? tool.result));
+    return { ...base, state: 'output-available', output: responses.length
+      ? { ok: true, summary: tool.result, content: responses.map(block => ({ type: 'response', block })) }
+      : tool.result ?? null };
+  }
   if (tool.ok === false || tool.error) {
     return { ...base, state: 'output-error', errorText: tool.error || tool.result || 'Tool execution failed.' };
   }
@@ -81,4 +87,18 @@ export function browserChatExecutionParts(steps: StepExecutionResult[]): Browser
         { type: 'data-step' as const, id: `step-${step.index}`, data: step },
       ];
     });
+}
+
+/** Shared projection for live messages, persisted conversations and automation views. */
+export function browserChatResponseParts(parts: BrowserChatUIMessagePart[] | undefined, fallbackText: string): BrowserChatUIMessagePart[] {
+  const response = (parts || []).filter(part => part.type === 'text' || part.type === 'data-response');
+  const generated = (parts || []).flatMap((part) => {
+    if (part.type === 'dynamic-tool' && part.state === 'output-available') return responseRegistry.toolBlocks(part.toolName, browserChatCapabilityResult(part.output));
+    if (part.type === 'data-step') return (part.data.tools || []).flatMap(tool => tool.ok === true
+      ? responseRegistry.toolBlocks(tool.name, browserChatCapabilityResult(tool.rawResult ?? tool.result)) : []);
+    return [];
+  });
+  const missing = responseRegistry.missing(response.flatMap(part => part.type === 'data-response' ? [part.data] : []), generated);
+  return [...(response.length ? response : fallbackText ? [{ type: 'text' as const, text: fallbackText }] : []),
+    ...missing.map(block => ({ type: 'data-response' as const, id: `tool-response:${responseRegistry.identity(block)}`, data: block }))];
 }

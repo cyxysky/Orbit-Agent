@@ -1062,13 +1062,13 @@ function queuePersonalMemoryExtraction(input: {
   const currentUrl = browserChatMemoryUrl(input.browser, input.session);
   const conversation = input.session.messages
     .filter((message) => message.role === 'user' || message.role === 'assistant')
-    .slice(-24)
+    .slice(-6)
     .map((message) => ({
       id: message.id,
       role: message.role,
       content: compactText(message.content, 4_000),
     }));
-  const userMessage = compactText(input.text, 8_000);
+  const userMessage = input.text;
   const assistantReply = compactText(input.result.reply, 16_000);
   const extractionSteps = input.result.newSteps.slice(-32).map(compactStepForRealtime);
   const startedAt = Date.now();
@@ -1082,6 +1082,7 @@ function queuePersonalMemoryExtraction(input: {
           currentUrl,
           targetUrl,
           userMessage,
+          userMessageId,
           assistantReply,
           conversation,
           steps: extractionSteps,
@@ -5920,6 +5921,7 @@ async function runBrowserChatMessage(
           sourceMessageIds: [userMessageId],
           usedMemoryIds,
           userMessages: [text],
+          abortSignal: abortController.signal,
         }),
         referenceImagePaths,
         credentialBindings: initialRuntimeContext.credentialBindings,

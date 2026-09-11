@@ -37,10 +37,32 @@ function actionFromInput(input: unknown) {
   return typeof action === 'string' ? action : undefined;
 }
 
+/** An interrupted action is not a successful task, even if its click completed. */
+export function browserExecutionRecoveryRequired(
+  traces: Array<{ name?: string; input?: unknown; result?: unknown }>,
+) {
+  let pending = false;
+  const record = (value: unknown): Record<string, unknown> | undefined => value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown> : undefined;
+  for (const trace of traces) {
+    const result = record(trace.result);
+    if (!result) continue;
+    const prerequisites = Array.isArray(result.prerequisiteResults) ? result.prerequisiteResults : [];
+    if (prerequisites.some(entry => record(entry)?.toolName === browserStatePrerequisiteToolName
+      && record(record(entry)?.result)?.ok === true)) pending = false;
+    if (trace.name !== browserCapabilityToolNames.browser) continue;
+    if (actionFromInput(trace.input) === 'state' && result.ok === true) pending = false;
+    const state = record(record(result.data)?.executionState);
+    if (result.ok === false && state?.requiresStateRefresh === true && state.outcome === 'unknown') pending = true;
+  }
+  return pending;
+}
+
 export function requiresBrowserStatePreflight(
   alreadyCompleted: boolean,
   traces: Array<{ name?: string; input?: unknown; result?: unknown }>,
 ) {
+  if (browserExecutionRecoveryRequired(traces)) return true;
   return !alreadyCompleted
     && !traces.some((trace) => {
       if (

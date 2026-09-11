@@ -3,7 +3,8 @@ import { link, mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import sharp from 'sharp';
-import type { ChartExportWindow } from '@/components/ExcalidrawPngExport';
+import type { ChartRecord } from '@webpilot/capability-chart';
+import type { ChartExportWindow } from '@/components/ChartPngExport';
 import { normalizeApplicationUserId } from '@/server/auth/user-context';
 import { createMountIdentityTicket } from '@/server/auth/mount-identity';
 import { readBrowserChatSessionOwner } from '@/server/storage/browser-chat-history-store';
@@ -16,7 +17,7 @@ const exportsState = ((globalThis as typeof globalThis & {
   __orbitChartImageExports?: { tail: Promise<unknown> };
 }).__orbitChartImageExports ??= { tail: Promise.resolve() });
 
-async function renderPng(option: unknown, userId: string) {
+async function renderPng(chart: ChartRecord, userId: string) {
   const port = Number(process.env.WEBPILOT_REALTIME_PUBLISH_PORT || process.env.PORT || 3000);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('画布导出服务端口无效。');
   const origin = `http://127.0.0.1:${port}`;
@@ -30,14 +31,14 @@ async function renderPng(option: unknown, userId: string) {
   });
   const deadline = setTimeout(() => { void browser.close().catch(() => {}); }, 90_000);
   try {
-    const page = await browser.newPage({ serviceWorkers: 'block' });
+    const page = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 1000, height: 800 }, deviceScaleFactor: 2 });
     // Scene images are embedded data. Only local application code/fonts may load.
     await page.route('**/*', route => new URL(route.request().url()).origin === origin
       ? route.continue() : route.abort());
     const response = await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 60_000 });
     if (!response?.ok()) throw new Error(`画布导出页面加载失败（${response?.status() || 0}）。`);
-    await page.waitForFunction(() => typeof (window as ChartExportWindow).orbitExportExcalidrawPng === 'function', undefined, { timeout: 30_000 });
-    const dataUrl = await page.evaluate(scene => (window as ChartExportWindow).orbitExportExcalidrawPng!(scene), option);
+    await page.waitForFunction(() => typeof (window as ChartExportWindow).orbitExportChartPng === 'function', undefined, { timeout: 30_000 });
+    const dataUrl = await page.evaluate(record => (window as ChartExportWindow).orbitExportChartPng!(record), chart);
     if (!dataUrl.startsWith('data:image/png;base64,')) throw new Error('画布导出没有返回 PNG。');
     const source = Buffer.from(dataUrl.slice('data:image/png;base64,'.length), 'base64');
     // Keep image delivery small; retain PNG rather than silently changing formats.
@@ -64,8 +65,8 @@ export async function exportBrowserChatChartImage(sessionId: string, chartId: st
   if (!owner || normalizeApplicationUserId(owner.userId) !== normalizeApplicationUserId(userId)) throw new Error('画布不存在。');
   const chart = await readBrowserChatChart(sessionId, chartId);
   if (!chart) throw new Error('画布不存在。');
-  if (chart.engine !== 'excalidraw') return undefined;
-  const digest = createHash('sha256').update(JSON.stringify(chart.option)).digest('hex').slice(0, 16);
+  const digest = createHash('sha256').update(JSON.stringify({ engine: chart.engine, option: chart.option,
+    renderer: chart.renderer, height: chart.height, maps: chart.maps })).digest('hex').slice(0, 16);
   const fileName = `${chartId}.revision-${chart.revision || 0}-${digest}.png`;
   const directory = artifactPath(sessionId, 'charts', 'images');
   const filename = path.join(directory, fileName);
@@ -76,7 +77,7 @@ export async function exportBrowserChatChartImage(sessionId: string, chartId: st
       if (existing.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))) return artifactId;
       throw new Error('已保存的画布 PNG 损坏。');
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-    const png = await renderPng(chart.option, userId);
+    const png = await renderPng(chart, userId);
     // The conversation may have been deleted while Chromium was rendering.
     const latestOwner = await readBrowserChatSessionOwner(sessionId);
     if (!latestOwner || normalizeApplicationUserId(latestOwner.userId) !== normalizeApplicationUserId(userId)) throw new Error('画布对话已删除。');

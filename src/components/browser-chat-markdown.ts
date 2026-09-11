@@ -1,4 +1,5 @@
 import type { BrowserChatUIMessagePart } from '@/lib/browser-chat-ui-message';
+import { browserChatResponseParts } from '@/lib/browser-chat-ui-message';
 
 function restoreCollapsedMarkdownBlocks(value: string) {
   return value
@@ -228,6 +229,5 @@ export function normalizeBrowserChatMarkdown(markdown: string) {
 
 /** Response blocks preserve their array position, including repeated views of one resource. */
 export function browserChatOrderedResponseParts(parts: BrowserChatUIMessagePart[] | undefined, fallbackText: string): BrowserChatUIMessagePart[] {
-  const response = (parts || []).filter(part => part.type === 'text' || part.type === 'data-response');
-  return response.length ? response : [{ type: 'text', text: fallbackText }];
+  return browserChatResponseParts(parts, fallbackText);
 }

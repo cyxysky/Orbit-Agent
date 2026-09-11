@@ -154,8 +154,8 @@ export async function assembleRuntimeContext(input: {
     const totalMessages = eligible.reduce((total, entry) => total + entry.block.length, 0);
     await input.onProgress?.({ stage: 'start', completedMessages: 0, totalMessages, beforeTokens, afterTokens: beforeTokens }, messages);
     const target = input.compressionTargetTokens;
-    const summaryOutputTokens = Math.max(256, Math.min(4096, Math.floor(input.contextWindowTokens * 0.08)));
-    const summaryInputBudget = Math.max(0, input.contextWindowTokens - 4096 - estimateRuntimeMessageContext(input.messages[input.currentUserIndex]).totalTokens);
+    const summaryOutputTokens = Math.max(256, Math.floor(input.contextWindowTokens * 0.08));
+    const summaryInputBudget = Math.max(0, input.contextWindowTokens - summaryOutputTokens - estimateRuntimeMessageContext(input.messages[input.currentUserIndex]).totalTokens);
     while (eligible.length && estimate(messages) > target) {
       input.abortSignal?.throwIfAborted();
       const batch: typeof eligible = [];

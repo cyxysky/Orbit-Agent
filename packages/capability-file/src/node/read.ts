@@ -7,10 +7,9 @@ import type {
   OfficeVisualQaDeckChecks,
   OfficeVisualQaPageChecks,
 } from '../office/types.ts';
-import { inspectDocxTemplateBuffer } from './office/docx-template.ts';
 import { renderFilePreview } from './office/preview.ts';
 import { createFileVisualIndex, fileVisualScreenshotId as screenshotId } from './visual-index.ts';
-import { extractFileTextInWorker, type FileTextSelection } from './text-extraction.ts';
+import { extractFileTextInWorker, type FileTextSelection, type FileTextExtractionResult } from './text-extraction.ts';
 
 export type FileReadableAttachment = {
   id: string;
@@ -115,10 +114,7 @@ export function fileAttachmentMetadata(attachment: FileReadableAttachment) {
   return `[文件] ${attachment.name} | attachmentId: ${attachment.id} | 类型: ${attachment.type || 'unknown'} | 大小: ${formatSize(attachment.size)} | 仅在任务需要分析文件内容时调用 file action=read；纯上传不要读取或重建内容，使用浏览器运行时提供的受控附件上传接口。`;
 }
 
-const docxStructureCache = new Map<string, string>();
-let docxStructureCacheCharacters = 0;
-
-async function extractAttachmentText(attachment: FileReadableAttachment, absolutePath?: string, reusableBuffer?: Buffer, selection: FileTextSelection & { abortSignal?: AbortSignal } = {}) {
+async function extractAttachmentText(attachment: FileReadableAttachment, absolutePath?: string, reusableBuffer?: Buffer, selection: FileTextSelection & { abortSignal?: AbortSignal } = {}): Promise<FileTextExtractionResult> {
   const kind = attachmentKind(attachment);
   if (kind === 'image') {
     if (!absolutePath) throw new Error('Could not locate the saved image artifact.');
@@ -129,7 +125,7 @@ async function extractAttachmentText(attachment: FileReadableAttachment, absolut
     const swapsAxes = [5, 6, 7, 8].includes(metadata.orientation || 0);
     const width = swapsAxes ? rawHeight : rawWidth;
     const height = swapsAxes ? rawWidth : rawHeight;
-    return [
+    return { parser: 'image-metadata', truncated: false, warnings: [], text: [
       '[Image artifact metadata]',
       `Name: ${attachment.name}`,
       `Saved bytes: ${buffer.byteLength}`,
@@ -138,52 +134,11 @@ async function extractAttachmentText(attachment: FileReadableAttachment, absolut
       `Aspect ratio: ${width && height ? (width / height).toFixed(6) : 'unknown'}`,
       ...(metadata.orientation ? [`EXIF orientation: ${metadata.orientation}`] : []),
       'These values were read from the exact saved artifact bytes. Use them for Office layout instead of probing the remote source URL in browserCode.',
-    ].join('\n');
+    ].join('\n') };
   }
-  if (kind === 'tab') return `[标签页引用：${attachment.sourceUrl || attachment.url || attachment.name}]`;
+  if (kind === 'tab') return { parser: 'tab', truncated: false, warnings: [], text: `[标签页引用：${attachment.sourceUrl || attachment.url || attachment.name}]` };
   if (!absolutePath) throw new Error('无法定位文件，无法解析。');
-  const extracted = await extractFileTextInWorker({ extension: extensionOf(attachment), kind, path: absolutePath, ...selection });
-  if (extensionOf(attachment) !== '.docx' || selection.section) return extracted;
-  const buffer = reusableBuffer || await readFile(absolutePath);
-  if (!buffer.byteLength) throw new Error('文件内容为空，无法解析。');
-  selection.abortSignal?.throwIfAborted();
-  const structureKey = createHash('sha256').update(buffer).digest('hex');
-  const cachedStructure = docxStructureCache.get(structureKey);
-  if (cachedStructure !== undefined) return cachedStructure + extracted;
-  const structure = await inspectDocxTemplateBuffer(buffer);
-  const rows = structure.rows.map((row) => (
-    `表格行 ${row.index}: ${row.cells.map((cell, index) => `单元格${index + 1}=${cell ? JSON.stringify(cell) : '[空]'}`).join(' | ')}`
-  ));
-  const structureText = [
-    '[DOCX 模板结构]',
-    `包部件 ${structure.partCount}；节 ${structure.sectionCount}；表格 ${structure.tableCount}；段落 ${structure.paragraphCount}；样式 ${structure.styleCount}；关系 ${structure.relationshipCount}`,
-    `视觉对象：绘图 ${structure.drawingCount}；文本框 ${structure.textBoxCount}；内容控件 ${structure.contentControlCount}；内嵌媒体 ${structure.mediaCount}`,
-    `扩展内容：页眉 ${structure.headerCount}；页脚 ${structure.footerCount}；批注 ${structure.commentCount}；脚注 ${structure.footnoteCount}；尾注 ${structure.endnoteCount}`,
-    ...(structure.mediaParts.length ? [`媒体部件：${structure.mediaParts.join(' | ')}`] : []),
-    ...(structure.headerTexts.length ? [`页眉文本：${structure.headerTexts.map((text) => JSON.stringify(text)).join(' | ')}`] : []),
-    ...(structure.footerTexts.length ? [`页脚文本：${structure.footerTexts.map((text) => JSON.stringify(text)).join(' | ')}`] : []),
-    ...(structure.commentTexts.length ? [`批注文本：${structure.commentTexts.map((text) => JSON.stringify(text)).join(' | ')}`] : []),
-    ...(structure.footnoteTexts.length ? [`脚注文本：${structure.footnoteTexts.map((text) => JSON.stringify(text)).join(' | ')}`] : []),
-    ...(structure.endnoteTexts.length ? [`尾注文本：${structure.endnoteTexts.map((text) => JSON.stringify(text)).join(' | ')}`] : []),
-    '原始 DOCX 包会一直保留；file action=read 只提取结构和预览，不会改写原文件。',
-    ...rows,
-    ...(structure.followingParagraphAnchors.length ? [
-      `标题后空段落候选：${structure.followingParagraphAnchors.map((anchor) => JSON.stringify(anchor)).join(' | ')}`,
-    ] : []),
-    '',
-    '[DOCX 正文文本]',
-    '',
-  ].join('\n');
-  if (structureText.length <= 1_000_000) {
-    while (docxStructureCache.size && (docxStructureCache.size >= 16 || docxStructureCacheCharacters + structureText.length > 2_000_000)) {
-      const oldest = docxStructureCache.keys().next().value!;
-      docxStructureCacheCharacters -= docxStructureCache.get(oldest)!.length;
-      docxStructureCache.delete(oldest);
-    }
-    docxStructureCache.set(structureKey, structureText);
-    docxStructureCacheCharacters += structureText.length;
-  }
-  return structureText + extracted;
+  return extractFileTextInWorker({ extension: extensionOf(attachment), kind, path: absolutePath, ...selection });
 }
 
 export async function readFileAttachment(input: FileTextSelection & {
@@ -227,7 +182,7 @@ export async function readFileAttachment(input: FileTextSelection & {
     const offset = normalizedOffset(input.offset);
     input.abortSignal?.throwIfAborted();
     const limit = normalizeFileReadLimit(input.limit);
-    const slice = content.slice(offset, offset + limit);
+    const slice = content.text.slice(offset, offset + limit);
     const nextOffset = offset + slice.length;
     const visualSummary = visuals ? [
       `视觉内容：渲染器=${visuals.renderer}${visuals.pageCount ? `；总页数=${visuals.pageCount}` : ''}${visuals.renderedPages.length ? `；本次页面=${visuals.renderedPages.join(',')}` : ''}${visuals.imagePaths.length ? `；已向下一轮模型请求附加 ${visuals.imagePaths.length} 张图像` : ''}`,
@@ -238,12 +193,14 @@ export async function readFileAttachment(input: FileTextSelection & {
       actual: [
         '读取类型：文件内容（readContent）；以下是从文件解析出的文本/数据，不是生成此文件的 Python/JavaScript 源码。修改生成逻辑请用 readSource + documentId；缺少 documentId 时先 list。',
         `文件：${resolvedAttachment.name}`,
-        `类型：${resolvedAttachment.type || 'unknown'}；大小：${formatSize(resolvedAttachment.size)}；解析器：${attachmentKind(resolvedAttachment)}`,
+        `类型：${resolvedAttachment.type || 'unknown'}；大小：${formatSize(resolvedAttachment.size)}；解析器：${content.parser}`,
         '原始附件：服务器保留原始字节；文本、结构和视觉预览均从该原件按需派生。',
+        `读取范围：${JSON.stringify(content.scope || {})}；提取截断：${content.truncated ? '是，请缩小选择范围' : '否'}`,
+        ...content.warnings.map((warning) => `读取提示：${warning}`),
         ...visualSummary,
         ...(input.includeVisuals && kind === 'image' && !visuals?.imagePaths.length
           ? ['图片像素未能附加；以下仅为元数据，不能据此确认图片主体或视觉质量。请使用可解码的图片素材。'] : []),
-        `字符区间：${offset}-${nextOffset} / ${content.length}${nextOffset < content.length ? `；仍有内容，下次 offset=${nextOffset}` : '；已到末尾'}`,
+        `字符区间：${offset}-${nextOffset} / ${content.text.length}${nextOffset < content.text.length ? `；仍有内容，下次 offset=${nextOffset}` : content.truncated ? '；已到本次提取末尾，原文档尚未完整读取' : '；已到所选范围末尾'}`,
         '',
         slice || '[该区间没有可读文本]',
       ].join('\n'),

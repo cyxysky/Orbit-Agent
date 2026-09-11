@@ -124,6 +124,14 @@ type PersonalMemoryType = 'alias' | 'preference' | 'workflow' | 'domain_fact';
 type PersonalMemoryStatus = 'active' | 'disabled';
 
 type PersonalMemoryItem = {
+  applicability?: { when: string; contextTerms: string[] };
+  utility?: string;
+  evidence?: string[];
+  verification?: Array<{ quote: string; check: string }>;
+  verifiedAt?: string;
+  expiresAt?: string;
+  reviewReason?: string;
+  history?: Array<{ value: string; replacedAt: string }>;
   recall?: 'always' | 'relevant';
   durability?: string;
   id: string;
@@ -146,6 +154,8 @@ type PersonalMemoryItem = {
 };
 
 type PersonalMemoryDraft = {
+  whenText: string;
+  contextTermsText: string;
   recall: 'always' | 'relevant';
   id?: string;
   userId?: string;
@@ -461,6 +471,8 @@ const personalMemoryTypeOptions: Array<{ label: string; value: PersonalMemoryTyp
 
 function createPersonalMemoryDraft(): PersonalMemoryDraft {
   return {
+    whenText: '',
+    contextTermsText: '',
     recall: 'relevant',
     shared: false,
     scope: 'global',
@@ -475,7 +487,9 @@ function createPersonalMemoryDraft(): PersonalMemoryDraft {
 
 function personalMemoryDraftFromItem(item: PersonalMemoryItem): PersonalMemoryDraft {
   return {
-    recall: item.recall || (item.durability === 'explicit_preference' ? 'always' : 'relevant'),
+    whenText: item.applicability?.when || '',
+    contextTermsText: item.applicability?.contextTerms.join(', ') || '',
+    recall: item.recall || 'relevant',
     id: item.id,
     userId: item.userId,
     shared: item.shared,
@@ -1421,6 +1435,9 @@ export function EnvironmentSettings({
 
   function personalMemoryPayload() {
     return {
+      applicability: personalMemoryDraft.whenText.trim() ? {
+        when: personalMemoryDraft.whenText.trim(), contextTerms: personalMemoryAliasesFromText(personalMemoryDraft.contextTermsText),
+      } : null,
       recall: personalMemoryDraft.scope === 'global' && personalMemoryDraft.type === 'preference' ? personalMemoryDraft.recall : 'relevant',
       shared: personalMemoryDraft.shared,
       scope: personalMemoryDraft.scope,
@@ -1436,6 +1453,10 @@ export function EnvironmentSettings({
 
   async function savePersonalMemory() {
     const payload = personalMemoryPayload();
+    if (personalMemoryDraft.contextTermsText.trim() && !personalMemoryDraft.whenText.trim()) {
+      window.alert(t('限定项目或环境时，请同时说明适用条件'));
+      return;
+    }
     if (!payload.key || !payload.value) {
       window.alert(t('记忆需要填写短语和说明'));
       return;
@@ -1924,6 +1945,18 @@ export function EnvironmentSettings({
                 onChange={(event) => updatePersonalMemoryDraft({ value: event.target.value })}
               />
             </label>
+            <label className="personal-memory-field wide">
+              <span>{t('适用条件（可选）')}</span>
+              <input value={personalMemoryDraft.whenText} maxLength={300}
+                onChange={(event) => updatePersonalMemoryDraft({ whenText: event.target.value })}
+                placeholder={t('这条记忆应该在什么任务中使用')} />
+            </label>
+            <label className="personal-memory-field wide">
+              <span>{t('限定项目或环境（可选）')}</span>
+              <input value={personalMemoryDraft.contextTermsText}
+                onChange={(event) => updatePersonalMemoryDraft({ contextTermsText: event.target.value })}
+                placeholder={t('多个名称用逗号分隔；任务提到其中一个时才会召回')} />
+            </label>
             <div className="resource-sharing-field wide">
               <div>
                 <strong>{t('所有 ID 共享')}</strong>
@@ -2036,6 +2069,18 @@ export function EnvironmentSettings({
                     <strong>{item.key}</strong>
                     <span>{item.value}</span>
                     {item.aliases?.length ? <small>{t('等价说法')}：{item.aliases.join(' · ')}</small> : null}
+                    {item.applicability ? <small>{t('适用条件')}：{item.applicability.when}
+                      {item.applicability.contextTerms.length ? ` (${item.applicability.contextTerms.join(' / ')})` : ''}</small> : null}
+                    <details>
+                      <summary>{t('记忆依据与记录')}</summary>
+                      {item.utility ? <p>{t('未来用途')}：{item.utility}</p> : null}
+                      {item.reviewReason ? <p>{t('保存理由')}：{item.reviewReason}</p> : <p>{t('尚无自动复核记录')}</p>}
+                      {item.evidence?.map((quote, index) => <blockquote key={index}>{quote}</blockquote>)}
+                      {item.verification?.map((proof, index) => <p key={index}>{t('验证依据')}：{proof.quote}<br />{t('复用时检查')}：{proof.check}</p>)}
+                      {item.expiresAt ? <p>{t('有效期至')}：{new Date(item.expiresAt).toLocaleString()}</p> : null}
+                      <p>{t('召回次数')}：{item.useCount} · {t('召回不代表已验证有效')}</p>
+                      {item.history?.map((entry, index) => <p key={index}>{t('此前内容')}：{entry.value}</p>)}
+                    </details>
                   </div>
                 ),
               },

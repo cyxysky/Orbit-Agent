@@ -2,7 +2,7 @@
 
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 
-/** Retain measured geometry and navigation anchors while releasing distant message trees. */
+/** Skip distant message layout without resetting component state on every scroll. */
 export function BrowserChatHistoryRow({ children, keepMounted, turnId }: {
   children: ReactNode;
   keepMounted: boolean;
@@ -13,7 +13,7 @@ export function BrowserChatHistoryRow({ children, keepMounted, turnId }: {
   const offscreenRef = useRef(false);
   const restoreRef = useRef(false);
   const [visible, setVisible] = useState(true);
-  const mounted = visible || keepMounted;
+  const rendered = visible || keepMounted;
 
   useLayoutEffect(() => {
     const row = rowRef.current;
@@ -36,15 +36,17 @@ export function BrowserChatHistoryRow({ children, keepMounted, turnId }: {
 
   useLayoutEffect(() => {
     const row = rowRef.current;
-    if (!row || !mounted) { restoreRef.current = true; return; }
+    if (!row || !rendered) { restoreRef.current = true; return; }
     const root = row.closest<HTMLElement>('.browser-chat-message-list');
     const measure = () => {
       const bounds = row.getBoundingClientRect();
       const previous = heightRef.current;
       heightRef.current = bounds.height;
       // Width changes can invalidate a placeholder's old height. Keep the visible turn fixed.
-      if (restoreRef.current && previous > 0 && root && bounds.bottom < root.getBoundingClientRect().top) {
-        root.scrollTop += bounds.height - previous;
+      // Test the old geometry: a shrinking row may now end above the viewport
+      // even though it previously contained the content the user was reading.
+      if (restoreRef.current && previous > 0 && root && bounds.top + previous <= root.getBoundingClientRect().top) {
+        root.scrollTo({ top: root.scrollTop + bounds.height - previous, behavior: 'instant' });
       }
       if (root && bounds.bottom >= root.getBoundingClientRect().top) restoreRef.current = false;
     };
@@ -53,12 +55,15 @@ export function BrowserChatHistoryRow({ children, keepMounted, turnId }: {
     const observer = new ResizeObserver(measure);
     observer.observe(row);
     return () => observer.disconnect();
-  }, [mounted]);
+  }, [rendered]);
 
   return <div
     className="browser-chat-history-row"
     data-browser-chat-turn-anchor={turnId}
     ref={rowRef}
-    style={mounted ? undefined : { height: heightRef.current }}
-  >{mounted ? children : null}</div>;
+    // Keep React state (expanded sections, loaded artifacts, editors) intact.
+    // The measured outer height preserves the scroll range while CSS skips
+    // layout and paint for the hidden descendants.
+    style={rendered ? undefined : { contentVisibility: 'hidden', height: heightRef.current }}
+  >{children}</div>;
 }

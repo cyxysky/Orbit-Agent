@@ -190,6 +190,11 @@ export function classifyRuntimeRetry(error: unknown, signal?: AbortSignal): Runt
   if (/context[_ -]?(?:length|window|limit|overflow)|maximum context|too many (?:input )?tokens|prompt (?:is )?too long|input.*exceeds.*token/i.test(message)) {
     return { category: 'invalid-request', reason: 'provider context limit exceeded; compress more history', recovery: 'compact-context', retryable: true, statusCode };
   }
+  if ((statusCode === 400 || statusCode === 422)
+    && (/\b(?:does not support|not supported|unsupported|incompatible|not compatible)\b/i.test(message)
+      && /\b(?:tool[_ -]?choice|thinking|reasoning|parameter|option|mode|response[_ -]?format)\b/i.test(message))) {
+    return { category: 'configuration', reason: 'provider rejected an unsupported request option or mode combination; change the request before retrying', retryable: false, statusCode };
+  }
   if (name === 'AbortError' || /\b(aborted|cancelled|canceled)\b/.test(normalizedMessage)) {
     return { category: 'aborted', reason: 'provider request was aborted; caller is still active', retryAfterMs, retryable: true, statusCode };
   }

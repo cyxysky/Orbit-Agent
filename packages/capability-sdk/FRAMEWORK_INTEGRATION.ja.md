@@ -2,6 +2,9 @@
 
 [English](FRAMEWORK_INTEGRATION.md) | [简体中文](FRAMEWORK_INTEGRATION.zh-CN.md) | [日本語](FRAMEWORK_INTEGRATION.ja.md)
 
+登録出力の共通 API は [Registered output across frameworks](FRAMEWORK_INTEGRATION.md#registered-output-across-frameworks)
+を参照してください。マニフェストからの収集、ResponseSession、検証と重複排除を含みます。
+
 移植可能な Capability 契約と共通の実行・ライフサイクル機構を定義します。
 
 この README は完全な接続の入口です。任意の TypeScript Agent フレームワークでは手順 1–4、または後述の AI SDK/MCP を使います。例にあるファイルはすべて**利用側のプロジェクト**に作成し、このパッケージ内には作りません。
@@ -191,7 +194,7 @@ npm install @webpilot/capability-adapter-ai-sdk "ai@>=7 <8" @ai-sdk/openai-compa
 
 ```ts
 import { randomUUID } from 'node:crypto';
-import { ToolLoopAgent, stepCountIs } from 'ai';
+import { ToolLoopAgent } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { mountAISDKCapabilities, EnvironmentCapabilityConfigStore } from '@webpilot/capability-adapter-ai-sdk';
 import { providers, configurations, cleanup } from './provider.js';
@@ -208,7 +211,7 @@ process.once('SIGINT', cancel);
 let runtime: Awaited<ReturnType<typeof mountAISDKCapabilities>> | undefined;
 try {
   runtime = await mountAISDKCapabilities({
-    providers, configurations,
+    providers, configurations, maxSteps: 10,
     context: { runId: randomUUID(), abortSignal: abort.signal },
     configStore: new EnvironmentCapabilityConfigStore(process.env),
     skills: { mode: 'eager' },
@@ -218,7 +221,7 @@ try {
     } },
   });
   const agent = new ToolLoopAgent({ model: modelProvider.chatModel(modelId),
-    ...runtime.agentOptions, stopWhen: stepCountIs(10) });
+    ...runtime.agentOptions });
   const result = await agent.generate({
     prompt: process.argv[2] || 'Describe the available tools and their intended usage.',
     abortSignal: abort.signal,

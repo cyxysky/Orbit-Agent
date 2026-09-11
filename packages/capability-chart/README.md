@@ -295,7 +295,7 @@ The filesystem store caches its directory index and retains the latest 20 revisi
 
 - `@webpilot/capability-chart` exports the portable capability, schemas, records, and store contracts.
 - `@webpilot/capability-chart/node` exports the filesystem-backed Node store.
-- `@webpilot/capability-chart/react` exports the renderer without Orbit API or session dependencies.
+- `@webpilot/capability-chart/react` exports the renderer and browser-side `exportChartPng(chart)` without Orbit API or session dependencies. PNG export supports ECharts (canvas/SVG and registered maps), Three.js, and Excalidraw. Hosts configure Excalidraw's asset path before exporting and can use the resulting data URL in their communication adapters.
 - `@webpilot/capability-chart/mcp` exports stdio and Streamable HTTP MCP entrypoints.
 
 ```ts

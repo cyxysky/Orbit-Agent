@@ -1,4 +1,6 @@
 import type { CapabilitySkill } from '@webpilot/capability-sdk';
+import { markdownBlock } from '@webpilot/capability-response';
+import { chartResponseBlock } from './response.ts';
 
 /** Complete model-facing operating manual for the Chart Capability workflow. */
 export const chartRuntimeSkillId = 'system-chart-runtime';
@@ -22,7 +24,7 @@ This Skill is authoritative for the chart model tool and is supplied by the char
 2. Before creating a chart, call chart with action \`api\` and no query to read the compact API module index.
 3. Call action \`api\` again with the exact module id needed for the requested chart. Read more than one module when the design combines series, coordinates, datasets, maps, or interactions.
 4. Call action \`create\` with one complete JSON-serializable \`option\`. For 2D, engine defaults to \`echarts\` and loads the full ECharts package. For native 3D, read module \`three\`, set engine to \`three\`, and follow its separate data schema. For editable diagrams, read module \`excalidraw\`, set engine to \`excalidraw\`, and supply elements plus optional appState. Omit files when there are no images; image resources use an object keyed by fileId, never a string or array.
-5. Read the successful result and copy its exact content[].block into \`finalResponse.blocks\` at the intended response position.
+5. After a successful create, finish with \`finalResponse\` and copy the exact content[].block into its blocks array at the intended position. Do not finish with plain Markdown containing a chart identifier. Use the registered types and params from the finalResponse tool schema.
 6. Never invent an identifier and never reference one after a failed call. Charts render through registered response blocks with type and params. Include each chartId once; do not also append it to a Markdown block.
 
 Markdown never renders charts. Identifiers such as \`chart_000001\`, including standalone lines and code examples, remain ordinary text.
@@ -161,14 +163,11 @@ chart({
 After a successful call returns \`chart_000001\`, place it in the final response like this:
 
 \`\`\`js
-finalResponse({
-  status: "passed",
-  blocks: [
-    { type: "markdown", text: "下面是销售额与同比增速的对比：" },
-    { type: "chart", chartId: "chart_000001", title: "销售额与同比增速" },
-    { type: "markdown", text: "第四季度两项指标同时达到全年最高点。" }
-  ]
-})
+finalResponse(${JSON.stringify({ status: 'passed', blocks: [
+  markdownBlock('下面是销售额与同比增速的对比：'),
+  chartResponseBlock({ chartId: 'chart_000001', title: '销售额与同比增速' }),
+  markdownBlock('第四季度两项指标同时达到全年最高点。'),
+] }, null, 2)})
 \`\`\`
 `;
 

@@ -1,5 +1,5 @@
-import { ExcalidrawPngExport } from '@/components/ExcalidrawPngExport';
+import { ChartPngExport } from '@/components/ChartPngExport';
 
 export default function ChartExportPage() {
-  return <ExcalidrawPngExport />;
+  return <ChartPngExport />;
 }

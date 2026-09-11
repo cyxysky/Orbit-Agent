@@ -1,17 +1,11 @@
 import { tool, type ToolSet } from 'ai';
 import { z } from 'zod';
 import {
-  filterDurablePersonalMemoryDrafts,
-  getPersonalMemoryItem,
-  markPersonalMemoryItemsUsed,
-  normalizePersonalMemoryDomain,
-  normalizePersonalMemoryUserId,
-  savePersonalMemoryItem,
-  searchPersonalMemory,
-  updatePersonalMemoryItem,
-  type PersonalMemoryDraft,
+  getPersonalMemoryItem, markPersonalMemoryItemsUsed, normalizePersonalMemoryDomain,
+  normalizePersonalMemoryUserId, searchPersonalMemory, reviewPersonalMemoryCandidates,
   type PersonalMemoryItem,
-} from '@/server/ai/personal-memory';
+} from './personal-memory';
+import { memoryCandidateSchema } from './personal-memory-policy';
 
 export type PersonalMemoryToolContext = {
   userId?: unknown;
@@ -22,201 +16,76 @@ export type PersonalMemoryToolContext = {
   userMessages?: string[];
   readOnly?: boolean;
   usedMemoryIds?: Set<string>;
-};
-
-const memoryScopeSchema = z.enum(['global', 'domain']);
-const memoryTypeSchema = z.enum(['alias', 'preference', 'workflow', 'domain_fact']);
-const durabilitySchema = z.enum([
-  'explicit_preference',
-  'explicit_workflow',
-  'explicit_alias',
-  'explicit_remember',
-  'repeated_user_behavior',
-]);
-const evidenceSchema = z.array(z.string().min(1).max(500)).min(1).max(8);
-
-const memoryDraftShape = {
-  scope: memoryScopeSchema,
-  domain: z.string().max(253).optional(),
-  type: memoryTypeSchema,
-  key: z.string().min(1).max(120),
-  aliases: z.array(z.string().min(1).max(120)).max(8).optional(),
-  value: z.string().min(1).max(500),
-  confidence: z.number().min(0).max(1).optional(),
+  abortSignal?: AbortSignal;
 };
 
 function toolMemoryItem(item: PersonalMemoryItem) {
-  return {
-    id: item.id,
-    scope: item.scope,
-    domain: item.domain,
-    type: item.type,
-    key: item.key,
-    aliases: item.aliases,
-    value: item.value,
-    confidence: item.confidence,
-    status: item.status,
-    updatedAt: item.updatedAt,
-  };
-}
-
-function exactUserEvidence(context: PersonalMemoryToolContext, evidence: string[]) {
-  const userMessages = (context.userMessages || []).map((message) => message.replace(/\s+/g, ' ').trim());
-  return evidence.every((quote) => {
-    const normalized = quote.replace(/\s+/g, ' ').trim();
-    return normalized.length >= 2 && userMessages.some((message) => message.includes(normalized));
-  });
-}
-
-function assertWritable(context: PersonalMemoryToolContext) {
-  if (context.readOnly) throw new Error('Personal memory tools are read-only in this agent.');
-}
-
-function durableDraft(input: PersonalMemoryDraft & {
-  evidence: string[];
-  durability: z.infer<typeof durabilitySchema>;
-}, context: PersonalMemoryToolContext) {
-  if (!exactUserEvidence(context, input.evidence)) {
-    throw new Error('Memory write rejected: evidence must be an exact quote from a user message in this turn.');
-  }
-  const [accepted] = filterDurablePersonalMemoryDrafts([input], context.userMessages || []);
-  if (!accepted) {
-    throw new Error('Memory write rejected: the user did not provide a durable preference, workflow, alias, remember request, or repeated behavior.');
-  }
-  return accepted;
-}
-
-function explicitMemoryManagementRequest(context: PersonalMemoryToolContext, evidence: string[]) {
-  if (!exactUserEvidence(context, evidence)) return false;
-  return evidence.some((quote) => /(?:忘记|删除|移除|停用|不要记|别记|更新记忆|修改记忆|改成|forget|delete|remove|disable|do not remember|update (?:the )?memory|change (?:the )?memory)/i.test(quote));
+  return { id: item.id, scope: item.scope, domain: item.domain, type: item.type,
+    key: item.key, aliases: item.aliases, value: item.value, status: item.status,
+    applicability: item.applicability, utility: item.utility, evidence: item.evidence,
+    verifiedAt: item.verifiedAt, verification: item.verification, expiresAt: item.expiresAt,
+    reviewReason: item.reviewReason, updatedAt: item.updatedAt };
 }
 
 export function createPersonalMemoryTools(context: PersonalMemoryToolContext): ToolSet {
   const userId = normalizePersonalMemoryUserId(context.userId);
   const usedMemoryIds = context.usedMemoryIds || new Set<string>();
   const currentUrl = () => context.getCurrentUrl?.() || context.currentUrl || '';
-  const currentDomain = () => normalizePersonalMemoryDomain(currentUrl());
-  const markUsedOnce = async (ids: string[]) => {
-    const unusedIds = Array.from(new Set(ids.filter((id) => id && !usedMemoryIds.has(id))));
-    if (!unusedIds.length) return;
-    await markPersonalMemoryItemsUsed(unusedIds);
-    unusedIds.forEach((id) => usedMemoryIds.add(id));
-  };
+  // One object schema for every provider; validation of action-specific fields happens below.
+  const inputSchema = z.object({
+    ...memoryCandidateSchema.partial().shape,
+    action: z.enum(['search', 'save', 'update', 'disable']),
+    query: z.string().trim().min(1).max(1000).optional(),
+    limit: z.number().int().min(1).max(20).optional(),
+    id: z.string().min(1).max(160).optional(),
+  }).strict();
 
-  const inputSchema = z.discriminatedUnion('action', [
-    z.object({
-      action: z.literal('search'),
-      query: z.string().min(1).max(1_000),
-      limit: z.number().int().min(1).max(20).optional(),
-    }),
-    z.object({
-      action: z.literal('save'),
-      ...memoryDraftShape,
-      evidence: evidenceSchema,
-      durability: durabilitySchema,
-    }),
-    z.object({
-      action: z.literal('update'),
-      id: z.string().min(1).max(160),
-      scope: memoryScopeSchema.optional(),
-      domain: z.string().max(253).optional(),
-      type: memoryTypeSchema.optional(),
-      key: z.string().min(1).max(120).optional(),
-      aliases: z.array(z.string().min(1).max(120)).max(8).optional(),
-      value: z.string().min(1).max(500).optional(),
-      confidence: z.number().min(0).max(1).optional(),
-      evidence: evidenceSchema,
-    }),
-    z.object({
-      action: z.literal('disable'),
-      id: z.string().min(1).max(160),
-      evidence: evidenceSchema,
-    }),
-  ]).superRefine((input, refinement) => {
-    if (input.action !== 'update') return;
-    if (
-      input.scope === undefined
-      && input.domain === undefined
-      && input.type === undefined
-      && input.key === undefined
-      && input.aliases === undefined
-      && input.value === undefined
-      && input.confidence === undefined
-    ) refinement.addIssue({ code: z.ZodIssueCode.custom, message: 'Provide at least one memory field to update.' });
-  });
-
-  return {
-    memory: tool({
-      description: 'Manage the current user\'s durable personal memory through one action-based tool. Use action=search only when injected memory is insufficient or the user asks what is remembered; action=save only for an explicit durable preference/workflow/alias/remember request; action=update or action=disable only when the user explicitly asks to change or forget a known memory. Never store assistant discoveries, page content, secrets, or one-off task data.',
-      inputSchema,
-      execute: async (input) => {
-        if (input.action === 'search') {
-          const { query, limit } = input;
-          const results = await searchPersonalMemory({
-            userId,
-            query,
-            domain: currentDomain(),
-            limit,
-          });
-          await markUsedOnce(results.map((result) => result.item.id));
-          return {
-            items: results.map((result) => ({
-              ...toolMemoryItem(result.item),
-              score: result.score,
-              reasons: result.reasons,
-            })),
-          };
+  return { memory: tool({
+    description: 'Search or maintain durable memory. Save only a scoped, useful user rule with exact evidence from the CURRENT user message, applicability and utility. Corrections update existing IDs; disable only on an explicit forget request. All writes are independently reviewed for source support, reuse value, duplicates and conflicts. Do not infer habits from repeated instructions. Operational lessons are extracted from verified tool results after the turn; do not fabricate tool verification here.',
+    inputSchema,
+    execute: async (input) => {
+      if (input.action === 'search') {
+        if (!input.query) throw new Error('Memory search requires query.');
+        const results = await searchPersonalMemory({ userId, query: input.query,
+          domain: normalizePersonalMemoryDomain(currentUrl()), limit: input.limit });
+        const unused = results.map(({ item }) => item.id).filter((id) => !usedMemoryIds.has(id));
+        if (unused.length) {
+          await markPersonalMemoryItemsUsed(unused);
+          unused.forEach((id) => usedMemoryIds.add(id));
         }
-
-        if (input.action === 'save') {
-          assertWritable(context);
-          const draft = durableDraft(input, context);
-          const domain = draft.scope === 'domain' ? draft.domain || currentDomain() : '';
-          if (draft.scope === 'domain' && !domain) {
-            throw new Error('Domain-scoped memory requires a current URL or an explicit domain.');
-          }
-          const item = await savePersonalMemoryItem({
-            ...draft,
-            userId,
-            domain,
-            sourceSessionId: context.sourceSessionId,
-            sourceMessageIds: context.sourceMessageIds,
-            sourceUrl: currentUrl(),
-          });
-          return { item: toolMemoryItem(item) };
-        }
-
-        if (input.action === 'update') {
-          const { action: _action, id, evidence, ...patch } = input;
-          void _action;
-          assertWritable(context);
-          if (!explicitMemoryManagementRequest(context, evidence)) {
-            throw new Error('Memory update rejected: the current user must explicitly request the memory change.');
-          }
-          const existing = await getPersonalMemoryItem(id, userId);
-          if (!existing || (existing.userId !== userId && existing.shared)) {
-            throw new Error('Personal memory was not found or is not editable by the current user.');
-          }
-          const item = await updatePersonalMemoryItem(id, { ...patch, evidence }, userId, {
-            sourceSessionId: context.sourceSessionId, sourceMessageIds: context.sourceMessageIds, sourceUrl: currentUrl(),
-          });
-          if (!item) throw new Error('Personal memory was not found.');
-          return { item: toolMemoryItem(item) };
-        }
-
-        const { id, evidence } = input;
-        assertWritable(context);
-        if (!explicitMemoryManagementRequest(context, evidence)) {
-          throw new Error('Memory disable rejected: the current user must explicitly ask to forget or disable it.');
-        }
-        const existing = await getPersonalMemoryItem(id, userId);
-        if (!existing || (existing.userId !== userId && existing.shared)) {
-          throw new Error('Personal memory was not found or is not editable by the current user.');
-        }
-        const item = await updatePersonalMemoryItem(id, { status: 'disabled' }, userId);
-        if (!item) throw new Error('Personal memory was not found.');
-        return { item: toolMemoryItem(item) };
-      },
-    }),
-  };
+        return { items: results.map(({ item, score, reasons }) => ({ ...toolMemoryItem(item), score, reasons })) };
+      }
+      if (context.readOnly) throw new Error('Personal memory tools are read-only in this agent.');
+      if (!context.sourceSessionId || !context.sourceMessageIds?.[0] || !context.userMessages?.length) {
+        throw new Error('Memory write requires an identified current user message.');
+      }
+      const previous = input.id ? await getPersonalMemoryItem(input.id, userId) : undefined;
+      if (input.action !== 'save' && (!previous || previous.userId !== userId)) {
+        throw new Error('Memory update/disable requires an existing memory owned by the current user.');
+      }
+      const { action, query: _query, limit: _limit, id: _id, ...fields } = input;
+      void _query; void _limit; void _id;
+      const candidate = memoryCandidateSchema.parse({
+        ...(previous ? { scope: previous.scope, domain: previous.domain, type: previous.type,
+          key: previous.key, aliases: previous.aliases, value: previous.value,
+          applicability: previous.applicability, utility: previous.utility } : {}),
+        ...fields,
+        ...(action === 'disable' ? {
+          applicability: previous?.applicability || { when: previous!.key, contextTerms: [] },
+          utility: 'Stop applying the specific rule the user has explicitly withdrawn.',
+          durability: 'user_correction', verification: [],
+        } : {}),
+      });
+      if (candidate.durability === 'verified_procedure') throw new Error('Procedural verification is collected from actual tool results after the turn.');
+      const reviewed = await reviewPersonalMemoryCandidates({
+        userId, currentUrl: currentUrl(), userMessage: context.userMessages[context.userMessages.length - 1],
+        userMessageId: context.sourceMessageIds[0], sourceMessageIds: [context.sourceMessageIds[0]],
+        sourceSessionId: context.sourceSessionId, assistantReply: '', steps: [], candidates: [candidate],
+        requestedAction: action, targetId: action !== 'save' ? input.id : undefined,
+        receiptSuffix: JSON.stringify({ action, id: input.id, candidate }), abortSignal: context.abortSignal,
+      });
+      return { changed: reviewed.items.length > 0, skipped: reviewed.skipped, reason: reviewed.reason,
+        items: reviewed.items.map(toolMemoryItem), review: reviewed.diagnostics };
+    },
+  }) };
 }

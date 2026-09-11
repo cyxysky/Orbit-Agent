@@ -66,6 +66,38 @@ An exporter creates content only; delivery remains the communication host's job.
 
 ## Host assembly
 
+The framework-neutral pipeline lives in `@webpilot/capability-sdk`:
+
+- `mountCapabilities({ providers, responses: coreResponses, ... })` collects package
+  `manifest.responses` and returns `mounted.responses`, filtered to active providers
+  and their enabled tools. `responses` supplies only host types; do not repeat types
+  already declared by package manifests.
+- `new ResponseSession(mounted.responses)` owns one turn's collected tool blocks and
+  accepted final response. Call `observe(toolName, capabilityResult)` after successful
+  framework tool execution, `accept(value)` for a structured final response, and
+  `finish()` after the loop. Normal completion requires an accepted finalResponse,
+  including prose-only answers. Only host-reported failed/blocked exits may use
+  `finish({ status, blocks })` without an accepted final call. The host provides prose blocks, so the SDK does
+  not depend on a Markdown package.
+- `ResponseRegistry.toolBlocks`, `identity`, `missing`, and `assemble` provide the
+  same stateless operations for streaming/history projections. Invalid tool blocks
+  are ignored; invalid explicit final blocks are rejected. `missing` preserves
+  unavailable explicit historical envelopes so missing plugins can show placeholders.
+
+`mountAISDKCapabilities` automatically connects the session to tool execution,
+registers `finalResponse` when output types exist, and exposes `responseSession`.
+After generation (or after consuming a stream), use
+`responseSession.finish()` as the structured message payload. Preserve
+`agentOptions.toolChoice` (auto) and `agentOptions.stopWhen`: it stops after
+an accepted final response or `maxSteps` (default 20). Invalid final arguments do
+not trigger the response stop condition. Mount once per turn, or create a new
+session and tool set per turn when retaining a lower-level capability runtime.
+
+The pipeline consumes standard object `CapabilityResult` values. A host that wraps
+results must decode its transport envelope first (`adapter.decodeResponseResult`
+for AI SDK). Never infer response blocks from Markdown, identifiers or arbitrary
+JSON embedded in prose. This decoding and message transport remain host concerns.
+
 Orbit has three explicit assembly points:
 
 - `src/lib/response-registry.ts`: installed type definitions, available for history.
@@ -94,7 +126,16 @@ Successful capability tools return a ready-to-use block:
 ```
 
 The agent copies `content[].block` into `finalResponse.blocks` at the desired
-position. Tools do not separately insert the same content into the response.
+position. `registry.modelInstructions()` supplies descriptions and validated
+examples from the same definitions used by the input schema; package Skill
+examples should use their response-block factories as well.
+
+Orbit also delivers successful registered tool blocks that were omitted from the
+final response. It consumes only the explicit `content[].block` contract, validates
+the owning tool and schema, and deduplicates against explicit response resources.
+Explicit ordering and intentionally repeated views are preserved. Markdown text
+and identifiers never become components. Live and persisted message projections
+use the same contract, so generated views do not depend on the model copying an ID.
 
 ## Streaming and history
 

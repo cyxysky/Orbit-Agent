@@ -1,11 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { generateText } from 'ai';
-import { z } from 'zod';
 import { fuzzyRetrievalScore, normalizeRetrievalText } from '@/lib/fuzzy-retrieval';
 import { normalizeApplicationUserId } from '@/server/auth/user-context';
-import { aiTelemetry } from '@/server/ai/ai-sdk-runtime';
-import { getModel, getModelSettings } from '@/server/ai/model';
-import type { StepExecutionResult } from '@/server/ai/schemas/runtime.schema';
+import { getModelSettings } from '@/server/ai/model';
+import { memoryApplicabilitySchema, memoryVerificationSchema, memoryExtractionSchema, parseMemoryJson } from './personal-memory-policy';
+import type { z } from 'zod';
 import {
   deletePersonalMemoryRecord,
   markPersonalMemoryRecordsUsed,
@@ -43,6 +41,15 @@ export type PersonalMemoryItem = {
   recall?: 'always' | 'relevant';
   evidence?: string[];
   durability?: string;
+  applicability?: z.infer<typeof memoryApplicabilitySchema>;
+  utility?: string;
+  verification?: z.infer<typeof memoryVerificationSchema>[];
+  verifiedAt?: string;
+  expiresAt?: string;
+  reviewReason?: string;
+  supersededBy?: string;
+  history?: Array<{ value: string; applicability?: PersonalMemoryItem['applicability']; evidence?: string[];
+    sourceSessionId?: string; sourceMessageIds?: string[]; replacedAt: string }>;
 };
 
 export type PersonalMemoryDraft = {
@@ -59,6 +66,14 @@ export type PersonalMemoryDraft = {
   recall?: unknown;
   evidence?: unknown;
   durability?: unknown;
+  applicability?: unknown;
+  utility?: unknown;
+  verification?: unknown;
+  verifiedAt?: unknown;
+  expiresAt?: unknown;
+  reviewReason?: unknown;
+  supersededBy?: unknown;
+  history?: PersonalMemoryItem['history'];
 };
 
 type PersonalMemoryStoreFile = {
@@ -81,13 +96,8 @@ export type PersonalMemoryExtractionResult = {
 };
 
 export type PersonalMemoryFilterRejectionReason =
-  | 'missing_evidence'
-  | 'unsupported_durability'
-  | 'repeated_behavior_requires_two_quotes'
-  | 'repeated_behavior_requires_two_user_messages'
-  | 'evidence_not_found_in_user_messages'
-  | 'missing_explicit_durability_cue'
-  | 'domain_fact_requires_explicit_remember_or_alias';
+  | 'invalid_candidate' | 'missing_new_evidence' | 'unverified_procedure' | 'invalid_scope'
+  | 'expired_candidate' | 'review_rejected' | 'invalid_review';
 
 export type PersonalMemoryFilterRejection = {
   index: number;
@@ -106,68 +116,20 @@ export type PersonalMemoryExtractionDiagnostics = {
   normalizationRejectedCount: number;
   rejectionReasons: Partial<Record<PersonalMemoryFilterRejectionReason, number>>;
   rejectedCandidates: PersonalMemoryFilterRejection[];
+  decisions?: Array<{ index: number; action: string; reason: string; targetIds: string[] }>;
 };
 
-type PersonalMemoryConversationMessage = {
+export type PersonalMemoryConversationMessage = {
   id?: string;
   role: 'user' | 'assistant';
   content: string;
 };
 
-type PersonalMemoryDurabilitySignal =
-  | 'explicit_preference'
-  | 'explicit_workflow'
-  | 'explicit_alias'
-  | 'explicit_remember'
-  | 'repeated_user_behavior';
-
-type PersonalMemoryExtractionDraft = PersonalMemoryDraft & {
-  evidence?: unknown;
-  durability?: unknown;
-};
-
 const memoryTypes: PersonalMemoryType[] = ['alias', 'preference', 'workflow', 'domain_fact'];
 const memoryScopes: PersonalMemoryScope[] = ['global', 'domain'];
 const memoryStatuses: PersonalMemoryStatus[] = ['active', 'disabled'];
-const personalMemoryExtractionSchema = z.object({
-  items: z.array(z.object({
-    scope: z.enum(['global', 'domain']),
-    domain: z.string().max(253).optional(),
-    type: z.enum(['alias', 'preference', 'workflow', 'domain_fact']),
-    key: z.string().min(1).max(120),
-    aliases: z.array(z.string().min(1).max(120)).max(8).optional(),
-    value: z.string().min(1).max(500),
-    confidence: z.number().min(0).max(1).optional(),
-    evidence: z.array(z.string().min(1).max(500)).min(1).max(8),
-    durability: z.enum([
-      'explicit_preference',
-      'explicit_workflow',
-      'explicit_alias',
-      'explicit_remember',
-      'repeated_user_behavior',
-    ]),
-  })).max(8),
-});
-
 export function parsePersonalMemoryExtractionOutput(value: unknown) {
-  const text = textFromUnknown(value).trim();
-  if (!text) return personalMemoryExtractionSchema.parse({ items: [] });
-  const fenced = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-  const source = (fenced?.[1] || text).trim();
-  const start = source.indexOf('{');
-  const end = source.lastIndexOf('}');
-  if (start < 0 || end < start) throw new Error('Personal memory extraction returned no JSON object.');
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(source.slice(start, end + 1));
-  } catch (error) {
-    throw new Error('Personal memory extraction returned invalid JSON.', { cause: error });
-  }
-  const validated = personalMemoryExtractionSchema.safeParse(parsed);
-  if (!validated.success) {
-    throw new Error(`Personal memory extraction returned an invalid object: ${validated.error.message}`);
-  }
-  return validated.data;
+  return memoryExtractionSchema.parse(parseMemoryJson(textFromUnknown(value)));
 }
 
 function now() {
@@ -197,7 +159,7 @@ export function personalMemoryEnabled() {
   return process.env.AI_PERSONAL_MEMORY_ENABLED !== 'false';
 }
 
-function personalMemoryExtractionEnabled() {
+export function personalMemoryExtractionEnabled() {
   return personalMemoryEnabled() && process.env.AI_PERSONAL_MEMORY_EXTRACT_ENABLED !== 'false';
 }
 
@@ -211,7 +173,7 @@ function personalMemoryPromptMaxChars() {
   return Number.isFinite(raw) ? Math.min(Math.max(Math.floor(raw), 1000), 120000) : 12000;
 }
 
-function personalMemoryExtractionInputLimit() {
+export function personalMemoryExtractionInputLimit() {
   const raw = Number(process.env.AI_PERSONAL_MEMORY_EXTRACTION_INPUT_MAX_CHARS || 18000);
   return Number.isFinite(raw) ? Math.min(Math.max(Math.floor(raw), 3000), 60000) : 18000;
 }
@@ -286,7 +248,7 @@ function itemText(input: Pick<PersonalMemoryItem, 'key' | 'value' | 'aliases' | 
   return compactText(`${input.type} ${input.key}: ${input.value}${aliases}${domain}`, 360);
 }
 
-function normalizeMemoryDraft(input: PersonalMemoryDraft, defaults: {
+export function normalizeMemoryDraft(input: PersonalMemoryDraft, defaults: {
   userId: string;
   domain?: string;
   sourceSessionId?: string;
@@ -319,10 +281,18 @@ function normalizeMemoryDraft(input: PersonalMemoryDraft, defaults: {
     ...(input.recall === 'always' || input.recall === 'relevant' ? { recall: input.recall } : {}),
     ...(Array.isArray(input.evidence) ? { evidence: input.evidence.filter((quote): quote is string => typeof quote === 'string').slice(0, 8).map((quote) => quote.slice(0, 500)) } : {}),
     ...(typeof input.durability === 'string' ? { durability: input.durability } : {}),
+    ...(input.applicability ? { applicability: memoryApplicabilitySchema.parse(input.applicability) } : {}),
+    ...(typeof input.utility === 'string' ? { utility: compactText(input.utility, 300) } : {}),
+    ...(Array.isArray(input.verification) ? { verification: input.verification.map((entry) => memoryVerificationSchema.parse(entry)).slice(0, 4) } : {}),
+    ...(typeof input.verifiedAt === 'string' ? { verifiedAt: input.verifiedAt } : {}),
+    ...(typeof input.expiresAt === 'string' ? { expiresAt: input.expiresAt } : {}),
+    ...(typeof input.reviewReason === 'string' ? { reviewReason: compactText(input.reviewReason, 400) } : {}),
+    ...(typeof input.supersededBy === 'string' ? { supersededBy: input.supersededBy } : {}),
+    ...(input.history ? { history: input.history.slice(-5) } : {}),
   };
 }
 
-function normalizeStoreItem(value: unknown): PersonalMemoryItem | undefined {
+export function normalizeStoreItem(value: unknown): PersonalMemoryItem | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const record = value as Partial<PersonalMemoryItem>;
   const userId = normalizePersonalMemoryUserId(record.userId);
@@ -525,7 +495,26 @@ export async function updatePersonalMemoryItem(id: string, patch: PersonalMemory
     lastUsedAt: previous.lastUsedAt,
     useCount: previous.useCount,
     status: normalizeStatus(patch.status ?? previous.status),
+    expiresAt: patch.expiresAt === null ? undefined : draft.expiresAt,
+    applicability: patch.applicability === null ? undefined : draft.applicability,
   };
+  const changed = previous.value !== item.value || previous.scope !== item.scope || previous.domain !== item.domain
+    || previous.type !== item.type || JSON.stringify(previous.applicability) !== JSON.stringify(item.applicability);
+  if (changed && !source) {
+    item.history = [...(previous.history || []), { value: previous.value, applicability: previous.applicability,
+      evidence: previous.evidence, sourceSessionId: previous.sourceSessionId, sourceMessageIds: previous.sourceMessageIds,
+      replacedAt: item.updatedAt }].slice(-5);
+    // A manual edit is authoritative user content, but is not the old verified claim.
+    item.evidence = undefined;
+    item.verification = undefined;
+    item.verifiedAt = undefined;
+    item.reviewReason = undefined;
+    item.durability = undefined;
+    item.utility = undefined;
+    item.sourceSessionId = undefined;
+    item.sourceMessageIds = undefined;
+  }
+  if (!source && patch.status === 'active') item.supersededBy = undefined;
   await writePersonalMemoryRecord(item);
   return item;
 }
@@ -547,7 +536,14 @@ export function rankPersonalMemory(items: PersonalMemoryItem[], input: {
   // Resolve the same key/alias before ranking, so a stale high-scoring duplicate
   // cannot beat the user's newer correction. Private and site-specific rules win.
   const identities = new Set<string>();
-  const ordered = [...items].filter((item) => item.status === 'active' && (item.userId === input.userId || item.shared)
+  const ordered = [...items].filter((item) => item.status === 'active' && !item.supersededBy
+    && (!item.expiresAt || Date.parse(item.expiresAt) > Date.now())
+    && (!item.applicability?.contextTerms.length || item.applicability.contextTerms.some((term) => {
+      const query = normalizeRetrievalText(input.query);
+      const context = normalizeRetrievalText(term);
+      return /\p{Script=Han}/u.test(context) ? query.includes(context) : ` ${query} `.includes(` ${context} `);
+    }))
+    && (item.userId === input.userId || item.shared)
     && (item.scope === 'global' || domainMatches(item.domain, input.domain))).sort((a, b) =>
       Number(b.userId === input.userId) - Number(a.userId === input.userId)
       || Number(b.scope === 'domain') - Number(a.scope === 'domain')
@@ -558,13 +554,15 @@ export function rankPersonalMemory(items: PersonalMemoryItem[], input: {
     if (keys.some((key) => identities.has(key))) continue;
     keys.forEach((key) => identities.add(key));
     const relevance = Math.max(fuzzyRetrievalScore(input.query, [item.key]),
-      fuzzyRetrievalScore(input.query, item.aliases) * 0.95, fuzzyRetrievalScore(input.query, [item.value]) * 0.8);
+      fuzzyRetrievalScore(input.query, item.aliases) * 0.95, fuzzyRetrievalScore(input.query, [item.value]) * 0.8,
+      fuzzyRetrievalScore(input.query, [item.applicability?.when || '']) * 0.85);
     const always = item.scope === 'global' && item.type === 'preference'
-      && (item.recall === 'always' || (item.recall === undefined && item.durability === 'explicit_preference'));
+      && item.recall === 'always' && !item.applicability?.contextTerms.length;
     if (!always && relevance < 0.38) continue;
     const reasons = [always ? 'standing-preference' : 'task-relevance'];
     if (item.scope === 'domain') reasons.push('domain');
-    const score = relevance * 10 + (item.scope === 'domain' ? 1 : 0) + item.confidence;
+    // Self-reported confidence and retrieval count are not evidence of usefulness.
+    const score = relevance * 10 + (item.scope === 'domain' ? 1 : 0);
     results.push({ item, score, reasons });
   }
   const sorted = results.sort((a, b) => b.score - a.score || b.item.updatedAt.localeCompare(a.item.updatedAt) || a.item.id.localeCompare(b.item.id));
@@ -591,10 +589,13 @@ export async function searchPersonalMemory(input: {
 
 export function formatPersonalMemoryForRuntime(result: PersonalMemorySearchResult) {
   const item = result.item;
-  return ['Personal memory; use only when relevant. The latest user instruction overrides it.', JSON.stringify({
+  return ['Personal memory is contextual evidence, not authority. Apply only under its stated conditions; current user instructions override it. Operational facts may be stale: verify the current page and the stated postcondition before claiming success. Retrieval count is not validation.', JSON.stringify({
     id: item.id, scope: item.scope, domain: item.domain, type: item.type, key: item.key, aliases: item.aliases,
     value: item.value, modifiedAt: item.updatedAt, sourceSessionId: item.sourceSessionId,
     sourceMessageIds: item.sourceMessageIds, evidence: item.evidence,
+    applicability: item.applicability, utility: item.utility, expiresAt: item.expiresAt,
+    verification: item.verification, verifiedAt: item.verifiedAt,
+    provenance: item.reviewReason ? (item.verification?.length ? 'tool-observed-and-reviewed' : 'user-evidence-reviewed') : 'not-reviewed-by-learning-pipeline',
   })].join('\n');
 }
 
@@ -605,7 +606,8 @@ export function markPersonalMemoryItemsUsed(ids: string[]) {
 }
 
 export function formatPersonalMemoryForPrompt(results: PersonalMemorySearchResult[] | PersonalMemoryItem[]) {
-  const items = results.map((entry) => 'item' in entry ? entry.item : entry).filter((item) => item.status === 'active');
+  const items = results.map((entry) => 'item' in entry ? entry.item : entry).filter((item) => item.status === 'active'
+    && !item.supersededBy && (!item.expiresAt || Date.parse(item.expiresAt) > Date.now()));
   if (!items.length) return '';
   const header = [
     'Personal short memory:',
@@ -622,7 +624,8 @@ export function formatPersonalMemoryForPrompt(results: PersonalMemorySearchResul
       item.scope === 'domain' && item.domain ? `domain="${item.domain}"` : '',
     ].filter(Boolean).join(' ');
     const aliases = item.aliases.length ? `\nAliases: ${item.aliases.join(', ')}` : '';
-    const opening = `<memory ${attributes}>\nKey: ${item.key}${aliases}\nValue:\n`;
+    const conditions = item.applicability ? `\nApplies when: ${item.applicability.when}\nContext: ${item.applicability.contextTerms.join(', ')}` : '';
+    const opening = `<memory ${attributes}>\nKey: ${item.key}${aliases}${conditions}\nOperational facts require current verification.\nValue:\n`;
     const closing = '\n</memory>';
     const separatorChars = 2;
     const available = maxChars - usedChars - separatorChars - opening.length - closing.length;
@@ -641,379 +644,10 @@ export function formatPersonalMemoryForPrompt(results: PersonalMemorySearchResul
   return [header, ...blocks].join('\n\n');
 }
 
-function safeJson(value: unknown) {
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return '';
-  }
-}
-
-function summarizeStep(step: StepExecutionResult) {
-  return {
-    index: step.index,
-    action: compactText(step.action, 220),
-    actual: compactText(step.actual, 260),
-    status: step.status,
-    tools: (step.tools || []).slice(-4).map((tool) => ({
-      name: tool.name,
-      reason: compactText(tool.reason, 160),
-      result: compactText(tool.result, 180),
-      ok: tool.ok,
-      recovered: tool.recovered,
-      transient: tool.transient,
-    })),
-  };
-}
-
-const personalMemoryDurabilitySignals = new Set<PersonalMemoryDurabilitySignal>([
-  'explicit_preference',
-  'explicit_workflow',
-  'explicit_alias',
-  'explicit_remember',
-  'repeated_user_behavior',
-]);
-
-const personalMemoryFilterRejectionDescriptions: Record<PersonalMemoryFilterRejectionReason, string> = {
-  missing_evidence: '缺少用户原文证据。',
-  unsupported_durability: '模型返回了不支持的长期性类型。',
-  repeated_behavior_requires_two_quotes: '重复行为至少需要两条用户原文证据。',
-  repeated_behavior_requires_two_user_messages: '重复行为证据必须来自两条不同的用户消息。',
-  evidence_not_found_in_user_messages: '模型给出的证据未在用户消息中找到。',
-  missing_explicit_durability_cue: '用户原文缺少“记住、以后、默认”等长期性表达。',
-  domain_fact_requires_explicit_remember_or_alias: '域名事实必须由用户明确要求记住或定义为可复用别名。',
-};
-
-function normalizedEvidenceText(value: unknown) {
-  return textFromUnknown(value).toLowerCase().replace(/\s+/g, ' ').trim();
-}
-
-function normalizedEvidenceTexts(value: unknown) {
-  const values = Array.isArray(value) ? value : [value];
-  return Array.from(new Set(values.map(normalizedEvidenceText).filter((evidence) => evidence.length >= 2)));
-}
-
-function hasExplicitDurabilityCue(text: string, signal: PersonalMemoryDurabilitySignal) {
-  const durableCue = /(?:记住|记下来|以后|下次|今后|从现在|总是|一直|每次|默认|习惯|偏好|我喜欢|我不喜欢|remember|from now on|in the future|always|never|every time|by default|i prefer|my preference)/i;
-  const aliasCue = /(?:我说.{1,40}(?:指|就是|表示|意思是)|(?:叫|称为).{1,40}(?:指|就是|表示|意思是)|when i say.{1,80}(?:mean|refer)|.{1,60}\bmeans\b.{1,80})/i;
-  if (signal === 'explicit_alias') return aliasCue.test(text) || durableCue.test(text);
-  return durableCue.test(text);
-}
-
-export function filterDurablePersonalMemoryDrafts(
-  items: PersonalMemoryExtractionDraft[],
-  userMessages: string[],
-): PersonalMemoryDraft[] {
-  return analyzeDurablePersonalMemoryDrafts(items, userMessages).items;
-}
-
-export function analyzeDurablePersonalMemoryDrafts(
-  items: PersonalMemoryExtractionDraft[],
-  userMessages: string[],
-) {
-  const normalizedUserMessages = userMessages.map(normalizedEvidenceText).filter(Boolean);
-  const accepted: PersonalMemoryDraft[] = [];
-  const rejected: PersonalMemoryFilterRejection[] = [];
-  items.forEach((item, index) => {
-    const evidence = normalizedEvidenceTexts(item.evidence);
-    const signal = textFromUnknown(item.durability).trim() as PersonalMemoryDurabilitySignal;
-    const reject = (reason: PersonalMemoryFilterRejectionReason) => {
-      rejected.push({
-        index,
-        key: compactText(item.key, 120),
-        type: textFromUnknown(item.type),
-        durability: signal,
-        reason,
-        reasonDescription: personalMemoryFilterRejectionDescriptions[reason],
-      });
-    };
-    if (!evidence.length) {
-      reject('missing_evidence');
-      return;
-    }
-    if (!personalMemoryDurabilitySignals.has(signal)) {
-      reject('unsupported_durability');
-      return;
-    }
-    const sourceMessageIndexes = new Set(evidence.map((quote) => (
-      normalizedUserMessages.findIndex((message) => message.includes(quote))
-    )).filter((index) => index >= 0));
-    if (evidence.some((quote) => !normalizedUserMessages.some((message) => message.includes(quote)))) {
-      reject('evidence_not_found_in_user_messages');
-      return;
-    }
-    if (signal === 'repeated_user_behavior') {
-      if (evidence.length < 2) {
-        reject('repeated_behavior_requires_two_quotes');
-        return;
-      }
-      if (sourceMessageIndexes.size < 2) {
-        reject('repeated_behavior_requires_two_user_messages');
-        return;
-      }
-    } else {
-      if (!sourceMessageIndexes.size) {
-        reject('evidence_not_found_in_user_messages');
-        return;
-      }
-      const hasDurableUserEvidence = Array.from(sourceMessageIndexes).some((index) => (
-        hasExplicitDurabilityCue(normalizedUserMessages[index], signal)
-      ));
-      if (!hasDurableUserEvidence) {
-        reject('missing_explicit_durability_cue');
-        return;
-      }
-    }
-    const type = normalizeType(item.type);
-    if (type === 'domain_fact' && signal !== 'explicit_remember' && signal !== 'explicit_alias') {
-      reject('domain_fact_requires_explicit_remember_or_alias');
-      return;
-    }
-    accepted.push(item);
-  });
-  return { items: accepted, rejected };
-}
-
-function compactConversationForMemory(messages: PersonalMemoryConversationMessage[]) {
-  return messages.map((message) => ({ role: message.role, content: compactText(message.content, 1400) }));
-}
-
-function boundedExtractionSource(source: {
-  primaryUserEvidence: { latestUserMessage: string; userMessages: string[] };
-  supplementaryAssistantContext: { assistantMessages: string[]; latestAssistantReply: string; browserSteps: unknown[] };
-  existingMemory: unknown[];
-}) {
-  const limit = personalMemoryExtractionInputLimit();
-  const fits = () => safeJson(source).length <= limit;
-  // Preserve valid JSON and user evidence; remove whole supplementary records first.
-  while (!fits() && source.supplementaryAssistantContext.browserSteps.length) source.supplementaryAssistantContext.browserSteps.shift();
-  while (!fits() && source.supplementaryAssistantContext.assistantMessages.length) source.supplementaryAssistantContext.assistantMessages.shift();
-  if (!fits()) source.supplementaryAssistantContext.latestAssistantReply = '';
-  while (!fits() && source.existingMemory.length) source.existingMemory.pop();
-  while (!fits() && source.primaryUserEvidence.userMessages.length) source.primaryUserEvidence.userMessages.shift();
-  // The current user message is authoritative; reject extraction if it alone is oversized.
-  return fits() ? safeJson(source) : undefined;
-}
-
-function buildExtractionPrompt(input: {
-  userId: string;
-  currentDomain: string;
-  currentUrl: string;
-  targetUrl: string;
-  userMessage: string;
-  assistantReply: string;
-  conversation: PersonalMemoryConversationMessage[];
-  steps: StepExecutionResult[];
-  existingItems: PersonalMemoryItem[];
-}) {
-  const conversation = compactConversationForMemory(input.conversation);
-  const source = {
-    currentDomain: input.currentDomain,
-    currentUrl: input.currentUrl,
-    targetUrl: input.targetUrl,
-    primaryUserEvidence: {
-      latestUserMessage: input.userMessage,
-      userMessages: conversation.filter((message) => message.role === 'user').map((message) => message.content),
-    },
-    supplementaryAssistantContext: {
-      assistantMessages: conversation.filter((message) => message.role === 'assistant').map((message) => message.content),
-      latestAssistantReply: input.assistantReply,
-      browserSteps: input.steps.map(summarizeStep),
-    },
-    existingMemory: input.existingItems.map((item) => ({
-      id: item.id,
-      scope: item.scope,
-      domain: item.domain,
-      type: item.type,
-      key: item.key,
-      aliases: item.aliases,
-      value: item.value,
-      status: item.status,
-    })),
-  };
-  const serializedSource = boundedExtractionSource(source);
-  if (!serializedSource) return undefined;
-  return [
-    'You extract durable personal short memory for a browser assistant.',
-    'Return raw JSON only. Do not use Markdown fences or add explanatory text.',
-    'The exact top-level shape is {"items":[]}. Each item must use only the fields defined below.',
-    '',
-    'Allowed item fields:',
-    '- scope: "global" or "domain"',
-    '- domain: hostname for domain-scoped facts, empty for global',
-    '- type: "alias", "preference", "workflow", or "domain_fact"',
-    '- key: short phrase the user may say later',
-    '- aliases: short alternative phrases',
-    '- value: one concise fact, at most 160 Chinese characters or 220 English characters',
-    '- confidence: number from 0 to 1',
-    '- evidence: an array of exact, short quotes copied only from user messages',
-    '- durability: "explicit_preference", "explicit_workflow", "explicit_alias", "explicit_remember", or "repeated_user_behavior"',
-    '',
-    'User-authored messages are the primary and only authoritative evidence of personal memory. Assistant messages and browser steps are supplementary context only: they may clarify the target or outcome, but they can never establish a user habit by themselves.',
-    'Use all user messages, not only the latest one. The default is {"items":[]}. Write an item when the user explicitly states a lasting preference/workflow, explicitly defines a reusable phrase, explicitly asks you to remember something, or independently demonstrates the same reusable behavior in at least two different user messages.',
-    'For an explicit durability signal, evidence must contain at least one exact user quote. For repeated_user_behavior, evidence must contain at least two exact quotes from two different user messages. Never use assistant text as evidence.',
-    'Assistant discoveries, public page content, successful one-off instructions, and descriptions of which control the user meant only in the current task are not personal memory.',
-    'Domain facts require an explicit remember request or an explicit reusable alias definition from the user. Never memorize documentation examples, page order, current UI layout, search results, or facts merely observed by the assistant.',
-    'Examples that MUST return no items: "点击第一个选择器", "打开带 icon 的滑块", "查一下 YYF 的直播间", or a completed workflow the user did not say should be reused.',
-    'Examples that may produce one item: "以后我说第一个选择器，是指基本示例里的那个"; "记住 YYF 的直播间是 9999"; "以后不要截图，默认用 DOM".',
-    'Return up to 8 independent items from one completed conversation. Do not merge separate preferences, aliases, or workflows into one broad memory.',
-    'Before returning an item, compare against every existing global item and every existing item for currentDomain. If the fact already exists, return no duplicate. If it should be updated, return the same scope/domain/type/key shape so the store updates it.',
-    'Do not store secrets, passwords, tokens, OTPs, private credentials, temporary IDs, one-off task data, raw page content, or long summaries.',
-    'Do not invent facts. If nothing durable is learned, return {"items":[]}.',
-    'Prefer concise user wording for key and aliases. Keep values short and operational.',
-    '',
-    `Input JSON:\n${serializedSource}`,
-  ].join('\n');
-}
-
-export async function upsertExtractedPersonalMemoryItems(input: {
-  userId?: unknown;
-  domain?: unknown;
-  sourceSessionId?: string;
-  sourceMessageIds?: string[];
-  sourceUrl?: string;
-  items: PersonalMemoryDraft[];
-}) {
-  const userId = normalizePersonalMemoryUserId(input.userId);
-  const store = await readStore({ userId, includeShared: true });
-  const byIdentity = new Map(store.items.map((item, index) => [memoryIdentity(item), index]));
-  const timestamp = now();
-  const saved: PersonalMemoryItem[] = [];
-  for (const rawItem of input.items.slice(0, 8)) {
-    const draft = normalizeMemoryDraft(rawItem, {
-      userId,
-      domain: textFromUnknown(input.domain),
-      sourceSessionId: input.sourceSessionId,
-      sourceMessageIds: input.sourceMessageIds,
-      sourceUrl: input.sourceUrl,
-    });
-    if (!draft) continue;
-    const identity = memoryIdentity(draft);
-    const existingIndex = byIdentity.get(identity);
-    if (typeof existingIndex === 'number') {
-      const previous = store.items[existingIndex];
-      const item: PersonalMemoryItem = {
-        ...previous,
-        ...draft,
-        shared: previous.shared,
-        aliases: Array.from(new Set([...previous.aliases, ...draft.aliases])).slice(0, 8),
-        text: itemText({ ...draft, aliases: Array.from(new Set([...previous.aliases, ...draft.aliases])).slice(0, 8) }),
-        confidence: draft.confidence,
-        sourceSessionId: draft.sourceSessionId || previous.sourceSessionId,
-        sourceMessageIds: Array.from(new Set([...(previous.sourceMessageIds || []), ...(draft.sourceMessageIds || [])])).slice(-20),
-        sourceUrl: draft.sourceUrl || previous.sourceUrl,
-        updatedAt: timestamp,
-        status: previous.status,
-      };
-      store.items[existingIndex] = item;
-      saved.push(item);
-    } else {
-      const item: PersonalMemoryItem = {
-        ...draft,
-        id: `mem_${randomUUID()}`,
-        createdAt: timestamp,
-        updatedAt: timestamp,
-        useCount: 0,
-      };
-      byIdentity.set(identity, store.items.length);
-      store.items.push(item);
-      saved.push(item);
-    }
-  }
-  if (saved.length) await writePersonalMemoryRecords(saved);
-  return saved;
-}
-
-export async function extractPersonalMemoryFromTurn(input: {
-  userId?: unknown;
-  currentUrl?: string;
-  targetUrl?: string;
-  userMessage: string;
-  assistantReply: string;
-  conversation?: PersonalMemoryConversationMessage[];
-  steps: StepExecutionResult[];
-  sourceSessionId: string;
-  sourceMessageIds: string[];
-}): Promise<PersonalMemoryExtractionResult> {
-  if (!personalMemoryExtractionEnabled()) return {
-    items: [],
-    rawText: '',
-    skipped: true,
-    reason: 'disabled',
-    diagnostics: {
-      candidateCount: 0,
-      acceptedCount: 0,
-      rejectedCount: 0,
-      savedCount: 0,
-      normalizationRejectedCount: 0,
-      rejectionReasons: {},
-      rejectedCandidates: [],
-    },
-  };
-  const userId = normalizePersonalMemoryUserId(input.userId);
-  const currentDomain = normalizePersonalMemoryDomain(input.currentUrl || input.targetUrl || '');
-  const existingItems = await listPersonalMemoryItems({ userId, domain: currentDomain, includeDisabled: true });
-  const prompt = buildExtractionPrompt({
-    userId,
-    currentDomain,
-    currentUrl: input.currentUrl || '',
-    targetUrl: input.targetUrl || '',
-    userMessage: input.userMessage,
-    assistantReply: input.assistantReply,
-    conversation: input.conversation || [],
-    steps: input.steps,
-    existingItems,
-  });
-  if (!prompt) return {
-    items: [], rawText: '', skipped: true, reason: 'user-evidence-exceeds-extraction-budget',
-    diagnostics: { candidateCount: 0, acceptedCount: 0, rejectedCount: 0, savedCount: 0,
-      normalizationRejectedCount: 0, rejectionReasons: {}, rejectedCandidates: [] },
-  };
-  const result = await generateText({
-    model: getModel(),
-    temperature: 0.1,
-    maxRetries: 3,
-    prompt,
-    telemetry: aiTelemetry('personal-memory-extraction'),
-  });
-  const output = parsePersonalMemoryExtractionOutput(result.text);
-  const userMessages = [
-    ...(input.conversation || []).filter((message) => message.role === 'user').map((message) => message.content),
-    input.userMessage,
-  ];
-  const filtered = analyzeDurablePersonalMemoryDrafts(output.items, userMessages);
-  const items = await upsertExtractedPersonalMemoryItems({
-    userId,
-    domain: currentDomain,
-    sourceSessionId: input.sourceSessionId,
-    sourceMessageIds: Array.from(new Set([
-      ...input.sourceMessageIds,
-      ...(input.conversation || []).filter((message) => message.role === 'user' && message.id
-        && filtered.items.some((item) => normalizedEvidenceTexts(item.evidence).some((quote) => normalizedEvidenceText(message.content).includes(quote))))
-        .flatMap((message) => message.id ? [message.id] : []),
-    ])),
-    sourceUrl: input.currentUrl || input.targetUrl || '',
-    items: filtered.items,
-  });
-  const rejectionReasons = filtered.rejected.reduce<Partial<Record<PersonalMemoryFilterRejectionReason, number>>>((counts, rejection) => {
-    counts[rejection.reason] = (counts[rejection.reason] || 0) + 1;
-    return counts;
-  }, {});
-  return {
-    items,
-    rawText: result.text,
-    skipped: false,
-    diagnostics: {
-      candidateCount: output.items.length,
-      acceptedCount: filtered.items.length,
-      rejectedCount: filtered.rejected.length,
-      savedCount: items.length,
-      normalizationRejectedCount: Math.max(0, filtered.items.length - items.length),
-      rejectionReasons,
-      rejectedCandidates: filtered.rejected,
-    },
-  };
-}
+export {
+  extractPersonalMemoryFromTurn, reviewPersonalMemoryCandidates,
+  analyzeDurablePersonalMemoryDrafts, filterDurablePersonalMemoryDrafts,
+} from './personal-memory-learning';
 
 export function personalMemoryDiagnostics() {
   return {

@@ -62,7 +62,7 @@ export function classifyRuntimeToolFailure(
   if (/circular|serialize|serialization|JSON-safe|cannot stringify|output.*truncat|heap limit|rss limit|object graph/i.test(actual)) {
     return 'serialization';
   }
-  if (/dependencyFailures|HTTP (?:408|429|5\d\d)|net::ERR_|request failed|ECONN|ENOTFOUND/i.test(actual)) {
+  if (/HTTP (?:408|429|5\d\d)|net::ERR_|request failed|ECONN|ENOTFOUND/i.test(actual)) {
     return 'network';
   }
   if (/browserCode returned a top-level \{ ok: false \}|"result"\s*:\s*\{\s*"ok"\s*:\s*false/i.test(actual)) {

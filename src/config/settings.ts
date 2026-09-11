@@ -323,7 +323,7 @@ const applicationRuntimeEnvDefinitions: RuntimeEnvDefinition[] = [
   { key: 'AI_SUBAGENT_RESULT_MAX_CHARS', label: '子 Agent 总结建议长度', description: '写入子 Agent 提示词的建议最大字符数；只引导模型控制篇幅，后端不会截断实际结果。', tab: 'runtime', defaultValue: '40000', control: 'number' },
   { key: 'AI_RUNTIME_REQUEST_RETRY_ATTEMPTS', label: 'AI 请求连续失败上限', description: 'Agent Loop 中上游连接或请求级错误连续失败达到该次数后停止；成功一次会清零。', tab: 'runtime', defaultValue: '3', control: 'number' },
   { key: 'AI_PERSONAL_MEMORY_ENABLED', label: '个性化记忆召回', description: '是否在浏览器对话提示词中召回简洁的用户记忆和域名记忆。', tab: 'runtime', defaultValue: 'true', control: 'boolean', options: boolOptions },
-  { key: 'AI_PERSONAL_MEMORY_EXTRACT_ENABLED', label: '个性化记忆提炼', description: '每轮浏览器对话完成后，是否提炼可长期复用的别名、偏好、工作流和域名事实。', tab: 'runtime', defaultValue: 'true', control: 'boolean', options: boolOptions },
+  { key: 'AI_PERSONAL_MEMORY_EXTRACT_ENABLED', label: '个性化记忆提炼', description: '从本轮新增证据提出候选，经证据、未来用途、适用条件和重复冲突复核后保存；没有可复用信息时不写入。', tab: 'runtime', defaultValue: 'true', control: 'boolean', options: boolOptions },
   { key: 'AI_PERSONAL_MEMORY_PROMPT_LIMIT', label: '个性化记忆注入上限', description: '单轮浏览器对话最多注入多少条个性化记忆。', tab: 'runtime', defaultValue: '6', control: 'number' },
   { key: 'AI_PERSONAL_MEMORY_PROMPT_MAX_CHARS', label: '个性化记忆注入字符预算', description: '单轮注入提示词的记忆字符预算，只限制本次 AI 上下文，不截断数据库保存的原文。', tab: 'runtime', defaultValue: '12000', control: 'number', min: 1000, max: 120000, step: 1000 },
   { key: 'AI_PERSONAL_MEMORY_EXTRACTION_CONCURRENCY', label: '记忆提取并发数', description: '不同用户可并发提取记忆的全局上限；同一用户始终串行，避免并发写入相互覆盖。', tab: 'runtime', defaultValue: '2', control: 'number', min: 1, max: 8, step: 1 },

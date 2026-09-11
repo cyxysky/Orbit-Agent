@@ -185,6 +185,7 @@ export type ResolvedCapabilityTool = {
 
 export type CapabilityRunSnapshot = {
   abortSignal?: AbortSignal;
+  responses: ResponseRegistry;
   manifests: readonly CapabilityManifest[];
   skills: readonly CapabilitySkill[];
   tools: Readonly<Record<string, ResolvedCapabilityTool>>;
@@ -194,6 +195,12 @@ export type CapabilityRunSnapshot = {
 export class CapabilityRegistry {
   readonly #providers = new Map<string, CapabilityProvider>();
   readonly #responses = new ResponseRegistry();
+  readonly #baseResponses: readonly ResponseDefinition[];
+
+  constructor(responses: readonly ResponseDefinition[] = []) {
+    this.#baseResponses = [...responses];
+    this.#responses.register(this.#baseResponses);
+  }
 
   register(provider: CapabilityProvider) {
     const id = provider.manifest.id.trim();
@@ -284,6 +291,8 @@ export class CapabilityRegistry {
       }
       return Object.freeze({
         abortSignal,
+        responses: new ResponseRegistry().register(this.#baseResponses).registerManifests(manifests)
+          .forTools(new Set(Object.keys(tools))),
         manifests: Object.freeze(manifests),
         skills: Object.freeze(skills),
         tools: Object.freeze(tools),

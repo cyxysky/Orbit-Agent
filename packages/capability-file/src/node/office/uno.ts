@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { CapabilityTaskQueue } from '@webpilot/capability-sdk';
 import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, copyFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -361,6 +361,74 @@ export async function inspectUnoApi(input: {
     });
   }
   return pending;
+}
+
+export type UnoContentReport = {
+  schemaVersion: 1;
+  parser: 'libreoffice-uno';
+  scope: Record<string, unknown>;
+  truncated: boolean;
+  warnings: string[];
+  blocks: Array<{ type: string; source: Record<string, unknown>; [key: string]: unknown }>;
+};
+
+/** Read a source snapshot through the same serialized host used by authoring. */
+export async function readUnoDocument(input: {
+  absolutePath: string;
+  extension: string;
+  sourceDigest: string;
+  documentType: OfficeDocumentKind;
+  selection: { sheet?: string; range?: string; section?: string; contentPages?: number[] };
+  abortSignal?: AbortSignal;
+}): Promise<UnoContentReport> {
+  input.abortSignal?.throwIfAborted();
+  const soffice = await resolveLibreOfficeExecutable();
+  if (!soffice) throw new Error('Office content reading requires LibreOffice. Configure LIBREOFFICE_PATH.');
+  const python = await resolveLibreOfficePythonExecutable(soffice);
+  if (!python) throw new Error('Office content reading requires PyUNO. Configure LIBREOFFICE_PYTHON_PATH.');
+  const worker = await resolveUnoProgramWorker();
+  if (!worker) throw new Error('LibreOffice UNO worker is missing from the runtime.');
+  if (!/^\.[a-z0-9]+$/i.test(input.extension)) throw new Error('Invalid Office file extension.');
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'webpilot-uno-read-'));
+  try {
+    const source = path.join(directory, `source${input.extension}`);
+    const selection = path.join(directory, 'selection.json');
+    const result = path.join(directory, 'content.json');
+    await copyFile(input.absolutePath, source);
+    await writeFile(selection, JSON.stringify(input.selection), { encoding: 'utf8', signal: input.abortSignal });
+    const receipt = await withPersistentUnoHost(soffice, async (initialHost, signal) => {
+      let host = initialHost;
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        try {
+          const workerReceipt = await runWorker({
+            executable: python,
+            args: [worker, '--read-input', source, '--read-selection', selection, '--read-result', result,
+              '--expected-source-digest', input.sourceDigest, '--document-type', input.documentType,
+              '--profile', path.join(directory, 'profile'), '--soffice', soffice, '--uno-pipe', host.pipeName],
+            libreOfficeProgramDirectory: path.dirname(soffice), abortSignal: signal, requireBytes: false,
+          });
+          if (workerReceipt.error && isTransientUnoBridgeError(new Error(String(workerReceipt.error)))) {
+            throw new Error(String(workerReceipt.error));
+          }
+          return workerReceipt;
+        } catch (error) {
+          // Interrupted reads can leave a live component in the shared host.
+          await stopPersistentUnoHost(host);
+          if (attempt >= 2 || signal.aborted || !isTransientUnoBridgeError(error)) throw error;
+          host = await ensurePersistentUnoHost(soffice);
+        }
+      }
+    }, input.abortSignal);
+    if (receipt?.error) throw new Error(`Office content reading failed: ${String(receipt.error)}`);
+    const report = JSON.parse(await readFile(result, { encoding: 'utf8', signal: input.abortSignal })) as UnoContentReport;
+    if (report.schemaVersion !== 1 || report.parser !== 'libreoffice-uno' || !Array.isArray(report.blocks)
+      || !Array.isArray(report.warnings) || typeof report.truncated !== 'boolean' || !report.scope) {
+      throw new Error('UNO content worker returned an invalid report.');
+    }
+    return report;
+  } finally {
+    await rm(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 150 }).catch(() => undefined);
+  }
 }
 
 export async function generateUnoProgramDocument(input: {

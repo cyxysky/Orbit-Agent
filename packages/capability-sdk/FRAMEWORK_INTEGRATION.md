@@ -8,6 +8,9 @@ This README is a complete integration entrypoint. Follow steps 1–4 for any Typ
 
 ## 1. Install and prepare
 
+For structured charts, maps and other registered output, also follow
+[Registered output across frameworks](#registered-output-across-frameworks).
+
 Use Node.js >=22.16 and ESM TypeScript. These examples match the 0.1.0 workspace contracts. Install matching Capability versions from your configured npm registry. If a version is unpublished, obtain the matching release tarballs/workspace packages from the maintainer; a registry 404 is not a runtime failure. Do not mix unrelated releases. For a new project:
 
 ```sh
@@ -191,7 +194,7 @@ Use a chat-completions-compatible provider that supports tools. Set `AGENT_MODEL
 
 ```ts
 import { randomUUID } from 'node:crypto';
-import { ToolLoopAgent, stepCountIs } from 'ai';
+import { ToolLoopAgent } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { mountAISDKCapabilities, EnvironmentCapabilityConfigStore } from '@webpilot/capability-adapter-ai-sdk';
 import { providers, configurations, cleanup } from './provider.js';
@@ -208,7 +211,7 @@ process.once('SIGINT', cancel);
 let runtime: Awaited<ReturnType<typeof mountAISDKCapabilities>> | undefined;
 try {
   runtime = await mountAISDKCapabilities({
-    providers, configurations,
+    providers, configurations, maxSteps: 10,
     context: { runId: randomUUID(), abortSignal: abort.signal },
     configStore: new EnvironmentCapabilityConfigStore(process.env),
     skills: { mode: 'eager' },
@@ -218,7 +221,7 @@ try {
     } },
   });
   const agent = new ToolLoopAgent({ model: modelProvider.chatModel(modelId),
-    ...runtime.agentOptions, stopWhen: stepCountIs(10) });
+    ...runtime.agentOptions });
   const result = await agent.generate({
     prompt: process.argv[2] || 'Describe the available tools and their intended usage.',
     abortSignal: abort.signal,
@@ -273,3 +276,79 @@ Replace provider.ts with the implementation from the selected package README. Ke
 - [capability-data](../capability-data/README.md)
 - [capability-media](../capability-media/README.md)
 - [capability-code-sandbox](../capability-code-sandbox/README.md)
+
+## Registered output across frameworks
+
+Tool registration and UI registration are separate. Package manifests carry pure
+response definitions; they never import React or a server storage implementation.
+`CapabilityRegistry.resolve()` and `mountCapabilities()` return a `responses`
+registry assembled from active manifests and filtered to the enabled tool names.
+Pass host-owned types such as `coreResponses` through the mount `responses` option.
+Do not register the same definitions both there and in a provider manifest.
+
+In the framework integration from step 3, add a session and wire these callbacks:
+
+```ts
+import { ResponseSession } from '@webpilot/capability-sdk';
+import { coreResponses, markdownBlock } from '@webpilot/capability-response';
+
+// Supply responses: coreResponses to mountCapabilities in step 3.
+const responses = new ResponseSession(mounted.responses);
+const finalInput = responses.registry.input();
+const instructions = responses.registry.modelInstructions();
+
+// After the existing validated/policy-controlled tool execution:
+responses.observe(toolName, result); // complete CapabilityResult object
+
+// Register this object using the framework's native tool constructor.
+// Append instructions to the Agent instructions before the first model call.
+const finalResponse = {
+  name: 'finalResponse',
+  description: instructions,
+  inputSchema: finalInput.jsonSchema,
+  execute(value: unknown) {
+    const accepted = responses.accept(value); // validates, throws on bad input
+    return { accepted: true, blockCount: accepted.blocks.length };
+  },
+};
+
+// Stop the framework loop when responses.accepted is true, retaining its step limit.
+// After the loop (and after all streamed tool results have arrived):
+const output = responses.finish();
+// Persist/send output.status and output.blocks via your host's message transport.
+```
+
+The variables `mounted`, `toolName`, and `result` above are the
+mount and tool callback values from your framework, not SDK globals.
+Create one `ResponseSession` per turn; all tool callbacks in that turn share it.
+If the runtime is retained across turns, allocate a new session for the next turn.
+Pass `status: 'failed'` or `'blocked'` to `finish` when the loop exits that way.
+An explicitly accepted response takes precedence over fallback status/text. Every
+normal final answer, including prose-only responses, requires an accepted
+finalResponse call; `finish()` rejects a missing call. Keep tool choice automatic
+because Thinking providers may reject required or named choices. Enforce delivery
+in the host, optionally requesting a bounded correction with the same tool history.
+Ordinary assistant text is progress narration.
+
+`finish` keeps explicit block order and repeated views, appends omitted tool
+resources once, and selects the latest collected block for each missing resource.
+It never parses identifiers in Markdown. Tool blocks require successful standard
+results, a registered schema and the matching tool owner. Decode your own wire
+envelope before calling `observe`. Invalid explicit responses throw; return that
+validation error to the model so it can correct the call. A host-reported failed or
+blocked session may finish with zero blocks; the model schema requires 1..64 blocks.
+
+For AI SDK, `mountAISDKCapabilities({ responses: coreResponses, ... })` performs
+these tool/session bindings automatically. Use its `responseSession.finish(...)`
+after generation, and preserve `agentOptions.stopWhen` (accepted response or
+`maxSteps`, default 20). For an already mounted runtime, pass a fresh session to
+`toAISDKToolSet(snapshot, { responseSession })`, add
+`createAISDKResponseTool(responseSession)`, and connect the same stop condition.
+
+For React, register the package's `/response` and `/response-react` exports once
+in `ResponseRendererRegistry`, then render every block through `RegisteredResponse`.
+For resource operations register `/response-node` handlers and supply authenticated
+storage/transport via the render context. A non-React host supplies its own UI
+adapter using the same `{type, params}` protocol. No per-message chart/map branch
+or Markdown-ID detection is required. A text-only host can use `registry.toText`
+or `ResponseHandlerRegistry.export` instead.

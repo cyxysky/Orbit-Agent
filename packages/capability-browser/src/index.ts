@@ -19,6 +19,9 @@ export * from './settings.ts';
 export * from './session-group.ts';
 
 const reason = z.string().trim().min(1).max(300);
+const needChange = z.boolean().optional().describe(
+  'Optional for action=code; defaults to false. Set true only when incremental DOM changes and their diagnostics from this cell are needed. Omitted or false skips reading and returning domChanges.',
+);
 const stateOptions = {
   scope: z.enum(['active', 'all']).optional(),
   frame: z.string().trim().min(1).max(200).optional(),
@@ -37,6 +40,7 @@ const browserCodeParser = z.object({
   action: z.literal('code'),
   reason,
   code: z.string().min(1).max(40_000),
+  needChange,
   maxOutputChars: z.number().int().min(1_000).optional(),
 }).strict();
 const waitForHumanVerificationParser = z.object({
@@ -57,6 +61,7 @@ const browserParser = z.object({
   code: z.string().min(1).max(40_000).optional().describe(
     'Required only when action=code. JavaScript executed in the persistent Playwright runtime.',
   ),
+  needChange,
   maxOutputChars: z.number().int().min(1_000).max(200_000).optional().describe('Output budget for code/state. State supports scope, frame, selector, query and nextCursor continuation.'),
   maxMs: z.number().int().min(1_000).max(30 * 60_000).optional().describe('Optional only when action=waitForHumanVerification.'),
 }).strict();
@@ -79,6 +84,7 @@ export function normalizeBrowserToolInput(value: unknown) {
       action: 'code',
       reason: input.reason,
       code: input.code,
+      ...(input.needChange !== undefined ? { needChange: input.needChange } : {}),
       ...(input.maxOutputChars !== undefined ? { maxOutputChars: input.maxOutputChars } : {}),
     };
   }

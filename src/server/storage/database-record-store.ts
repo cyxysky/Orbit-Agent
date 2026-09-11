@@ -2,6 +2,7 @@ import { hydrateBrowserChatContextSnapshot, splitBrowserChatContextSnapshot, mar
 import type { EntityManager } from 'typeorm';
 import type { SkillRecord } from '@/server/ai/schemas/runtime.schema';
 import {
+  databaseDriver,
   executeDatabase,
   getDatabase,
   parseDatabaseJson,
@@ -262,6 +263,55 @@ export async function writePersonalMemoryRecord<T extends PersonalMemoryRecordFi
 export async function writePersonalMemoryRecords<T extends PersonalMemoryRecordFields>(items: T[]) {
   await runDatabaseTransaction(async (manager) => {
     for (const item of items) await upsertPersonalMemoryRecord(manager, item);
+  });
+}
+
+export async function hasPersonalMemoryReceipt(userId: string, sourceKey: string) {
+  return Boolean(await queryDatabaseOne(
+    'SELECT source_key FROM personal_memory_receipt WHERE user_id = ? AND source_key = ?', [userId, sourceKey],
+  ));
+}
+
+/** Ignore retrieval counters when checking whether the model's input became stale. */
+function memoryContentSignature(items: PersonalMemoryRecordFields[]) {
+  return JSON.stringify(items.map((item) => {
+    const entries = Object.entries(item).filter(([key]) => key !== 'lastUsedAt' && key !== 'useCount');
+    return Object.fromEntries(entries.sort(([a], [b]) => a.localeCompare(b)));
+  }).sort((a, b) => String(a.id).localeCompare(String(b.id))));
+}
+
+export async function commitPersonalMemoryReview<T extends PersonalMemoryRecordFields>(input: {
+  userId: string;
+  sourceKey: string;
+  expectedItems: T[];
+  items: T[];
+  report: unknown;
+}) {
+  return runDatabaseTransaction(async (manager) => {
+    // Serialize reviewed writes for one user across processes on PostgreSQL.
+    if (databaseDriver() === 'postgres') {
+      await queryDatabase('SELECT pg_advisory_xact_lock(hashtext(?))', [input.userId], manager);
+    }
+    const receipt = await queryDatabaseOne('SELECT source_key FROM personal_memory_receipt WHERE user_id = ? AND source_key = ?',
+      [input.userId, input.sourceKey], manager);
+    if (receipt) return 'duplicate' as const;
+    const rows = await queryDatabase<JsonRow>(
+      `SELECT record_json FROM personal_memory_item WHERE user_id = ? OR shared = ?${databaseDriver() === 'postgres' ? ' FOR UPDATE' : ''}`,
+      [input.userId, true], manager,
+    );
+    const current = rows.map((row) => parseDatabaseJson<T | undefined>(row.record_json, undefined))
+      .filter((item): item is T => Boolean(item));
+    if (memoryContentSignature(current) !== memoryContentSignature(input.expectedItems)) return 'conflict' as const;
+    for (const item of input.items) {
+      if (item.userId !== input.userId) throw new Error('Cannot change another user\'s memory.');
+      const latest = current.find((previous) => previous.id === item.id) as (T & { useCount?: number; lastUsedAt?: string }) | undefined;
+      await upsertPersonalMemoryRecord(manager, { ...item,
+        ...(latest ? { useCount: latest.useCount, lastUsedAt: latest.lastUsedAt } : {}),
+      });
+    }
+    await executeDatabase('INSERT INTO personal_memory_receipt (user_id, source_key, report_json, created_at) VALUES (?, ?, ?, ?)',
+      [input.userId, input.sourceKey, JSON.stringify(input.report), now()], manager);
+    return 'committed' as const;
   });
 }
 

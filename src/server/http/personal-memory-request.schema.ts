@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { memoryApplicabilitySchema } from '@/server/ai/personal-memory-policy';
 
 export const personalMemoryRequestSchema = z.object({
   id: z.string().trim().max(120).optional(),
@@ -7,7 +8,9 @@ export const personalMemoryRequestSchema = z.object({
   type: z.enum(['alias', 'preference', 'workflow', 'domain_fact']).default('preference'),
   key: z.string().trim().min(1).max(120),
   aliases: z.array(z.string().trim().max(80)).max(20).default([]),
-  value: z.string().trim().min(1).max(260),
+  value: z.string().trim().min(1).max(500),
+  applicability: memoryApplicabilitySchema.nullable().optional(),
+  expiresAt: z.iso.datetime().optional(),
   confidence: z.number().min(0).max(1).default(1),
   sourceUrl: z.string().trim().max(2_000).optional(),
   status: z.enum(['active', 'disabled']).default('active'),
@@ -21,7 +24,9 @@ export const personalMemoryPatchSchema = z.object({
   type: z.enum(['alias', 'preference', 'workflow', 'domain_fact']).optional(),
   key: z.string().trim().min(1).max(120).optional(),
   aliases: z.array(z.string().trim().max(80)).max(20).optional(),
-  value: z.string().trim().min(1).max(260).optional(),
+  value: z.string().trim().min(1).max(500).optional(),
+  applicability: memoryApplicabilitySchema.nullable().optional(),
+  expiresAt: z.iso.datetime().nullable().optional(),
   confidence: z.number().min(0).max(1).optional(),
   sourceUrl: z.string().trim().max(2_000).optional(),
   status: z.enum(['active', 'disabled']).optional(),

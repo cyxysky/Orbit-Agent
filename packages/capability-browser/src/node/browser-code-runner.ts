@@ -71,7 +71,7 @@ export type BrowserCodeRunResult = {
   aborted?: boolean;
   executionState?: BrowserCodeExecutionState;
   kernelReset?: {
-    reason: 'age-limit' | 'execution-limit' | 'heap-limit' | 'rss-limit' | 'timeout' | 'aborted' | 'crashed';
+    reason: 'age-limit' | 'execution-limit' | 'heap-limit' | 'rss-limit' | 'timeout' | 'aborted' | 'crashed' | 'out-of-memory';
     memoryUsage?: BrowserCodeKernelMemoryUsage;
   };
 };
@@ -326,7 +326,7 @@ type PendingExecution = {
 const maxDiagnosticChars = 4_000;
 const defaultBrowserCodeKernelReadyTimeoutMs = 10_000;
 const defaultBrowserCodeExecutionTimeoutMs = 90_000;
-export const BROWSER_CODE_KERNEL_RUNTIME_REVISION = 37;
+export const BROWSER_CODE_KERNEL_RUNTIME_REVISION = 38;
 
 function boundedInteger(value: unknown, fallback: number, min: number, max: number) {
   const parsed = typeof value === 'number' ? value : Number(value);
@@ -3067,6 +3067,22 @@ function browserCodeResolvedPackageReadRoots(playwrightEntryPath: string) {
   return roots;
 }
 
+/** One policy for between-cell recycling and the child's in-cell allocation ceiling. */
+function browserCodeKernelMemoryLimits(options: BrowserCodeKernelOptions) {
+  const mb = 1024 * 1024;
+  const environment = options.environment || process.env;
+  const maxHeapBytes = boundedInteger(options.maxHeapBytes
+    ?? Number(environment.AI_BROWSER_CODE_KERNEL_MAX_HEAP_MB ?? 256) * mb, 256 * mb, 16 * mb, 1024 * mb);
+  // Playwright, serialization and one cell's temporaries need headroom beyond
+  // retained heap. A fixed 128 MB ceiling could be below the recycle threshold.
+  const hardHeapMb = Math.max(256, Math.ceil(maxHeapBytes / mb) * 2);
+  const defaultRssBytes = (hardHeapMb + 256) * mb;
+  const maxRssBytes = boundedInteger(options.maxRssBytes
+    ?? Number(environment.AI_BROWSER_CODE_KERNEL_MAX_RSS_MB ?? hardHeapMb + 256) * mb,
+  defaultRssBytes, 32 * mb, 4 * 1024 * mb);
+  return { maxHeapBytes, maxRssBytes, hardHeapMb };
+}
+
 function browserCodeModuleReadRoots(playwrightEntryPath: string, environment: Readonly<Record<string, string | undefined>> = process.env) {
   const roots = [
     path.resolve(process.cwd(), 'node_modules'),
@@ -3082,6 +3098,7 @@ function browserCodeChildArgs(
   tempDir: string,
   entryPath: string,
   moduleReadRoots: string[],
+  hardHeapMb: number,
 ) {
   return [
     '--permission',
@@ -3089,7 +3106,7 @@ function browserCodeChildArgs(
     ...moduleReadRoots.map((root) => `--allow-fs-read=${root}`),
     `--allow-fs-read=${tempDir}`,
     `--allow-fs-write=${tempDir}`,
-    '--max-old-space-size=128',
+    `--max-old-space-size=${hardHeapMb}`,
     '--max-semi-space-size=32',
     '--stack-size=4096',
     entryPath,
@@ -3125,6 +3142,7 @@ function removeBrowserCodeTempDir(tempDir?: string) {
 }
 
 export class BrowserCodeKernel {
+  private readonly memoryLimits;
   private child?: ChildProcess;
   private childStartedAt = 0;
   private closed = false;
@@ -3142,7 +3160,7 @@ export class BrowserCodeKernel {
   constructor(
     private readonly connection: BrowserCodeConnection,
     private readonly options: BrowserCodeKernelOptions = {},
-  ) {}
+  ) { this.memoryLimits = browserCodeKernelMemoryLimits(options); }
 
   execute(input: BrowserCodeExecutionInput): Promise<BrowserCodeRunResult> {
     const task = this.tail.then(() => this.executeNow(input));
@@ -3302,7 +3320,7 @@ export class BrowserCodeKernel {
     this.readyPromise = readyPromise;
     let child: ChildProcess;
     try {
-      child = spawn(process.execPath, browserCodeChildArgs(tempDir, entryPath, moduleReadRoots), {
+      child = spawn(process.execPath, browserCodeChildArgs(tempDir, entryPath, moduleReadRoots, this.memoryLimits.hardHeapMb), {
         cwd: process.cwd(),
         env: browserCodeChildEnv(tempDir, moduleReadRoots, this.options.environment),
         stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
@@ -3336,7 +3354,11 @@ export class BrowserCodeKernel {
       this.child = undefined;
       this.readyPromise = undefined;
       this.rejectReady(error);
-      this.finishPending(this.interrupted('crashed', error.message));
+      const interrupted = this.interrupted('crashed', error.message);
+      if (/heap out of memory|allocation failed.*heap|reached heap limit/i.test(diagnostic)) {
+        interrupted.kernelReset = { reason: 'out-of-memory' };
+      }
+      this.finishPending(interrupted);
     });
     const readyTimeoutMs = boundedInteger(
       this.options.readyTimeoutMs ?? this.options.environment?.AI_BROWSER_CODE_KERNEL_READY_TIMEOUT_MS ?? process.env.AI_BROWSER_CODE_KERNEL_READY_TIMEOUT_MS,
@@ -3380,19 +3402,7 @@ export class BrowserCodeKernel {
       heapUsed: numberValue('heapUsed'),
       rss: numberValue('rss'),
     } : undefined;
-    const mb = 1024 * 1024;
-    const maxHeapBytes = boundedInteger(
-      this.options.maxHeapBytes ?? Number(this.options.environment?.AI_BROWSER_CODE_KERNEL_MAX_HEAP_MB ?? process.env.AI_BROWSER_CODE_KERNEL_MAX_HEAP_MB ?? 96) * mb,
-      96 * mb,
-      16 * mb,
-      1024 * mb,
-    );
-    const maxRssBytes = boundedInteger(
-      this.options.maxRssBytes ?? Number(this.options.environment?.AI_BROWSER_CODE_KERNEL_MAX_RSS_MB ?? process.env.AI_BROWSER_CODE_KERNEL_MAX_RSS_MB ?? 384) * mb,
-      384 * mb,
-      32 * mb,
-      4 * 1024 * mb,
-    );
+    const { maxHeapBytes, maxRssBytes } = this.memoryLimits;
     const maxExecutions = boundedInteger(
       this.options.maxExecutions ?? this.options.environment?.AI_BROWSER_CODE_KERNEL_MAX_EXECUTIONS ?? process.env.AI_BROWSER_CODE_KERNEL_MAX_EXECUTIONS,
       80,

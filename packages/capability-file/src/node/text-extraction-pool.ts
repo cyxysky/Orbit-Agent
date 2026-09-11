@@ -6,6 +6,7 @@ import { Worker } from 'node:worker_threads';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CapabilityTaskQueue } from '@webpilot/capability-sdk';
+import { readUnoDocument } from './office/uno.ts';
 
 export type NodeFileTextExtractionObserver = {
   incrementMetric?: (name: string, labels?: Record<string, string>) => void;
@@ -18,9 +19,16 @@ export function configureNodeFileTextExtractionObserver(value: NodeFileTextExtra
 export type FileTextExtractionKind = 'archive' | 'pdf' | 'presentation' | 'spreadsheet' | 'text' | 'unknown' | 'word';
 export type FileTextSelection = { sheet?: string; range?: string; contentPages?: number[]; section?: string };
 export type FileTextExtractionInput = FileTextSelection & { extension: string; kind: FileTextExtractionKind; path: string; abortSignal?: AbortSignal };
+export type FileTextExtractionResult = {
+  text: string;
+  parser: string;
+  scope?: Record<string, unknown>;
+  truncated: boolean;
+  warnings: string[];
+};
 type Slot = { worker: Worker; busy: boolean; digest?: string; timer?: ReturnType<typeof setTimeout> };
 const slots = new Set<Slot>();
-const cache = new Map<string, string>();
+const cache = new Map<string, FileTextExtractionResult>();
 let cacheBytes = 0;
 let nextId = 1;
 let disposing: Promise<void> | undefined;
@@ -41,7 +49,15 @@ function gauges() {
 function retire(slot: Slot) {
   if (slot.timer) clearTimeout(slot.timer);
   slots.delete(slot);
-  return slot.worker.terminate();
+  if (slot.busy) return slot.worker.terminate();
+  // Idle parsers may own native PDF/canvas resources. Let the worker drain
+  // normally; force termination is reserved for stuck or cancelled work.
+  return new Promise<number>((resolve) => {
+    const timeout = setTimeout(() => { void slot.worker.terminate().then(resolve); }, 5_000);
+    slot.worker.once('exit', (code) => { clearTimeout(timeout); resolve(code); });
+    slot.worker.ref();
+    slot.worker.postMessage({ dispose: true });
+  });
 }
 function workerPath() {
   const relative = 'javascript/text-extraction-worker.cjs';
@@ -56,8 +72,17 @@ function workerPath() {
   if (!found) throw new Error('File text extraction worker is missing from the package runtime.');
   return found;
 }
-async function parse(input: FileTextExtractionInput, digest: string, signal: AbortSignal): Promise<string> {
+async function parse(input: FileTextExtractionInput, digest: string, signal: AbortSignal): Promise<FileTextExtractionResult> {
   signal.throwIfAborted();
+  if (input.kind === 'word' || input.kind === 'presentation' || input.kind === 'spreadsheet') {
+    const report = await readUnoDocument({
+      absolutePath: input.path, extension: input.extension, sourceDigest: digest, documentType: input.kind,
+      selection: { sheet: input.sheet, range: input.range, section: input.section, contentPages: input.contentPages },
+      abortSignal: signal,
+    });
+    return { text: report.blocks.map((block) => JSON.stringify(block)).join('\n'), parser: report.parser,
+      scope: report.scope, truncated: report.truncated, warnings: report.warnings };
+  }
   let slot = [...slots].find((item) => !item.busy && item.digest === digest) || [...slots].find((item) => !item.busy);
   if (!slot) {
     slot = { worker: new Worker(workerPath(), {
@@ -107,7 +132,8 @@ async function parse(input: FileTextExtractionInput, digest: string, signal: Abo
         sheet: input.sheet, range: input.range, contentPages: input.contentPages, section: input.section });
     });
     current.digest = digest;
-    return value;
+    return { text: value, parser: input.kind, truncated: false,
+      warnings: input.kind === 'pdf' ? ['PDF text layer only; image text and complex layout may require visual reading or OCR.'] : [] };
   } finally {
     if (!reusable || signal.aborted || !slots.has(current)) await retire(current);
     else {
@@ -119,7 +145,7 @@ async function parse(input: FileTextExtractionInput, digest: string, signal: Abo
 }
 
 /** Offsets are deliberately absent from the cache key: subsequent text pages reuse extraction. */
-export function extractFileTextInWorker(input: FileTextExtractionInput): Promise<string> {
+export function extractFileTextInWorker(input: FileTextExtractionInput): Promise<FileTextExtractionResult> {
   if (disposing) return Promise.reject(new Error('File extraction pool is being disposed.'));
   const started = performance.now();
   const pending = queue.run(async (signal) => {
@@ -134,7 +160,7 @@ export function extractFileTextInWorker(input: FileTextExtractionInput): Promise
     }
     signal.throwIfAborted();
     const digest = hash.digest('hex');
-    const key = JSON.stringify(['file-text-v2', digest, input.kind, input.extension, input.sheet, input.range, input.contentPages, input.section]);
+    const key = JSON.stringify(['file-content-uno', digest, input.kind, input.extension, input.sheet, input.range, input.contentPages, input.section]);
     const cached = cache.get(key);
     if (cached !== undefined) {
       cache.delete(key); cache.set(key, cached);
@@ -143,13 +169,13 @@ export function extractFileTextInWorker(input: FileTextExtractionInput): Promise
     }
     const text = await parse(input, digest, signal);
     const budget = integer('CPU_WORKER_TEXT_CACHE_BYTES', 32 * 1024 * 1024, 0, 256 * 1024 * 1024);
-    const size = text.length * 2;
+    const size = JSON.stringify(text).length * 2;
     if (size <= budget) {
       const previous = cache.get(key);
-      if (previous !== undefined) { cacheBytes -= previous.length * 2; cache.delete(key); }
+      if (previous !== undefined) { cacheBytes -= JSON.stringify(previous).length * 2; cache.delete(key); }
       while (cache.size && (cacheBytes + size > budget || cache.size >= 128)) {
         const oldest = cache.keys().next().value!;
-        cacheBytes -= cache.get(oldest)!.length * 2; cache.delete(oldest);
+        cacheBytes -= JSON.stringify(cache.get(oldest)).length * 2; cache.delete(oldest);
       }
       cache.set(key, text); cacheBytes += size;
     }

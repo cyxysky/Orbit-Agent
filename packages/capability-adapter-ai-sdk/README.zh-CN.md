@@ -4,6 +4,33 @@
 
 将能力 Provider 转换为 AI SDK 7 工具和 Agent 指令。
 
+## 注册输出
+
+每轮调用 `mountAISDKCapabilities({ providers, context, responses: coreResponses,
+maxSteps: 20 })`：包的响应定义从 manifest 自动汇总，responses 仅传宿主额外类型，
+不要重复传入包已经声明的类型。适配器自动收集工具块并注册 finalResponse。
+
+将返回的 agentOptions 展开到 ToolLoopAgent，保留其中 toolChoice（auto）和 stopWhen；有效终答或
+步数上限触发停止，无效终答仍可修正。生成结束后调用：
+
+```ts
+const output = runtime.responseSession.finish();
+```
+
+coreResponses 从 `@webpilot/capability-response` 导入。所有正常终答（包括纯文字和澄清）
+必须调用 finalResponse；finish 在宿主层拒绝缺少终答调用的成功结果。Thinking 模式
+可能拒绝 required 或指定工具的 toolChoice，因此请求保持 auto。宿主可保留已有工具
+结果进行有限次数的终答纠正，不应重新执行已完成的操作。
+通过宿主的消息协议保存/发送 output，UI 仍按注册类型分发。流式场景需消费完流再
+finish；失败/阻塞可传入后备 status，已接受的结构化回复优先于后备文本和状态。
+每轮独立回复 session，结束后释放运行时。
+
+复用底层能力运行时时，每轮新建 SDK ResponseSession，传给 toAISDKToolSet 的
+responseSession，注册 createAISDKResponseTool(session)，并在 accepted 时结束。
+自定义工具结果包装通过 adapter.decodeResponseResult 解码；终答追踪通过
+createAISDKResponseTool 的 onAccept 接入，回调失败必须抛错。
+完整示例见 [English registered output](README.md#registered-output)。
+
 本 README 是完整接入入口。任意 TypeScript Agent 框架可按步骤 1–4 接入，也可选择下方 AI SDK/MCP 路线。示例中的命名文件全部创建在**你的使用方项目**中，不是在本包目录中。
 
 ## 1. 安装与准备
@@ -193,7 +220,7 @@ npm install @webpilot/capability-adapter-ai-sdk "ai@>=7 <8" @ai-sdk/openai-compa
 
 ```ts
 import { randomUUID } from 'node:crypto';
-import { ToolLoopAgent, stepCountIs } from 'ai';
+import { ToolLoopAgent } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { mountAISDKCapabilities, EnvironmentCapabilityConfigStore } from '@webpilot/capability-adapter-ai-sdk';
 import { providers, configurations, cleanup } from './provider.js';
@@ -210,7 +237,7 @@ process.once('SIGINT', cancel);
 let runtime: Awaited<ReturnType<typeof mountAISDKCapabilities>> | undefined;
 try {
   runtime = await mountAISDKCapabilities({
-    providers, configurations,
+    providers, configurations, maxSteps: 10,
     context: { runId: randomUUID(), abortSignal: abort.signal },
     configStore: new EnvironmentCapabilityConfigStore(process.env),
     skills: { mode: 'eager' },
@@ -220,7 +247,7 @@ try {
     } },
   });
   const agent = new ToolLoopAgent({ model: modelProvider.chatModel(modelId),
-    ...runtime.agentOptions, stopWhen: stepCountIs(10) });
+    ...runtime.agentOptions });
   const result = await agent.generate({
     prompt: process.argv[2] || 'Describe the available tools and their intended usage.',
     abortSignal: abort.signal,

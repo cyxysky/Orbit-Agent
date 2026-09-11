@@ -42,6 +42,11 @@ export class ResponseRegistry {
 
   definitions() { return [...this.#definitions.values()]; }
   get(type: string) { return this.#definitions.get(type); }
+  /** Assemble a catalog from package manifests without importing their runtimes. */
+  registerManifests(manifests: readonly { responses?: readonly ResponseDefinition[] }[]) {
+    for (const manifest of manifests) this.register(manifest.responses || []);
+    return this;
+  }
   forTools(tools: ReadonlySet<string>) {
     return new ResponseRegistry().register(this.definitions().filter(definition => !definition.tools?.length || definition.tools.some(name => tools.has(name))));
   }
@@ -60,13 +65,27 @@ export class ResponseRegistry {
   parseResponse(value: unknown): StructuredResponse {
     const response = object(value);
     if (Object.keys(response).some(key => key !== 'status' && key !== 'blocks')) throw new Error('Unknown response field.');
-    const status = response.status ?? 'passed';
+    const status = response.status;
     if (status !== 'passed' && status !== 'failed' && status !== 'blocked') throw new Error('Invalid response status.');
     if (!Array.isArray(response.blocks) || !response.blocks.length || response.blocks.length > 64) throw new Error('Expected 1 to 64 response blocks.');
     return { status, blocks: response.blocks.map((block, index) => {
       try { return this.parse(block); }
       catch (error) { throw new Error(`blocks.${index}: ${error instanceof Error ? error.message : String(error)}`); }
     }) };
+  }
+
+  /** Keep model instructions and examples aligned with the same registered schemas. */
+  modelInstructions() {
+    return [
+      'Every final answer, including prose-only answers and clarification questions, must be submitted through finalResponse. Ordinary assistant text is progress narration, not a completed response.',
+      'When a successful tool returns content entries with type="response", finish with finalResponse and include their exact block values. Plain text identifiers do not render registered views.',
+      'Registered block types for this run:',
+      ...this.definitions().map(definition => {
+        const example = definition.examples?.[0];
+        const block = example ? this.parse({ type: definition.type, params: example }) : undefined;
+        return `${definition.type}: ${definition.description}${block ? ` Example block: ${JSON.stringify(block)}` : ''}`;
+      }),
+    ].join('\n');
   }
 
   input(): CapabilityInputSchema<StructuredResponse> {
@@ -115,6 +134,87 @@ export class ResponseRegistry {
   resource(block: ResponseBlock) {
     const parsed = this.parse(block);
     return this.require(parsed.type).resource?.(parsed.params);
+  }
+
+  /** Consume only successful standard CapabilityResult content, never prose IDs. */
+  toolBlocks(toolName: string, value: unknown): ResponseBlock[] {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+    const result = value as { ok?: unknown; content?: unknown };
+    if (result.ok !== true || !Array.isArray(result.content)) return [];
+    return result.content.flatMap(entry => {
+      try {
+        const content = object(entry);
+        if (content.type !== 'response') return [];
+        const block = this.parse(content.block);
+        const definition = this.require(block.type);
+        if (definition.tools?.length && !definition.tools.includes(toolName)) return [];
+        return [block];
+      } catch { return []; }
+    });
+  }
+
+  identity(block: ResponseBlock) {
+    try {
+      const resource = this.resource(block);
+      if (resource) return JSON.stringify(['resource', resource.topic, resource.id]);
+    } catch { /* Preserve unavailable historical views by their envelope identity. */ }
+    return JSON.stringify(canonical(block));
+  }
+
+  /** Explicit positions/repeated views win; latest generated resource fills omissions. */
+  missing(explicit: readonly ResponseBlock[], generated: readonly ResponseBlock[]) {
+    const represented = new Set(explicit.map(block => this.identity(block)));
+    const latest = new Map<string, ResponseBlock>();
+    for (const value of generated) {
+      const block = this.parse(value);
+      const identity = this.identity(block);
+      if (!represented.has(identity)) latest.set(identity, block);
+    }
+    return [...latest.values()];
+  }
+
+  assemble(explicit: readonly ResponseBlock[], generated: readonly ResponseBlock[] = []): ResponseBlock[] {
+    const validated = explicit.map(block => this.parse(block));
+    return [...validated, ...this.missing(validated, generated)];
+  }
+}
+
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, entry]) => [key, canonical(entry)]));
+}
+
+/** One instance per response/turn, shared by all framework tool callbacks. */
+export class ResponseSession {
+  readonly #generated = new Map<string, ResponseBlock>();
+  #explicit: StructuredResponse | undefined;
+  constructor(readonly registry: ResponseRegistry) {}
+
+  observe(toolName: string, result: unknown) {
+    const blocks = this.registry.toolBlocks(toolName, result);
+    for (const block of blocks) this.#generated.set(this.registry.identity(block), block);
+    return blocks;
+  }
+
+  accept(value: unknown) {
+    const response = this.registry.parseResponse(value);
+    this.#explicit = response;
+    return response;
+  }
+
+  get accepted() { return Boolean(this.#explicit); }
+
+  /** Normal completion requires an accepted final tool call; hosts may report interruption/failure. */
+  finish(fallback: { status?: StructuredResponse['status']; blocks?: readonly ResponseBlock[] } = {}): StructuredResponse {
+    if (!this.#explicit && fallback.status !== 'failed' && fallback.status !== 'blocked') {
+      throw new Error('A successful response requires an accepted finalResponse call.');
+    }
+    return {
+      status: this.#explicit?.status ?? fallback.status ?? 'passed',
+      blocks: this.registry.assemble(this.#explicit?.blocks ?? fallback.blocks ?? [], [...this.#generated.values()]),
+    };
   }
 }
 

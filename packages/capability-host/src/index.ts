@@ -8,6 +8,7 @@ import {
   type CapabilityRunSnapshot,
   type CapabilitySettingApplyMode,
   type CapabilitySkill,
+  type ResponseDefinition,
 } from '@webpilot/capability-sdk';
 
 export type CapabilityConfigScope = Readonly<{
@@ -280,6 +281,8 @@ export class CapabilitySkillCatalog {
 }
 
 export type MountCapabilitiesOptions = {
+  /** Host-provided output types (for example Markdown); package types come from manifests. */
+  responses?: readonly ResponseDefinition[];
   onDisposeError?: (error: AggregateError) => void;
   providers: readonly CapabilityProvider[];
   context: Omit<CapabilityRunContext, 'configuration'> & { configuration?: CapabilityConfiguration };
@@ -298,7 +301,7 @@ export type MountedCapabilities = CapabilityRunSnapshot & {
 export async function mountCapabilities(
   options: MountCapabilitiesOptions,
 ): Promise<MountedCapabilities> {
-  const registry = new CapabilityRegistry();
+  const registry = new CapabilityRegistry(options.responses);
   for (const provider of options.providers) registry.register(provider);
   const enabledManifests = registry.manifests().filter((manifest) => (
     !options.enabledCapabilityIds || options.enabledCapabilityIds.has(manifest.id)
