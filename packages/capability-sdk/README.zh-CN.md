@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
 
-接入 Cursor 或其他 MCP 客户端，直接使用[统一 MCP 命令](MCP-CLI.zh-CN.md)，无需编写启动文件或增加依赖。此功能需使用 0.2.1 之后包含该改动的版本或本地包。
+接入 Cursor 或其他 MCP 客户端，直接使用[统一 MCP 命令](MCP-CLI.zh-CN.md)，无需编写启动文件或增加依赖。此功能从 0.3.0 提供。
 
 ```sh
 npx --no-install capability-mcp init cursor
@@ -10,9 +10,9 @@ npx --no-install capability-mcp init cursor
 
 [Grouped tool configuration / JSON Schema](MCP-CONFIG.zh-CN.md)
 
-[图表与地图显示](MCP-UI.zh-CN.md)：MCP Apps 内嵌界面、本机浏览器预览、编辑保存及二维图表 PNG（尚未发布）。
+[图表与地图显示](MCP-UI.zh-CN.md)：MCP Apps 内嵌界面、本机浏览器预览、编辑保存及二维图表 PNG（0.3.0 起）。
 
-[Agent 接入完整指南](AGENT-INTEGRATIONS.zh-CN.md)：Codex、Cursor、Claude Code、自有 MCP client，以及 OpenAI Agents SDK / Responses API 原生接入（`/local` + `/openai`，尚未发布）。
+[Agent 接入完整指南](AGENT-INTEGRATIONS.zh-CN.md)：Codex、Cursor、Claude Code、自有 MCP client，以及 OpenAI Agents SDK / Responses API 原生接入（`/local` + `/openai`，0.3.0 起）。
 
 一个包提供能力契约、执行、配置、响应、AI SDK/MCP 适配，以及全部工具。
 

@@ -4,7 +4,7 @@ Codex、Cursor、Claude Code、自有 agent 的完整配置，以及不经过 MC
 
 [English](MCP-CLI.md) | [简体中文](MCP-CLI.zh-CN.md)
 
-统一 CLI 随本包提供，不需要编写 `mcp-server.mjs`，也不需要额外安装 TypeScript、tsx 或 MCP 适配器。此入口尚未包含在已发布的 0.2.1 中，需使用包含该改动的后续版本或本地包。
+统一 CLI 从 0.3.0 起随本包提供，不需要编写 `mcp-server.mjs`，也不需要额外安装 TypeScript、tsx 或 MCP 适配器。
 
 ## Cursor
 

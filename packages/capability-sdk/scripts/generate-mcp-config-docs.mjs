@@ -3,7 +3,7 @@ import { configSchema, toolConfigurationKeys } from './mcp-config.mjs';
 
 const introduction = `# MCP 按工具配置参考
 
-本文与 mcp-config.schema.json 均由 scripts/mcp-config.mjs 中同一字段目录生成。适用于包含统一配置功能的本地包或后续发布版，公开的 0.2.1 不包含此功能。
+本文与 mcp-config.schema.json 均由 scripts/mcp-config.mjs 中同一字段目录生成。适用于 0.3.0 及后续兼容版本，0.2.1 不包含此功能。
 
 ## 快速开始
 

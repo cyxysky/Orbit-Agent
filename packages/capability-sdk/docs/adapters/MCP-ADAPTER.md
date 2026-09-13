@@ -4,7 +4,7 @@
 
 Publish Capability providers through MCP, independently of the consuming Agent framework.
 
-Chart/maps providers also expose MCP Apps resources and loopback browser previews by default. Configure `visualization` to disable previews, images or persistence from the UI. See [visualization configuration](../../MCP-UI.zh-CN.md) for lifecycle and client support (unreleased).
+Chart/maps providers also expose MCP Apps resources and loopback browser previews by default. Configure `visualization` to disable previews, images or persistence from the UI. See [visualization configuration](../../MCP-UI.zh-CN.md) for lifecycle and client support (since 0.3.0).
 
 This README is a complete integration entrypoint. Follow steps 1–4 for any TypeScript Agent framework, or use the AI SDK/MCP routes below. All named source files are created in **your consuming project**, not inside this package.
 

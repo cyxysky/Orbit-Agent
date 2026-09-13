@@ -2,7 +2,7 @@
 
 [English](MCP-CLI.md) | [简体中文](MCP-CLI.zh-CN.md)
 
-The CLI needs no server file, TypeScript, tsx, or additional MCP dependency. This entry is new after published version 0.2.1; use a subsequent release containing it or a local package.
+The CLI is available since 0.3.0 and needs no server file, TypeScript, tsx, or additional MCP dependency.
 
 Tool configuration lives in project-root `capability.config.json`, automatically loaded at startup. `capability-mcp init config` creates a complete template; `init cursor` also creates this file when missing. Read [the detailed field reference](MCP-CONFIG.zh-CN.md), or run `capability-mcp --describe-config` for the machine-readable schema with descriptions. JSON uses real booleans/numbers and rejects unknown fields, invalid ranges and incompatible browser options. Explicit JSON settings override corresponding environment variables. Restart MCP after edits.
 

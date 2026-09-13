@@ -2,7 +2,7 @@
 
 本指南覆盖自有 agent、Codex、Cursor、Claude Code、OpenAI Agents SDK、Responses API 和 Vercel AI SDK。工具安装一次；不同 agent 选择 MCP 或进程内调用入口。
 
-**版本说明：统一 CLI、分组配置、单一 browser 工具和 `/local`、`/openai` 属于尚未发布的本地改动，npm 上的 0.2.1 不包含这些功能。以下示例用于包含这些改动的本地包或后续发布版。** 当前 consumer-test 已覆盖本地改动；重新 `npm ci` 会恢复 registry 版本。
+**版本说明：本文适用于 0.3.0 及后续兼容版本。统一 CLI、分组配置、单一 browser 工具、`/local`、`/openai` 和 MCP 可视化均从 0.3.0 提供，0.2.1 不包含这些功能。**
 
 ## 选择接入方式
 
@@ -285,6 +285,6 @@ try {
 - Office 超时：检查运行环境是否 ready、工具配置和客户端请求超时；不要每次连接都重新安装运行环境。
 - `file download` 不能读操作系统路径：下载操作接受 HTTP(S)/页面相对 URL；本地文件由宿主绑定附件，或通过终端/代码工具读取。`file write` 用于发布精确文本，`readContent` 使用返回的 artifactId。
 - `terminal read/write` 输出是增量；`stop` 返回 `terminal-cancelled` 表示主机取消成功。JavaScript 代码运行环境是 ESM。图表 update 需要 option 和 expectedRevision。
-- chart/maps 已提供 MCP Apps 页面和本机浏览器预览链接，二维 ECharts 还返回 PNG；是否内嵌显示由客户端决定。配置、生命周期和地图密钥见 [MCP 可视化说明](MCP-UI.zh-CN.md)。原生 function adapter 的展示仍需业务 UI 接入 renderer。本次适配尚未发布。
+- chart/maps 已提供 MCP Apps 页面和本机浏览器预览链接，二维 ECharts 还返回 PNG；是否内嵌显示由客户端决定。配置、生命周期和地图密钥见 [MCP 可视化说明](MCP-UI.zh-CN.md)。原生 function adapter 的展示仍需业务 UI 接入 renderer。
 
 本地 Windows 验证覆盖默认 8 工具、Office/UNO/Python/FFmpeg/三模型运行、真实 SQLite、MCP 通信以及官方 Agents SDK 0.18.0 的本地工具循环。Google、企业 webhook、外部 MCP 和模型响应使用模拟接口验证；未完成真实外部服务、Linux 实机以及各客户端 UI 的端到端验证。详细证据见 consumer 项目的 `artifacts/tools-audit/`，不能把协议测试理解为所有业务集成已在生产服务通过。

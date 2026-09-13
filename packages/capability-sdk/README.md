@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
 
-For Cursor or another MCP client, use the [unified MCP CLI](MCP-CLI.md); no server file or extra dependency is needed. Available after 0.2.1.
+For Cursor or another MCP client, use the [unified MCP CLI](MCP-CLI.md); no server file or extra dependency is needed. Available since 0.3.0.
 
 ```sh
 npx --no-install capability-mcp init cursor
@@ -10,9 +10,9 @@ npx --no-install capability-mcp init cursor
 
 [Grouped tool configuration / JSON Schema](MCP-CONFIG.zh-CN.md)
 
-[Chart/maps UI (Chinese)](MCP-UI.zh-CN.md): MCP Apps, local browser previews, chart editing and static ECharts images (unreleased).
+[Chart/maps UI (Chinese)](MCP-UI.zh-CN.md): MCP Apps, local browser previews, chart editing and static ECharts images (since 0.3.0).
 
-[Agent integrations (Chinese)](AGENT-INTEGRATIONS.zh-CN.md): Codex, Cursor, Claude Code, custom MCP clients, and native OpenAI Agents SDK / Responses API adapters (`/local` and `/openai`; unreleased).
+[Agent integrations (Chinese)](AGENT-INTEGRATIONS.zh-CN.md): Codex, Cursor, Claude Code, custom MCP clients, and native OpenAI Agents SDK / Responses API adapters (`/local` and `/openai`; since 0.3.0).
 
 One package for capability contracts, execution, configuration, responses, AI SDK/MCP adapters and all tools.
 
