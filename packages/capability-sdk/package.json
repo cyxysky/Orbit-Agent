@@ -1,6 +1,6 @@
 {
   "name": "@cjfclonedeep/capability-sdk",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Capability SDK with all tools, structured responses, AI SDK/MCP adapters and automatic Windows/Linux runtime setup.",
   "type": "module",
   "sideEffects": false,
