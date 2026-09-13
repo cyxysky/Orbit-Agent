@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { artifactContentType } from '@webpilot/capability-file';
-import { generateFileBuffer } from '@webpilot/capability-file/node';
+import { artifactContentType } from '@cjfclonedeep/capability-sdk/file';
+import { generateFileBuffer } from '@cjfclonedeep/capability-sdk/file/node';
 import { requestApplicationUserId } from '@/server/auth/user-context';
 import { apiError } from '@/server/http/api-request';
 

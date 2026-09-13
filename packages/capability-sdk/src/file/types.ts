@@ -1,0 +1,183 @@
+import type {
+  CapabilityExecutionContext,
+  CapabilityHealth,
+  CapabilityResult,
+} from '../index.ts';
+import type {
+  OfficeDocumentKind,
+  OfficeDesignBrief,
+  OfficeSemanticDocumentInput,
+  OfficeVisualQaCheckStatus,
+  OfficeVisualQaDeckChecks,
+  OfficeVisualQaIssue,
+  OfficeVisualQaPageChecks,
+} from './office/types.ts';
+
+export const fileActions = [
+  'list',
+  'readSource',
+  'readContent',
+  /** Legacy transport alias; not advertised to models. */
+  'read',
+  'download',
+  'write',
+  'convert',
+  'plan',
+  'generate',
+  'edit',
+  'unoApi',
+  'jsApi',
+  'render',
+] as const;
+
+export const fileModelActions = fileActions.filter((action) => action !== 'read');
+
+export const fileVisualToolActions = [
+  'visualIndex',
+  'visualRead',
+  'visualReport',
+] as const;
+
+export type FileAction = typeof fileActions[number];
+export type FileVisualToolAction = typeof fileVisualToolActions[number];
+export type FileDocumentType = OfficeDocumentKind;
+export type FileOperation = 'create' | 'modify';
+
+export type FileToolInput = {
+  reason?: string;
+  action?: string;
+  attachmentId?: string;
+  artifactId?: string;
+  sourceArtifactId?: string;
+  documentId?: string;
+  fileName?: string;
+  fileType?: string;
+  /** Exact UTF-8 file contents for write, including whitespace and empty files. */
+  content?: string;
+  documentType?: FileDocumentType;
+  operation?: FileOperation;
+  sourceAttachmentId?: string;
+  intent?: string;
+  design?: OfficeDesignBrief;
+  url?: string;
+  path?: string;
+  startLine?: number;
+  endLine?: number;
+  includeDiagnostics?: boolean;
+  urlOrPath?: string;
+  program?: string;
+  /** Compact semantic create spec. Generate accepts exactly one of spec or program. */
+  spec?: OfficeSemanticDocumentInput;
+  patch?: string;
+  replacements?: Array<{ oldText: string; newText: string }>;
+  render?: boolean;
+  includeVisuals?: boolean;
+  offset?: number;
+  limit?: number;
+  pages?: number[];
+  /** Content selectors; pages remains the visual-preview selector. */
+  sheet?: string;
+  range?: string;
+  contentPages?: number[];
+  section?: string;
+  query?: string;
+  screenshotIds?: string[];
+  reviews?: FileVisualReview[];
+  deckReview?: FileVisualDeckReview;
+  [key: string]: unknown;
+};
+
+export type FileReadInput = Pick<
+  FileToolInput,
+  'attachmentId' | 'artifactId' | 'includeVisuals' | 'limit' | 'offset' | 'pages' | 'sheet' | 'range' | 'contentPages' | 'section'
+>;
+
+export type FileAttachmentBinding = {
+  name: string;
+  path: string;
+  ref: string;
+};
+
+export type FileArtifactOperationError = {
+  code: string;
+  message: string;
+  details?: unknown;
+  retryable?: boolean;
+};
+
+/**
+ * Structured result returned by Node artifact operations. `actual` remains for
+ * browser-operation compatibility; new integrations should consume data/error.
+ */
+export type FileArtifactOperationResult<TData = unknown> = {
+  ok: boolean;
+  /** @deprecated Compatibility text for BrowserActionResult consumers. Prefer data/error. */
+  actual: string;
+  data?: TData;
+  error?: FileArtifactOperationError;
+  referenceImagePaths?: string[];
+  summary?: string;
+};
+
+export type FileVisualCheckStatus = OfficeVisualQaCheckStatus;
+export type FileVisualPageChecks = OfficeVisualQaPageChecks;
+export type FileVisualDeckChecks = OfficeVisualQaDeckChecks;
+export type FileVisualIssue = OfficeVisualQaIssue;
+
+export type FileVisualReview = {
+  screenshotId: string;
+  status: 'failed' | 'passed';
+  observation: string;
+  checks: FileVisualPageChecks;
+  issues?: FileVisualIssue[];
+};
+
+export type FileVisualDeckReview = {
+  status: 'failed' | 'passed';
+  observation: string;
+  checks: FileVisualDeckChecks;
+  issues?: FileVisualIssue[];
+};
+
+export const fileVisualActions = ['index', 'read', 'report'] as const;
+export type FileVisualAction = typeof fileVisualActions[number];
+
+export type FileVisualToolInput = {
+  reason?: string;
+  action: FileVisualAction;
+  artifactId: string;
+  screenshotIds?: string[];
+  reviews?: FileVisualReview[];
+  deckReview?: FileVisualDeckReview;
+  offset?: number;
+  limit?: number;
+};
+
+export type FileActionInput<TAction extends FileAction> = FileToolInput & {
+  action: TAction;
+};
+
+export type FileActionHandler<TAction extends FileAction> = (
+  input: FileActionInput<TAction>,
+  context: CapabilityExecutionContext,
+) => Promise<CapabilityResult>;
+
+export type FileCapabilityOperations = {
+  [TAction in FileAction]?: FileActionHandler<TAction>;
+};
+
+export type FileVisualActionHandler<TAction extends FileVisualAction> = (
+  input: FileVisualToolInput & { action: TAction },
+  context: CapabilityExecutionContext,
+) => Promise<CapabilityResult>;
+
+export type FileVisualCapabilityOperations = {
+  [TAction in FileVisualAction]?: FileVisualActionHandler<TAction>;
+};
+
+export type FileCapabilityRuntimeOperations = {
+  file: FileCapabilityOperations;
+  visual?: FileVisualCapabilityOperations;
+  health?: () => Promise<CapabilityHealth>;
+  dispose?: () => Promise<void>;
+};

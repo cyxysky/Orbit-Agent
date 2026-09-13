@@ -2,13 +2,21 @@
 
 [English](MCP.md) | [简体中文](MCP.zh-CN.md) | [日本語](MCP.ja.md)
 
+内蔵ローカルツールには [統合 CLI](MCP-CLI.md) を使用してください。以下はカスタムサーバーと HTTP の高度な接続例です。統合 CLI は公開済み 0.2.1 には含まれません。
+
+```sh
+npx --no-install capability-mcp init cursor
+```
+
+[Grouped tool configuration / JSON Schema](MCP-CONFIG.zh-CN.md)
+
 このガイドはパッケージに同梱されます。先に README の provider.ts と policy.ts を作成します。providers 配列を複数の能力ファクトリーに置き換えられますが、ツールと Skill ID は一意にします。sensitive-data はモデルミドルウェアなので配列に入れません。以下のファイルは利用側のプロジェクトに置きます。
 
 処理はサーバー自身のマシンで実行されます。クライアントは MCP URL があればよく、能力 npm パッケージの読み込みは不要です。ローカルプロセスには stdio、ブラウザー/ワークスペース実行を呼び出し間で共有するリモート接続にはステートフル Streamable HTTP 例を使います。
 ## 1. サーバーの依存と設定
 
 ```sh
-npm install @webpilot/capability-adapter-mcp @webpilot/capability-host @webpilot/capability-sdk @modelcontextprotocol/server@2.0.0
+npm install @cjfclonedeep/capability-sdk   @modelcontextprotocol/server@2.0.0
 npm install -D tsx typescript @types/node
 ```
 
@@ -16,8 +24,8 @@ mcp-options.ts として保存します。セッションの文脈は信頼さ�
 
 ```ts
 import { randomUUID } from 'node:crypto';
-import { EnvironmentCapabilityConfigStore } from '@webpilot/capability-host';
-import type { CapabilityProvider } from '@webpilot/capability-sdk';
+import { EnvironmentCapabilityConfigStore } from '@cjfclonedeep/capability-sdk/host';
+import type { CapabilityProvider } from '@cjfclonedeep/capability-sdk';
 import { providers, configurations } from './provider.js';
 import { policy, beforeInvoke } from './policy.js';
 
@@ -51,7 +59,7 @@ export function mcpOptions() {
 mcp-stdio.ts として保存します。手動接続なら npx tsx mcp-stdio.ts を実行するか、MCP クライアントに起動させます。stdout は MCP プロトコル専用、ログは stderr に出します。プロセスの寿命はクライアントが管理します。
 
 ```ts
-import { serveCapabilityMcpStdio } from '@webpilot/capability-adapter-mcp';
+import { serveCapabilityMcpStdio } from '@cjfclonedeep/capability-sdk/mcp';
 import { mcpOptions } from './mcp-options.js';
 import { cleanup } from './provider.js';
 const handle = serveCapabilityMcpStdio(mcpOptions());
@@ -143,7 +151,7 @@ mcp-http.ts として保存し、npx tsx mcp-http.ts を実行します。その
 ```ts
 import { randomUUID } from 'node:crypto';
 import { WebStandardStreamableHTTPServerTransport, isInitializeRequest } from '@modelcontextprotocol/server';
-import { createCapabilityMcpServer } from '@webpilot/capability-adapter-mcp';
+import { createCapabilityMcpServer } from '@cjfclonedeep/capability-sdk/mcp';
 import { mcpOptions } from './mcp-options.js';
 import { cleanup } from './provider.js';
 import { listen } from './http-bridge.js';

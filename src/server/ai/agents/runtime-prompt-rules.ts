@@ -1,5 +1,5 @@
-import { fileArtifactRuntimeSkillId } from '@webpilot/capability-file/runtime-skill';
-import { chartRuntimeSkillId } from '@webpilot/capability-chart/runtime-skill';
+import { fileArtifactRuntimeSkillId } from '@cjfclonedeep/capability-sdk/file/runtime-skill';
+import { chartRuntimeSkillId } from '@cjfclonedeep/capability-sdk/chart/runtime-skill';
 import {
   activeBrowserRuntimeSkillId,
   hiddenRuntimeSkillSummaries,

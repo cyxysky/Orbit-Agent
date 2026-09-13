@@ -1,6 +1,6 @@
 'use client';
 
-import type { ResponseRenderContext } from '@webpilot/capability-response/react';
+import type { ResponseRenderContext } from '@cjfclonedeep/capability-sdk/responses/react';
 import { responseRegistry } from '@/lib/response-registry';
 import { subscribeRealtimeRefresh } from '@/lib/realtime-refresh';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';

@@ -1,7 +1,7 @@
 import {
   configureNodeFileTextExtractionObserver,
   nodeFileTextExtractionPoolSnapshot,
-} from '@webpilot/capability-file/node';
+} from '@cjfclonedeep/capability-sdk/file/node';
 import {
   incrementMetric,
   recordMetricTiming,

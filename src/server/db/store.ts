@@ -394,7 +394,7 @@ export const store = {
     const data = await readConfigData();
     const existing = normalizeStoredModelConfig(data.modelConfig);
     const providers: Partial<Record<ModelProvider, ModelProviderSettings>> = {};
-    const { providerMediaSettingsSchema, mediaModelSelectionsSchema } = await import('@webpilot/capability-media/model-settings');
+    const { providerMediaSettingsSchema, mediaModelSelectionsSchema } = await import('@cjfclonedeep/capability-sdk/media/model-settings');
     const timestamp = now();
     const providerDefinitions = modelProviderDefinitionsForConfig({
       ...existing?.providers,

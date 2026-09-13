@@ -1,6 +1,6 @@
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { editUnoFileArtifact, readUnoDraft, renderFileArtifact } from '@webpilot/capability-file/node/workspace';
+import { editUnoFileArtifact, readUnoDraft, renderFileArtifact } from '@cjfclonedeep/capability-sdk/file/node/workspace';
 
 const validationRoot = path.resolve('validation', 'uno-stress');
 const artifactsRoot = path.join(validationRoot, 'artifacts');

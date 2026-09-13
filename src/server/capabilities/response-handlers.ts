@@ -1,6 +1,6 @@
-import { ResponseHandlerRegistry } from '@webpilot/capability-sdk';
-import { createChartResponseHandlers } from '@webpilot/capability-chart/response-node';
-import { createMapResponseHandlers } from '@webpilot/capability-maps/response-node';
+import { ResponseHandlerRegistry } from '@cjfclonedeep/capability-sdk';
+import { createChartResponseHandlers } from '@cjfclonedeep/capability-sdk/chart/response-node';
+import { createMapResponseHandlers } from '@cjfclonedeep/capability-sdk/maps/response-node';
 import { responseRegistry } from '@/lib/response-registry';
 import { readBrowserChatChart, updateBrowserChatChart } from './browser-chat-chart';
 import { browserChatMapStore, resolveBrowserChatMap } from './browser-chat-maps';

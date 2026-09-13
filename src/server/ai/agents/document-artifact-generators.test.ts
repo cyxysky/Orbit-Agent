@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { generateFileBuffer, resolveLibreOfficeExecutable } from '@webpilot/capability-file/node';
+import { generateFileBuffer, resolveLibreOfficeExecutable } from '@cjfclonedeep/capability-sdk/file/node';
 
 test('generates plain text and delimited data without treating them as Office documents', async () => {
   const json = await generateFileBuffer({

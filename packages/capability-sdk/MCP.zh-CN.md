@@ -2,13 +2,21 @@
 
 [English](MCP.md) | [简体中文](MCP.zh-CN.md) | [日本語](MCP.ja.md)
 
+内置本地工具优先使用[统一 CLI](MCP-CLI.zh-CN.md)。以下自定义服务和 HTTP 示例用于高级接入。统一 CLI 尚未包含在已发布的 0.2.1 中。
+
+```sh
+npx --no-install capability-mcp init cursor
+```
+
+[Grouped tool configuration / JSON Schema](MCP-CONFIG.zh-CN.md)
+
 本指南随能力包发布。先按 README 创建 provider.ts 与 policy.ts，可以将 providers 数组替换为多个能力工厂，工具及 Skill ID 必须唯一。sensitive-data 是模型中间件，不放入数组。以下文件均位于使用方项目。
 
 服务端在自己的机器执行操作。客户端需要 MCP 地址，不需要导入你的能力 npm 包。本地进程可用 stdio，需要跨调用共享浏览器/工作区运行实例的远程连接使用有状态 Streamable HTTP 示例。
 ## 1. 服务端依赖与选项
 
 ```sh
-npm install @webpilot/capability-adapter-mcp @webpilot/capability-host @webpilot/capability-sdk @modelcontextprotocol/server@2.0.0
+npm install @cjfclonedeep/capability-sdk   @modelcontextprotocol/server@2.0.0
 npm install -D tsx typescript @types/node
 ```
 
@@ -16,8 +24,8 @@ npm install -D tsx typescript @types/node
 
 ```ts
 import { randomUUID } from 'node:crypto';
-import { EnvironmentCapabilityConfigStore } from '@webpilot/capability-host';
-import type { CapabilityProvider } from '@webpilot/capability-sdk';
+import { EnvironmentCapabilityConfigStore } from '@cjfclonedeep/capability-sdk/host';
+import type { CapabilityProvider } from '@cjfclonedeep/capability-sdk';
 import { providers, configurations } from './provider.js';
 import { policy, beforeInvoke } from './policy.js';
 
@@ -51,7 +59,7 @@ export function mcpOptions() {
 保存为 mcp-stdio.ts。手动连接时运行 npx tsx mcp-stdio.ts，也可以让 MCP 客户端启动。stdout 专用于 MCP 协议，日志写入 stderr。客户端负责进程生命周期。
 
 ```ts
-import { serveCapabilityMcpStdio } from '@webpilot/capability-adapter-mcp';
+import { serveCapabilityMcpStdio } from '@cjfclonedeep/capability-sdk/mcp';
 import { mcpOptions } from './mcp-options.js';
 import { cleanup } from './provider.js';
 const handle = serveCapabilityMcpStdio(mcpOptions());
@@ -143,7 +151,7 @@ export function listen(fetchHandler: (request: Request) => Promise<Response>) {
 ```ts
 import { randomUUID } from 'node:crypto';
 import { WebStandardStreamableHTTPServerTransport, isInitializeRequest } from '@modelcontextprotocol/server';
-import { createCapabilityMcpServer } from '@webpilot/capability-adapter-mcp';
+import { createCapabilityMcpServer } from '@cjfclonedeep/capability-sdk/mcp';
 import { mcpOptions } from './mcp-options.js';
 import { cleanup } from './provider.js';
 import { listen } from './http-bridge.js';

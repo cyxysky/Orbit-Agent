@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import type { BrowserSession } from '@webpilot/capability-browser/node';
+import type { BrowserSession } from '@cjfclonedeep/capability-sdk/browser/node';
 import { createWebPilotBrowserSession } from '@/server/capabilities/webpilot-browser';
 import { store } from '@/server/db/store';
 import { apiError, apiJson } from '@/server/http/api-request';

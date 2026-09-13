@@ -1,18 +1,17 @@
-import type { BrowserActionResult } from '@webpilot/capability-browser/node';
-import type { CapabilitySkill } from '@webpilot/capability-sdk';
-import { browserCapabilityManifest } from '@webpilot/capability-browser';
-import { fileCapabilityManifest } from '@webpilot/capability-file';
-import { chartCapabilityManifest } from '@webpilot/capability-chart';
-import { mapsCapabilityManifest } from '@webpilot/capability-maps';
-import { codeSandboxCapabilityManifest } from '@webpilot/capability-code-sandbox';
-import { communicationCapabilityManifest } from '@webpilot/capability-communication';
-import { computerCapabilityManifest } from '@webpilot/capability-computer';
-import { connectorsCapabilityManifest } from '@webpilot/capability-connectors';
-import { dataCapabilityManifest } from '@webpilot/capability-data';
-import { gitCapabilityManifest } from '@webpilot/capability-git';
-import { knowledgeCapabilityManifest } from '@webpilot/capability-knowledge';
-import { mediaCapabilityManifest } from '@webpilot/capability-media';
-import { workflowCapabilityManifest } from '@webpilot/capability-workflow';
+import type { BrowserActionResult } from '@cjfclonedeep/capability-sdk/browser/node';
+import type { CapabilitySkill } from '@cjfclonedeep/capability-sdk';
+import { browserCapabilityManifest } from '@cjfclonedeep/capability-sdk/browser';
+import { fileCapabilityManifest } from '@cjfclonedeep/capability-sdk/file';
+import { chartCapabilityManifest } from '@cjfclonedeep/capability-sdk/chart';
+import { mapsCapabilityManifest } from '@cjfclonedeep/capability-sdk/maps';
+import { codeSandboxCapabilityManifest } from '@cjfclonedeep/capability-sdk/execution/code';
+import { communicationCapabilityManifest } from '@cjfclonedeep/capability-sdk/integrations/communication';
+import { computerCapabilityManifest } from '@cjfclonedeep/capability-sdk/computer';
+import { connectorsCapabilityManifest } from '@cjfclonedeep/capability-sdk/integrations/connectors';
+import { dataCapabilityManifest } from '@cjfclonedeep/capability-sdk/data';
+import { terminalCapabilityManifest } from '@cjfclonedeep/capability-sdk/execution/terminal';
+import { knowledgeCapabilityManifest } from '@cjfclonedeep/capability-sdk/knowledge';
+import { mediaCapabilityManifest } from '@cjfclonedeep/capability-sdk/media';
 import { subagentRuntimeSkill } from './subagent-runtime-skill';
 
 function manifestRuntimeSkill(manifest: { id: string; skills?: readonly CapabilitySkill[] }) {
@@ -33,9 +32,8 @@ const capabilityRuntimeSkills = [
   dataCapabilityManifest,
   mediaCapabilityManifest,
   communicationCapabilityManifest,
-  gitCapabilityManifest,
+  terminalCapabilityManifest,
   computerCapabilityManifest,
-  workflowCapabilityManifest,
 ].flatMap((manifest) => {
   manifestRuntimeSkill(manifest);
   return manifest.skills!;

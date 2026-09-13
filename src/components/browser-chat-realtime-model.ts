@@ -42,20 +42,27 @@ export function parseBrowserChatRealtimePatch<T extends { session?: { id?: unkno
   return patch;
 }
 
-export function mergeBrowserChatRealtimeRecords<T extends { id: string }>(
+export function mergeBrowserChatRealtimeRecords<T extends { id: string; revision?: number }>(
   current: T[] | undefined,
   incoming: Array<Partial<T> & Pick<T, 'id'>> | undefined,
 ) {
-  let records = current || [];
+  const original = current || [];
+  let records = original;
+  const indexes = new Map(records.map((record, index) => [record.id, index]));
   for (const record of incoming || []) {
-    const index = records.findIndex((item) => item.id === record.id);
-    if (index < 0) {
-      records = [...records, record as T];
+    const index = indexes.get(record.id);
+    if (index === undefined) {
+      if (records === original) records = [...records];
+      indexes.set(record.id, records.length);
+      records.push(record as T);
       continue;
     }
-    const next = [...records];
-    next[index] = { ...records[index], ...record };
-    records = next;
+    if (typeof records[index].revision === 'number'
+      && (record.revision === undefined || record.revision < records[index].revision!)) continue;
+    const shared = shareBrowserChatValue(records[index], { ...records[index], ...record });
+    if (shared === records[index]) continue;
+    if (records === original) records = [...records];
+    records[index] = shared;
   }
   return records;
 }
@@ -142,10 +149,13 @@ export function mergeBrowserChatRealtimeCollections<
     const incomingTime = message.updatedAt || message.createdAt || '';
     if (existing && existing.id === message.id && incomingTime < existingTime) continue;
     if (index >= 0) {
-      const next = [...messages];
-      next[index] = existing?.id === message.id && existing.createdAt
+      const replacement = existing?.id === message.id && existing.createdAt
         ? { ...message, createdAt: existing.createdAt }
         : message;
+      const shared = shareBrowserChatValue(messages[index], replacement);
+      if (shared === existing) continue;
+      const next = [...messages];
+      next[index] = shared;
       messages = next;
       continue;
     }
@@ -183,8 +193,10 @@ export function mergeBrowserChatRealtimeCollections<
   for (const log of patch.logs || []) {
     const index = logs.findIndex((item) => item.id === log.id);
     if (index >= 0) {
+      const shared = shareBrowserChatValue(logs[index], log);
+      if (shared === logs[index]) continue;
       const next = [...logs];
-      next[index] = log;
+      next[index] = shared;
       logs = next;
       continue;
     }

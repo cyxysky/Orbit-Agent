@@ -11,11 +11,11 @@ const stagingRoot = path.join(root, '.capability-runtime');
 await rm(stagingRoot, { recursive: true, force: true });
 await mkdir(stagingRoot, { recursive: true });
 
+const packageRoot = source === 'npm'
+  ? path.join(root, 'node_modules', '@cjfclonedeep', 'capability-sdk')
+  : path.join(root, 'packages', 'capability-sdk');
 for (const name of ['file', 'browser', 'computer', 'sensitive-data']) {
-  const packageRoot = source === 'npm'
-    ? path.join(root, 'node_modules', '@webpilot', `capability-${name}`)
-    : path.join(root, 'packages', `capability-${name}`);
-  await cp(path.join(packageRoot, 'runtime'), path.join(stagingRoot, name), {
+  await cp(path.join(packageRoot, 'runtime', name), path.join(stagingRoot, name), {
     recursive: true,
   });
 }

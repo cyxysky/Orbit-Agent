@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import path from 'node:path';
-import { uploadStorageExtension } from '@webpilot/capability-file';
+import { uploadStorageExtension } from '@cjfclonedeep/capability-sdk/file';
 import { artifactApiUrlFromRelative } from '@/lib/artifacts';
 import { normalizeApplicationUserId } from '@/server/auth/user-context';
 import { ApiRequestError } from '@/server/http/api-request';

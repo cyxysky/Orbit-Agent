@@ -16,7 +16,7 @@ import { idempotencyFingerprint, runIdempotentJson } from '@/server/http/idempot
 import { requestHasAdminSettingsAccess } from '@/server/settings/admin-settings-access';
 import { readModelSettingsState } from '@/server/settings/settings-snapshot';
 import { normalizeModelProvider } from '@/lib/model-selection';
-import { providerMediaSettingsSchema } from '@webpilot/capability-media/model-settings';
+import { providerMediaSettingsSchema } from '@cjfclonedeep/capability-sdk/media/model-settings';
 
 const modelBodySchema = z.record(z.string(), z.unknown());
 

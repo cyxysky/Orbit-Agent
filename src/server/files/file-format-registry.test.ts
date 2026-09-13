@@ -5,7 +5,7 @@ import {
   fileFormatForExtension,
   fileFormats as webPilotFileFormats,
   uploadStorageExtension,
-} from '@webpilot/capability-file';
+} from '@cjfclonedeep/capability-sdk/file';
 
 test('every generated format is readable and has an explicit response MIME type', () => {
   const generated = webPilotFileFormats.filter((format) => format.canGenerate);

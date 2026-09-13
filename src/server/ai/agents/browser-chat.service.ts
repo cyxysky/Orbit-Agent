@@ -1,20 +1,20 @@
-import { markdownBlock } from '@webpilot/capability-response';
+import { markdownBlock } from '@cjfclonedeep/capability-sdk/responses';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { nextBrowserChatActivity } from '@/lib/browser-chat-activity';
-import { BrowserSession, type BrowserActionResult, type BrowserLiveInput, type BrowserLiveNativeEvent, type BrowserScreencastFrame, type BrowserTabSnapshot } from '@webpilot/capability-browser/node';
+import { BrowserSession, type BrowserActionResult, type BrowserLiveInput, type BrowserLiveNativeEvent, type BrowserScreencastFrame, type BrowserTabSnapshot } from '@cjfclonedeep/capability-sdk/browser/node';
 import type {
   BrowserCodeAttachmentBinding,
   BrowserCodeCredentialBinding,
-} from '@webpilot/capability-browser/node';
+} from '@cjfclonedeep/capability-sdk/browser/node';
 import { createWebPilotBrowserSession } from '@/server/capabilities/webpilot-browser';
 import { normalizeApplicationUserId } from '@/server/auth/user-context';
 import { normalizeDisabledCapabilityTools } from './runtime-tool-catalog';
 import { readBrowserDomainCookies } from '@/server/credentials/browser-domain-cookie-vault';
 import { incrementMetric, structuredLog } from '@/server/observability/runtime-observability';
 import { archiveAiOperationsChatSession } from '@/server/observability/ai-operations-chat-archive';
-import { artifactContentType } from '@webpilot/capability-file';
+import { artifactContentType } from '@cjfclonedeep/capability-sdk/file';
 import '@/server/capabilities/webpilot-file-observability';
 import {
   executeInteractiveBrowserTurn,
@@ -32,7 +32,7 @@ import {
   readFileAttachment as readBrowserChatAttachment,
   readFileVisuals as readBrowserChatFileVisuals,
   type FileVisualInput as BrowserChatFileVisualInput,
-} from '@webpilot/capability-file/node';
+} from '@cjfclonedeep/capability-sdk/file/node';
 import {
   normalizeBrowserChatAttachments,
   normalizeBrowserChatUploadPath,
@@ -109,7 +109,7 @@ import { readRuntimeKnowledgeRevisions, readRuntimeSkillCatalog } from '@/server
 import { retrievalQueryTexts } from '@/lib/fuzzy-retrieval';
 
 import { isBrowserChatDomObservationText, normalizeBrowserChatFinalReplyText } from '@/server/ai/agents/browser-chat-reply-text';
-import { officeDraftCatalogForPrompt } from '@webpilot/capability-file/node/workspace';
+import { officeDraftCatalogForPrompt } from '@cjfclonedeep/capability-sdk/file/node/workspace';
 import {
   extractPersonalMemoryFromTurn,
   formatPersonalMemoryForRuntime,
@@ -884,8 +884,8 @@ function browserChatProgressPersistDelayMs() {
 }
 
 function browserChatStreamPublishDelayMs() {
-  const raw = Number(process.env.BROWSER_CHAT_STREAM_PUBLISH_DELAY_MS || 32);
-  const normalized = Number.isFinite(raw) ? Math.floor(raw) : 32;
+  const raw = Number(process.env.BROWSER_CHAT_STREAM_PUBLISH_DELAY_MS || 100);
+  const normalized = Number.isFinite(raw) ? Math.floor(raw) : 100;
   return Math.min(Math.max(normalized, 16), 160);
 }
 
@@ -1821,8 +1821,12 @@ function compactRealtimeTool<T extends StepToolCall | BrowserChatAiOutputTool>(t
   return realtimeTool;
 }
 
+const compactOutputCycleCache = new WeakMap<BrowserChatAiOutputCycle, BrowserChatAiOutputCycle>();
+
 function compactOutputCycleForRealtime(cycle: BrowserChatAiOutputCycle): BrowserChatAiOutputCycle {
-  return {
+  const cached = compactOutputCycleCache.get(cycle);
+  if (cached) return cached;
+  const compacted = {
     ...cycle,
     output: {
       ...cycle.output,
@@ -1831,6 +1835,8 @@ function compactOutputCycleForRealtime(cycle: BrowserChatAiOutputCycle): Browser
       tools: cycle.output.tools.map(compactRealtimeTool),
     },
   };
+  compactOutputCycleCache.set(cycle, compacted);
+  return compacted;
 }
 
 const browserChatDetailedStepRetention = 8;
@@ -2176,6 +2182,7 @@ export function subscribeBrowserChatUIStream(
   listener: BrowserChatUIStreamListener,
 ) {
   const publishedOutputCycleSignatures = new Map<string, string>();
+  const publishedOutputCycles = new Map<string, BrowserChatAiOutputCycle>();
   const wrapped: BrowserChatUIStreamListener = (update) => {
     const currentSession = sessions.get(sessionId);
     const message = update.message?.clientMessageId === clientMessageId
@@ -2185,6 +2192,7 @@ export function subscribeBrowserChatUIStream(
         ));
     const outputCycles = message
       ? update.outputCycles
+          .filter((cycle) => cycle.messageId === message.id && publishedOutputCycles.get(cycle.id) !== cycle)
           .map(compactOutputCycleForRealtime)
           .filter((cycle) => (
             cycle.messageId === message.id
@@ -2206,6 +2214,9 @@ export function subscribeBrowserChatUIStream(
     });
     for (const cycle of outputCycles) {
       publishedOutputCycleSignatures.set(cycle.id, JSON.stringify(cycle));
+    }
+    for (const cycle of update.outputCycles) {
+      if (cycle.messageId === message?.id) publishedOutputCycles.set(cycle.id, cycle);
     }
   };
   const listeners = uiStreamListeners.get(sessionId) || new Set<BrowserChatUIStreamListener>();
@@ -2747,16 +2758,20 @@ function writeSessionSnapshot(item: BrowserChatPersistedSessionSnapshot): Browse
   return patch;
 }
 
+const publishedStreamOutputCycles = new WeakSet<BrowserChatAiOutputCycle>();
+
 async function publishBrowserChatTextStreamSnapshot(sessionId: string, assistantMessageId: string) {
   const session = sessions.get(sessionId);
   const message = session?.messages.find((item) => item.id === assistantMessageId);
   if (!session || !message || message.role !== 'assistant') return;
+  publishBrowserChatUIStreamUpdate(sessionId);
   const header = sessionSnapshotHeader(session);
   const realtimeRecords = browserChatClientRecordsForMessage(session, message.id, { includeSubagents: true });
+  const changedOutputCycles = realtimeRecords.outputCycles.filter((cycle) => !publishedStreamOutputCycles.has(cycle));
   const patch: BrowserChatSessionRealtimePatch = {
     session: {
       ...header,
-      outputCycles: realtimeRecords.outputCycles.map(compactOutputCycleForRealtime),
+      outputCycles: changedOutputCycles.map(compactOutputCycleForRealtime),
       subagents: realtimeRecords.subagents.map(compactBrowserChatSubagentRecord),
       pendingToolConfirmation: header.pendingToolConfirmation ?? null,
     },
@@ -2774,6 +2789,7 @@ async function publishBrowserChatTextStreamSnapshot(sessionId: string, assistant
     userId: normalizeApplicationUserId(session.userId),
     patch,
   });
+  for (const cycle of changedOutputCycles) publishedStreamOutputCycles.add(cycle);
 }
 
 function browserChatTextStreamPublisher() {
@@ -3173,11 +3189,14 @@ function persistInterruptedSessionInBackground(sessionId: string) {
 }
 
 async function persistAndNotify(sessionId: string, options: { defer?: boolean; deletedUserId?: string; mergePersisted?: boolean } = {}) {
-  publishBrowserChatUIStreamUpdate(sessionId);
   if (options.defer) {
+    const message = sessions.get(sessionId)?.activeAssistantMessageId;
+    if (message) scheduleBrowserChatTextStreamPublish(sessionId, message);
     schedulePersistAndNotify(sessionId);
     return true;
   }
+  browserChatRuntimeState.streamPublisher?.cancel(sessionId);
+  publishBrowserChatUIStreamUpdate(sessionId);
   clearPendingPersist(sessionId);
   const persisted = await persistSession(sessionId, {
     deletedUserId: options.deletedUserId,
@@ -3189,6 +3208,7 @@ async function persistAndNotify(sessionId: string, options: { defer?: boolean; d
 }
 
 async function persistAndNotifyTerminal(sessionId: string) {
+  browserChatRuntimeState.streamPublisher?.cancel(sessionId);
   publishBrowserChatUIStreamUpdate(sessionId);
   clearPendingPersist(sessionId);
   const persisted = await persistSession(sessionId);
@@ -4419,6 +4439,7 @@ function upsertBrowserChatOutputCycle(session: BrowserChatSessionRecord, cycle: 
   const updated = {
     ...existing,
     ...cycle,
+    revision: (existing?.revision || 0) + 1,
     sequence: cycle.sequence ?? existing?.sequence ?? lastSequence + 1,
     createdAt: cycle.createdAt || existing?.createdAt || now(),
   };
@@ -5640,8 +5661,9 @@ async function resumeBlockedBrowserChatSubagent(input: {
 }) {
   const { session, binding, userMessage, assistantMessageId, fromStepIndex, abortController } = input;
   const ownsTurn = () => isActiveBrowserChatTurn(session, assistantMessageId, abortController);
+  const modelSettings = { ...await browserChatModelSettings(session.modelProvider, session.model), sessionId: session.id };
   const getRuntimeOperationalContext = await withModelSettings(
-    await browserChatModelSettings(session.modelProvider, session.model),
+    modelSettings,
     () => createBrowserChatRuntimeOperationalContext({
       session,
       browser: binding.browser,
@@ -5651,7 +5673,7 @@ async function resumeBlockedBrowserChatSubagent(input: {
       usedMemoryIds: browserChatTurnUsedMemoryIds(session, assistantMessageId),
     }),
   );
-  const initialRuntimeContext = await getRuntimeOperationalContext();
+  const initialRuntimeContext = await withModelSettings(modelSettings, () => getRuntimeOperationalContext());
   const requestSubagentToolConfirmation = createBrowserChatTurnToolConfirmation(
     session,
     assistantMessageId,
@@ -5668,7 +5690,7 @@ async function resumeBlockedBrowserChatSubagent(input: {
     preservedMessages: browserChatSubagentSessionRegistry(session.id).get(binding.id)?.messages || [],
   });
   try {
-    const result = await withModelSettings(await browserChatModelSettings(session.modelProvider, session.model), () => executeInteractiveBrowserTurn({
+    const result = await withModelSettings(modelSettings, () => executeInteractiveBrowserTurn({
       session: binding.browser,
       runId: `${session.id}_${binding.id}_verification_resume`,
       userId: session.userId,
@@ -5856,7 +5878,7 @@ async function runBrowserChatMessage(
   skills: SkillRecord[] = [],
 ) {
   const modelSettings = await browserChatModelSettings(session.modelProvider, session.model);
-  return withModelSettings(modelSettings, async () => {
+  return withModelSettings({ ...modelSettings, sessionId: session.id }, async () => {
     const assertTurnActive = () => {
       if (isActiveBrowserChatTurn(session, assistantMessageId, abortController)) return;
       throw abortController.signal.reason || new Error('Browser chat operation interrupted by user.');

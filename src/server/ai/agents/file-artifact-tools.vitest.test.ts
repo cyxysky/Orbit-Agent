@@ -18,8 +18,8 @@ import {
   recordOfficeVisualQaProgress,
   requestedPresentationCapabilities,
   sourceUnitsForDraft,
-} from '@webpilot/capability-file/node/workspace';
-import { resolveLibreOfficeExecutable } from '@webpilot/capability-file/node';
+} from '@cjfclonedeep/capability-sdk/file/node/workspace';
+import { resolveLibreOfficeExecutable } from '@cjfclonedeep/capability-sdk/file/node';
 
 const roots: string[] = [];
 

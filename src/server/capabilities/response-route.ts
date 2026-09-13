@@ -1,4 +1,4 @@
-import { ResponseOperationError } from '@webpilot/capability-sdk';
+import { ResponseOperationError } from '@cjfclonedeep/capability-sdk';
 import { responseRegistry } from '@/lib/response-registry';
 import { responseHandlers } from './response-handlers';
 import { readBrowserChatRuntimeState } from '@/server/ai/agents/browser-chat-read.service';

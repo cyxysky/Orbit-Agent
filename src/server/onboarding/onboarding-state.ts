@@ -18,7 +18,7 @@ import {
   resolveLibreOfficeExecutable,
   resolveLibreOfficePythonExecutable,
   resolveUnoProgramWorker,
-} from '@webpilot/capability-file/node';
+} from '@cjfclonedeep/capability-sdk/file/node';
 import { store } from '@/server/db/store';
 
 type OnboardingRow = {

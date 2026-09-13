@@ -11,6 +11,9 @@ WORKDIR /app
 
 ARG ORBIT_CAPABILITY_SOURCE
 ENV WEBPILOT_CAPABILITY_SOURCE=${ORBIT_CAPABILITY_SOURCE}
+# The runner below provisions its own system/Python/model layers. Keep the
+# dependency-only build layer from downloading another complete runtime cache.
+ENV CAPABILITY_SKIP_RUNTIME_INSTALL=1
 
 COPY package*.json ./
 COPY scripts/prepare-capability-install.mjs ./scripts/prepare-capability-install.mjs
@@ -40,7 +43,7 @@ ARG GLINER_CHINESE_NER_MODEL=uer/roberta-base-finetuned-cluener2020-chinese
 ARG GLINER_PII_MODEL=LiquidAI/LFM2.5-Encoder-350M-PII-Detector
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libreoffice-nogui fonts-noto-cjk python3 python3-venv \
+    && apt-get install -y --no-install-recommends libreoffice-nogui fonts-noto-cjk python3 python3-venv python3-uno \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /app/.capability-runtime/sensitive-data/python/requirements.txt /opt/webpilot-sensitive-data/service/requirements.txt

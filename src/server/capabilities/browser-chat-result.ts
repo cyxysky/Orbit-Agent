@@ -1,6 +1,6 @@
-import type { CapabilityResult } from '@webpilot/capability-sdk';
-import { browserOperationSummary } from '@webpilot/capability-browser';
-import type { BrowserActionResult } from '@webpilot/capability-browser/node';
+import type { CapabilityResult } from '@cjfclonedeep/capability-sdk';
+import { browserOperationSummary } from '@cjfclonedeep/capability-sdk/browser';
+import type { BrowserActionResult } from '@cjfclonedeep/capability-sdk/browser/node';
 
 type BrowserActionResultEnvelope = {
   runtime: 'webpilot.browser-action-result' | 'webpilot.browser-operation';
@@ -45,7 +45,11 @@ export function capabilityResultToBrowserActionResult(
   if (!result.ok) {
     return browserActionEnvelope(result.error.details) || {
       ok: false,
-      actual: result.error.message,
+      // Preserve structured diagnostics such as terminal exit codes and stderr.
+      // The browser-specific envelope above still retains its native format.
+      actual: result.error.details === undefined
+        ? result.error.message
+        : JSON.stringify({ ok: false, error: result.error }, null, 2),
       failureCategory: result.error.code,
     };
   }

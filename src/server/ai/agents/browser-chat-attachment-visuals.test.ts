@@ -10,7 +10,7 @@ import {
   resolveLibreOfficeExecutable,
   resolveLibreOfficePythonExecutable,
   resolveUnoProgramWorker,
-} from '@webpilot/capability-file/node';
+} from '@cjfclonedeep/capability-sdk/file/node';
 
 const passedPageVisualChecks = {
   overlap: 'passed', clipping: 'passed', alignment: 'passed', spacing: 'passed',

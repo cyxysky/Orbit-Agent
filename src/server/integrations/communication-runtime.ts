@@ -1,6 +1,6 @@
-import type { WeComBotConnection, WeComInboundMessage } from '@webpilot/capability-communication/node';
-import { createWeComMessageArguments } from '@webpilot/capability-communication/node';
-import { CommunicationDeliveryError } from '@webpilot/capability-communication';
+import type { WeComBotConnection, WeComInboundMessage } from '@cjfclonedeep/capability-sdk/integrations/communication/node';
+import { createWeComMessageArguments } from '@cjfclonedeep/capability-sdk/integrations/communication/node';
+import { CommunicationDeliveryError } from '@cjfclonedeep/capability-sdk/integrations/communication';
 import {
   createBrowserChatSession, deleteBrowserChatSession, getBrowserChatSession,
   sendBrowserChatMessage, subscribeBrowserChatUIStream,

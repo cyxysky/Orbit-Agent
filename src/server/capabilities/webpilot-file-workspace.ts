@@ -1,5 +1,5 @@
-import { createNodeFileWorkspace } from '@webpilot/capability-file/node/workspace';
-import type { CapabilityConfiguration } from '@webpilot/capability-sdk';
+import { createNodeFileWorkspace } from '@cjfclonedeep/capability-sdk/file/node/workspace';
+import type { CapabilityConfiguration } from '@cjfclonedeep/capability-sdk';
 import { artifactApiUrlFromRelative } from '@/lib/artifacts';
 import { artifactsRoot } from '@/server/storage/paths';
 

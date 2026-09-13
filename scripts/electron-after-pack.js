@@ -3,7 +3,7 @@ const path = require('node:path');
 const { createRequire } = require('node:module');
 const {
   assertSensitiveDataRuntime,
-} = require('../packages/capability-sensitive-data/scripts/runtime-layout.cjs');
+} = require('../packages/capability-sdk/scripts/sensitive-data/runtime-layout.cjs');
 
 function findBrowserRevisionDir(executablePath) {
   let dir = path.dirname(executablePath);

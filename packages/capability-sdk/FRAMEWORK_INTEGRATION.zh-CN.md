@@ -13,13 +13,13 @@
 ```sh
 npm init -y
 npm pkg set type=module
-npm install @webpilot/capability-sdk @webpilot/capability-host
+npm install @cjfclonedeep/capability-sdk
 npm install -D typescript tsx @types/node
 ```
 
 示例实现新能力，无需继承类。实现 `CapabilityProvider.manifest` 和 `createRuntime(context)`，工具提供 JSON Schema 与权威 parse，并返回 `CapabilityResult`。最小装配可直接使用 `CapabilityRegistry.register/resolve`；需要配置归一化和 Skill 目录时使用 host 的 mountCapabilities。
 
-SDK 不只有 interface：注册表检测能力、工具和 Skill ID 冲突，跟踪活动调用并管理释放；createCapabilityExecutor 执行串行分组和宿主策略。每个挂载实例共用一个执行器，不要每次调用创建一个。Node 专用进程/持久化辅助 API 在 /node。SDK 不依赖 AI SDK、MCP、React 或应用代码。新增普通能力遵循这些契约；sensitive-data 属于单独说明的模型中间件。
+SDK 不只有 interface：注册表检测能力、工具和 Skill ID 冲突，跟踪活动调用并管理释放；createCapabilityExecutor 执行串行分组和宿主策略。每个挂载实例共用一个执行器，不要每次调用创建一个。Node 专用进程/持久化辅助 API 在 /node。SDK 根入口不加载 AI SDK、MCP、React 或应用代码。新增普通能力遵循这些契约；sensitive-data 属于单独说明的模型中间件。
 
 ## 2. 创建 Provider
 
@@ -27,7 +27,7 @@ SDK 不只有 interface：注册表检测能力、工具和 Skill ID 冲突，�
 
 ```ts
 import { createCapabilityRuntime, defineCapabilityInput, defineCapabilityTool,
-  type CapabilityProvider } from '@webpilot/capability-sdk';
+  type CapabilityProvider } from '@cjfclonedeep/capability-sdk';
 const provider: CapabilityProvider = {
   manifest: { schemaVersion: 1, id: 'example.greeting', name: 'Greeting', version: '1.0.0',
     skills: [{ id: 'example.greeting/usage', title: 'Greeting',
@@ -72,9 +72,9 @@ export async function cleanup() {  }
 
 ```ts
 import { randomUUID } from 'node:crypto';
-import { mountCapabilities, EnvironmentCapabilityConfigStore } from '@webpilot/capability-host';
+import { mountCapabilities, EnvironmentCapabilityConfigStore } from '@cjfclonedeep/capability-sdk/host';
 import { createCapabilityExecutor, disposeOnce,
-  type CapabilityExecutionPolicyOptions } from '@webpilot/capability-sdk';
+  type CapabilityExecutionPolicyOptions } from '@cjfclonedeep/capability-sdk';
 import { providers, configurations, cleanup } from './provider.js';
 
 export async function openCapabilities(options: {
@@ -126,7 +126,7 @@ export async function openCapabilities(options: {
 保存为 `policy.ts`。该单用户示例授权显式选定的 Provider。共享 Agent 应将这些钩子连接到已有的用户权限和操作审批逻辑。若工具声明 prerequisite，还需提供 policy.prerequisite，验证指定前置条件，不满足时抛错。
 
 ```ts
-import type { CapabilityExecutionPolicyOptions } from '@webpilot/capability-sdk';
+import type { CapabilityExecutionPolicyOptions } from '@cjfclonedeep/capability-sdk';
 import { providers } from './provider.js';
 
 // This sample host grants the permissions of its explicitly configured providers.
@@ -184,7 +184,7 @@ try {
 ## AI SDK：完整模型驱动 Agent
 
 ```sh
-npm install @webpilot/capability-adapter-ai-sdk "ai@>=7 <8" @ai-sdk/openai-compatible
+npm install @cjfclonedeep/capability-sdk "ai@>=7 <8" @ai-sdk/openai-compatible
 ```
 
 选择支持工具调用的 Chat Completions 兼容服务。在进程环境中设置 AGENT_MODEL_BASE_URL（包含 API 路径前缀）、AGENT_MODEL_ID，可选 AGENT_MODEL_API_KEY。保存为 agent.ts，与 provider.ts、policy.ts 放在一起，执行 `npx tsx agent.ts "你的任务"`。这是 first-call.ts 的替代入口，不要在其内部重复挂载。默认提示词只要求说明工具，实际执行时传入你的任务。
@@ -193,7 +193,7 @@ npm install @webpilot/capability-adapter-ai-sdk "ai@>=7 <8" @ai-sdk/openai-compa
 import { randomUUID } from 'node:crypto';
 import { ToolLoopAgent } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { mountAISDKCapabilities, EnvironmentCapabilityConfigStore } from '@webpilot/capability-adapter-ai-sdk';
+import { mountAISDKCapabilities, EnvironmentCapabilityConfigStore } from '@cjfclonedeep/capability-sdk/ai-sdk';
 import { providers, configurations, cleanup } from './provider.js';
 import { policy, beforeInvoke } from './policy.js';
 
@@ -244,7 +244,7 @@ try {
 
 ## 排查与接入完成标准
 
-- 找不到模块：检查发布 exports、版本一致性、Node/ESM 配置，安装对应入口的可选 peer。
+- 找不到模块：检查发布 exports、版本一致性、Node/ESM 配置，确认 npm 已完整安装包依赖。
 - 找不到工具：检查 runtime.tools、启用的能力 ID 与允许的工具名，不要根据目录名猜测。
 - 参数校验失败：使用实际 inputSchema 与 parse 错误，不复制其他入口的 Schema。
 - 操作被禁用/不可用：检查归一化配置、所选后端、系统程序和宿主回调。
@@ -254,25 +254,24 @@ try {
 
 ## 发布入口
 
-- `@webpilot/capability-sdk/node`
-- `@webpilot/capability-sdk`
+- `@cjfclonedeep/capability-sdk/node`
+- `@cjfclonedeep/capability-sdk`
 
 ## 具体能力 Provider
 
 将 provider.ts 替换为对应能力 README 的实现，保留 integration.ts 的执行和生命周期。
 
-- [capability-file](../capability-file/README.zh-CN.md)
-- [capability-browser](../capability-browser/README.zh-CN.md)
-- [capability-chart](../capability-chart/README.zh-CN.md)
-- [capability-knowledge](../capability-knowledge/README.zh-CN.md)
-- [capability-workflow](../capability-workflow/README.zh-CN.md)
-- [capability-git](../capability-git/README.zh-CN.md)
-- [capability-connectors](../capability-connectors/README.zh-CN.md)
-- [capability-communication](../capability-communication/README.zh-CN.md)
-- [capability-computer](../capability-computer/README.zh-CN.md)
-- [capability-data](../capability-data/README.zh-CN.md)
-- [capability-media](../capability-media/README.zh-CN.md)
-- [capability-code-sandbox](../capability-code-sandbox/README.zh-CN.md)
+- [capability-file](../capability-sdk/docs/file/README.zh-CN.md)
+- [capability-browser](../capability-sdk/docs/browser/README.zh-CN.md)
+- [capability-chart](../capability-sdk/docs/chart/README.zh-CN.md)
+- [capability-knowledge](../capability-sdk/docs/knowledge/README.zh-CN.md)
+- [capability-sdk/execution/terminal](../capability-sdk/docs/execution/TERMINAL.zh-CN.md)
+- [capability-sdk/integrations/connectors](../capability-sdk/docs/integrations/CONNECTORS.zh-CN.md)
+- [capability-sdk/integrations/communication](../capability-sdk/docs/integrations/COMMUNICATION.zh-CN.md)
+- [capability-computer](../capability-sdk/docs/computer/README.zh-CN.md)
+- [capability-data](../capability-sdk/docs/data/README.zh-CN.md)
+- [capability-media](../capability-sdk/docs/media/README.zh-CN.md)
+- [capability-sdk/execution/code](../capability-sdk/docs/execution/CODE.zh-CN.md)
 
 ## 跨框架结构化回复接入
 
@@ -284,8 +283,8 @@ try {
 通用框架只需要连接以下接口，不需要自己实现图表判断和去重：
 
 ```ts
-import { ResponseSession } from '@webpilot/capability-sdk';
-import { markdownBlock } from '@webpilot/capability-response';
+import { ResponseSession } from '@cjfclonedeep/capability-sdk';
+import { markdownBlock } from '@cjfclonedeep/capability-sdk/responses';
 
 const session = new ResponseSession(mounted.responses);
 const input = session.registry.input();

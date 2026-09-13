@@ -14,7 +14,7 @@ import {
   type BrowserCodeAttachmentBinding,
   type BrowserCodeCredentialBinding,
   type BrowserCodeUidReference,
-} from '@webpilot/capability-browser/node';
+} from '@cjfclonedeep/capability-sdk/browser/node';
 
 let browserServer: BrowserServer;
 let browser: Browser;

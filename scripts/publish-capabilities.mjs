@@ -1,28 +1,11 @@
 import { spawnSync } from 'node:child_process';
 
 const packages = [
-  '@webpilot/capability-sdk',
-  '@webpilot/capability-response',
-  '@webpilot/capability-host',
-  '@webpilot/capability-adapter-ai-sdk',
-  '@webpilot/capability-adapter-mcp',
-  '@webpilot/capability-browser',
-  '@webpilot/capability-chart',
-  '@webpilot/capability-maps',
-  '@webpilot/capability-file',
-  '@webpilot/capability-code-sandbox',
-  '@webpilot/capability-connectors',
-  '@webpilot/capability-knowledge',
-  '@webpilot/capability-data',
-  '@webpilot/capability-media',
-  '@webpilot/capability-communication',
-  '@webpilot/capability-git',
-  '@webpilot/capability-computer',
-  '@webpilot/capability-workflow',
-  '@webpilot/capability-sensitive-data',
+  '@cjfclonedeep/capability-sdk',
 ];
 const dryRun = process.argv.includes('--dry-run');
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const npmCli = process.env.npm_execpath;
 
 for (const packageName of packages) {
   const args = [
@@ -31,6 +14,10 @@ for (const packageName of packages) {
     '--access', 'public',
     ...(dryRun ? ['--dry-run'] : []),
   ];
-  const result = spawnSync(npm, args, { stdio: 'inherit' });
+
+  const result = npmCli
+    ? spawnSync(process.execPath, [npmCli, ...args], { stdio: 'inherit' })
+    : spawnSync(npm, args, { stdio: 'inherit', shell: process.platform === 'win32' });
+  if (result.error) throw result.error;
   if (result.status !== 0) process.exit(result.status || 1);
 }

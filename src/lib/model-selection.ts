@@ -1,5 +1,5 @@
-import { parseMediaModelSelection, mediaModelTypeDefinitions, mediaConfigurationForProviders } from '@webpilot/capability-media/model-settings';
-export { mediaModelSelectionId, parseMediaModelSelection } from '@webpilot/capability-media/model-settings';
+import { parseMediaModelSelection, mediaModelTypeDefinitions, mediaConfigurationForProviders } from '@cjfclonedeep/capability-sdk/media/model-settings';
+export { mediaModelSelectionId, parseMediaModelSelection } from '@cjfclonedeep/capability-sdk/media/model-settings';
 import {
   defaultModelByProvider,
   defaultModelForProvider,

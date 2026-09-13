@@ -1,4 +1,4 @@
-import type { CommunicationContent } from '@webpilot/capability-communication';
+import type { CommunicationContent } from '@cjfclonedeep/capability-sdk/integrations/communication';
 import type { BrowserChatMessage } from '@/server/ai/agents/browser-chat.service';
 import { responseHandlers } from '@/server/capabilities/response-handlers';
 import { communicationReplyContents } from './communication-reply';

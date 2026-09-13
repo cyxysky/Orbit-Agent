@@ -77,7 +77,6 @@ import {
   Folder,
   FolderOpen,
   Gauge,
-  GitBranch,
   Globe,
   ImageIcon,
   ImageUp,
@@ -111,6 +110,7 @@ import {
   SquareArrowOutUpRight,
   Square,
   SquareTerminal,
+  Terminal,
   Star,
   Trash2,
   UserRound,
@@ -260,7 +260,7 @@ import {
 } from '@/components/browser-chat-log-model';
 import { useI18n } from '@/i18n/I18nProvider';
 import { readApiJson } from '@/lib/api-client';
-import { browserSessionGroupLabel } from '@webpilot/capability-browser/session-group';
+import { browserSessionGroupLabel } from '@cjfclonedeep/capability-sdk/browser/session-group';
 import { fuzzyRetrievalScore } from '@/lib/fuzzy-retrieval';
 import {
   browserChatSessionDisplayTitle,
@@ -1037,7 +1037,7 @@ function browserChatToolLabel(name: string, input: unknown, t: (value: string) =
     file: '文件操作',
     fileVisual: '视觉检查',
     finalResponse: '生成回复',
-    git: 'Git',
+    terminal: '本地终端',
     knowledge: '知识库',
     memory: '记忆管理',
     media: '媒体',
@@ -1047,7 +1047,6 @@ function browserChatToolLabel(name: string, input: unknown, t: (value: string) =
     readSubagent: '读取子 Agent',
     spawnSubagents: '子 Agent',
     waitForHumanVerification: '等待人工验证',
-    workflow: '工作流程',
   };
   if (labels[name]) return t(labels[name]);
 
@@ -1147,7 +1146,7 @@ function BrowserChatToolIcon({ input, name }: { input?: unknown; name: string })
     return <Clapperboard size={13} />;
   }
   if (name === 'communication') return action === 'send' ? <SendHorizontal size={13} /> : <MessageSquare size={13} />;
-  if (name === 'git') return <GitBranch size={13} />;
+  if (name === 'terminal') return <Terminal size={13} />;
   if (name === 'computer') {
     if (action === 'click') return <MousePointer2 size={13} />;
     if (action === 'type') return <PencilLine size={13} />;
@@ -1156,7 +1155,6 @@ function BrowserChatToolIcon({ input, name }: { input?: unknown; name: string })
     if (action === 'screenshot') return <ImageIcon size={13} />;
     return <MonitorCog size={13} />;
   }
-  if (name === 'workflow') return <Workflow size={13} />;
   if (name === 'chart') return <ChartNoAxesCombined size={13} />;
   if (name === 'maps') return <MapPin size={13} />;
   if (name === 'skill') return <Sparkles size={13} />;
@@ -1841,14 +1839,17 @@ function browserChatUIMessageOutputCycles(messages: BrowserChatUIMessage[], sess
     .flatMap((message) => message.parts.flatMap((part) => part.type === 'data-outputCycle' ? [part.data] : []));
 }
 
-function appendMissingBrowserChatOutputCycles(
+function mergeBrowserChatOutputCycleStreams(
   current: BrowserChatAiOutputCycle[] | undefined,
   incoming: BrowserChatAiOutputCycle[],
 ) {
   if (!incoming.length) return current || emptyBrowserChatOutputCycles;
-  const ids = new Set((current || []).map((cycle) => cycle.id));
-  const additions = incoming.filter((cycle) => !ids.has(cycle.id));
-  return additions.length ? [...(current || []), ...additions] : current || emptyBrowserChatOutputCycles;
+  const byId = new Map((current || []).map((cycle) => [cycle.id, cycle]));
+  const updates = incoming.filter((cycle) => {
+    const previous = byId.get(cycle.id);
+    return !previous || (cycle.revision !== undefined && cycle.revision > (previous.revision || 0));
+  });
+  return updates.length ? mergeBrowserChatRealtimeRecords(current, updates) : current || emptyBrowserChatOutputCycles;
 }
 
 function browserChatUIMessageSubagents(messages: BrowserChatUIMessage[], sessionId: string) {
@@ -1918,7 +1919,10 @@ function overlayBrowserChatUIMessages(
     if (previous?.status && !['running', 'queued'].includes(previous.status)) continue;
     if (previous?.id === streamed.id && previous.updatedAt && streamed.updatedAt
       && previous.updatedAt > streamed.updatedAt) continue;
-    if (index >= 0) result[index] = { ...result[index], ...streamed };
+    if (index >= 0) result[index] = { ...result[index], ...streamed,
+      activity: streamed.activity && (!previous?.activity?.updatedAt || streamed.activity.updatedAt >= previous.activity.updatedAt)
+        ? streamed.activity : previous?.activity,
+    };
     else insertBrowserChatMessageChronologically(result, streamed);
   }
   return result;
@@ -2035,7 +2039,7 @@ function mergeBrowserChatSessionRealtimePatch(
   // freeze even when messages/steps are merged correctly.
   const outputCycles = mergeBrowserChatRealtimeRecords(current.outputCycles, sessionPatch.outputCycles);
   const subagents = mergeBrowserChatRealtimeSubagents(current.subagents, sessionPatch.subagents);
-  return normalizeSession({
+  const normalized = normalizeSession({
     ...current,
     ...(applySessionPatch ? sessionPatch : {}),
     outputCycles,
@@ -2045,6 +2049,11 @@ function mergeBrowserChatSessionRealtimePatch(
     subagents,
     ...collections,
   });
+  if (normalized.messages.length === current.messages.length
+    && normalized.messages.every((message, index) => message === current.messages[index])) {
+    normalized.messages = current.messages;
+  }
+  return normalized;
 }
 
 function sessionSortTime(session: BrowserChatSession) {
@@ -4251,7 +4260,7 @@ const BrowserChatProcessDisclosure = memo(function BrowserChatProcessDisclosure(
   const autoCloseTimerRef = useRef(0);
   const [liveNowMs, setLiveNowMs] = useState(() => Date.now());
   const elapsed = formatBrowserChatElapsedTime(browserChatMessageElapsedMs(
-    running && message.activity?.startedAt ? { ...message, createdAt: message.activity.startedAt } : message,
+    message,
     running ? liveNowMs : undefined,
   ));
   const setDisclosureExpanded = useCallback((nextExpanded: boolean) => {
@@ -8292,7 +8301,7 @@ export function BrowserChatWorkspace({
       steps: browserChatUIMessageSteps(currentRequestUIMessages, session?.id || ''),
     }).steps;
   }, [currentRequestUIMessages, session?.id, session?.steps]));
-  const outputCycles = useSharedBrowserChatValue(useMemo(() => appendMissingBrowserChatOutputCycles(
+  const outputCycles = useSharedBrowserChatValue(useMemo(() => mergeBrowserChatOutputCycleStreams(
     session?.outputCycles,
     browserChatUIMessageOutputCycles(currentRequestUIMessages, session?.id || ''),
   ), [currentRequestUIMessages, session?.id, session?.outputCycles]));

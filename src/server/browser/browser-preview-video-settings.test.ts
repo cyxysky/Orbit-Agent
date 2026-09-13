@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { browserPreviewVideoDimensions } from '@webpilot/capability-browser/node';
+import { browserPreviewVideoDimensions } from '@cjfclonedeep/capability-sdk/browser/node';
 
 function withVideoDimensions(width: string, height: string, action: () => void) {
   const previousWidth = process.env.BROWSER_PREVIEW_VIDEO_MAX_WIDTH;

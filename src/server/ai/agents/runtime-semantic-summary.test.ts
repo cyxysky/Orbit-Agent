@@ -6,8 +6,8 @@ import { fallbackRuntimeContinuationSummary } from './runtime-context-compressio
 import { normalizeBrowserChatModelContext } from './browser-chat-model-context';
 import { assembleRuntimeContext, deriveRuntimeTaskState, runtimeContextMessageRef } from './runtime-context-assembler';
 import { hiddenRuntimeSkillContent, hiddenRuntimeSkillIdsInModelContext, requireHiddenRuntimeSkillRead } from './hidden-runtime-skills';
-import { fileArtifactRuntimeSkillId } from '@webpilot/capability-file/runtime-skill';
-import { chartRuntimeSkillId } from '@webpilot/capability-chart/runtime-skill';
+import { fileArtifactRuntimeSkillId } from '@cjfclonedeep/capability-sdk/file/runtime-skill';
+import { chartRuntimeSkillId } from '@cjfclonedeep/capability-sdk/chart/runtime-skill';
 import { runtimeSummaryRecord } from './runtime-context-materials';
 
 function state(ref = 'ctx_user') {

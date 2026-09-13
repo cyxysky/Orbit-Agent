@@ -4,25 +4,24 @@ import { randomUUID } from 'node:crypto';
 import { copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import ffmpegStaticPath from 'ffmpeg-static';
-import type { CapabilityProvider, CapabilityRunContext } from '@webpilot/capability-sdk';
-import { createCodeSandboxCapability } from '@webpilot/capability-code-sandbox';
-import { createNodeProcessCodeSandbox } from '@webpilot/capability-code-sandbox/node';
-import { createHttpCodeSandboxExecutor } from '@webpilot/capability-code-sandbox/remote';
-import { createNodeConnectorsCapability } from '@webpilot/capability-connectors/node';
-import type { AgentConnector } from '@webpilot/capability-connectors';
-import { createNodeKnowledgeCapability } from '@webpilot/capability-knowledge/node';
-import { createDataCapability, createDataSourceRegistry, type AgentDataSource } from '@webpilot/capability-data';
-import { createMediaCapability, type MediaOperations } from '@webpilot/capability-media';
-import { createFfmpegMediaOperations } from '@webpilot/capability-media/node';
-import { fileFormatForMimeType } from '@webpilot/capability-file';
-import { createAiSdkMediaGenerationOperations } from '@webpilot/capability-media/ai-sdk';
+import type { CapabilityProvider, CapabilityRunContext } from '@cjfclonedeep/capability-sdk';
+import { createCodeSandboxCapability } from '@cjfclonedeep/capability-sdk/execution/code';
+import { createNodeProcessCodeSandbox } from '@cjfclonedeep/capability-sdk/execution/code/node';
+import { createHttpCodeSandboxExecutor } from '@cjfclonedeep/capability-sdk/execution/code/remote';
+import { createNodeConnectorsCapability } from '@cjfclonedeep/capability-sdk/integrations/connectors/node';
+import type { AgentConnector } from '@cjfclonedeep/capability-sdk/integrations/connectors';
+import { createNodeKnowledgeCapability } from '@cjfclonedeep/capability-sdk/knowledge/node';
+import { createDataCapability, createDataSourceRegistry, type AgentDataSource } from '@cjfclonedeep/capability-sdk/data';
+import { createMediaCapability, type MediaOperations } from '@cjfclonedeep/capability-sdk/media';
+import { createFfmpegMediaOperations } from '@cjfclonedeep/capability-sdk/media/node';
+import { fileFormatForMimeType } from '@cjfclonedeep/capability-sdk/file';
+import { createAiSdkMediaGenerationOperations } from '@cjfclonedeep/capability-sdk/media/ai-sdk';
 import { store } from '@/server/db/store';
-import { createNodeCommunicationCapability } from '@webpilot/capability-communication/node';
-import type { CommunicationChannel } from '@webpilot/capability-communication';
-import { createNodeGitCapability } from '@webpilot/capability-git/node';
-import { createNodeComputerCapability } from '@webpilot/capability-computer/node';
-import { createNodeWorkflowCapability } from '@webpilot/capability-workflow/node';
-import type { BrowserCodeAttachmentBinding } from '@webpilot/capability-browser/node';
+import { createNodeCommunicationCapability } from '@cjfclonedeep/capability-sdk/integrations/communication/node';
+import type { CommunicationChannel } from '@cjfclonedeep/capability-sdk/integrations/communication';
+import { createNodeTerminalCapability } from '@cjfclonedeep/capability-sdk/execution/terminal/node';
+import { createNodeComputerCapability } from '@cjfclonedeep/capability-sdk/computer/node';
+import type { BrowserCodeAttachmentBinding } from '@cjfclonedeep/capability-sdk/browser/node';
 import { artifactApiUrl } from '@/lib/artifacts';
 import { artifactPath, artifactsRoot, codeSandboxRoot } from '@/server/storage/paths';
 import { communicationArtifactReader } from '@/server/storage/artifact-access';
@@ -157,14 +156,13 @@ export function createAgentInfrastructureProviders(input: {
     createDataCapability({ createRegistry: async () => createDataSourceRegistry(await configuredDataSources()) }),
     createMediaCapability({ createOperations: (context) => createConfiguredMediaOperations({ context, attachments: input.attachmentBindings || [] }) }),
     createNodeCommunicationCapability({ channels: configuredCommunicationChannels, draftDirectory: (context) => artifactPath('agent-infrastructure', 'communication', safeSegment(context.userId, 'shared')) }),
-    createNodeGitCapability({ repository: (context) => String(context.configuration.AGENT_GIT_REPOSITORY || '').trim() || process.cwd() }),
+    createNodeTerminalCapability(),
     createNodeComputerCapability({
       screenshotDirectory: (context) => artifactPath(
         safeSegment(context.runId, 'shared'),
         'computer',
       ),
     }),
-    createNodeWorkflowCapability({ directory: (context) => artifactPath('agent-infrastructure', 'workflows', safeSegment(context.userId, 'shared')) }),
   ];
 }
 
@@ -175,7 +173,6 @@ export const agentInfrastructureToolNames = Object.freeze([
   'data',
   'media',
   'communication',
-  'git',
+  'terminal',
   'computer',
-  'workflow',
 ] as const);

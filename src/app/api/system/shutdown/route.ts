@@ -1,4 +1,4 @@
-import { closeAllBrowserSessions } from '@webpilot/capability-browser/node';
+import { closeAllBrowserSessions } from '@cjfclonedeep/capability-sdk/browser/node';
 import { ApiRequestError, apiError, apiJson } from '@/server/http/api-request';
 
 export const dynamic = 'force-dynamic';

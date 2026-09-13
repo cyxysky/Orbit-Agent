@@ -27,311 +27,311 @@
       "@/*": [
         "./src/*"
       ],
-      "@webpilot/capability-sdk": [
-        "./packages/capability-sdk/src/index.ts"
-      ],
-      "@webpilot/capability-sdk/node": [
+      "@cjfclonedeep/capability-sdk/node": [
         "./packages/capability-sdk/src/node.ts"
       ],
-      "@webpilot/capability-host": [
-        "./packages/capability-host/src/index.ts"
+      "@cjfclonedeep/capability-sdk": [
+        "./packages/capability-sdk/src/index.ts"
       ],
-      "@webpilot/capability-host/node": [
-        "./packages/capability-host/src/node.ts"
+      "@cjfclonedeep/capability-sdk/host": [
+        "./packages/capability-sdk/src/host/index.ts"
       ],
-      "@webpilot/capability-host/typeorm": [
-        "./packages/capability-host/src/typeorm.ts"
+      "@cjfclonedeep/capability-sdk/typeorm": [
+        "./packages/capability-sdk/src/host/typeorm.ts"
       ],
-      "@webpilot/capability-adapter-ai-sdk": [
-        "./packages/capability-adapter-ai-sdk/src/index.ts"
+      "@cjfclonedeep/capability-sdk/responses": [
+        "./packages/capability-sdk/src/responses/index.ts"
       ],
-      "@webpilot/capability-adapter-ai-sdk/node": [
-        "./packages/capability-adapter-ai-sdk/src/node.ts"
+      "@cjfclonedeep/capability-sdk/responses/react": [
+        "./packages/capability-sdk/src/responses/react.tsx"
       ],
-      "@webpilot/capability-adapter-ai-sdk/typeorm": [
-        "./packages/capability-adapter-ai-sdk/src/typeorm.ts"
+      "@cjfclonedeep/capability-sdk/ai-sdk": [
+        "./packages/capability-sdk/src/adapters/ai-sdk/index.ts"
       ],
-      "@webpilot/capability-adapter-mcp": [
-        "./packages/capability-adapter-mcp/src/index.ts"
+      "@cjfclonedeep/capability-sdk/ai-sdk/node": [
+        "./packages/capability-sdk/src/adapters/ai-sdk/node.ts"
       ],
-      "@webpilot/capability-browser": [
-        "./packages/capability-browser/src/index.ts"
+      "@cjfclonedeep/capability-sdk/ai-sdk/typeorm": [
+        "./packages/capability-sdk/src/adapters/ai-sdk/typeorm.ts"
       ],
-      "@webpilot/capability-browser/node": [
-        "./packages/capability-browser/src/node.ts"
+      "@cjfclonedeep/capability-sdk/mcp": [
+        "./packages/capability-sdk/src/adapters/mcp/index.ts"
       ],
-      "@webpilot/capability-browser/runtime-skill": [
-        "./packages/capability-browser/src/runtime-skill.ts"
+      "@cjfclonedeep/capability-sdk/browser": [
+        "./packages/capability-sdk/src/browser/index.ts"
       ],
-      "@webpilot/capability-browser/settings": [
-        "./packages/capability-browser/src/settings.ts"
+      "@cjfclonedeep/capability-sdk/browser/node": [
+        "./packages/capability-sdk/src/browser/node.ts"
       ],
-      "@webpilot/capability-browser/session-group": [
-        "./packages/capability-browser/src/session-group.ts"
+      "@cjfclonedeep/capability-sdk/browser/runtime-skill": [
+        "./packages/capability-sdk/src/browser/runtime-skill.ts"
       ],
-      "@webpilot/capability-browser/mcp": [
-        "./packages/capability-browser/src/mcp.ts"
+      "@cjfclonedeep/capability-sdk/browser/settings": [
+        "./packages/capability-sdk/src/browser/settings.ts"
       ],
-      "@webpilot/capability-chart": [
-        "./packages/capability-chart/src/index.ts"
+      "@cjfclonedeep/capability-sdk/browser/session-group": [
+        "./packages/capability-sdk/src/browser/session-group.ts"
       ],
-      "@webpilot/capability-maps": [
-        "./packages/capability-maps/src/index.ts"
+      "@cjfclonedeep/capability-sdk/browser/mcp": [
+        "./packages/capability-sdk/src/browser/mcp.ts"
       ],
-      "@webpilot/capability-maps/core": [
-        "./packages/capability-maps/src/core.ts"
+      "@cjfclonedeep/capability-sdk/execution/code": [
+        "./packages/capability-sdk/src/execution/code/index.ts"
       ],
-      "@webpilot/capability-maps/node": [
-        "./packages/capability-maps/src/node.ts"
+      "@cjfclonedeep/capability-sdk/execution/code/node": [
+        "./packages/capability-sdk/src/execution/code/node.ts"
       ],
-      "@webpilot/capability-maps/react": [
-        "./packages/capability-maps/src/react.tsx"
+      "@cjfclonedeep/capability-sdk/execution/code/remote": [
+        "./packages/capability-sdk/src/execution/code/remote.ts"
       ],
-      "@webpilot/capability-maps/settings": [
-        "./packages/capability-maps/src/settings.ts"
+      "@cjfclonedeep/capability-sdk/execution/code/mcp": [
+        "./packages/capability-sdk/src/execution/code/mcp.ts"
       ],
-      "@webpilot/capability-chart/node": [
-        "./packages/capability-chart/src/node.ts"
+      "@cjfclonedeep/capability-sdk/execution/code/runtime-skill": [
+        "./packages/capability-sdk/src/execution/code/runtime-skill.ts"
       ],
-      "@webpilot/capability-chart/react": [
-        "./packages/capability-chart/src/react.tsx"
+      "@cjfclonedeep/capability-sdk/execution/code/settings": [
+        "./packages/capability-sdk/src/execution/code/settings.ts"
       ],
-      "@webpilot/capability-chart/runtime-skill": [
-        "./packages/capability-chart/src/runtime-skill.ts"
+      "@cjfclonedeep/capability-sdk/execution/terminal": [
+        "./packages/capability-sdk/src/execution/terminal/index.ts"
       ],
-      "@webpilot/capability-chart/settings": [
-        "./packages/capability-chart/src/settings.ts"
+      "@cjfclonedeep/capability-sdk/execution/terminal/node": [
+        "./packages/capability-sdk/src/execution/terminal/node.ts"
       ],
-      "@webpilot/capability-chart/mcp": [
-        "./packages/capability-chart/src/mcp.ts"
+      "@cjfclonedeep/capability-sdk/execution/terminal/mcp": [
+        "./packages/capability-sdk/src/execution/terminal/mcp.ts"
       ],
-      "@webpilot/capability-code-sandbox": [
-        "./packages/capability-code-sandbox/src/index.ts"
+      "@cjfclonedeep/capability-sdk/execution/terminal/runtime-skill": [
+        "./packages/capability-sdk/src/execution/terminal/runtime-skill.ts"
       ],
-      "@webpilot/capability-code-sandbox/node": [
-        "./packages/capability-code-sandbox/src/node.ts"
+      "@cjfclonedeep/capability-sdk/execution/terminal/settings": [
+        "./packages/capability-sdk/src/execution/terminal/settings.ts"
       ],
-      "@webpilot/capability-code-sandbox/remote": [
-        "./packages/capability-code-sandbox/src/remote.ts"
+      "@cjfclonedeep/capability-sdk/execution": [
+        "./packages/capability-sdk/src/execution/index.ts"
       ],
-      "@webpilot/capability-code-sandbox/runtime-skill": [
-        "./packages/capability-code-sandbox/src/runtime-skill.ts"
+      "@cjfclonedeep/capability-sdk/execution/node": [
+        "./packages/capability-sdk/src/execution/node.ts"
       ],
-      "@webpilot/capability-code-sandbox/settings": [
-        "./packages/capability-code-sandbox/src/settings.ts"
+      "@cjfclonedeep/capability-sdk/chart": [
+        "./packages/capability-sdk/src/chart/index.ts"
       ],
-      "@webpilot/capability-code-sandbox/mcp": [
-        "./packages/capability-code-sandbox/src/mcp.ts"
+      "@cjfclonedeep/capability-sdk/chart/core": [
+        "./packages/capability-sdk/src/chart/core.ts"
       ],
-      "@webpilot/capability-connectors": [
-        "./packages/capability-connectors/src/index.ts"
+      "@cjfclonedeep/capability-sdk/chart/node": [
+        "./packages/capability-sdk/src/chart/node.ts"
       ],
-      "@webpilot/capability-connectors/node": [
-        "./packages/capability-connectors/src/node.ts"
+      "@cjfclonedeep/capability-sdk/chart/react": [
+        "./packages/capability-sdk/src/chart/react.tsx"
       ],
-      "@webpilot/capability-connectors/runtime-skill": [
-        "./packages/capability-connectors/src/runtime-skill.ts"
+      "@cjfclonedeep/capability-sdk/chart/runtime-skill": [
+        "./packages/capability-sdk/src/chart/runtime-skill.ts"
       ],
-      "@webpilot/capability-connectors/settings": [
-        "./packages/capability-connectors/src/settings.ts"
+      "@cjfclonedeep/capability-sdk/chart/settings": [
+        "./packages/capability-sdk/src/chart/settings.ts"
       ],
-      "@webpilot/capability-connectors/mcp": [
-        "./packages/capability-connectors/src/mcp.ts"
+      "@cjfclonedeep/capability-sdk/chart/mcp": [
+        "./packages/capability-sdk/src/chart/mcp.ts"
       ],
-      "@webpilot/capability-knowledge": [
-        "./packages/capability-knowledge/src/index.ts"
+      "@cjfclonedeep/capability-sdk/chart/response": [
+        "./packages/capability-sdk/src/chart/response.ts"
       ],
-      "@webpilot/capability-knowledge/node": [
-        "./packages/capability-knowledge/src/node.ts"
+      "@cjfclonedeep/capability-sdk/chart/response-react": [
+        "./packages/capability-sdk/src/chart/response-react.tsx"
       ],
-      "@webpilot/capability-knowledge/runtime-skill": [
-        "./packages/capability-knowledge/src/runtime-skill.ts"
+      "@cjfclonedeep/capability-sdk/chart/response-node": [
+        "./packages/capability-sdk/src/chart/response-node.ts"
       ],
-      "@webpilot/capability-knowledge/settings": [
-        "./packages/capability-knowledge/src/settings.ts"
+      "@cjfclonedeep/capability-sdk/maps": [
+        "./packages/capability-sdk/src/maps/index.ts"
       ],
-      "@webpilot/capability-knowledge/mcp": [
-        "./packages/capability-knowledge/src/mcp.ts"
+      "@cjfclonedeep/capability-sdk/maps/core": [
+        "./packages/capability-sdk/src/maps/core.ts"
       ],
-      "@webpilot/capability-data": [
-        "./packages/capability-data/src/index.ts"
+      "@cjfclonedeep/capability-sdk/maps/node": [
+        "./packages/capability-sdk/src/maps/node.ts"
       ],
-      "@webpilot/capability-data/typeorm": [
-        "./packages/capability-data/src/typeorm.ts"
+      "@cjfclonedeep/capability-sdk/maps/react": [
+        "./packages/capability-sdk/src/maps/react.tsx"
       ],
-      "@webpilot/capability-data/runtime-skill": [
-        "./packages/capability-data/src/runtime-skill.ts"
+      "@cjfclonedeep/capability-sdk/maps/settings": [
+        "./packages/capability-sdk/src/maps/settings.ts"
       ],
-      "@webpilot/capability-data/settings": [
-        "./packages/capability-data/src/settings.ts"
+      "@cjfclonedeep/capability-sdk/maps/response": [
+        "./packages/capability-sdk/src/maps/response.ts"
       ],
-      "@webpilot/capability-data/mcp": [
-        "./packages/capability-data/src/mcp.ts"
+      "@cjfclonedeep/capability-sdk/maps/response-react": [
+        "./packages/capability-sdk/src/maps/response-react.tsx"
       ],
-      "@webpilot/capability-media": [
-        "./packages/capability-media/src/index.ts"
+      "@cjfclonedeep/capability-sdk/maps/response-node": [
+        "./packages/capability-sdk/src/maps/response-node.ts"
       ],
-      "@webpilot/capability-media/node": [
-        "./packages/capability-media/src/node.ts"
+      "@cjfclonedeep/capability-sdk/integrations/connectors": [
+        "./packages/capability-sdk/src/integrations/connectors/index.ts"
       ],
-      "@webpilot/capability-media/model-settings": [
-        "./packages/capability-media/src/model-settings.ts"
+      "@cjfclonedeep/capability-sdk/integrations/connectors/node": [
+        "./packages/capability-sdk/src/integrations/connectors/node.ts"
       ],
-      "@webpilot/capability-media/models": [
-        "./packages/capability-media/src/models.ts"
+      "@cjfclonedeep/capability-sdk/integrations/connectors/mcp": [
+        "./packages/capability-sdk/src/integrations/connectors/mcp.ts"
       ],
-      "@webpilot/capability-media/ai-sdk": [
-        "./packages/capability-media/src/ai-sdk.ts"
+      "@cjfclonedeep/capability-sdk/integrations/connectors/runtime-skill": [
+        "./packages/capability-sdk/src/integrations/connectors/runtime-skill.ts"
       ],
-      "@webpilot/capability-media/runtime-skill": [
-        "./packages/capability-media/src/runtime-skill.ts"
+      "@cjfclonedeep/capability-sdk/integrations/connectors/settings": [
+        "./packages/capability-sdk/src/integrations/connectors/settings.ts"
       ],
-      "@webpilot/capability-media/settings": [
-        "./packages/capability-media/src/settings.ts"
+      "@cjfclonedeep/capability-sdk/integrations/communication": [
+        "./packages/capability-sdk/src/integrations/communication/index.ts"
       ],
-      "@webpilot/capability-media/mcp": [
-        "./packages/capability-media/src/mcp.ts"
+      "@cjfclonedeep/capability-sdk/integrations/communication/node": [
+        "./packages/capability-sdk/src/integrations/communication/node.ts"
       ],
-      "@webpilot/capability-communication": [
-        "./packages/capability-communication/src/index.ts"
+      "@cjfclonedeep/capability-sdk/integrations/communication/mcp": [
+        "./packages/capability-sdk/src/integrations/communication/mcp.ts"
       ],
-      "@webpilot/capability-communication/node": [
-        "./packages/capability-communication/src/node.ts"
+      "@cjfclonedeep/capability-sdk/integrations/communication/runtime-skill": [
+        "./packages/capability-sdk/src/integrations/communication/runtime-skill.ts"
       ],
-      "@webpilot/capability-communication/runtime-skill": [
-        "./packages/capability-communication/src/runtime-skill.ts"
+      "@cjfclonedeep/capability-sdk/integrations/communication/settings": [
+        "./packages/capability-sdk/src/integrations/communication/settings.ts"
       ],
-      "@webpilot/capability-communication/settings": [
-        "./packages/capability-communication/src/settings.ts"
+      "@cjfclonedeep/capability-sdk/integrations": [
+        "./packages/capability-sdk/src/integrations/index.ts"
       ],
-      "@webpilot/capability-communication/mcp": [
-        "./packages/capability-communication/src/mcp.ts"
+      "@cjfclonedeep/capability-sdk/integrations/node": [
+        "./packages/capability-sdk/src/integrations/node.ts"
       ],
-      "@webpilot/capability-git": [
-        "./packages/capability-git/src/index.ts"
+      "@cjfclonedeep/capability-sdk/computer": [
+        "./packages/capability-sdk/src/computer/index.ts"
       ],
-      "@webpilot/capability-git/node": [
-        "./packages/capability-git/src/node.ts"
+      "@cjfclonedeep/capability-sdk/computer/node": [
+        "./packages/capability-sdk/src/computer/node.ts"
       ],
-      "@webpilot/capability-git/runtime-skill": [
-        "./packages/capability-git/src/runtime-skill.ts"
+      "@cjfclonedeep/capability-sdk/computer/mcp": [
+        "./packages/capability-sdk/src/computer/mcp.ts"
       ],
-      "@webpilot/capability-git/settings": [
-        "./packages/capability-git/src/settings.ts"
+      "@cjfclonedeep/capability-sdk/computer/runtime-skill": [
+        "./packages/capability-sdk/src/computer/runtime-skill.ts"
       ],
-      "@webpilot/capability-git/mcp": [
-        "./packages/capability-git/src/mcp.ts"
+      "@cjfclonedeep/capability-sdk/computer/settings": [
+        "./packages/capability-sdk/src/computer/settings.ts"
       ],
-      "@webpilot/capability-computer": [
-        "./packages/capability-computer/src/index.ts"
+      "@cjfclonedeep/capability-sdk/data": [
+        "./packages/capability-sdk/src/data/index.ts"
       ],
-      "@webpilot/capability-computer/node": [
-        "./packages/capability-computer/src/node.ts"
+      "@cjfclonedeep/capability-sdk/data/typeorm": [
+        "./packages/capability-sdk/src/data/typeorm.ts"
       ],
-      "@webpilot/capability-computer/runtime-skill": [
-        "./packages/capability-computer/src/runtime-skill.ts"
+      "@cjfclonedeep/capability-sdk/data/mcp": [
+        "./packages/capability-sdk/src/data/mcp.ts"
       ],
-      "@webpilot/capability-computer/settings": [
-        "./packages/capability-computer/src/settings.ts"
+      "@cjfclonedeep/capability-sdk/data/runtime-skill": [
+        "./packages/capability-sdk/src/data/runtime-skill.ts"
       ],
-      "@webpilot/capability-computer/mcp": [
-        "./packages/capability-computer/src/mcp.ts"
+      "@cjfclonedeep/capability-sdk/data/settings": [
+        "./packages/capability-sdk/src/data/settings.ts"
       ],
-      "@webpilot/capability-workflow": [
-        "./packages/capability-workflow/src/index.ts"
+      "@cjfclonedeep/capability-sdk/file": [
+        "./packages/capability-sdk/src/file/index.ts"
       ],
-      "@webpilot/capability-workflow/node": [
-        "./packages/capability-workflow/src/node.ts"
+      "@cjfclonedeep/capability-sdk/file/node": [
+        "./packages/capability-sdk/src/file/node.ts"
       ],
-      "@webpilot/capability-workflow/runtime-skill": [
-        "./packages/capability-workflow/src/runtime-skill.ts"
+      "@cjfclonedeep/capability-sdk/file/formats": [
+        "./packages/capability-sdk/src/file/formats.ts"
       ],
-      "@webpilot/capability-workflow/settings": [
-        "./packages/capability-workflow/src/settings.ts"
+      "@cjfclonedeep/capability-sdk/file/office": [
+        "./packages/capability-sdk/src/file/office/types.ts"
       ],
-      "@webpilot/capability-workflow/mcp": [
-        "./packages/capability-workflow/src/mcp.ts"
+      "@cjfclonedeep/capability-sdk/file/runtime-skill": [
+        "./packages/capability-sdk/src/file/runtime-skill.ts"
       ],
-      "@webpilot/capability-file": [
-        "./packages/capability-file/src/index.ts"
+      "@cjfclonedeep/capability-sdk/file/settings": [
+        "./packages/capability-sdk/src/file/settings.ts"
       ],
-      "@webpilot/capability-file/node": [
-        "./packages/capability-file/src/node.ts"
+      "@cjfclonedeep/capability-sdk/file/mcp": [
+        "./packages/capability-sdk/src/file/mcp.ts"
       ],
-      "@webpilot/capability-file/formats": [
-        "./packages/capability-file/src/formats.ts"
+      "@cjfclonedeep/capability-sdk/file/node/artifacts": [
+        "./packages/capability-sdk/src/file/node/artifacts.ts"
       ],
-      "@webpilot/capability-file/office": [
-        "./packages/capability-file/src/office/types.ts"
+      "@cjfclonedeep/capability-sdk/file/node/convert": [
+        "./packages/capability-sdk/src/file/node/convert.ts"
       ],
-      "@webpilot/capability-file/runtime-skill": [
-        "./packages/capability-file/src/runtime-skill.ts"
+      "@cjfclonedeep/capability-sdk/file/node/download": [
+        "./packages/capability-sdk/src/file/node/download.ts"
       ],
-      "@webpilot/capability-file/settings": [
-        "./packages/capability-file/src/settings.ts"
+      "@cjfclonedeep/capability-sdk/file/node/generate": [
+        "./packages/capability-sdk/src/file/node/generate.ts"
       ],
-      "@webpilot/capability-file/mcp": [
-        "./packages/capability-file/src/mcp.ts"
+      "@cjfclonedeep/capability-sdk/file/node/office": [
+        "./packages/capability-sdk/src/file/node/office.ts"
       ],
-      "@webpilot/capability-file/node/artifacts": [
-        "./packages/capability-file/src/node/artifacts.ts"
+      "@cjfclonedeep/capability-sdk/file/node/read": [
+        "./packages/capability-sdk/src/file/node/read.ts"
       ],
-      "@webpilot/capability-file/node/convert": [
-        "./packages/capability-file/src/node/convert.ts"
+      "@cjfclonedeep/capability-sdk/file/node/text-extraction": [
+        "./packages/capability-sdk/src/file/node/text-extraction.ts"
       ],
-      "@webpilot/capability-file/node/download": [
-        "./packages/capability-file/src/node/download.ts"
+      "@cjfclonedeep/capability-sdk/file/node/workspace": [
+        "./packages/capability-sdk/src/file/node/workspace.ts"
       ],
-      "@webpilot/capability-file/node/generate": [
-        "./packages/capability-file/src/node/generate.ts"
+      "@cjfclonedeep/capability-sdk/knowledge": [
+        "./packages/capability-sdk/src/knowledge/index.ts"
       ],
-      "@webpilot/capability-file/node/office": [
-        "./packages/capability-file/src/node/office.ts"
+      "@cjfclonedeep/capability-sdk/knowledge/node": [
+        "./packages/capability-sdk/src/knowledge/node.ts"
       ],
-      "@webpilot/capability-file/node/read": [
-        "./packages/capability-file/src/node/read.ts"
+      "@cjfclonedeep/capability-sdk/knowledge/mcp": [
+        "./packages/capability-sdk/src/knowledge/mcp.ts"
       ],
-      "@webpilot/capability-file/node/text-extraction": [
-        "./packages/capability-file/src/node/text-extraction.ts"
+      "@cjfclonedeep/capability-sdk/knowledge/runtime-skill": [
+        "./packages/capability-sdk/src/knowledge/runtime-skill.ts"
       ],
-      "@webpilot/capability-file/node/workspace": [
-        "./packages/capability-file/src/node/workspace.ts"
+      "@cjfclonedeep/capability-sdk/knowledge/settings": [
+        "./packages/capability-sdk/src/knowledge/settings.ts"
       ],
-      "@webpilot/capability-sensitive-data": [
-        "./packages/capability-sensitive-data/src/index.ts"
+      "@cjfclonedeep/capability-sdk/media": [
+        "./packages/capability-sdk/src/media/index.ts"
       ],
-      "@webpilot/capability-sensitive-data/ai-sdk": [
-        "./packages/capability-sensitive-data/src/ai-sdk.ts"
+      "@cjfclonedeep/capability-sdk/media/node": [
+        "./packages/capability-sdk/src/media/node.ts"
       ],
-      "@webpilot/capability-sensitive-data/node": [
-        "./packages/capability-sensitive-data/src/node.ts"
+      "@cjfclonedeep/capability-sdk/media/model-settings": [
+        "./packages/capability-sdk/src/media/model-settings.ts"
       ],
-      "@webpilot/capability-sensitive-data/settings": [
-        "./packages/capability-sensitive-data/src/settings.ts"
+      "@cjfclonedeep/capability-sdk/media/models": [
+        "./packages/capability-sdk/src/media/models.ts"
       ],
-      "@webpilot/capability-response": [
-        "./packages/capability-response/src/index.ts"
+      "@cjfclonedeep/capability-sdk/media/ai-sdk": [
+        "./packages/capability-sdk/src/media/ai-sdk.ts"
       ],
-      "@webpilot/capability-response/react": [
-        "./packages/capability-response/src/react.tsx"
+      "@cjfclonedeep/capability-sdk/media/mcp": [
+        "./packages/capability-sdk/src/media/mcp.ts"
       ],
-      "@webpilot/capability-chart/response": [
-        "./packages/capability-chart/src/response.ts"
+      "@cjfclonedeep/capability-sdk/media/runtime-skill": [
+        "./packages/capability-sdk/src/media/runtime-skill.ts"
       ],
-      "@webpilot/capability-chart/response-react": [
-        "./packages/capability-chart/src/response-react.tsx"
+      "@cjfclonedeep/capability-sdk/media/settings": [
+        "./packages/capability-sdk/src/media/settings.ts"
       ],
-      "@webpilot/capability-chart/response-node": [
-        "./packages/capability-chart/src/response-node.ts"
+      "@cjfclonedeep/capability-sdk/sensitive-data": [
+        "./packages/capability-sdk/src/sensitive-data/index.ts"
       ],
-      "@webpilot/capability-maps/response": [
-        "./packages/capability-maps/src/response.ts"
+      "@cjfclonedeep/capability-sdk/sensitive-data/ai-sdk": [
+        "./packages/capability-sdk/src/sensitive-data/ai-sdk.ts"
       ],
-      "@webpilot/capability-maps/response-react": [
-        "./packages/capability-maps/src/response-react.tsx"
+      "@cjfclonedeep/capability-sdk/sensitive-data/node": [
+        "./packages/capability-sdk/src/sensitive-data/node.ts"
       ],
-      "@webpilot/capability-maps/response-node": [
-        "./packages/capability-maps/src/response-node.ts"
+      "@cjfclonedeep/capability-sdk/sensitive-data/settings": [
+        "./packages/capability-sdk/src/sensitive-data/settings.ts"
+      ],
+      "@cjfclonedeep/capability-sdk/runtime": [
+        "./packages/capability-sdk/src/runtime.ts"
       ]
     }
   },

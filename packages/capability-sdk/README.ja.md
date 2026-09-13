@@ -1,6 +1,29 @@
-# @webpilot/capability-sdk
+# @cjfclonedeep/capability-sdk
 
 [English](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
+
+Cursor や他の MCP クライアントには [統合 MCP CLI](MCP-CLI.md) を使用できます。起動ファイルや追加依存は不要です。公開済み 0.2.1 には含まれません。
+
+```sh
+npx --no-install capability-mcp init cursor
+```
+
+[Grouped tool configuration / JSON Schema](MCP-CONFIG.zh-CN.md)
+
+能力の契約、実行、設定、応答、AI SDK/MCP アダプターと全ツールを一つのパッケージで提供します。
+
+npm 依存はすべて含まれます。ルートは契約と実行機能を公開し、すべてのツールやアダプターを一括ロードしません。通常の npm インストールでは postinstall が対応する Windows/Linux の実行環境も準備します。 [Runtime](RUNTIME.md) · [Tools](TOOLS.ja.md)
+
+| エントリ | 用途 |
+| --- | --- |
+| `.` | Contracts / Registry / Executor |
+| `/host`, `/node`, `/typeorm` | Configuration / Mount / Storage |
+| `/responses` | [Response schemas](docs/responses/README.md) |
+| `/responses/react` | React response renderers |
+| `/ai-sdk` | [AI SDK](docs/adapters/AI-SDK.ja.md) |
+| `/mcp` | [MCP](docs/adapters/MCP-ADAPTER.ja.md) |
+
+マウント、設定ストア、Skill カタログは [`/host`](HOST.ja.md) に含まれます。JSON ファイルストアは `/node`、任意の TypeORM ストアは `/typeorm` から利用します。ルートは Node や TypeORM のアダプターを読み込みません。
 
 移植可能な Capability 契約と共通の実行・ライフサイクル機構を定義します。
 
@@ -13,13 +36,13 @@ Node.js >=22.16 と ESM TypeScript を使います。例は 0.1.0 ワークス�
 ```sh
 npm init -y
 npm pkg set type=module
-npm install @webpilot/capability-sdk @webpilot/capability-host
+npm install @cjfclonedeep/capability-sdk
 npm install -D typescript tsx @types/node
 ```
 
 この例はクラスを継承せず新しい能力を実装します。`CapabilityProvider.manifest` と `createRuntime(context)` を実装し、ツールに JSON Schema と正式な parse を持たせ、`CapabilityResult` を返します。最小構成は `CapabilityRegistry.register/resolve`、設定の正規化と Skill カタログが必要なら host の mountCapabilities を使います。
 
-SDK は interface だけではありません。レジストリは能力・ツール・Skill ID の重複を検出し、実行中の呼び出しと解放を管理します。createCapabilityExecutor は直列グループとホストのポリシーを適用します。実行器は呼び出しごとではなくマウントごとに共有します。Node 専用のプロセス・永続化ヘルパーは /node にあります。AI SDK、MCP、React、アプリコードには依存しません。新しい通常の能力はこの契約に従い、sensitive-data は別途説明するモデルミドルウェアです。
+SDK は interface だけではありません。レジストリは能力・ツール・Skill ID の重複を検出し、実行中の呼び出しと解放を管理します。createCapabilityExecutor は直列グループとホストのポリシーを適用します。実行器は呼び出しごとではなくマウントごとに共有します。Node 専用のプロセス・永続化ヘルパーは /node にあります。ルートは AI SDK、MCP、React、アプリコードをインポートしません。アダプターは明示的なサブパスから使います。新しい通常の能力はこの契約に従い、sensitive-data は別途説明するモデルミドルウェアです。
 
 ## 2. Provider の作成
 
@@ -27,7 +50,7 @@ SDK は interface だけではありません。レジストリは能力・ツ�
 
 ```ts
 import { createCapabilityRuntime, defineCapabilityInput, defineCapabilityTool,
-  type CapabilityProvider } from '@webpilot/capability-sdk';
+  type CapabilityProvider } from '@cjfclonedeep/capability-sdk';
 const provider: CapabilityProvider = {
   manifest: { schemaVersion: 1, id: 'example.greeting', name: 'Greeting', version: '1.0.0',
     skills: [{ id: 'example.greeting/usage', title: 'Greeting',
@@ -72,9 +95,9 @@ export async function cleanup() {  }
 
 ```ts
 import { randomUUID } from 'node:crypto';
-import { mountCapabilities, EnvironmentCapabilityConfigStore } from '@webpilot/capability-host';
+import { mountCapabilities, EnvironmentCapabilityConfigStore } from '@cjfclonedeep/capability-sdk/host';
 import { createCapabilityExecutor, disposeOnce,
-  type CapabilityExecutionPolicyOptions } from '@webpilot/capability-sdk';
+  type CapabilityExecutionPolicyOptions } from '@cjfclonedeep/capability-sdk';
 import { providers, configurations, cleanup } from './provider.js';
 
 export async function openCapabilities(options: {
@@ -126,7 +149,7 @@ export async function openCapabilities(options: {
 `policy.ts` として保存します。この単一ユーザー例は明示した Provider を許可します。共有 Agent では既存の認証済み権限・操作承認に接続します。ツールが prerequisite を宣言する場合、policy.prerequisite で条件を検証し、不成立なら例外を投げます。
 
 ```ts
-import type { CapabilityExecutionPolicyOptions } from '@webpilot/capability-sdk';
+import type { CapabilityExecutionPolicyOptions } from '@cjfclonedeep/capability-sdk';
 import { providers } from './provider.js';
 
 // This sample host grants the permissions of its explicitly configured providers.
@@ -184,7 +207,7 @@ ok、data、content、error（code/retryable/details 含む）を保持し、sum
 ## AI SDK：モデルで動作する完全な Agent
 
 ```sh
-npm install @webpilot/capability-adapter-ai-sdk "ai@>=7 <8" @ai-sdk/openai-compatible
+npm install @cjfclonedeep/capability-sdk "ai@>=7 <8" @ai-sdk/openai-compatible
 ```
 
 ツール呼び出しに対応する Chat Completions 互換サービスを選びます。プロセス環境に AGENT_MODEL_BASE_URL（API 接頭辞含む）、AGENT_MODEL_ID、必要なら AGENT_MODEL_API_KEY を設定します。provider.ts、policy.ts と同じ場所に agent.ts として保存し、`npx tsx agent.ts "タスク"` で実行します。first-call.ts の代替入口であり、その中で再度マウントしません。既定のプロンプトは説明のみなので、操作には目的のタスクを渡します。
@@ -193,7 +216,7 @@ npm install @webpilot/capability-adapter-ai-sdk "ai@>=7 <8" @ai-sdk/openai-compa
 import { randomUUID } from 'node:crypto';
 import { ToolLoopAgent, stepCountIs } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { mountAISDKCapabilities, EnvironmentCapabilityConfigStore } from '@webpilot/capability-adapter-ai-sdk';
+import { mountAISDKCapabilities, EnvironmentCapabilityConfigStore } from '@cjfclonedeep/capability-sdk/ai-sdk';
 import { providers, configurations, cleanup } from './provider.js';
 import { policy, beforeInvoke } from './policy.js';
 
@@ -244,7 +267,7 @@ try {
 
 ## トラブル対処と接続完了の確認
 
-- モジュールがない：公開 exports、版の一致、Node/ESM、入口の任意 peer を確認します。
+- モジュールがない：公開 exports、版の一致、Node/ESM、npm 依存が完全にインストールされているか確認します。
 - ツールがない：runtime.tools、有効な能力 ID、許可名を確認し、フォルダー名から推測しません。
 - 検証失敗：実際の inputSchema と parse エラーを使い、別入口のスキーマを流用しません。
 - 無効/未提供の操作：正規化設定、選択バックエンド、実行バイナリー、ホストコールバックを確認します。
@@ -254,11 +277,11 @@ try {
 
 ## 公開エントリーポイント
 
-- `@webpilot/capability-sdk/node`
-- `@webpilot/capability-sdk`
+- `@cjfclonedeep/capability-sdk/node`
+- `@cjfclonedeep/capability-sdk`
 
 ## 補足の動作リファレンス
 
 この例はクラスを継承せず新しい能力を実装します。`CapabilityProvider.manifest` と `createRuntime(context)` を実装し、ツールに JSON Schema と正式な parse を持たせ、`CapabilityResult` を返します。最小構成は `CapabilityRegistry.register/resolve`、設定の正規化と Skill カタログが必要なら host の mountCapabilities を使います。
 
-SDK は interface だけではありません。レジストリは能力・ツール・Skill ID の重複を検出し、実行中の呼び出しと解放を管理します。createCapabilityExecutor は直列グループとホストのポリシーを適用します。実行器は呼び出しごとではなくマウントごとに共有します。Node 専用のプロセス・永続化ヘルパーは /node にあります。AI SDK、MCP、React、アプリコードには依存しません。新しい通常の能力はこの契約に従い、sensitive-data は別途説明するモデルミドルウェアです。
+SDK は interface だけではありません。レジストリは能力・ツール・Skill ID の重複を検出し、実行中の呼び出しと解放を管理します。createCapabilityExecutor は直列グループとホストのポリシーを適用します。実行器は呼び出しごとではなくマウントごとに共有します。Node 専用のプロセス・永続化ヘルパーは /node にあります。ルートは AI SDK、MCP、React、アプリコードをインポートしません。アダプターは明示的なサブパスから使います。新しい通常の能力はこの契約に従い、sensitive-data は別途説明するモデルミドルウェアです。

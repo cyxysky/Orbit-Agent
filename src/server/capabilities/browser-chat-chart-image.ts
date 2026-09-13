@@ -3,7 +3,7 @@ import { link, mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import sharp from 'sharp';
-import type { ChartRecord } from '@webpilot/capability-chart';
+import type { ChartRecord } from '@cjfclonedeep/capability-sdk/chart';
 import type { ChartExportWindow } from '@/components/ChartPngExport';
 import { normalizeApplicationUserId } from '@/server/auth/user-context';
 import { createMountIdentityTicket } from '@/server/auth/mount-identity';

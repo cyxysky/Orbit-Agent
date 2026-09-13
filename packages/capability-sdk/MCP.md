@@ -2,13 +2,21 @@
 
 [English](MCP.md) | [简体中文](MCP.zh-CN.md) | [日本語](MCP.ja.md)
 
+For built-in local tools, start with the [unified CLI](MCP-CLI.md). The custom server and HTTP examples below are for advanced integrations. The new CLI is not included in published 0.2.1.
+
+```sh
+npx --no-install capability-mcp init cursor
+```
+
+[Grouped tool configuration / JSON Schema](MCP-CONFIG.zh-CN.md)
+
 This guide ships with the package. First create `provider.ts` and `policy.ts` from its README. You can replace the providers array with several capability factories; keep tool and Skill IDs unique. `sensitive-data` is model middleware and does not go in this array. All files below live in the consuming project.
 
 The server executes operations on its own machine. The client needs an MCP endpoint, not npm imports of your capabilities. Use stdio for a local process, or the stateful Streamable HTTP example for remote calls that share a browser/workspace runtime.
 ## 1. Server dependencies and options
 
 ```sh
-npm install @webpilot/capability-adapter-mcp @webpilot/capability-host @webpilot/capability-sdk @modelcontextprotocol/server@2.0.0
+npm install @cjfclonedeep/capability-sdk   @modelcontextprotocol/server@2.0.0
 npm install -D tsx typescript @types/node
 ```
 
@@ -16,8 +24,8 @@ Save as `mcp-options.ts`. The session context is created by trusted server code.
 
 ```ts
 import { randomUUID } from 'node:crypto';
-import { EnvironmentCapabilityConfigStore } from '@webpilot/capability-host';
-import type { CapabilityProvider } from '@webpilot/capability-sdk';
+import { EnvironmentCapabilityConfigStore } from '@cjfclonedeep/capability-sdk/host';
+import type { CapabilityProvider } from '@cjfclonedeep/capability-sdk';
 import { providers, configurations } from './provider.js';
 import { policy, beforeInvoke } from './policy.js';
 
@@ -51,7 +59,7 @@ export function mcpOptions() {
 Save as `mcp-stdio.ts`. Run `npx tsx mcp-stdio.ts` when connecting manually, or let your MCP client launch it. stdout is exclusively MCP protocol output; logs go to stderr. The client owns process lifetime.
 
 ```ts
-import { serveCapabilityMcpStdio } from '@webpilot/capability-adapter-mcp';
+import { serveCapabilityMcpStdio } from '@cjfclonedeep/capability-sdk/mcp';
 import { mcpOptions } from './mcp-options.js';
 import { cleanup } from './provider.js';
 const handle = serveCapabilityMcpStdio(mcpOptions());
@@ -143,7 +151,7 @@ Save as `mcp-http.ts`, then run `npx tsx mcp-http.ts`. Keep this process running
 ```ts
 import { randomUUID } from 'node:crypto';
 import { WebStandardStreamableHTTPServerTransport, isInitializeRequest } from '@modelcontextprotocol/server';
-import { createCapabilityMcpServer } from '@webpilot/capability-adapter-mcp';
+import { createCapabilityMcpServer } from '@cjfclonedeep/capability-sdk/mcp';
 import { mcpOptions } from './mcp-options.js';
 import { cleanup } from './provider.js';
 import { listen } from './http-bridge.js';

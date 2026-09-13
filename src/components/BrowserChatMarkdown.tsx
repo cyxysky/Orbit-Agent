@@ -1,6 +1,6 @@
 'use client';
 
-import { RegisteredResponse } from '@webpilot/capability-response/react';
+import { RegisteredResponse } from '@cjfclonedeep/capability-sdk/responses/react';
 import { responseRenderers } from './response-renderers';
 import { createResponseContext } from './response-context';
 import { useI18n } from '@/i18n/I18nProvider';

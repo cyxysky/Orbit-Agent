@@ -5,7 +5,7 @@ import { artifactApiUrlFromRelative } from '@/lib/artifacts';
 import {
   type BrowserSession,
   type AccessibilitySnapshotExportControlResult,
-} from '@webpilot/capability-browser/node';
+} from '@cjfclonedeep/capability-sdk/browser/node';
 import { createWebPilotBrowserSession } from '@/server/capabilities/webpilot-browser';
 import { artifactPath, artifactsRoot } from '@/server/storage/paths';
 

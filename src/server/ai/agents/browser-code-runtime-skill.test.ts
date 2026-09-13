@@ -4,7 +4,7 @@ import {
   browserCodeRuntimeSkillContent,
   browserCodeRuntimeSkillId,
   browserCodeRuntimeSkillSummary,
-} from '@webpilot/capability-browser/runtime-skill';
+} from '@cjfclonedeep/capability-sdk/browser/runtime-skill';
 
 test('hidden browser code-action runtime Skill documents the complete required operating sequence', () => {
   assert.equal(browserCodeRuntimeSkillId, 'system-browser-code-runtime');

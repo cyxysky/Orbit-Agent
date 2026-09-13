@@ -9,4 +9,13 @@ for (const workspace of manifest.workspaces || []) {
   const destination = path.join(output, workspace);
   await mkdir(destination, { recursive: true });
   await copyFile(path.join(source, workspace, 'package.json'), path.join(destination, 'package.json'));
+  if (workspace === 'packages/capability-sdk') {
+    // npm still invokes postinstall in the manifest-only Docker dependency layer.
+    // These bootstrap files allow the explicitly skipped lifecycle to run before COPY . .
+    for (const filename of ['scripts/runtime.cjs', 'runtime/managed/layout.cjs', 'runtime/managed/spec.json']) {
+      const target = path.join(destination, filename);
+      await mkdir(path.dirname(target), { recursive: true });
+      await copyFile(path.join(source, workspace, filename), target);
+    }
+  }
 }

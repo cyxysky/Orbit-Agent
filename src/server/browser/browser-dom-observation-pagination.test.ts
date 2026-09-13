@@ -5,7 +5,7 @@ import {
   encodeDomObservationCursor,
   parseDomObservationCursor,
   readDomObservationPage,
-} from '@webpilot/capability-browser/node';
+} from '@cjfclonedeep/capability-sdk/browser/node';
 
 test('DOM observation pagination preserves cursor mode and entry boundaries', () => {
   const lines = ['alpha', 'bravo', 'charlie'];

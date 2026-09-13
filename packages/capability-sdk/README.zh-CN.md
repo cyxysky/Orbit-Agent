@@ -1,6 +1,33 @@
-# @webpilot/capability-sdk
+# @cjfclonedeep/capability-sdk
 
 [English](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
+
+接入 Cursor 或其他 MCP 客户端，直接使用[统一 MCP 命令](MCP-CLI.zh-CN.md)，无需编写启动文件或增加依赖。此功能需使用 0.2.1 之后包含该改动的版本或本地包。
+
+```sh
+npx --no-install capability-mcp init cursor
+```
+
+[Grouped tool configuration / JSON Schema](MCP-CONFIG.zh-CN.md)
+
+[图表与地图显示](MCP-UI.zh-CN.md)：MCP Apps 内嵌界面、本机浏览器预览、编辑保存及二维图表 PNG（尚未发布）。
+
+[Agent 接入完整指南](AGENT-INTEGRATIONS.zh-CN.md)：Codex、Cursor、Claude Code、自有 MCP client，以及 OpenAI Agents SDK / Responses API 原生接入（`/local` + `/openai`，尚未发布）。
+
+一个包提供能力契约、执行、配置、响应、AI SDK/MCP 适配，以及全部工具。
+
+npm 依赖全部随包安装。根入口提供契约和执行机制，不会连带加载全部工具与框架适配。正常 npm 安装还会通过 postinstall 自动准备受支持的 Windows/Linux 执行环境。 [Runtime](RUNTIME.zh-CN.md) · [Tools](TOOLS.zh-CN.md)
+
+| 入口 | 用途 |
+| --- | --- |
+| `.` | Contracts / Registry / Executor |
+| `/host`, `/node`, `/typeorm` | Configuration / Mount / Storage |
+| `/responses` | [Response schemas](docs/responses/README.md) |
+| `/responses/react` | React response renderers |
+| `/ai-sdk` | [AI SDK](docs/adapters/AI-SDK.zh-CN.md) |
+| `/mcp` | [MCP](docs/adapters/MCP-ADAPTER.zh-CN.md) |
+
+挂载、配置存储与 Skill 目录已纳入 [`/host`](HOST.zh-CN.md)。JSON 文件存储从 `/node` 导入，可选 TypeORM 存储从 `/typeorm` 导入。根入口保持无框架依赖，不加载 Node 或 TypeORM 适配器。
 
 定义可移植能力契约及公共执行、生命周期机制。
 
@@ -13,13 +40,13 @@
 ```sh
 npm init -y
 npm pkg set type=module
-npm install @webpilot/capability-sdk @webpilot/capability-host
+npm install @cjfclonedeep/capability-sdk
 npm install -D typescript tsx @types/node
 ```
 
 示例实现新能力，无需继承类。实现 `CapabilityProvider.manifest` 和 `createRuntime(context)`，工具提供 JSON Schema 与权威 parse，并返回 `CapabilityResult`。最小装配可直接使用 `CapabilityRegistry.register/resolve`；需要配置归一化和 Skill 目录时使用 host 的 mountCapabilities。
 
-SDK 不只有 interface：注册表检测能力、工具和 Skill ID 冲突，跟踪活动调用并管理释放；createCapabilityExecutor 执行串行分组和宿主策略。每个挂载实例共用一个执行器，不要每次调用创建一个。Node 专用进程/持久化辅助 API 在 /node。SDK 不依赖 AI SDK、MCP、React 或应用代码。新增普通能力遵循这些契约；sensitive-data 属于单独说明的模型中间件。
+SDK 不只有 interface：注册表检测能力、工具和 Skill ID 冲突，跟踪活动调用并管理释放；createCapabilityExecutor 执行串行分组和宿主策略。每个挂载实例共用一个执行器，不要每次调用创建一个。Node 专用进程/持久化辅助 API 在 /node。SDK 根入口不导入 AI SDK、MCP、React 或应用代码，适配器从独立子入口使用。新增普通能力遵循这些契约；sensitive-data 属于单独说明的模型中间件。
 
 ## 2. 创建 Provider
 
@@ -27,7 +54,7 @@ SDK 不只有 interface：注册表检测能力、工具和 Skill ID 冲突，�
 
 ```ts
 import { createCapabilityRuntime, defineCapabilityInput, defineCapabilityTool,
-  type CapabilityProvider } from '@webpilot/capability-sdk';
+  type CapabilityProvider } from '@cjfclonedeep/capability-sdk';
 const provider: CapabilityProvider = {
   manifest: { schemaVersion: 1, id: 'example.greeting', name: 'Greeting', version: '1.0.0',
     skills: [{ id: 'example.greeting/usage', title: 'Greeting',
@@ -72,9 +99,9 @@ export async function cleanup() {  }
 
 ```ts
 import { randomUUID } from 'node:crypto';
-import { mountCapabilities, EnvironmentCapabilityConfigStore } from '@webpilot/capability-host';
+import { mountCapabilities, EnvironmentCapabilityConfigStore } from '@cjfclonedeep/capability-sdk/host';
 import { createCapabilityExecutor, disposeOnce,
-  type CapabilityExecutionPolicyOptions } from '@webpilot/capability-sdk';
+  type CapabilityExecutionPolicyOptions } from '@cjfclonedeep/capability-sdk';
 import { providers, configurations, cleanup } from './provider.js';
 
 export async function openCapabilities(options: {
@@ -126,7 +153,7 @@ export async function openCapabilities(options: {
 保存为 `policy.ts`。该单用户示例授权显式选定的 Provider。共享 Agent 应将这些钩子连接到已有的用户权限和操作审批逻辑。若工具声明 prerequisite，还需提供 policy.prerequisite，验证指定前置条件，不满足时抛错。
 
 ```ts
-import type { CapabilityExecutionPolicyOptions } from '@webpilot/capability-sdk';
+import type { CapabilityExecutionPolicyOptions } from '@cjfclonedeep/capability-sdk';
 import { providers } from './provider.js';
 
 // This sample host grants the permissions of its explicitly configured providers.
@@ -184,7 +211,7 @@ try {
 ## AI SDK：完整模型驱动 Agent
 
 ```sh
-npm install @webpilot/capability-adapter-ai-sdk "ai@>=7 <8" @ai-sdk/openai-compatible
+npm install @cjfclonedeep/capability-sdk "ai@>=7 <8" @ai-sdk/openai-compatible
 ```
 
 选择支持工具调用的 Chat Completions 兼容服务。在进程环境中设置 AGENT_MODEL_BASE_URL（包含 API 路径前缀）、AGENT_MODEL_ID，可选 AGENT_MODEL_API_KEY。保存为 agent.ts，与 provider.ts、policy.ts 放在一起，执行 `npx tsx agent.ts "你的任务"`。这是 first-call.ts 的替代入口，不要在其内部重复挂载。默认提示词只要求说明工具，实际执行时传入你的任务。
@@ -193,7 +220,7 @@ npm install @webpilot/capability-adapter-ai-sdk "ai@>=7 <8" @ai-sdk/openai-compa
 import { randomUUID } from 'node:crypto';
 import { ToolLoopAgent, stepCountIs } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { mountAISDKCapabilities, EnvironmentCapabilityConfigStore } from '@webpilot/capability-adapter-ai-sdk';
+import { mountAISDKCapabilities, EnvironmentCapabilityConfigStore } from '@cjfclonedeep/capability-sdk/ai-sdk';
 import { providers, configurations, cleanup } from './provider.js';
 import { policy, beforeInvoke } from './policy.js';
 
@@ -244,7 +271,7 @@ try {
 
 ## 排查与接入完成标准
 
-- 找不到模块：检查发布 exports、版本一致性、Node/ESM 配置，安装对应入口的可选 peer。
+- 找不到模块：检查发布 exports、版本一致性、Node/ESM 配置，确认 npm 已完整安装包依赖。
 - 找不到工具：检查 runtime.tools、启用的能力 ID 与允许的工具名，不要根据目录名猜测。
 - 参数校验失败：使用实际 inputSchema 与 parse 错误，不复制其他入口的 Schema。
 - 操作被禁用/不可用：检查归一化配置、所选后端、系统程序和宿主回调。
@@ -254,11 +281,11 @@ try {
 
 ## 发布入口
 
-- `@webpilot/capability-sdk/node`
-- `@webpilot/capability-sdk`
+- `@cjfclonedeep/capability-sdk/node`
+- `@cjfclonedeep/capability-sdk`
 
 ## 补充行为参考
 
 示例实现新能力，无需继承类。实现 `CapabilityProvider.manifest` 和 `createRuntime(context)`，工具提供 JSON Schema 与权威 parse，并返回 `CapabilityResult`。最小装配可直接使用 `CapabilityRegistry.register/resolve`；需要配置归一化和 Skill 目录时使用 host 的 mountCapabilities。
 
-SDK 不只有 interface：注册表检测能力、工具和 Skill ID 冲突，跟踪活动调用并管理释放；createCapabilityExecutor 执行串行分组和宿主策略。每个挂载实例共用一个执行器，不要每次调用创建一个。Node 专用进程/持久化辅助 API 在 /node。SDK 不依赖 AI SDK、MCP、React 或应用代码。新增普通能力遵循这些契约；sensitive-data 属于单独说明的模型中间件。
+SDK 不只有 interface：注册表检测能力、工具和 Skill ID 冲突，跟踪活动调用并管理释放；createCapabilityExecutor 执行串行分组和宿主策略。每个挂载实例共用一个执行器，不要每次调用创建一个。Node 专用进程/持久化辅助 API 在 /node。SDK 根入口不导入 AI SDK、MCP、React 或应用代码，适配器从独立子入口使用。新增普通能力遵循这些契约；sensitive-data 属于单独说明的模型中间件。

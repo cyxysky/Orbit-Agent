@@ -1,4 +1,4 @@
-import { jsonRecordFromUnknown, jsonValueFromString } from '@webpilot/capability-sdk';
+import { jsonRecordFromUnknown, jsonValueFromString } from '@cjfclonedeep/capability-sdk';
 import type { StepExecutionResult, StepToolCall } from '@/server/ai/schemas/runtime.schema';
 
 export type BrowserChatArtifactSummary = {

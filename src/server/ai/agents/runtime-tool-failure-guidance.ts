@@ -1,4 +1,4 @@
-import type { BrowserActionResult } from '@webpilot/capability-browser/node';
+import type { BrowserActionResult } from '@cjfclonedeep/capability-sdk/browser/node';
 
 export type RuntimeToolFailureCategory =
   | 'actionability'

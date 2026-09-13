@@ -5,7 +5,7 @@ const { copyProductionRuntime, copyServerRuntime } = require('./server-package-l
 const {
   assertSensitiveDataRuntime,
   copySensitiveDataRuntime,
-} = require('../packages/capability-sensitive-data/scripts/runtime-layout.cjs');
+} = require('../packages/capability-sdk/scripts/sensitive-data/runtime-layout.cjs');
 
 const root = path.resolve(__dirname, '..');
 const packageName = 'Orbit-Server';
@@ -101,14 +101,14 @@ function writeReadme() {
 
 function copyBrowserSessionExtension() {
   copyInto(
-    path.join(root, 'packages', 'capability-browser', 'runtime'),
+    path.join(root, 'packages', 'capability-sdk', 'runtime', 'browser'),
     path.join(serverRoot, 'capability-runtime', 'browser'),
   );
 }
 
 function copyComputerDriverRuntime() {
   copyInto(
-    path.join(root, 'packages', 'capability-computer', 'runtime'),
+    path.join(root, 'packages', 'capability-sdk', 'runtime', 'computer'),
     path.join(serverRoot, 'capability-runtime', 'computer'),
   );
 }
@@ -144,7 +144,7 @@ copyInto(path.join(root, 'public'), path.join(serverRoot, 'public'));
 const serverRuntimeFiles = copyServerRuntime(root, serverRoot);
 copySensitiveDataRuntime(path.join(serverRoot, 'sensitive-data-runtime'));
 copyInto(
-  path.join(root, 'packages', 'capability-file', 'runtime'),
+  path.join(root, 'packages', 'capability-sdk', 'runtime', 'file'),
   path.join(serverRoot, 'capability-runtime', 'file'),
 );
 copyBrowserSessionExtension();

@@ -1,10 +1,10 @@
-import { normalizeBrowserToolInput } from '@webpilot/capability-browser';
-import { normalizeFileToolInput } from '@webpilot/capability-file';
+import { normalizeBrowserToolInput } from '@cjfclonedeep/capability-sdk/browser';
+import { normalizeFileToolInput } from '@cjfclonedeep/capability-sdk/file';
 import {
   arrayFromJsonString,
   jsonRecordFromUnknown,
   unwrapToolTransport,
-} from '@webpilot/capability-sdk';
+} from '@cjfclonedeep/capability-sdk';
 
 function browserCodeFromGeneratedMarkup(value: unknown) {
   if (typeof value !== 'string') return value;

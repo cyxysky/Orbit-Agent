@@ -1,8 +1,8 @@
 import http from 'node:http';
 import type { Socket } from 'node:net';
 import { dispatchBrowserChatPreviewInput, startBrowserChatScreencast } from '@/server/ai/agents/browser-chat.service';
-import type { BrowserLiveInput, BrowserScreencastFrame, BrowserTabSnapshot } from '@webpilot/capability-browser/node';
-import { browserPreviewFramesPerSecond, type BrowserPreviewFramePumpMetrics } from '@webpilot/capability-browser/node';
+import type { BrowserLiveInput, BrowserScreencastFrame, BrowserTabSnapshot } from '@cjfclonedeep/capability-sdk/browser/node';
+import { browserPreviewFramesPerSecond, type BrowserPreviewFramePumpMetrics } from '@cjfclonedeep/capability-sdk/browser/node';
 import {
   acceptWebSocketUpgrade,
   consumeWebSocketFrames,

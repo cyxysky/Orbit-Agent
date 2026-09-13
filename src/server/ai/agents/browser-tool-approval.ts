@@ -1,6 +1,6 @@
-import { analyzeBrowserCodeRisk } from '@webpilot/capability-browser/node';
-import { isReadOnlyStatement } from '@webpilot/capability-data';
-import { mediaGenerationActions } from '@webpilot/capability-media';
+import { analyzeBrowserCodeRisk } from '@cjfclonedeep/capability-sdk/browser/node';
+import { isReadOnlyStatement } from '@cjfclonedeep/capability-sdk/data';
+import { mediaGenerationActions } from '@cjfclonedeep/capability-sdk/media';
 
 export type BrowserToolApprovalRequest = {
   prompt: string;
@@ -35,6 +35,15 @@ export function browserToolApprovalRequest(input: {
     return { reason, prompt: `请确认是否下载文件${reason ? `：${reason}` : ''}` };
   }
 
+  if (input.toolName === 'terminal' && (record.action === 'run' || record.action === 'write')) {
+    return {
+      reason,
+      prompt: record.action === 'run'
+        ? `请确认是否在本地终端执行命令：${compact(record.command, 300)}${record.cwd ? `（目录：${compact(record.cwd, 160)}）` : ''}`
+        : `请确认是否向终端进程 ${compact(record.sessionId, 100)} 写入：${compact(record.stdin, 300)}`,
+    };
+  }
+
   const action = typeof record.action === 'string' ? record.action : '';
   const approvalRequired = (
     (input.toolName === 'codeSandbox' && action === 'run')
@@ -43,9 +52,7 @@ export function browserToolApprovalRequest(input: {
     || (input.toolName === 'data' && action === 'query' && !isReadOnlyStatement(typeof record.statement === 'string' ? record.statement : ''))
     || (input.toolName === 'media' && mediaGenerationActions.some((candidate) => candidate === action))
     || (input.toolName === 'communication' && action === 'send')
-    || (input.toolName === 'git' && (action === 'applyPatch' || action === 'commit'))
     || (input.toolName === 'computer' && ['click', 'type', 'key', 'scroll'].includes(action))
-    || (input.toolName === 'workflow' && action === 'cancel')
   );
   if (approvalRequired) {
     return {

@@ -1,9 +1,9 @@
-import { createGoogleMapsClient, createMapsCapability, createMapsTool, mapsCapabilitySettings, MapsError, type GoogleMapsOptions } from '@webpilot/capability-maps';
-import { createFileSystemMapStore, reserveMapsRequest } from '@webpilot/capability-maps/node';
+import { createGoogleMapsClient, createMapsCapability, createMapsTool, mapsCapabilitySettings, MapsError, type GoogleMapsOptions } from '@cjfclonedeep/capability-sdk/maps';
+import { createFileSystemMapStore, reserveMapsRequest } from '@cjfclonedeep/capability-sdk/maps/node';
 import { artifactPath, appDataRoot } from '@/server/storage/paths';
 import path from 'node:path';
 import { capabilityResultToBrowserActionResult } from './browser-chat-result';
-import type { CapabilityConfiguration } from '@webpilot/capability-sdk';
+import type { CapabilityConfiguration } from '@cjfclonedeep/capability-sdk';
 
 function mapScope(runId: string) {
   if (/^automation_run_[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(runId)) return runId;

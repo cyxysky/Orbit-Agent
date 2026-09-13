@@ -84,6 +84,6 @@ for (const [name, size] of [['app-icon.svg', 512], ['app-icon-small.svg', 128]])
   await save(`assets/${name}`, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" role="img" aria-label="Orbit"><image width="${size}" height="${size}" href="data:image/png;base64,${data}"/></svg>\n`);
 }
 for (const size of [16, 32, 48, 128]) {
-  await save(`packages/capability-browser/runtime/session-tab-grouper-extension/icons/orbit-${size}.png`, await png(size));
+  await save(`packages/capability-sdk/runtime/browser/session-tab-grouper-extension/icons/orbit-${size}.png`, await png(size));
 }
 console.log('Updated Orbit desktop, installer, web, touch, and extension icons from the approved source.');

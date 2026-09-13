@@ -24,8 +24,8 @@ import {
   sourceUnitsForDraft,
   syncDocumentAssets,
   verifyCurrentUnoRenderedArtifact,
-} from '@webpilot/capability-file/node/workspace';
-import { resolveLibreOfficeExecutable } from '@webpilot/capability-file/node';
+} from '@cjfclonedeep/capability-sdk/file/node/workspace';
+import { resolveLibreOfficeExecutable } from '@cjfclonedeep/capability-sdk/file/node';
 import { repairFileArtifactDownloadLinks } from '@/server/capabilities/browser-chat-file-links';
 
 const passedPageVisualChecks = {

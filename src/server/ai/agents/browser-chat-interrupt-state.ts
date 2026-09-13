@@ -128,4 +128,4 @@ export function runtimeSnapshotIsNewer(runtimeUpdatedAt: string, persistedUpdate
   const persistedTime = Date.parse(persistedUpdatedAt);
   return Number.isFinite(runtimeTime) && Number.isFinite(persistedTime) && runtimeTime > persistedTime;
 }
-import { raceWithAbort } from '@webpilot/capability-sdk';
+import { raceWithAbort } from '@cjfclonedeep/capability-sdk';

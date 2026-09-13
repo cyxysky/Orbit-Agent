@@ -1,4 +1,4 @@
-import { readExcalidrawFont } from '@webpilot/capability-chart/node';
+import { readExcalidrawFont } from '@cjfclonedeep/capability-sdk/chart/node';
 
 export const runtime = 'nodejs';
 

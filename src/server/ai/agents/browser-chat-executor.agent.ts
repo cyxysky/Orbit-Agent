@@ -1,19 +1,19 @@
 import { responseRegistry } from '@/lib/response-registry';
 import { browserChatCapabilityResult } from '@/lib/browser-chat-capability-result';
-import { coreResponses, markdownBlock } from '@webpilot/capability-response';
-import { ResponseSession, type StructuredResponse } from '@webpilot/capability-sdk';
+import { coreResponses, markdownBlock } from '@cjfclonedeep/capability-sdk/responses';
+import { ResponseSession, type StructuredResponse } from '@cjfclonedeep/capability-sdk';
 import { randomUUID } from 'node:crypto';
 import { assembleRuntimeContext, createRuntimeContextReadTool, contextReadToolName, runtimeContextMessageRef, type RuntimeContextManifest } from './runtime-context-assembler';
 import { runtimeKnowledgeMessage, type RuntimeKnowledgeBlock } from './runtime-knowledge-context';
 import { generateText, hasToolCall, parsePartialJson, streamText, ToolLoopAgent, tool, type ModelMessage, type StopCondition, type ToolCallRepairFunction, type ToolSet } from 'ai';
 import { z } from 'zod';
-import { jsonRecordFromUnknown, type CapabilityProgressEvent } from '@webpilot/capability-sdk';
-import { fileCapabilityManifest, fileCapabilityToolNames, type FileReadInput } from '@webpilot/capability-file';
-import { browserCapabilityManifest, browserCapabilityToolNames } from '@webpilot/capability-browser';
-import { chartCapabilityManifest, chartCapabilityToolNames } from '@webpilot/capability-chart';
-import { mapsCapabilityManifest } from '@webpilot/capability-maps';
+import { jsonRecordFromUnknown, type CapabilityProgressEvent } from '@cjfclonedeep/capability-sdk';
+import { fileCapabilityManifest, fileCapabilityToolNames, type FileReadInput } from '@cjfclonedeep/capability-sdk/file';
+import { browserCapabilityManifest, browserCapabilityToolNames } from '@cjfclonedeep/capability-sdk/browser';
+import { chartCapabilityManifest, chartCapabilityToolNames } from '@cjfclonedeep/capability-sdk/chart';
+import { mapsCapabilityManifest } from '@cjfclonedeep/capability-sdk/maps';
 import { browserChatMapsCapability, executeBrowserChatMaps } from '@/server/capabilities/browser-chat-maps';
-import { createAISDKResponseTool, EnvironmentCapabilityConfigStore, mountAISDKCapabilities } from '@webpilot/capability-adapter-ai-sdk';
+import { createAISDKResponseTool, EnvironmentCapabilityConfigStore, mountAISDKCapabilities } from '@cjfclonedeep/capability-sdk/ai-sdk';
 import type { AiRequestSnapshot, AiToolContextSnapshot, BrowserOperationRecord, StepExecutionResult, StepToolCall, VisualFrameRecord } from '@/server/ai/schemas/runtime.schema';
 import { getModel, getModelSettings } from '@/server/ai/model';
 import { AiFirstChunkTimeoutError, aiReasoningEffort, aiRuntimeRequestTimeoutMs, aiStreamTimeouts, aiTelemetry, createAiRequestWatchdog } from '@/server/ai/ai-sdk-runtime';
@@ -22,11 +22,11 @@ import { buildCodexObjectPrompt, currentRuntimeTimePromptLine, customRuntimeProm
 import {
   BrowserSession,
   type BrowserActionResult,
-} from '@webpilot/capability-browser/node';
+} from '@cjfclonedeep/capability-sdk/browser/node';
 import {
   type BrowserCodeAttachmentBinding,
   type BrowserCodeCredentialBinding,
-} from '@webpilot/capability-browser/node';
+} from '@cjfclonedeep/capability-sdk/browser/node';
 import { richTextToPlainText } from '@/lib/rich-text';
 import {
   aiSdkEmptyStopRequiresRetry,
@@ -36,7 +36,7 @@ import {
 } from './ai-sdk-finish-state';
 import { browserCodeServiceFileDeliveryViolation } from './browser-chat-file-delivery';
 import { fileToolModelOutput } from './browser-chat-file-model-output';
-import { fileArtifactRuntimeSkillId } from '@webpilot/capability-file/runtime-skill';
+import { fileArtifactRuntimeSkillId } from '@cjfclonedeep/capability-sdk/file/runtime-skill';
 import { nativeRuntimeToolNames, normalizeDisabledCapabilityTools, runtimeBuiltinToolPrompts } from './runtime-tool-catalog';
 import {
   activeBrowserRuntimeSkillId,
@@ -48,13 +48,13 @@ import {
 } from './hidden-runtime-skills';
 import { parseContextSummary } from './runtime-semantic-summary';
 import { subagentRuntimeSkillId } from './subagent-runtime-skill';
-import { chartRuntimeSkillId } from '@webpilot/capability-chart/runtime-skill';
+import { chartRuntimeSkillId } from '@cjfclonedeep/capability-sdk/chart/runtime-skill';
 import {
   browserChatChartCapability,
   executeBrowserChatChart,
 } from '@/server/capabilities/browser-chat-chart';
 import { capabilityResultToBrowserActionResult } from '@/server/capabilities/browser-chat-result';
-import { browserOperationSummary } from '@webpilot/capability-browser';
+import { browserOperationSummary } from '@cjfclonedeep/capability-sdk/browser';
 import { agentInfrastructureToolNames, createAgentInfrastructureProviders } from '@/server/capabilities/agent-infrastructure';
 import {
   createBrowserChatFileCapability,
@@ -70,7 +70,7 @@ import { containsPrivateToolProtocol, isBrowserChatDomObservationText, normalize
 import { createReasoningStreamObserver, type ReasoningStreamUpdate } from './browser-chat-reasoning-stream';
 import {
   formatFileArtifactResult,
-} from '@webpilot/capability-file/node/workspace';
+} from '@cjfclonedeep/capability-sdk/file/node/workspace';
 import { repairFileArtifactDownloadLinks } from '@/server/capabilities/browser-chat-file-links';
 import { browserChatCodeRules } from './runtime-prompt-rules';
 import {
@@ -137,7 +137,7 @@ import {
   repairBrowserChatToolCallInput,
 } from './browser-chat-tool-input-coercion';
 import { racePromiseWithAbort } from './browser-chat-interrupt-state';
-import type { FileVisualInput as BrowserChatFileVisualInput } from '@webpilot/capability-file/node';
+import type { FileVisualInput as BrowserChatFileVisualInput } from '@cjfclonedeep/capability-sdk/file/node';
 import { createBrowserChatDefectReport } from '@/server/storage/browser-chat-defect-store';
 import { stringFromUnknown as textFromUnknown } from '@/lib/browser-chat-output-cycles';
 
@@ -1279,7 +1279,7 @@ async function makeBrowserTools(
     runSubagents?: BrowserChatSubagentRunner;
     readSubagent?: BrowserChatSubagentReader;
     requiredSubagentUuid?: string;
-    readFile?: (input: BrowserChatReadFileInput, context?: import('@webpilot/capability-sdk').CapabilityExecutionContext) => Promise<BrowserActionResult>;
+    readFile?: (input: BrowserChatReadFileInput, context?: import('@cjfclonedeep/capability-sdk').CapabilityExecutionContext) => Promise<BrowserActionResult>;
     readFileVisuals?: (input: BrowserChatFileVisualInput) => Promise<BrowserActionResult>;
     readSkill?: BrowserChatReadSkill;
     onReferenceImage?: (input: { path: string; source: string; label?: string }) => void;
@@ -1711,7 +1711,7 @@ function runtimePrompt(input: { runtimeRecord: BrowserChatRuntimeRecord; fileVis
     '- Mandatory web research: except for absolute, timeless common knowledge (for example 1+1), use browser action=code to search the web and obtain current evidence before answering or carrying out subsequent analysis, recommendations, planning, or content generation. The common-knowledge exemption is extremely narrow: technology explanations, framework comparisons, product introductions, and professional knowledge are NOT exempt even when the user does not say "latest" or "search". A short question, a text-only answer, familiarity with the topic, or remembered facts is NOT an exemption. When unsure whether something is absolute common knowledge, search first. Current facts, figures, prices, dates, versions, policies, companies, people, products, and industry information always require live verification.',
     '- Search with queries specific to the current task, open relevant result pages, and inspect their actual content. Prefer official or primary sources, check publication/update dates and the period covered by each figure, and use the latest applicable data in subsequent steps. Cite the supporting page URLs near factual claims. A browser state snapshot, opening an empty search page, or inventing a search result does not satisfy research. Reuse sufficiently current browser evidence already collected for this same task; do not repeat the same search before every tool call. If research fails, report what remains unverified and never present memory or estimates as verified live data. Respect explicit user instructions that prohibit browsing, restrict the answer to supplied material, or narrow this turn to a specific operation.',
     '- Before using browser, file, chart, an infrastructure capability, or subagent spawn, read its required system Skill. Capability schemas are visible from the start; if one is called before its Skill is loaded, the Agent returns the complete Skill content and skips the requested operation. That returned content satisfies the read prerequisite: apply it directly and retry the original operation in the next model step without calling skill again. In one model step call at most one relevant tool.',
-    `- Optional infrastructure tools are ${agentInfrastructureToolNames.join(', ')}. Use only a configured tool that directly helps the current request. Knowledge is durable reference storage; workflow is durable multi-stage state; connectors, data, media, communication, Git, code execution, and computer control retain their separate permission boundaries.`,
+    `- Optional infrastructure tools are ${agentInfrastructureToolNames.join(', ')}. Use only a configured tool that directly helps the current request. Knowledge is durable reference storage; connectors, data, media, communication, local terminal, isolated code execution, and computer control retain their separate permission boundaries. Use terminal for local CLI commands, including Git; its cwd is not a sandbox and its processes are stopped when this runtime ends.`,
     '- The latest user message is the scope authority. If it explicitly narrows the current turn to one action (for example, "just click Search"), perform and verify only that action, then stop. Do not silently resume a broader goal from an earlier message unless the latest message explicitly asks you to continue it.',
     '- The single browser tool is the real browser mechanism. action=state returns a fresh fixed top-level snapshot, action=code performs targeted Playwright reads and interactions, and action=waitForHumanVerification pauses for user-owned verification. The action field is authoritative; unrelated fields are discarded. Use action=code for iframe, selector, DOM, screenshot, and targeted page-state inspection. A pending browser-state prerequisite is executed internally and returned in prerequisiteResults while the requested action still executes in the same call. Never say navigation/clicking is unavailable, substitute a file download, or ask the user to navigate manually while browser action=code is available unless a real attempt failed and you report that failure. One code cell may execute multiple bounded operations.',
     '- Keep tool input limited to exact arguments, a concise semantic reason, and confirmation fields only when loaded safety rules require them. Set needChange: true on browser action=code only when incremental domChanges from this cell is needed; it defaults to false and skips reading and returning domChanges. Results never include an automatic axTree; page.domSnapshot() returns surfaces/topSurfaceIds/surfaceStack plus a most-recent-surface-scoped AX read by default, and the model may instead write targeted Playwright or DOM reads.',
@@ -2069,7 +2069,7 @@ async function executeRuntimeStep(input: {
   runSubagents?: BrowserChatSubagentRunner;
   readSubagent?: BrowserChatSubagentReader;
   requiredSubagentUuid?: string;
-  readFile?: (input: BrowserChatReadFileInput, context?: import('@webpilot/capability-sdk').CapabilityExecutionContext) => Promise<BrowserActionResult>;
+  readFile?: (input: BrowserChatReadFileInput, context?: import('@cjfclonedeep/capability-sdk').CapabilityExecutionContext) => Promise<BrowserActionResult>;
   readFileVisuals?: (input: BrowserChatFileVisualInput) => Promise<BrowserActionResult>;
   readSkill?: BrowserChatReadSkill;
   loadedHiddenRuntimeSkillIds?: Set<string>;
@@ -2211,6 +2211,7 @@ async function executeRuntimeStep(input: {
     const disabledToolNames = new Set(disabledTools);
     const allowedToolTypes = requestedAllowedToolTypes.filter((name) => !disabledToolNames.has(name));
     const nativeToolsRef: { current?: RuntimeToolDefinitions } = {};
+    let requestAllowedToolNames: ReadonlySet<string> | undefined;
     const visualContext = new VisualContextManager();
     const publishToolTrace = async (trace: ToolTrace) => {
       upsertToolTrace(traces, trace);
@@ -2426,8 +2427,10 @@ async function executeRuntimeStep(input: {
       });
       const availableStepNames = browserStateGatePending || stepAllowedToolTypes.length !== allowedToolTypes.length
         ? stepAllowedToolTypes : requiredSubagentUuid ? ['subagent'] : Object.keys(nativeToolsRef.current || {});
+      requestAllowedToolNames = new Set(availableStepNames);
+      // The schema prefix stays fixed; execution eligibility is enforced below.
       const stepTools = codexMode ? undefined : Object.fromEntries(Object.entries(nativeToolsRef.current || {})
-        .filter(([name]) => availableStepNames.includes(name)).sort(([left], [right]) => left.localeCompare(right)));
+        .sort(([left], [right]) => left.localeCompare(right)));
       const baseSystemPrompt = codexMode ? buildCodexObjectPrompt(prompt, stepAllowedToolTypes) : prompt;
       const agentStepIndex = retryAgentStepOffset + turnIndex + 1;
       const activeModelSettings = getModelSettings();
@@ -2490,7 +2493,10 @@ async function executeRuntimeStep(input: {
       if (appendedMessages.length) messageImagePaths = [...messageImagePaths, ...appendedImagePaths];
       await checkpointContext([...source, ...appendedMessages]);
       requestSystemPrompt = baseSystemPrompt;
-      const operationalContext = runtimeOperationalContextText(requiredSubagentDirective);
+      const operationalContext = [runtimeOperationalContextText(requiredSubagentDirective),
+        !codexMode && availableStepNames.length !== Object.keys(nativeToolsRef.current || {}).length
+          ? `Tools executable in this step: ${[...availableStepNames].sort().join(', ')}. Other visible tool schemas are reference only; finish the prerequisite before calling them.` : '',
+      ].filter(Boolean).join('\n\n');
       const beforeStats = modelMessagesTextAndImageStats(sanitizeModelInputForStats(requestSystemPrompt, candidates, messageImagePaths), stepTools);
       let compressionBeforeStats = beforeStats;
       await onAttemptDebug?.({ phase: 'ai:runtime:prepare', stepIndex, message: '正在检查上下文与压缩阈值',
@@ -2587,20 +2593,15 @@ async function executeRuntimeStep(input: {
       // Raw candidates include material that may never be sent to the model.
       await attachContextAfterToCompletedTools(toolContextFromAiRequest(aiRequest));
       lastAiRequest = aiRequest;
-      const hiddenSkillGateActive = stepAllowedToolTypes.length !== allowedToolTypes.length;
-      const activeTools = browserStateGatePending || hiddenSkillGateActive
-        ? stepAllowedToolTypes as Array<keyof typeof toolsForRequest>
-        : requiredSubagentUuid
-          ? ['subagent'] as Array<keyof typeof toolsForRequest>
-          : undefined;
       return {
         system: requestSystemPrompt || undefined,
         messages: requestMessages,
         modelMessagesForLog,
         allowedTypes: stepAllowedToolTypes,
-        activeTools,
-        // Restrict available tools through activeTools; Thinking modes may reject
-        // both required and named tool choice. The host validates final delivery.
+        // Keep the serialized tool list stable for provider prefix caching.
+        // The execution wrapper enforces the current prerequisite restrictions.
+        activeTools: Object.entries(nativeToolsRef.current || {}).some(([name, definition]) =>
+          !definition.execute && !availableStepNames.includes(name)) ? availableStepNames : undefined,
         toolChoice: 'auto' as const,
       };
     }
@@ -2775,10 +2776,20 @@ async function executeRuntimeStep(input: {
       await browserToolRuntime.dispose();
       throw new Error(`External tool name conflicts with an enabled capability: ${conflictingExternalToolName}.`);
     }
-    const toolsForRequest: RuntimeToolDefinitions = {
+    const toolDefinitions: RuntimeToolDefinitions = {
       ...browserTools,
       ...allowedExternalTools,
     };
+    const toolsForRequest: RuntimeToolDefinitions = Object.fromEntries(Object.entries(toolDefinitions).map(([name, definition]) => {
+      const execute = definition.execute;
+      if (!execute) return [name, definition];
+      return [name, { ...definition, execute: async (...args: Parameters<typeof execute>) => {
+        if (requestAllowedToolNames && !requestAllowedToolNames.has(name)) {
+          throw new Error(`Tool ${name} is not executable in this step. Complete the prerequisite using: ${[...requestAllowedToolNames].sort().join(', ')}.`);
+        }
+        return execute(...args);
+      } }];
+    }));
     nativeToolsRef.current = toolsForRequest;
     const stableToolOrder = Object.keys(toolsForRequest).sort() as Array<keyof typeof toolsForRequest>;
     const repairToolCall: ToolCallRepairFunction<typeof toolsForRequest> = async ({ toolCall }) => {
@@ -3546,7 +3557,7 @@ export async function executeInteractiveBrowserTurn(input: {
   requestToolConfirmation?: (request: BrowserToolConfirmationRequest) => Promise<BrowserToolConfirmationDecision>;
   runSubagents?: BrowserChatSubagentRunner;
   readSubagent?: BrowserChatSubagentReader;
-  readFile?: (input: BrowserChatReadFileInput, context?: import('@webpilot/capability-sdk').CapabilityExecutionContext) => Promise<BrowserActionResult>;
+  readFile?: (input: BrowserChatReadFileInput, context?: import('@cjfclonedeep/capability-sdk').CapabilityExecutionContext) => Promise<BrowserActionResult>;
   readFileVisuals?: (input: BrowserChatFileVisualInput) => Promise<BrowserActionResult>;
   readSkill?: BrowserChatReadSkill;
   attachmentBindings?: BrowserCodeAttachmentBinding[];
@@ -4157,7 +4168,7 @@ async function executeCodexRuntimeObject(input: {
   readSubagent?: BrowserChatSubagentReader;
   requiredSubagentUuid?: string;
   browserStatePreflightComplete?: boolean;
-  readFile?: (input: BrowserChatReadFileInput, context?: import('@webpilot/capability-sdk').CapabilityExecutionContext) => Promise<BrowserActionResult>;
+  readFile?: (input: BrowserChatReadFileInput, context?: import('@cjfclonedeep/capability-sdk').CapabilityExecutionContext) => Promise<BrowserActionResult>;
   readFileVisuals?: (input: BrowserChatFileVisualInput) => Promise<BrowserActionResult>;
   readSkill?: BrowserChatReadSkill;
   loadedHiddenRuntimeSkillIds?: Set<string>;

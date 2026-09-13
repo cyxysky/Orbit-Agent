@@ -2,18 +2,18 @@ import { createHash, randomUUID } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { DataSource } from 'typeorm';
-import { createMcpStreamableHttpConnector } from '@webpilot/capability-connectors/node';
-import type { AgentConnector } from '@webpilot/capability-connectors';
-import type { AgentDataSource } from '@webpilot/capability-data';
-import { createTypeOrmAgentDataSource } from '@webpilot/capability-data/typeorm';
+import { createMcpStreamableHttpConnector } from '@cjfclonedeep/capability-sdk/integrations/connectors/node';
+import type { AgentConnector } from '@cjfclonedeep/capability-sdk/integrations/connectors';
+import type { AgentDataSource } from '@cjfclonedeep/capability-sdk/data';
+import { createTypeOrmAgentDataSource } from '@cjfclonedeep/capability-sdk/data/typeorm';
 import {
   createConnectorCommunicationChannel,
   createJsonWebhookChannel,
   createWeComMessageArguments,
   validateWeComMessageContent,
-} from '@webpilot/capability-communication/node';
-import type { CommunicationChannel, CommunicationDraft, CommunicationMediaOperations, CommunicationReceipt } from '@webpilot/capability-communication';
-import { CommunicationDeliveryError } from '@webpilot/capability-communication';
+} from '@cjfclonedeep/capability-sdk/integrations/communication/node';
+import type { CommunicationChannel, CommunicationDraft, CommunicationMediaOperations, CommunicationReceipt } from '@cjfclonedeep/capability-sdk/integrations/communication';
+import { CommunicationDeliveryError } from '@cjfclonedeep/capability-sdk/integrations/communication';
 import { getWeComConnection, weComConnectionStatus } from './wecom-connections';
 import { listCommunicationConversations } from '@/server/storage/communication-conversation-store';
 import type {

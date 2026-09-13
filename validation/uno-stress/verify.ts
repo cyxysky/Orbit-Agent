@@ -1,8 +1,8 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import sharp from 'sharp';
-import { planFileArtifact, generateUnoFileArtifact, renderFileArtifact } from '@webpilot/capability-file/node/workspace';
-import { renderFilePreview as renderBrowserChatAttachmentVisuals } from '@webpilot/capability-file/node';
+import { planFileArtifact, generateUnoFileArtifact, renderFileArtifact } from '@cjfclonedeep/capability-sdk/file/node/workspace';
+import { renderFilePreview as renderBrowserChatAttachmentVisuals } from '@cjfclonedeep/capability-sdk/file/node';
 
 type ActionResult = { ok: boolean; actual?: string; referenceImagePaths?: string[] };
 

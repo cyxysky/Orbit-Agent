@@ -6,7 +6,7 @@ import {
   scrypt,
 } from 'node:crypto';
 import { z } from 'zod';
-import { providerMediaSettingsSchema, mediaModelSelectionsSchema } from '@webpilot/capability-media/model-settings';
+import { providerMediaSettingsSchema, mediaModelSelectionsSchema } from '@cjfclonedeep/capability-sdk/media/model-settings';
 import { isModelProvider, modelProviderDefinitionsForConfig } from '@/config/settings';
 import {
   exportLoginAccountCredentials,

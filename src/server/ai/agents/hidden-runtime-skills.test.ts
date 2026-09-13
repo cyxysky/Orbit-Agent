@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { browserCodeRuntimeSkillId } from '@webpilot/capability-browser/runtime-skill';
+import { browserCodeRuntimeSkillId } from '@cjfclonedeep/capability-sdk/browser/runtime-skill';
 import {
   fileArtifactRuntimeSkillContent,
   fileArtifactRuntimeSkillId,
-} from '@webpilot/capability-file/runtime-skill';
+} from '@cjfclonedeep/capability-sdk/file/runtime-skill';
 import {
   hiddenRuntimeSkillContent,
   automaticallyLoadHiddenRuntimeSkill,

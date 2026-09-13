@@ -1,4 +1,4 @@
-import { browserCapabilityToolNames } from '@webpilot/capability-browser';
+import { browserCapabilityToolNames } from '@cjfclonedeep/capability-sdk/browser';
 
 export const browserStatePrerequisiteToolName = 'browser.state';
 

@@ -36,25 +36,19 @@ export default function nextConfig(phase: string): NextConfig {
       tsconfigPath: capabilitySource === 'npm' ? 'tsconfig.npm.json' : 'tsconfig.json',
     },
     transpilePackages: [
-      '@webpilot/capability-sdk',
-      '@webpilot/capability-response',
-      '@webpilot/capability-host',
-      '@webpilot/capability-adapter-ai-sdk',
-      '@webpilot/capability-adapter-mcp',
-      '@webpilot/capability-browser',
-      '@webpilot/capability-chart',
-      '@webpilot/capability-maps',
-      '@webpilot/capability-file',
-      '@webpilot/capability-code-sandbox',
-      '@webpilot/capability-connectors',
-      '@webpilot/capability-knowledge',
-      '@webpilot/capability-data',
-      '@webpilot/capability-media',
-      '@webpilot/capability-communication',
-      '@webpilot/capability-git',
-      '@webpilot/capability-computer',
-      '@webpilot/capability-workflow',
-      '@webpilot/capability-sensitive-data',
+
+      '@cjfclonedeep/capability-sdk',
+
+
+
+
+
+
+
+
+
+
+
     ],
     // A running development server must never write into the production build
     // directory. Sharing .next lets dev hot updates corrupt next build manifests.

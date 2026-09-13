@@ -1,8 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { normalizeBoundedInteger } from '@webpilot/capability-sdk';
+import { normalizeBoundedInteger } from '@cjfclonedeep/capability-sdk';
 import ffmpegStaticPath from 'ffmpeg-static';
 
-export { browserPreviewVideoDimensions } from '@webpilot/capability-browser/node';
+export { browserPreviewVideoDimensions } from '@cjfclonedeep/capability-sdk/browser/node';
 
 export const BROWSER_PREVIEW_VIDEO_MIME_TYPE = 'video/mp4; codecs="avc1.42C029"';
 

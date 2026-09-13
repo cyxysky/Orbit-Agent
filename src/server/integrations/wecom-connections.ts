@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { createWeComBotConnection, WECOM_BOT_RUNTIME_REVISION, type WeComBotConnection } from '@webpilot/capability-communication/node';
+import { createWeComBotConnection, WECOM_BOT_RUNTIME_REVISION, type WeComBotConnection } from '@cjfclonedeep/capability-sdk/integrations/communication/node';
 import type { ResolvedExternalIntegration } from './external-integration-vault';
 
 type Connection = { fingerprint: string; integrationId: string; bot: WeComBotConnection };

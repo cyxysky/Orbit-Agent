@@ -38,5 +38,6 @@ id_ed25519.*
 /.workflow-data
 /.workflow-vitest
 /.venv-gliner
+/.capability-sdk/
 **/__pycache__/
 *.py[cod]

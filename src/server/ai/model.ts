@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { randomUUID } from 'node:crypto';
 import { resolveCodexCliPath } from './codex-cli';
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import type { generateText } from 'ai';
@@ -6,6 +7,7 @@ import { isOpenAICompatibleProvider, normalizeMiniMaxOpenAIBaseURL, openAICompat
 import { ensureAiSdkTelemetryRegistered } from '@/server/ai/ai-sdk-telemetry';
 import { filterSensitiveData } from '@/server/capabilities/sensitive-data';
 import { normalizeToolInputSchemas } from '@/server/ai/tool-input-schema';
+import { normalizeRuntimeCacheUsage } from '@/server/ai/agents/runtime-prompt-cache';
 
 ensureAiSdkTelemetryRegistered();
 
@@ -45,6 +47,7 @@ type AiProvider =
 type ApprovalMode = 'never' | 'on-request' | 'untrusted';
 type SandboxMode = 'danger-full-access' | 'read-only' | 'workspace-write';
 export type ModelSettingsOverride = {
+  sessionId?: string;
   provider?: string;
   model?: string;
   supportsImageInput?: boolean;
@@ -103,10 +106,12 @@ function mergeExtraOpenAICompatibleRequestParameters(
 function lazyLanguageModel(
   provider: string,
   modelId: string,
-  loader: () => Promise<LoadedLanguageModel>,
+  loader: (sessionId: string) => Promise<LoadedLanguageModel>,
 ): GenerateTextModel {
+  // Capture before lazy loading, which may run outside the settings scope.
+  const sessionId = modelSettingsStorage.getStore()?.sessionId || randomUUID();
   let resolvedModel: Promise<LoadedLanguageModel> | undefined;
-  const loadModel = () => (resolvedModel ??= loader());
+  const loadModel = () => (resolvedModel ??= loader(sessionId));
   return {
     specificationVersion: 'v4',
     provider,
@@ -114,13 +119,31 @@ function lazyLanguageModel(
     supportedUrls: {},
     doGenerate: async (options) => {
       const prepared = normalizeToolInputSchemas(await filterSensitiveData(options));
-      return (await loadModel()).doGenerate(prepared);
+      const result = await (await loadModel()).doGenerate(prepared);
+      return { ...result, usage: normalizeRuntimeCacheUsage(result.usage) };
     },
     doStream: async (options) => {
       const prepared = normalizeToolInputSchemas(await filterSensitiveData(options));
-      return (await loadModel()).doStream(prepared);
+      const result = await (await loadModel()).doStream(prepared);
+      return { ...result, stream: result.stream.pipeThrough(new TransformStream({
+        transform(part, controller) {
+          controller.enqueue(part.type === 'finish'
+            ? { ...part, usage: normalizeRuntimeCacheUsage(part.usage) } : part);
+        },
+      })) };
     },
   } satisfies GenerateTextModel;
+}
+
+function openCodeHeaders(baseURL: string | undefined, sessionId: string) {
+  if (!baseURL) return undefined;
+  try {
+    const { hostname } = new URL(baseURL);
+    if (hostname !== 'opencode.ai' && !hostname.endsWith('.opencode.ai')) return undefined;
+  } catch {
+    return undefined;
+  }
+  return { 'x-opencode-session': sessionId, 'User-Agent': 'webpilot/1.0' };
 }
 
 function openAiCompatibleModel(
@@ -131,7 +154,7 @@ function openAiCompatibleModel(
   apiKeyEnvironmentName: string,
   extraRequestParametersEnvironmentName: string,
 ) {
-  return lazyLanguageModel(provider, modelId, async () => {
+  return lazyLanguageModel(provider, modelId, async (sessionId) => {
     const baseURL = optionalEnvironmentValue(baseUrlEnvironmentName) || defaultBaseURL;
     if (!baseURL) {
       throw new Error(`${provider} has no Base URL. Configure the complete OpenAI-compatible /v1 endpoint in model settings.`);
@@ -142,6 +165,7 @@ function openAiCompatibleModel(
       return createMiniMaxOpenAIV4({
         apiKey: optionalEnvironmentValue(apiKeyEnvironmentName) || '',
         baseURL,
+        headers: openCodeHeaders(baseURL, sessionId),
         extraRequestParameters,
       })(modelId);
     }
@@ -149,6 +173,7 @@ function openAiCompatibleModel(
     return createOpenAICompatible({
       name: provider,
       baseURL,
+      headers: openCodeHeaders(baseURL, sessionId),
       apiKey: optionalEnvironmentValue(apiKeyEnvironmentName),
       transformRequestBody: (body) => mergeExtraOpenAICompatibleRequestParameters(body, extraRequestParameters),
     })(modelId) as unknown as LoadedLanguageModel;
@@ -156,7 +181,8 @@ function openAiCompatibleModel(
 }
 
 export function withModelSettings<T>(settings: ModelSettingsOverride, callback: () => T): T {
-  return modelSettingsStorage.run(settings, callback);
+  const sessionId = settings.sessionId?.trim() || modelSettingsStorage.getStore()?.sessionId || randomUUID();
+  return modelSettingsStorage.run({ ...settings, sessionId }, callback);
 }
 
 export function getModel(): GenerateTextModel {
@@ -174,10 +200,10 @@ export function getModel(): GenerateTextModel {
     const { createAlibaba } = await import('@ai-sdk/alibaba');
     return createAlibaba({ apiKey: process.env.ALIBABA_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
   });
-  if (provider === 'anthropic') return lazyLanguageModel(provider, model, async () => {
+  if (provider === 'anthropic') return lazyLanguageModel(provider, model, async (sessionId) => {
     const baseURL = optionalEnvironmentValue('ANTHROPIC_BASE_URL');
     const { createAnthropic } = await import('@ai-sdk/anthropic');
-    return createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
+    return createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY || '', baseURL, headers: openCodeHeaders(baseURL, sessionId) })(model) as unknown as LoadedLanguageModel;
   });
   if (provider === 'bedrock') return lazyLanguageModel(provider, model, async () => {
     const { createAmazonBedrock } = await import('@ai-sdk/amazon-bedrock');
@@ -197,10 +223,10 @@ export function getModel(): GenerateTextModel {
     return createCohere({ apiKey: process.env.COHERE_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
   });
   if (provider === 'codex') return getCodexModel(model);
-  if (provider === 'deepseek') return lazyLanguageModel(provider, model, async () => {
+  if (provider === 'deepseek') return lazyLanguageModel(provider, model, async (sessionId) => {
     const baseURL = optionalEnvironmentValue('DEEPSEEK_BASE_URL');
     const { createDeepSeek } = await import('@ai-sdk/deepseek');
-    return createDeepSeek({ apiKey: process.env.DEEPSEEK_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
+    return createDeepSeek({ apiKey: process.env.DEEPSEEK_API_KEY || '', baseURL, headers: openCodeHeaders(baseURL, sessionId) })(model) as unknown as LoadedLanguageModel;
   });
   if (provider === 'deepinfra') return lazyLanguageModel(provider, model, async () => {
     const baseURL = optionalEnvironmentValue('DEEPINFRA_BASE_URL');
@@ -245,19 +271,20 @@ export function getModel(): GenerateTextModel {
       `${environmentPrefix}_EXTRA_REQUEST_PARAMETERS`,
     );
   }
-  if (provider === 'minimax') return lazyLanguageModel(provider, model, async () => {
+  if (provider === 'minimax') return lazyLanguageModel(provider, model, async (sessionId) => {
     const baseURL = miniMaxOpenAIBaseURL();
     const { createMiniMaxOpenAIV4 } = await import('@/server/ai/providers/minimax-openai-v4-provider');
     return createMiniMaxOpenAIV4({
       apiKey: process.env.MINIMAX_API_KEY || '',
       baseURL: baseURL || 'https://api.minimax.io/v1',
+      headers: openCodeHeaders(baseURL, sessionId),
       extraRequestParameters: extraOpenAICompatibleRequestParameters('MINIMAX_EXTRA_REQUEST_PARAMETERS'),
     })(model);
   });
-  if (provider === 'openai') return lazyLanguageModel(provider, model, async () => {
+  if (provider === 'openai') return lazyLanguageModel(provider, model, async (sessionId) => {
     const baseURL = optionalEnvironmentValue('OPENAI_BASE_URL');
     const { createOpenAI } = await import('@ai-sdk/openai');
-    return createOpenAI({ apiKey: process.env.OPENAI_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
+    return createOpenAI({ apiKey: process.env.OPENAI_API_KEY || '', baseURL, headers: openCodeHeaders(baseURL, sessionId) })(model) as unknown as LoadedLanguageModel;
   });
   if (provider === 'azure-openai') return lazyLanguageModel(provider, model, async () => {
     const baseURL = optionalEnvironmentValue('AZURE_OPENAI_BASE_URL') || 'http://mirrors.shterm.com:4000';

@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, open, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { CodeSandboxArtifact, CodeSandboxExecutor, CodeSandboxTransportFile } from '@webpilot/capability-code-sandbox';
-import { artifactContentType } from '@webpilot/capability-file';
+import type { CodeSandboxArtifact, CodeSandboxExecutor, CodeSandboxTransportFile } from '@cjfclonedeep/capability-sdk/execution/code';
+import { artifactContentType } from '@cjfclonedeep/capability-sdk/file';
 import { artifactApiUrlFromRelative } from '@/lib/artifacts';
 import { normalizeApplicationUserId } from '@/server/auth/user-context';
 import { artifactsRoot } from '@/server/storage/paths';
-import { decodeFile, MAX_TOTAL_BYTES, relativeFile } from '../../../packages/capability-code-sandbox/runtime/files.cjs';
+import { decodeFile, MAX_TOTAL_BYTES, relativeFile } from '../../../packages/capability-sdk/runtime/execution/files.cjs';
 
 /** Persist runner bytes before its disposable workspace disappears; never expose transport Base64 in run results. */
 export function withCodeSandboxArtifacts(executor: CodeSandboxExecutor, scope: { userId?: string; runId: string; root?: string }): CodeSandboxExecutor {

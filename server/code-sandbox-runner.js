@@ -4,7 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { mkdtemp, mkdir, rm, writeFile, chmod } = require('node:fs/promises');
-const { collectFiles, stageFiles } = require('../packages/capability-code-sandbox/runtime/files.cjs');
+const { collectFiles, stageFiles } = require('../packages/capability-sdk/runtime/execution/files.cjs');
 
 const HOST = process.env.CODE_SANDBOX_RUNNER_HOST || '127.0.0.1';
 const PORT = Number(process.env.CODE_SANDBOX_RUNNER_PORT || 18100);

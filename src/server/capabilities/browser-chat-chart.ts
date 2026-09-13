@@ -6,8 +6,8 @@ import {
   type ChartUpdateInput,
   type ChartToolInput,
   type ChartRecord,
-} from '@webpilot/capability-chart';
-import { createFileSystemChartStore, validateEChartsOption } from '@webpilot/capability-chart/node';
+} from '@cjfclonedeep/capability-sdk/chart';
+import { createFileSystemChartStore, validateEChartsOption } from '@cjfclonedeep/capability-sdk/chart/node';
 import { artifactPath } from '@/server/storage/paths';
 import { capabilityResultToBrowserActionResult } from './browser-chat-result';
 import { publishRealtimeRefreshEvent } from '@/server/realtime/ws-refresh';

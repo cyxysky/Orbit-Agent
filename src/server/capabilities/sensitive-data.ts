@@ -1,9 +1,9 @@
-import { capabilityConfigurationFromEnvironment } from '@webpilot/capability-host';
-import { sensitiveDataCapabilityManifest } from '@webpilot/capability-sensitive-data';
+import { capabilityConfigurationFromEnvironment } from '@cjfclonedeep/capability-sdk/host';
+import { sensitiveDataCapabilityManifest } from '@cjfclonedeep/capability-sdk/sensitive-data';
 import {
   createNodeSensitiveDataFilter,
   sensitiveDataFilterConfigFromEnvironment,
-} from '@webpilot/capability-sensitive-data/node';
+} from '@cjfclonedeep/capability-sdk/sensitive-data/node';
 
 const sensitiveDataRuntime = createNodeSensitiveDataFilter({
   getConfig: () => sensitiveDataFilterConfigFromEnvironment(

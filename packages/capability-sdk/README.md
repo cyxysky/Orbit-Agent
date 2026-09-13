@@ -1,6 +1,33 @@
-# @webpilot/capability-sdk
+# @cjfclonedeep/capability-sdk
 
 [English](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
+
+For Cursor or another MCP client, use the [unified MCP CLI](MCP-CLI.md); no server file or extra dependency is needed. Available after 0.2.1.
+
+```sh
+npx --no-install capability-mcp init cursor
+```
+
+[Grouped tool configuration / JSON Schema](MCP-CONFIG.zh-CN.md)
+
+[Chart/maps UI (Chinese)](MCP-UI.zh-CN.md): MCP Apps, local browser previews, chart editing and static ECharts images (unreleased).
+
+[Agent integrations (Chinese)](AGENT-INTEGRATIONS.zh-CN.md): Codex, Cursor, Claude Code, custom MCP clients, and native OpenAI Agents SDK / Responses API adapters (`/local` and `/openai`; unreleased).
+
+One package for capability contracts, execution, configuration, responses, AI SDK/MCP adapters and all tools.
+
+All npm dependencies are included. The root exposes contracts and execution without eagerly importing tool implementations or framework adapters. Normal npm installation also prepares the supported Windows/Linux execution runtimes through postinstall. [Runtime](RUNTIME.md) · [Tools](TOOLS.md)
+
+| Entry | Purpose |
+| --- | --- |
+| `.` | Contracts / Registry / Executor |
+| `/host`, `/node`, `/typeorm` | Configuration / Mount / Storage |
+| `/responses` | [Response schemas](docs/responses/README.md) |
+| `/responses/react` | React response renderers |
+| `/ai-sdk` | [AI SDK](docs/adapters/AI-SDK.md) |
+| `/mcp` | [MCP](docs/adapters/MCP-ADAPTER.md) |
+
+Mounting, configuration stores and the Skill catalog are included at [`/host`](HOST.md). JSON-file storage is at `/node`; optional TypeORM storage is at `/typeorm`. The root stays framework-neutral and does not load Node or TypeORM adapters.
 
 Define portable Capability contracts and shared execution/lifecycle primitives.
 
@@ -8,18 +35,18 @@ This README is a complete integration entrypoint. Follow steps 1–4 for any Typ
 
 ## 1. Install and prepare
 
-Use Node.js >=22.16 and ESM TypeScript. These examples match the 0.1.0 workspace contracts. Install matching Capability versions from your configured npm registry. If a version is unpublished, obtain the matching release tarballs/workspace packages from the maintainer; a registry 404 is not a runtime failure. Do not mix unrelated releases. For a new project:
+Use Node.js >=22.16 and ESM TypeScript. These examples match the 0.2.1 workspace contracts. Install matching Capability versions from your configured npm registry. If a version is unpublished, obtain the matching release tarballs/workspace packages from the maintainer; a registry 404 is not a runtime failure. Do not mix unrelated releases. For a new project:
 
 ```sh
 npm init -y
 npm pkg set type=module
-npm install @webpilot/capability-sdk @webpilot/capability-host
+npm install @cjfclonedeep/capability-sdk
 npm install -D typescript tsx @types/node
 ```
 
 This example implements a new capability without inheriting a class. Implement `CapabilityProvider.manifest` and `createRuntime(context)`; expose tools with JSON Schema plus an authoritative `parse`, and return `CapabilityResult`. Use `CapabilityRegistry.register/resolve` directly for minimal assembly, or host's `mountCapabilities` for normalized configuration and Skills.
 
-SDK includes real runtime code, not only interfaces: the registry detects duplicate capability/tool/Skill IDs, tracks active invocations and owns disposal; `createCapabilityExecutor` enforces serial groups and calls host policies. Use one executor per mounted runtime, not one per tool call. Node-only process/persistence helpers live at `/node`. SDK does not depend on AI SDK, MCP, React or application code. A new ordinary capability should follow these contracts; sensitive-data is separately documented model middleware.
+SDK includes real runtime code, not only interfaces: the registry detects duplicate capability/tool/Skill IDs, tracks active invocations and owns disposal; `createCapabilityExecutor` enforces serial groups and calls host policies. Use one executor per mounted runtime, not one per tool call. Node-only process/persistence helpers live at `/node`. The root does not import AI SDK, MCP, React or application code; adapters use explicit subpaths. A new ordinary capability should follow these contracts; sensitive-data is separately documented model middleware.
 
 ## 2. Create the provider
 
@@ -27,7 +54,7 @@ Save as `provider.ts`. This file creates the provider and exports the first vali
 
 ```ts
 import { createCapabilityRuntime, defineCapabilityInput, defineCapabilityTool,
-  type CapabilityProvider } from '@webpilot/capability-sdk';
+  type CapabilityProvider } from '@cjfclonedeep/capability-sdk';
 const provider: CapabilityProvider = {
   manifest: { schemaVersion: 1, id: 'example.greeting', name: 'Greeting', version: '1.0.0',
     skills: [{ id: 'example.greeting/usage', title: 'Greeting',
@@ -72,9 +99,9 @@ Save as `integration.ts`. There is one shared executor per run, preserving seria
 
 ```ts
 import { randomUUID } from 'node:crypto';
-import { mountCapabilities, EnvironmentCapabilityConfigStore } from '@webpilot/capability-host';
+import { mountCapabilities, EnvironmentCapabilityConfigStore } from '@cjfclonedeep/capability-sdk/host';
 import { createCapabilityExecutor, disposeOnce,
-  type CapabilityExecutionPolicyOptions } from '@webpilot/capability-sdk';
+  type CapabilityExecutionPolicyOptions } from '@cjfclonedeep/capability-sdk';
 import { providers, configurations, cleanup } from './provider.js';
 
 export async function openCapabilities(options: {
@@ -126,7 +153,7 @@ export async function openCapabilities(options: {
 Save as `policy.ts`. This explicitly configured single-user example grants its selected providers. In a shared Agent, connect these hooks to your existing authenticated permission and action approval logic. Prerequisites declared by a tool need a `policy.prerequisite` handler; it must verify the named condition or throw.
 
 ```ts
-import type { CapabilityExecutionPolicyOptions } from '@webpilot/capability-sdk';
+import type { CapabilityExecutionPolicyOptions } from '@cjfclonedeep/capability-sdk';
 import { providers } from './provider.js';
 
 // This sample host grants the permissions of its explicitly configured providers.
@@ -184,7 +211,7 @@ The next section is a complete concrete Agent implementation using AI SDK. For o
 ## AI SDK: complete model-driven Agent
 
 ```sh
-npm install @webpilot/capability-adapter-ai-sdk "ai@>=7 <8" @ai-sdk/openai-compatible
+npm install @cjfclonedeep/capability-sdk "ai@>=7 <8" @ai-sdk/openai-compatible
 ```
 
 Use a chat-completions-compatible provider that supports tools. Set `AGENT_MODEL_BASE_URL` (including its API prefix), `AGENT_MODEL_ID`, and optionally `AGENT_MODEL_API_KEY` in the process environment. Save as `agent.ts` alongside `provider.ts` and `policy.ts`, then run `npx tsx agent.ts "your task"`. This is an alternative to first-call.ts, not a second mount inside it. The initial prompt only asks for tool descriptions; supply your intended task to execute operations.
@@ -193,7 +220,7 @@ Use a chat-completions-compatible provider that supports tools. Set `AGENT_MODEL
 import { randomUUID } from 'node:crypto';
 import { ToolLoopAgent, stepCountIs } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { mountAISDKCapabilities, EnvironmentCapabilityConfigStore } from '@webpilot/capability-adapter-ai-sdk';
+import { mountAISDKCapabilities, EnvironmentCapabilityConfigStore } from '@cjfclonedeep/capability-sdk/ai-sdk';
 import { providers, configurations, cleanup } from './provider.js';
 import { policy, beforeInvoke } from './policy.js';
 
@@ -244,7 +271,7 @@ The following table lists literal defaults from the package settings; dynamic de
 
 ## Troubleshooting and completion criteria
 
-- Module not found: check published exports, aligned versions and Node/ESM setup; install the selected entrypoint's optional peers.
+- Module not found: check published exports, aligned versions and Node/ESM setup; check that npm installed the package dependencies.
 - Tool missing: inspect `runtime.tools`, enabled capability IDs and allowed names; do not guess names from folder names.
 - Validation failure: use the actual inputSchema and parser error, not a copied schema from a different entrypoint.
 - Disabled/unavailable operation: check normalized settings, selected backend, installed binaries and supplied host callbacks.
@@ -254,14 +281,14 @@ The following table lists literal defaults from the package settings; dynamic de
 
 ## Published entrypoints
 
-- `@webpilot/capability-sdk/node`
-- `@webpilot/capability-sdk`
+- `@cjfclonedeep/capability-sdk/node`
+- `@cjfclonedeep/capability-sdk`
 
 ## Additional package reference
 
 The following pre-existing reference includes focused API fragments and application integration notes. The complete runnable entrypoints are the numbered tutorial above; do not concatenate unrelated snippets.
 
-## @webpilot/capability-sdk
+## @cjfclonedeep/capability-sdk
 
 Framework-neutral contracts and an immutable per-run registry for executable capabilities.
 
@@ -274,6 +301,6 @@ name, description, JSON Schema, parser, execution function, policy, and result
 to its native tool abstraction.
 
 For the complete registration, Skill, execution, and lifecycle contract, see
-the [TypeScript Agent framework integration guide](./FRAMEWORK_INTEGRATION.md).
+the [TypeScript Agent framework integration guide](FRAMEWORK_INTEGRATION.md).
 
-`createCapabilityExecutor({ authorize, prerequisite, reportProgress })` provides shared execution policy handling for adapters. Authorization callbacks belong to the host; serial groups are enforced per executor. Mounted snapshots expose their combined `abortSignal`. Disposal is idempotent, aborts and waits for active tool invocations, then closes providers in reverse mount order. Cleanup failures are aggregated; supply `onDisposeError` to handle them explicitly. Node-only persistence and cancellable process helpers are exported from `@webpilot/capability-sdk/node`.
+`createCapabilityExecutor({ authorize, prerequisite, reportProgress })` provides shared execution policy handling for adapters. Authorization callbacks belong to the host; serial groups are enforced per executor. Mounted snapshots expose their combined `abortSignal`. Disposal is idempotent, aborts and waits for active tool invocations, then closes providers in reverse mount order. Cleanup failures are aggregated; supply `onDisposeError` to handle them explicitly. Node-only persistence and cancellable process helpers are exported from `@cjfclonedeep/capability-sdk/node`.

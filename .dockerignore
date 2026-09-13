@@ -5,6 +5,7 @@
 .tmp/
 .sandbox-runner-work/
 .capability-runtime/
+.capability-sdk/
 .workspace-manifests/
 output/
 packages/*/dist/

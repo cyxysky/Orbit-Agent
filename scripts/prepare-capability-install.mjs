@@ -9,7 +9,7 @@ if (source === 'npm') {
   const packagePath = new URL('../package.json', import.meta.url);
   const packageJson = JSON.parse(await readFile(packagePath, 'utf8'));
   const capabilityDependencies = Object.entries(packageJson.dependencies || {})
-    .filter(([name]) => name.startsWith('@webpilot/capability-'));
+    .filter(([name]) => name.startsWith('@cjfclonedeep/capability-'));
   const invalid = capabilityDependencies
     .filter(([, version]) => typeof version !== 'string' || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version))
     .map(([name]) => name);

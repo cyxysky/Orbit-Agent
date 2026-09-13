@@ -1,7 +1,7 @@
 import { fromMarkdown } from 'mdast-util-from-markdown';
 import type { Root, RootContent } from 'mdast';
-import type { CommunicationContent } from '@webpilot/capability-communication';
-import { artifactContentType } from '@webpilot/capability-file';
+import type { CommunicationContent } from '@cjfclonedeep/capability-sdk/integrations/communication';
+import { artifactContentType } from '@cjfclonedeep/capability-sdk/file';
 import { browserChatArtifactIdFromUrl } from '@/lib/browser-chat-artifacts';
 import type { BrowserChatMessage } from '@/server/ai/agents/browser-chat.service';
 import { responseRegistry } from '@/lib/response-registry';

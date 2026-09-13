@@ -176,6 +176,12 @@ export function classifyRuntimeRetry(error: unknown, signal?: AbortSignal): Runt
   if (signal?.aborted) {
     return { category: 'aborted', reason: 'request was aborted', retryable: false, statusCode };
   }
+  if (records.some((record) =>
+    [record.code, record.type, record.message, record.responseBody].some((value) =>
+      typeof value === 'string' && /\bMissingSessionID\b|\bmissing\s+x-opencode-session\b/i.test(value)))
+    || /\bMissingSessionID\b|\bmissing\s+x-opencode-session\b/i.test(message)) {
+    return { category: 'configuration', reason: 'OpenCode requires a stable x-opencode-session header; configure it before retrying', retryable: false, statusCode };
+  }
   if (name === 'AI_InvalidToolInputSchemaError'
     || ((statusCode === undefined || statusCode === 400 || statusCode === 422)
       && /\binvalid (?:json )?schema\b|\bschema\b.{0,160}\b(?:must|required|invalid|unsupported|not supported)\b/i.test(message))) {

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect } from 'react';
-import { exportChartPng } from '@webpilot/capability-chart/react';
+import { exportChartPng } from '@cjfclonedeep/capability-sdk/chart/react';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 
 export type ChartExportWindow = Window & {

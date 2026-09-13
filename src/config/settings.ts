@@ -1,24 +1,23 @@
 import type { ModelProvider, ModelProviderSettings } from '@/server/ai/schemas/runtime.schema';
 import { normalizedModelCapabilities } from '@/lib/model-capabilities';
-import { browserCapabilitySettings } from '@webpilot/capability-browser/settings';
-import { chartCapabilitySettings } from '@webpilot/capability-chart/settings';
-import { mapsCapabilitySettings } from '@webpilot/capability-maps/settings';
-import { codeSandboxCapabilitySettings } from '@webpilot/capability-code-sandbox/settings';
-import { communicationCapabilitySettings } from '@webpilot/capability-communication/settings';
-import { computerCapabilitySettings } from '@webpilot/capability-computer/settings';
-import { connectorsCapabilitySettings } from '@webpilot/capability-connectors/settings';
-import { dataCapabilitySettings } from '@webpilot/capability-data/settings';
-import { fileCapabilitySettings } from '@webpilot/capability-file/settings';
-import { gitCapabilitySettings } from '@webpilot/capability-git/settings';
-import { knowledgeCapabilitySettings } from '@webpilot/capability-knowledge/settings';
-import { mediaCapabilitySettings } from '@webpilot/capability-media/settings';
-import { workflowCapabilitySettings } from '@webpilot/capability-workflow/settings';
+import { browserCapabilitySettings } from '@cjfclonedeep/capability-sdk/browser/settings';
+import { chartCapabilitySettings } from '@cjfclonedeep/capability-sdk/chart/settings';
+import { mapsCapabilitySettings } from '@cjfclonedeep/capability-sdk/maps/settings';
+import { codeSandboxCapabilitySettings } from '@cjfclonedeep/capability-sdk/execution/code/settings';
+import { communicationCapabilitySettings } from '@cjfclonedeep/capability-sdk/integrations/communication/settings';
+import { computerCapabilitySettings } from '@cjfclonedeep/capability-sdk/computer/settings';
+import { connectorsCapabilitySettings } from '@cjfclonedeep/capability-sdk/integrations/connectors/settings';
+import { dataCapabilitySettings } from '@cjfclonedeep/capability-sdk/data/settings';
+import { fileCapabilitySettings } from '@cjfclonedeep/capability-sdk/file/settings';
+import { terminalCapabilitySettings } from '@cjfclonedeep/capability-sdk/execution/terminal/settings';
+import { knowledgeCapabilitySettings } from '@cjfclonedeep/capability-sdk/knowledge/settings';
+import { mediaCapabilitySettings } from '@cjfclonedeep/capability-sdk/media/settings';
 import {
   defaultGlinerOpenLabelModel,
   defaultLiquidPiiModel,
-} from '@webpilot/capability-sensitive-data';
-import { sensitiveDataCapabilitySettings } from '@webpilot/capability-sensitive-data/settings';
-import { normalizeBoundedNumberSetting, type CapabilitySettingDefinition } from '@webpilot/capability-sdk';
+} from '@cjfclonedeep/capability-sdk/sensitive-data';
+import { sensitiveDataCapabilitySettings } from '@cjfclonedeep/capability-sdk/sensitive-data/settings';
+import { normalizeBoundedNumberSetting, type CapabilitySettingDefinition } from '@cjfclonedeep/capability-sdk';
 
 export { defaultGlinerOpenLabelModel, defaultLiquidPiiModel };
 
@@ -72,9 +71,8 @@ const capabilitySettingDefinitions: readonly CapabilitySettingDefinition[] = [
   ...dataCapabilitySettings,
   ...mediaCapabilitySettings,
   ...communicationCapabilitySettings,
-  ...gitCapabilitySettings,
+  ...terminalCapabilitySettings,
   ...computerCapabilitySettings,
-  ...workflowCapabilitySettings,
   ...sensitiveDataCapabilitySettings,
 ];
 

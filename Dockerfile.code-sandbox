@@ -7,7 +7,7 @@ RUN apt-get update \
 
 WORKDIR /runner
 COPY server/code-sandbox-runner.js ./server/code-sandbox-runner.js
-COPY packages/capability-code-sandbox/runtime ./packages/capability-code-sandbox/runtime
+COPY packages/capability-sdk/runtime/execution ./packages/capability-sdk/runtime/execution
 RUN chown -R sandbox:sandbox /runner
 
 ENV NODE_ENV=production \

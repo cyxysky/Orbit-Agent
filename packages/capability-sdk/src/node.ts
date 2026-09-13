@@ -60,3 +60,5 @@ export function createCapabilityDocumentDatabase<T extends { id: string; updated
     async dispose() { closed = true; connection?.close(); connection = undefined; },
   };
 }
+
+export { JsonFileCapabilityConfigStore } from './host/node.ts';

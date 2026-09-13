@@ -11,12 +11,12 @@ This README is a complete integration entrypoint. Follow steps 1–4 for any Typ
 For structured charts, maps and other registered output, also follow
 [Registered output across frameworks](#registered-output-across-frameworks).
 
-Use Node.js >=22.16 and ESM TypeScript. These examples match the 0.1.0 workspace contracts. Install matching Capability versions from your configured npm registry. If a version is unpublished, obtain the matching release tarballs/workspace packages from the maintainer; a registry 404 is not a runtime failure. Do not mix unrelated releases. For a new project:
+Use Node.js >=22.16 and ESM TypeScript. These examples match the 0.2.1 workspace contracts. Install matching Capability versions from your configured npm registry. If a version is unpublished, obtain the matching release tarballs/workspace packages from the maintainer; a registry 404 is not a runtime failure. Do not mix unrelated releases. For a new project:
 
 ```sh
 npm init -y
 npm pkg set type=module
-npm install @webpilot/capability-sdk @webpilot/capability-host
+npm install @cjfclonedeep/capability-sdk
 npm install -D typescript tsx @types/node
 ```
 
@@ -30,7 +30,7 @@ Save as `provider.ts`. This file creates the provider and exports the first vali
 
 ```ts
 import { createCapabilityRuntime, defineCapabilityInput, defineCapabilityTool,
-  type CapabilityProvider } from '@webpilot/capability-sdk';
+  type CapabilityProvider } from '@cjfclonedeep/capability-sdk';
 const provider: CapabilityProvider = {
   manifest: { schemaVersion: 1, id: 'example.greeting', name: 'Greeting', version: '1.0.0',
     skills: [{ id: 'example.greeting/usage', title: 'Greeting',
@@ -75,9 +75,9 @@ Save as `integration.ts`. There is one shared executor per run, preserving seria
 
 ```ts
 import { randomUUID } from 'node:crypto';
-import { mountCapabilities, EnvironmentCapabilityConfigStore } from '@webpilot/capability-host';
+import { mountCapabilities, EnvironmentCapabilityConfigStore } from '@cjfclonedeep/capability-sdk/host';
 import { createCapabilityExecutor, disposeOnce,
-  type CapabilityExecutionPolicyOptions } from '@webpilot/capability-sdk';
+  type CapabilityExecutionPolicyOptions } from '@cjfclonedeep/capability-sdk';
 import { providers, configurations, cleanup } from './provider.js';
 
 export async function openCapabilities(options: {
@@ -129,7 +129,7 @@ export async function openCapabilities(options: {
 Save as `policy.ts`. This explicitly configured single-user example grants its selected providers. In a shared Agent, connect these hooks to your existing authenticated permission and action approval logic. Prerequisites declared by a tool need a `policy.prerequisite` handler; it must verify the named condition or throw.
 
 ```ts
-import type { CapabilityExecutionPolicyOptions } from '@webpilot/capability-sdk';
+import type { CapabilityExecutionPolicyOptions } from '@cjfclonedeep/capability-sdk';
 import { providers } from './provider.js';
 
 // This sample host grants the permissions of its explicitly configured providers.
@@ -187,7 +187,7 @@ The next section is a complete concrete Agent implementation using AI SDK. For o
 ## AI SDK: complete model-driven Agent
 
 ```sh
-npm install @webpilot/capability-adapter-ai-sdk "ai@>=7 <8" @ai-sdk/openai-compatible
+npm install @cjfclonedeep/capability-sdk "ai@>=7 <8" @ai-sdk/openai-compatible
 ```
 
 Use a chat-completions-compatible provider that supports tools. Set `AGENT_MODEL_BASE_URL` (including its API prefix), `AGENT_MODEL_ID`, and optionally `AGENT_MODEL_API_KEY` in the process environment. Save as `agent.ts` alongside `provider.ts` and `policy.ts`, then run `npx tsx agent.ts "your task"`. This is an alternative to first-call.ts, not a second mount inside it. The initial prompt only asks for tool descriptions; supply your intended task to execute operations.
@@ -196,7 +196,7 @@ Use a chat-completions-compatible provider that supports tools. Set `AGENT_MODEL
 import { randomUUID } from 'node:crypto';
 import { ToolLoopAgent } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { mountAISDKCapabilities, EnvironmentCapabilityConfigStore } from '@webpilot/capability-adapter-ai-sdk';
+import { mountAISDKCapabilities, EnvironmentCapabilityConfigStore } from '@cjfclonedeep/capability-sdk/ai-sdk';
 import { providers, configurations, cleanup } from './provider.js';
 import { policy, beforeInvoke } from './policy.js';
 
@@ -247,7 +247,7 @@ The following table lists literal defaults from the package settings; dynamic de
 
 ## Troubleshooting and completion criteria
 
-- Module not found: check published exports, aligned versions and Node/ESM setup; install the selected entrypoint's optional peers.
+- Module not found: check published exports, aligned versions and Node/ESM setup; check that npm installed the package dependencies.
 - Tool missing: inspect `runtime.tools`, enabled capability IDs and allowed names; do not guess names from folder names.
 - Validation failure: use the actual inputSchema and parser error, not a copied schema from a different entrypoint.
 - Disabled/unavailable operation: check normalized settings, selected backend, installed binaries and supplied host callbacks.
@@ -257,25 +257,24 @@ The following table lists literal defaults from the package settings; dynamic de
 
 ## Published entrypoints
 
-- `@webpilot/capability-sdk/node`
-- `@webpilot/capability-sdk`
+- `@cjfclonedeep/capability-sdk/node`
+- `@cjfclonedeep/capability-sdk`
 
 ## Concrete package providers
 
 Replace provider.ts with the implementation from the selected package README. Keep integration.ts and its lifecycle unchanged.
 
-- [capability-file](../capability-file/README.md)
-- [capability-browser](../capability-browser/README.md)
-- [capability-chart](../capability-chart/README.md)
-- [capability-knowledge](../capability-knowledge/README.md)
-- [capability-workflow](../capability-workflow/README.md)
-- [capability-git](../capability-git/README.md)
-- [capability-connectors](../capability-connectors/README.md)
-- [capability-communication](../capability-communication/README.md)
-- [capability-computer](../capability-computer/README.md)
-- [capability-data](../capability-data/README.md)
-- [capability-media](../capability-media/README.md)
-- [capability-code-sandbox](../capability-code-sandbox/README.md)
+- [capability-file](../capability-sdk/docs/file/README.md)
+- [capability-browser](../capability-sdk/docs/browser/README.md)
+- [capability-chart](../capability-sdk/docs/chart/README.md)
+- [capability-knowledge](../capability-sdk/docs/knowledge/README.md)
+- [capability-sdk/execution/terminal](../capability-sdk/docs/execution/TERMINAL.md)
+- [capability-sdk/integrations/connectors](../capability-sdk/docs/integrations/CONNECTORS.md)
+- [capability-sdk/integrations/communication](../capability-sdk/docs/integrations/COMMUNICATION.md)
+- [capability-computer](../capability-sdk/docs/computer/README.md)
+- [capability-data](../capability-sdk/docs/data/README.md)
+- [capability-media](../capability-sdk/docs/media/README.md)
+- [capability-sdk/execution/code](../capability-sdk/docs/execution/CODE.md)
 
 ## Registered output across frameworks
 
@@ -289,8 +288,8 @@ Do not register the same definitions both there and in a provider manifest.
 In the framework integration from step 3, add a session and wire these callbacks:
 
 ```ts
-import { ResponseSession } from '@webpilot/capability-sdk';
-import { coreResponses, markdownBlock } from '@webpilot/capability-response';
+import { ResponseSession } from '@cjfclonedeep/capability-sdk';
+import { coreResponses, markdownBlock } from '@cjfclonedeep/capability-sdk/responses';
 
 // Supply responses: coreResponses to mountCapabilities in step 3.
 const responses = new ResponseSession(mounted.responses);

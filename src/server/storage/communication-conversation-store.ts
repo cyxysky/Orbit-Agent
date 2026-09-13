@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
-import type { WeComInboundMessage, WeComInboundAttachment } from '@webpilot/capability-communication/node';
+import type { WeComInboundMessage, WeComInboundAttachment } from '@cjfclonedeep/capability-sdk/integrations/communication/node';
 import type { BrowserChatAttachment } from '@/server/ai/agents/browser-chat-attachments';
-import type { CommunicationContent } from '@webpilot/capability-communication';
+import type { CommunicationContent } from '@cjfclonedeep/capability-sdk/integrations/communication';
 import { executeDatabase, queryDatabase, queryDatabaseOne } from '@/server/db/database';
 
 export type CommunicationConversation = {

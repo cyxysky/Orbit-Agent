@@ -3,7 +3,7 @@ import test from 'node:test';
 import {
   resolveBrowserOutputPixelRatio,
   resolveBrowserPreviewImageFormat,
-} from '@webpilot/capability-browser';
+} from '@cjfclonedeep/capability-sdk/browser';
 
 test('browser output pixel ratio is bounded without changing viewport dimensions', () => {
   assert.equal(resolveBrowserOutputPixelRatio(undefined), 1.5);

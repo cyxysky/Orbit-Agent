@@ -180,6 +180,7 @@ export type BrowserChatAiOutputView = {
 
 export type BrowserChatAiOutputCycle = {
   id: string;
+  revision?: number;
   messageId?: string;
   output: BrowserChatAiOutputView;
   stepIndex?: number;
@@ -260,7 +261,7 @@ export type ModelProvider =
 
 export type ModelProviderSettings = {
   selectedModel?: string;
-  media?: import('@webpilot/capability-media/model-settings').ProviderMediaSettings;
+  media?: import('@cjfclonedeep/capability-sdk/media/model-settings').ProviderMediaSettings;
   displayName?: string;
   enabled?: boolean;
   defaultModel?: string;
@@ -279,7 +280,7 @@ export type ModelProviderSettings = {
 };
 
 export type ModelConfigRecord = {
-  mediaSelections?: import('@webpilot/capability-media/model-settings').MediaModelSelections;
+  mediaSelections?: import('@cjfclonedeep/capability-sdk/media/model-settings').MediaModelSelections;
   provider: ModelProvider;
   providerOrder?: ModelProvider[];
   providers: Partial<Record<ModelProvider, ModelProviderSettings>>;

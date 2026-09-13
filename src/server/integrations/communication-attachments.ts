@@ -1,7 +1,7 @@
 import { Readable } from 'node:stream';
 import sharp from 'sharp';
-import { artifactContentType } from '@webpilot/capability-file';
-import type { WeComBotConnection } from '@webpilot/capability-communication/node';
+import { artifactContentType } from '@cjfclonedeep/capability-sdk/file';
+import type { WeComBotConnection } from '@cjfclonedeep/capability-sdk/integrations/communication/node';
 import { browserChatAttachmentLimit } from '@/server/ai/agents/browser-chat-attachments';
 import { storeUploadedFile, uploadMaxBytes } from '@/server/storage/upload-file';
 import { saveCommunicationInbound, type CommunicationInbound } from '@/server/storage/communication-conversation-store';

@@ -1,10 +1,10 @@
-import { createBrowserCapability } from '@webpilot/capability-browser';
+import { createBrowserCapability } from '@cjfclonedeep/capability-sdk/browser';
 import {
   createNodeBrowserOperations,
   type BrowserCodeAttachmentBinding,
   type BrowserCodeCredentialBinding,
   type BrowserSession,
-} from '@webpilot/capability-browser/node';
+} from '@cjfclonedeep/capability-sdk/browser/node';
 import { browserCodeServiceFileDeliveryViolation } from '@/server/ai/agents/browser-chat-file-delivery';
 
 export type BrowserChatBrowserCapabilityOptions = {

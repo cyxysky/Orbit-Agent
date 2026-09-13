@@ -10,7 +10,7 @@ import {
   FILE_READ_MIN_CHARACTERS as BROWSER_CHAT_FILE_READ_MIN_CHARS,
   normalizeFileReadLimit as normalizeBrowserChatFileReadLimit,
   readFileAttachment as readBrowserChatAttachment,
-} from '@webpilot/capability-file/node';
+} from '@cjfclonedeep/capability-sdk/file/node';
 
 test('readFile defaults to 20000 characters and clamps smaller requested limits', () => {
   assert.equal(normalizeBrowserChatFileReadLimit(undefined), 20_000);

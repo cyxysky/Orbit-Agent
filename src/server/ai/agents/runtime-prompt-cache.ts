@@ -1,4 +1,5 @@
 import type { ModelMessage } from 'ai';
+import type { LanguageModelV4Usage } from '@ai-sdk/provider';
 
 // Generated background is request-local. It must never become dialogue history.
 const generatedPrefixes = ['[Conversation background]', '[WebPilot task state]', '[WebPilot material reference]',
@@ -12,4 +13,20 @@ export function isRuntimePromptCacheMetadataMessage(message: ModelMessage) {
 }
 export function withoutRuntimePromptCacheMetadata(messages: ModelMessage[]) {
   return messages.filter((message) => !isRuntimePromptCacheMetadataMessage(message));
+}
+
+/** OpenAI-compatible gateways may forward DeepSeek's native usage fields. */
+export function normalizeRuntimeCacheUsage(usage: LanguageModelV4Usage): LanguageModelV4Usage {
+  const raw = usage.raw;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return usage;
+  const details = raw.prompt_tokens_details;
+  if (details && typeof details === 'object' && !Array.isArray(details)
+    && typeof details.cached_tokens === 'number') return usage;
+  const cacheRead = raw.prompt_cache_hit_tokens;
+  const total = usage.inputTokens.total;
+  if (typeof cacheRead !== 'number' || !Number.isFinite(cacheRead) || cacheRead < 0
+    || typeof total !== 'number' || cacheRead > total) return usage;
+  return { ...usage, inputTokens: { ...usage.inputTokens, cacheRead,
+    noCache: Math.max(0, total - cacheRead - (usage.inputTokens.cacheWrite || 0)),
+  } };
 }

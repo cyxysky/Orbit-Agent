@@ -13,7 +13,7 @@ import {
 } from 'react';
 import { FileText, X } from 'lucide-react';
 import type { PreviewSource } from '@open-file-viewer/core';
-import { artifactContentType } from '@webpilot/capability-file/formats';
+import { artifactContentType } from '@cjfclonedeep/capability-sdk/file/formats';
 import { BeautifulLoadingState } from '@/components/BeautifulLoadingState';
 import { useI18n } from '@/i18n/I18nProvider';
 import { useTheme } from '@/theme/ThemeProvider';

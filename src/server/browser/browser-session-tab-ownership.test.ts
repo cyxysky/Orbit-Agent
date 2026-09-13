@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { BrowserContext, Page } from 'playwright';
-import { BrowserSession } from '@webpilot/capability-browser/node';
+import { BrowserSession } from '@cjfclonedeep/capability-sdk/browser/node';
 
 function markedPage(groupId: string, nativeTabId: number) {
   let reads = 0;

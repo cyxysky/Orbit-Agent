@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import type { Page } from 'playwright';
-import { BrowserSession, closeAllBrowserSessions } from '@webpilot/capability-browser/node';
+import { BrowserSession, closeAllBrowserSessions } from '@cjfclonedeep/capability-sdk/browser/node';
 
 async function waitForCondition(check: () => boolean | Promise<boolean>, timeoutMs = 8_000) {
   const deadline = Date.now() + timeoutMs;

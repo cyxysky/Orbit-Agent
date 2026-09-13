@@ -1,4 +1,4 @@
-import type { ResponseBlock, StructuredResponse } from '@webpilot/capability-sdk';
+import type { ResponseBlock, StructuredResponse } from '@cjfclonedeep/capability-sdk';
 import { responseRegistry } from '@/lib/response-registry';
 import { browserChatCapabilityResult } from './browser-chat-capability-result';
 import type { DynamicToolUIPart, UIMessage } from 'ai';

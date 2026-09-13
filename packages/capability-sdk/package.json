@@ -1,15 +1,27 @@
 {
-  "name": "@webpilot/capability-sdk",
-  "version": "0.1.0",
-  "description": "Framework-neutral capability contracts and runtime registry.",
+  "name": "@cjfclonedeep/capability-sdk",
+  "version": "0.2.1",
+  "description": "Capability SDK with all tools, structured responses, AI SDK/MCP adapters and automatic Windows/Linux runtime setup.",
   "type": "module",
   "sideEffects": false,
   "files": [
     "dist",
-    "README*.md", "MCP*.md",
-    "FRAMEWORK_INTEGRATION*.md"
+    "runtime",
+    "scripts",
+    "docs",
+    "licenses",
+    "mcp-config.schema.json",
+    "*.md"
   ],
   "exports": {
+    "./openai": {
+      "types": "./scripts/openai.d.mts",
+      "import": "./scripts/openai.mjs"
+    },
+    "./local": {
+      "types": "./scripts/local.d.mts",
+      "import": "./scripts/local.mjs"
+    },
     "./node": {
       "types": "./dist/node.d.ts",
       "import": "./dist/node.js"
@@ -17,16 +29,475 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./host": {
+      "types": "./dist/host/index.d.ts",
+      "import": "./dist/host/index.js"
+    },
+    "./typeorm": {
+      "types": "./dist/host/typeorm.d.ts",
+      "import": "./dist/host/typeorm.js"
+    },
+    "./responses": {
+      "types": "./dist/responses/index.d.ts",
+      "import": "./dist/responses/index.js"
+    },
+    "./responses/react": {
+      "types": "./dist/responses/react.d.ts",
+      "import": "./dist/responses/react.js"
+    },
+    "./ai-sdk": {
+      "types": "./dist/adapters/ai-sdk/index.d.ts",
+      "import": "./dist/adapters/ai-sdk/index.js"
+    },
+    "./ai-sdk/node": {
+      "types": "./dist/adapters/ai-sdk/node.d.ts",
+      "import": "./dist/adapters/ai-sdk/node.js"
+    },
+    "./ai-sdk/typeorm": {
+      "types": "./dist/adapters/ai-sdk/typeorm.d.ts",
+      "import": "./dist/adapters/ai-sdk/typeorm.js"
+    },
+    "./mcp": {
+      "types": "./dist/adapters/mcp/index.d.ts",
+      "import": "./dist/adapters/mcp/index.js"
+    },
+    "./browser": {
+      "types": "./dist/browser/index.d.ts",
+      "import": "./dist/browser/index.js"
+    },
+    "./browser/node": {
+      "types": "./dist/browser/node.d.ts",
+      "import": "./dist/browser/node.js"
+    },
+    "./browser/runtime-skill": {
+      "types": "./dist/browser/runtime-skill.d.ts",
+      "import": "./dist/browser/runtime-skill.js"
+    },
+    "./browser/settings": {
+      "types": "./dist/browser/settings.d.ts",
+      "import": "./dist/browser/settings.js"
+    },
+    "./browser/session-group": {
+      "types": "./dist/browser/session-group.d.ts",
+      "import": "./dist/browser/session-group.js"
+    },
+    "./browser/mcp": {
+      "types": "./dist/browser/mcp.d.ts",
+      "import": "./dist/browser/mcp.js"
+    },
+    "./execution/code": {
+      "types": "./dist/execution/code/index.d.ts",
+      "import": "./dist/execution/code/index.js"
+    },
+    "./execution/code/node": {
+      "types": "./dist/execution/code/node.d.ts",
+      "import": "./dist/execution/code/node.js"
+    },
+    "./execution/code/remote": {
+      "types": "./dist/execution/code/remote.d.ts",
+      "import": "./dist/execution/code/remote.js"
+    },
+    "./execution/code/mcp": {
+      "types": "./dist/execution/code/mcp.d.ts",
+      "import": "./dist/execution/code/mcp.js"
+    },
+    "./execution/code/runtime-skill": {
+      "types": "./dist/execution/code/runtime-skill.d.ts",
+      "import": "./dist/execution/code/runtime-skill.js"
+    },
+    "./execution/code/settings": {
+      "types": "./dist/execution/code/settings.d.ts",
+      "import": "./dist/execution/code/settings.js"
+    },
+    "./execution/terminal": {
+      "types": "./dist/execution/terminal/index.d.ts",
+      "import": "./dist/execution/terminal/index.js"
+    },
+    "./execution/terminal/node": {
+      "types": "./dist/execution/terminal/node.d.ts",
+      "import": "./dist/execution/terminal/node.js"
+    },
+    "./execution/terminal/mcp": {
+      "types": "./dist/execution/terminal/mcp.d.ts",
+      "import": "./dist/execution/terminal/mcp.js"
+    },
+    "./execution/terminal/runtime-skill": {
+      "types": "./dist/execution/terminal/runtime-skill.d.ts",
+      "import": "./dist/execution/terminal/runtime-skill.js"
+    },
+    "./execution/terminal/settings": {
+      "types": "./dist/execution/terminal/settings.d.ts",
+      "import": "./dist/execution/terminal/settings.js"
+    },
+    "./execution": {
+      "types": "./dist/execution/index.d.ts",
+      "import": "./dist/execution/index.js"
+    },
+    "./execution/node": {
+      "types": "./dist/execution/node.d.ts",
+      "import": "./dist/execution/node.js"
+    },
+    "./chart": {
+      "types": "./dist/chart/index.d.ts",
+      "import": "./dist/chart/index.js"
+    },
+    "./chart/core": {
+      "types": "./dist/chart/core.d.ts",
+      "import": "./dist/chart/core.js"
+    },
+    "./chart/node": {
+      "types": "./dist/chart/node.d.ts",
+      "import": "./dist/chart/node.js"
+    },
+    "./chart/react": {
+      "types": "./dist/chart/react.d.ts",
+      "import": "./dist/chart/react.js"
+    },
+    "./chart/runtime-skill": {
+      "types": "./dist/chart/runtime-skill.d.ts",
+      "import": "./dist/chart/runtime-skill.js"
+    },
+    "./chart/settings": {
+      "types": "./dist/chart/settings.d.ts",
+      "import": "./dist/chart/settings.js"
+    },
+    "./chart/mcp": {
+      "types": "./dist/chart/mcp.d.ts",
+      "import": "./dist/chart/mcp.js"
+    },
+    "./chart/response": {
+      "types": "./dist/chart/response.d.ts",
+      "import": "./dist/chart/response.js"
+    },
+    "./chart/response-react": {
+      "types": "./dist/chart/response-react.d.ts",
+      "import": "./dist/chart/response-react.js"
+    },
+    "./chart/response-node": {
+      "types": "./dist/chart/response-node.d.ts",
+      "import": "./dist/chart/response-node.js"
+    },
+    "./maps": {
+      "types": "./dist/maps/index.d.ts",
+      "import": "./dist/maps/index.js"
+    },
+    "./maps/core": {
+      "types": "./dist/maps/core.d.ts",
+      "import": "./dist/maps/core.js"
+    },
+    "./maps/node": {
+      "types": "./dist/maps/node.d.ts",
+      "import": "./dist/maps/node.js"
+    },
+    "./maps/react": {
+      "types": "./dist/maps/react.d.ts",
+      "import": "./dist/maps/react.js"
+    },
+    "./maps/settings": {
+      "types": "./dist/maps/settings.d.ts",
+      "import": "./dist/maps/settings.js"
+    },
+    "./maps/response": {
+      "types": "./dist/maps/response.d.ts",
+      "import": "./dist/maps/response.js"
+    },
+    "./maps/response-react": {
+      "types": "./dist/maps/response-react.d.ts",
+      "import": "./dist/maps/response-react.js"
+    },
+    "./maps/response-node": {
+      "types": "./dist/maps/response-node.d.ts",
+      "import": "./dist/maps/response-node.js"
+    },
+    "./integrations/connectors": {
+      "types": "./dist/integrations/connectors/index.d.ts",
+      "import": "./dist/integrations/connectors/index.js"
+    },
+    "./integrations/connectors/node": {
+      "types": "./dist/integrations/connectors/node.d.ts",
+      "import": "./dist/integrations/connectors/node.js"
+    },
+    "./integrations/connectors/mcp": {
+      "types": "./dist/integrations/connectors/mcp.d.ts",
+      "import": "./dist/integrations/connectors/mcp.js"
+    },
+    "./integrations/connectors/runtime-skill": {
+      "types": "./dist/integrations/connectors/runtime-skill.d.ts",
+      "import": "./dist/integrations/connectors/runtime-skill.js"
+    },
+    "./integrations/connectors/settings": {
+      "types": "./dist/integrations/connectors/settings.d.ts",
+      "import": "./dist/integrations/connectors/settings.js"
+    },
+    "./integrations/communication": {
+      "types": "./dist/integrations/communication/index.d.ts",
+      "import": "./dist/integrations/communication/index.js"
+    },
+    "./integrations/communication/node": {
+      "types": "./dist/integrations/communication/node.d.ts",
+      "import": "./dist/integrations/communication/node.js"
+    },
+    "./integrations/communication/mcp": {
+      "types": "./dist/integrations/communication/mcp.d.ts",
+      "import": "./dist/integrations/communication/mcp.js"
+    },
+    "./integrations/communication/runtime-skill": {
+      "types": "./dist/integrations/communication/runtime-skill.d.ts",
+      "import": "./dist/integrations/communication/runtime-skill.js"
+    },
+    "./integrations/communication/settings": {
+      "types": "./dist/integrations/communication/settings.d.ts",
+      "import": "./dist/integrations/communication/settings.js"
+    },
+    "./integrations": {
+      "types": "./dist/integrations/index.d.ts",
+      "import": "./dist/integrations/index.js"
+    },
+    "./integrations/node": {
+      "types": "./dist/integrations/node.d.ts",
+      "import": "./dist/integrations/node.js"
+    },
+    "./computer": {
+      "types": "./dist/computer/index.d.ts",
+      "import": "./dist/computer/index.js"
+    },
+    "./computer/node": {
+      "types": "./dist/computer/node.d.ts",
+      "import": "./dist/computer/node.js"
+    },
+    "./computer/mcp": {
+      "types": "./dist/computer/mcp.d.ts",
+      "import": "./dist/computer/mcp.js"
+    },
+    "./computer/runtime-skill": {
+      "types": "./dist/computer/runtime-skill.d.ts",
+      "import": "./dist/computer/runtime-skill.js"
+    },
+    "./computer/settings": {
+      "types": "./dist/computer/settings.d.ts",
+      "import": "./dist/computer/settings.js"
+    },
+    "./data": {
+      "types": "./dist/data/index.d.ts",
+      "import": "./dist/data/index.js"
+    },
+    "./data/typeorm": {
+      "types": "./dist/data/typeorm.d.ts",
+      "import": "./dist/data/typeorm.js"
+    },
+    "./data/mcp": {
+      "types": "./dist/data/mcp.d.ts",
+      "import": "./dist/data/mcp.js"
+    },
+    "./data/runtime-skill": {
+      "types": "./dist/data/runtime-skill.d.ts",
+      "import": "./dist/data/runtime-skill.js"
+    },
+    "./data/settings": {
+      "types": "./dist/data/settings.d.ts",
+      "import": "./dist/data/settings.js"
+    },
+    "./file": {
+      "types": "./dist/file/index.d.ts",
+      "import": "./dist/file/index.js"
+    },
+    "./file/node": {
+      "types": "./dist/file/node.d.ts",
+      "import": "./dist/file/node.js"
+    },
+    "./file/formats": {
+      "types": "./dist/file/formats.d.ts",
+      "import": "./dist/file/formats.js"
+    },
+    "./file/office": {
+      "types": "./dist/file/office/types.d.ts",
+      "import": "./dist/file/office/types.js"
+    },
+    "./file/runtime-skill": {
+      "types": "./dist/file/runtime-skill.d.ts",
+      "import": "./dist/file/runtime-skill.js"
+    },
+    "./file/settings": {
+      "types": "./dist/file/settings.d.ts",
+      "import": "./dist/file/settings.js"
+    },
+    "./file/mcp": {
+      "types": "./dist/file/mcp.d.ts",
+      "import": "./dist/file/mcp.js"
+    },
+    "./file/node/artifacts": {
+      "types": "./dist/file/node/artifacts.d.ts",
+      "import": "./dist/file/node/artifacts.js"
+    },
+    "./file/node/convert": {
+      "types": "./dist/file/node/convert.d.ts",
+      "import": "./dist/file/node/convert.js"
+    },
+    "./file/node/download": {
+      "types": "./dist/file/node/download.d.ts",
+      "import": "./dist/file/node/download.js"
+    },
+    "./file/node/generate": {
+      "types": "./dist/file/node/generate.d.ts",
+      "import": "./dist/file/node/generate.js"
+    },
+    "./file/node/office": {
+      "types": "./dist/file/node/office.d.ts",
+      "import": "./dist/file/node/office.js"
+    },
+    "./file/node/read": {
+      "types": "./dist/file/node/read.d.ts",
+      "import": "./dist/file/node/read.js"
+    },
+    "./file/node/text-extraction": {
+      "types": "./dist/file/node/text-extraction.d.ts",
+      "import": "./dist/file/node/text-extraction.js"
+    },
+    "./file/node/workspace": {
+      "types": "./dist/file/node/workspace.d.ts",
+      "import": "./dist/file/node/workspace.js"
+    },
+    "./knowledge": {
+      "types": "./dist/knowledge/index.d.ts",
+      "import": "./dist/knowledge/index.js"
+    },
+    "./knowledge/node": {
+      "types": "./dist/knowledge/node.d.ts",
+      "import": "./dist/knowledge/node.js"
+    },
+    "./knowledge/mcp": {
+      "types": "./dist/knowledge/mcp.d.ts",
+      "import": "./dist/knowledge/mcp.js"
+    },
+    "./knowledge/runtime-skill": {
+      "types": "./dist/knowledge/runtime-skill.d.ts",
+      "import": "./dist/knowledge/runtime-skill.js"
+    },
+    "./knowledge/settings": {
+      "types": "./dist/knowledge/settings.d.ts",
+      "import": "./dist/knowledge/settings.js"
+    },
+    "./media": {
+      "types": "./dist/media/index.d.ts",
+      "import": "./dist/media/index.js"
+    },
+    "./media/node": {
+      "types": "./dist/media/node.d.ts",
+      "import": "./dist/media/node.js"
+    },
+    "./media/model-settings": {
+      "types": "./dist/media/model-settings.d.ts",
+      "import": "./dist/media/model-settings.js"
+    },
+    "./media/models": {
+      "types": "./dist/media/models.d.ts",
+      "import": "./dist/media/models.js"
+    },
+    "./media/ai-sdk": {
+      "types": "./dist/media/ai-sdk.d.ts",
+      "import": "./dist/media/ai-sdk.js"
+    },
+    "./media/mcp": {
+      "types": "./dist/media/mcp.d.ts",
+      "import": "./dist/media/mcp.js"
+    },
+    "./media/runtime-skill": {
+      "types": "./dist/media/runtime-skill.d.ts",
+      "import": "./dist/media/runtime-skill.js"
+    },
+    "./media/settings": {
+      "types": "./dist/media/settings.d.ts",
+      "import": "./dist/media/settings.js"
+    },
+    "./sensitive-data": {
+      "types": "./dist/sensitive-data/index.d.ts",
+      "import": "./dist/sensitive-data/index.js"
+    },
+    "./sensitive-data/ai-sdk": {
+      "types": "./dist/sensitive-data/ai-sdk.d.ts",
+      "import": "./dist/sensitive-data/ai-sdk.js"
+    },
+    "./sensitive-data/node": {
+      "types": "./dist/sensitive-data/node.d.ts",
+      "import": "./dist/sensitive-data/node.js"
+    },
+    "./sensitive-data/settings": {
+      "types": "./dist/sensitive-data/settings.d.ts",
+      "import": "./dist/sensitive-data/settings.js"
+    },
+    "./runtime": {
+      "types": "./dist/runtime.d.ts",
+      "import": "./dist/runtime.js"
     }
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "prepack": "npm run build"
+    "prepack": "npm run build && npm run bundle-ui",
+    "bundle-ui": "node scripts/bundle-ui.mjs",
+    "install-runtime": "node scripts/runtime.cjs install",
+    "start-runtime": "node scripts/sensitive-data/start-runtime.cjs",
+    "bundle-runtime": "node scripts/sensitive-data/prepare-runtime.cjs",
+    "postinstall": "node scripts/runtime.cjs install",
+    "doctor": "node scripts/runtime.cjs doctor"
   },
   "engines": {
     "node": ">=22.16"
   },
+  "devDependencies": {
+    "esbuild": "^0.28.0",
+    "@modelcontextprotocol/ext-apps": "2.0.0"
+  },
   "publishConfig": {
     "access": "public"
+  },
+  "dependencies": {
+    "zod": "^4.4.3",
+    "@modelcontextprotocol/server": "2.0.0",
+    "acorn": "^8.16.0",
+    "playwright": "^1.60.0",
+    "@codemirror/commands": "^6.11.0",
+    "@codemirror/lang-json": "^6.0.2",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/lint": "^6.9.7",
+    "@codemirror/state": "^6.7.4",
+    "@codemirror/view": "^6.43.11",
+    "@excalidraw/excalidraw": "^0.18.1",
+    "@lezer/highlight": "^1.2.3",
+    "codemirror": "^6.0.2",
+    "echarts": ">=6.0.0 <7",
+    "three": ">=0.184.0 <0.186",
+    "@wecom/aibot-node-sdk": "^1.0.7",
+    "typeorm": ">=0.3.20 <2",
+    "docx": "^9.7.1",
+    "exceljs": "^4.4.0",
+    "jszip": "^3.10.1",
+    "mammoth": "^1.12.0",
+    "pdf-parse": "^2.4.5",
+    "pptxgenjs": "^4.0.1",
+    "sharp": "^0.34.5",
+    "typescript": "^5.8.3",
+    "xlsx": "^0.18.5",
+    "ai-sdk-provider-codex-cli": "^2.1.2",
+    "ai": "^7.0.59",
+    "@ai-sdk/openai": "^4.0.37",
+    "@ai-sdk/openai-compatible": "^3.0.29",
+    "@ai-sdk/google": "^4.0.40",
+    "@ai-sdk/xai": "^4.0.34",
+    "@ai-sdk/alibaba": "^2.0.30",
+    "@ai-sdk/provider": "^4.0.7",
+    "ffmpeg-static": "^5.3.0",
+    "undici": "^7.29.0"
+  },
+  "bin": {
+    "capability-mcp": "scripts/mcp.mjs",
+    "webpilot-browser-mcp": "dist/browser/bin/mcp.js",
+    "webpilot-chart-mcp": "dist/chart/bin/mcp.js",
+    "webpilot-file-mcp": "dist/file/bin/mcp.js",
+    "capability-runtime": "scripts/runtime.cjs"
+  },
+  "peerDependencies": {
+    "react": ">=19.0.0 <20",
+    "react-dom": ">=19.0.0 <20"
   }
 }

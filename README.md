@@ -4,7 +4,7 @@ An agent workspace built with Next.js and AI SDK, with capabilities for browsers
 
 Orbit combines an Agent Harness for persistent sessions, context management, tool execution, and recovery with a workspace for reviewing results and controlling tasks.
 
-Google Maps is available as the independent `@webpilot/capability-maps` package for place searches, basic routes, and interactive chat maps. Configure separate browser/server keys under **设置 → 工具能力 → 地图**. See the [Google Maps setup guide](packages/capability-maps/README.md) for API enablement, key restrictions, usage limits, and examples.
+Google Maps is available as the independent `@cjfclonedeep/capability-sdk/maps` package for place searches, basic routes, and interactive chat maps. Configure separate browser/server keys under **设置 → 工具能力 → 地图**. See the [Google Maps setup guide](packages/capability-sdk/docs/maps/README.md) for API enablement, key restrictions, usage limits, and examples.
 
 The product name is **Orbit**, with no brand prefix. Shared product metadata lives
 in `electron/product.json`. `ORBIT_BRAND_PREFIX` (empty by default) and
@@ -14,7 +14,7 @@ automatically while custom names are preserved.
 
 Public host settings accept the `ORBIT_*` prefix; the corresponding `WEBPILOT_*`
 settings remain supported, and an explicitly supplied Orbit setting takes precedence.
-The `@webpilot/*` npm names, capability IDs, service identity, database filenames,
+The `@cjfclonedeep/*` npm names, capability IDs, service identity, database filenames,
 and existing storage keys remain compatible. Desktop upgrades reuse an existing
 legacy profile when no Orbit profile exists. The server installer retains its
 existing data directory. Docker Compose service keys remain stable for upgrades;
@@ -694,22 +694,25 @@ const hiddenRuntimeSkillPolicies = {
 
 AI SDK 的 `ToolLoopAgent` 本身已经支持 `tools`、`activeTools`、`prepareStep`、`stopWhen` 等机制，所以 Agent Loop 不需要重写，只需要把静态工具表改为 Registry 动态装配。[AI SDK ToolLoopAgent](https://ai-sdk.dev/docs/reference/ai-sdk-core/tool-loop-agent)
 
-## 三、建议新增四个包
+## 三、统一发布包
 
-三个是业务能力库，第四个只是很薄的共享协议，不属于业务能力。
+基础实现和全部工具统一为 `@cjfclonedeep/capability-sdk`。根入口提供基础接口，子路径分别导入各项能力；npm 安装自动准备受支持的 Windows/Linux 执行环境。完整安装和导出说明见 [packages 指南](packages/README.zh-CN.md)。
 
 ```text
 packages/
   capability-sdk/
-  capability-file/
-  capability-chart/
-  capability-browser/
-  capability-sensitive-data/
+    src/responses/
+    src/adapters/
+    src/browser/
+    src/file/
+    src/execution/
+    src/integrations/
+    runtime/
 ```
 
-### `@webpilot/capability-sdk`
+### `@cjfclonedeep/capability-sdk`
 
-只放稳定契约：
+根入口提供稳定契约；配置存储、响应及框架适配通过子路径导出：
 
 - 插件 Manifest
 - Capability 生命周期
@@ -721,7 +724,7 @@ packages/
 - Health Check
 - Progress/Trace 事件
 
-它不能依赖：
+根入口不加载以下应用或框架模块（可选适配入口可以使用相应框架）：
 
 - Next.js
 - React
@@ -784,7 +787,7 @@ type CapabilityResult = {
 
 这样 File、Chart 不再依赖 Browser 模块。
 
-### `@webpilot/capability-file`
+### `@cjfclonedeep/capability-sdk/file`
 
 包含：
 
@@ -812,16 +815,12 @@ type CapabilityResult = {
 Python 和 LibreOffice 不应直接塞进普通 npm 包。建议拆成：
 
 ```text
-capability-file/
-  src/
-  runtime/
+capability-sdk/
+  src/file/
+  runtime/file/
     python/
-    libreoffice/
-    workers/
-  adapters/
-    ai-sdk/
-    mcp/
-    webpilot/
+    javascript/
+  docs/file/
 ```
 
 Manifest 声明运行时要求：
@@ -839,7 +838,7 @@ Manifest 声明运行时要求：
 
 Orbit 安装器负责检测或安装运行时；离线桌面包继续携带固定版本的 LibreOffice 和 Python Worker。
 
-### `@webpilot/capability-chart`
+### `@cjfclonedeep/capability-sdk/chart`
 
 包含完整链路：
 
@@ -870,7 +869,7 @@ Chart 的 MCP 版本必须考虑宿主能力差异：
 
 所以可以“同一能力多格式发布”，但不能承诺每种宿主都有完全相同的 UI。
 
-### `@webpilot/capability-browser`
+### `@cjfclonedeep/capability-sdk/browser`
 
 包含：
 
@@ -1349,5 +1348,5 @@ http://localhost:3000/*
 上线后再添加实际域名。服务端 IP 填公网出口地址，不是 127.0.0.1。官方限制说明
 3. 用管理员账号进入项目的 设置 → 工具能力 → 地图，填写“Google 地图浏览器 Key”和“Google 地图服务端 Key”，保存即可。不用把 Key 发到聊天里。
 4. 在聊天工具面板开启“地图”，尝试：“搜索香港中环附近的咖啡店，并在地图上标记。”
-默认设置了每月搜索 4,500 次、路线 9,000 次的应用上限；地图点击后才加载。完整步骤见[配置说明](C:/Users/18367/Desktop/test/web-app-test/packages/capability-maps/README.md)。
+默认设置了每月搜索 4,500 次、路线 9,000 次的应用上限；地图点击后才加载。完整步骤见[配置说明](packages/capability-sdk/docs/maps/README.md)。
 8 项针对性检查及模拟地图界面检查通过，真实 Google 调用待配置 Key 后验证。未运行 dev/build；全量类型检查仍有项目既有错误，本次地图改动无相关诊断。

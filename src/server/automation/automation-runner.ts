@@ -5,8 +5,8 @@ import { store } from '@/server/db/store';
 import { createRuntimeKnowledgeResolver } from '@/server/ai/agents/runtime-knowledge-context';
 import { readRuntimeKnowledgeRevisions, readRuntimeSkillCatalog } from '@/server/storage/runtime-knowledge-store';
 import { automationTaskInstruction } from './automation-task';
-import type { BrowserSession } from '@webpilot/capability-browser/node';
-import type { BrowserCodeCredentialBinding } from '@webpilot/capability-browser/node';
+import type { BrowserSession } from '@cjfclonedeep/capability-sdk/browser/node';
+import type { BrowserCodeCredentialBinding } from '@cjfclonedeep/capability-sdk/browser/node';
 import { createWebPilotBrowserSession } from '@/server/capabilities/webpilot-browser';
 import {
   listLoginAccounts,

@@ -1,4 +1,4 @@
-import type { CapabilitySkill } from '@webpilot/capability-sdk';
+import type { CapabilitySkill } from '@cjfclonedeep/capability-sdk';
 
 export const subagentRuntimeSkillId = 'system-subagent-runtime';
 

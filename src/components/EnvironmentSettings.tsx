@@ -4,7 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNo
 import { TextArea } from '@heroui/react/textarea';
 import { InputGroup } from '@heroui/react/input-group';
 import Link from 'next/link';
-import { AlertCircle, ArrowLeft, BookOpen, Bot, Brain, Bug, ChartNoAxesCombined, ChevronDown, CircleCheck, ClipboardCheck, CodeXml, Copy, Database, Files, FolderOpen, GitBranch, ImageIcon, KeyRound, Layers, Loader2, Maximize2, MessagesSquare, Monitor, Navigation, Network, Palette, PencilLine, PlayCircle, Plug, Plus, RefreshCw, Save, ScanSearch, Search, Server, ShieldCheck, SlidersHorizontal, Terminal, Trash2, Workflow, X, type LucideIcon } from 'lucide-react';
+import { AlertCircle, ArrowLeft, BookOpen, Bot, Brain, Bug, ChartNoAxesCombined, ChevronDown, CircleCheck, ClipboardCheck, CodeXml, Copy, Database, Files, FolderOpen, ImageIcon, KeyRound, Layers, Loader2, Maximize2, MessagesSquare, Monitor, Navigation, Network, Palette, PencilLine, PlayCircle, Plug, Plus, RefreshCw, Save, ScanSearch, Search, Server, ShieldCheck, SlidersHorizontal, Terminal, Trash2, X, type LucideIcon } from 'lucide-react';
 import { CustomSelect } from '@/components/CustomSelect';
 import { ConfirmDeleteModal } from '@/components/ConfirmDeleteModal';
 import { SkillsManager } from '@/components/SkillsManager';
@@ -55,8 +55,8 @@ import { WorkspaceSidebarArchiveRow } from '@/components/WorkspaceSidebarArchive
 import { useWorkspaceBrand } from '@/brand/WorkspaceBrandProvider';
 import { ExternalIntegrationSettings } from '@/components/ExternalIntegrationSettings';
 import { ModelTypeSettings } from '@/components/ModelTypeSettings';
-import { builtInMediaModels, createMediaTypeSettings, normalizeProviderMediaSettings, mediaSettingFields, mediaModelTypeDefinitions, type MediaTypeSettings } from '@webpilot/capability-media/model-settings';
-import { mediaModelDrivers, mediaModelDriver, type MediaModelKind, type MediaModelDriver } from '@webpilot/capability-media/models';
+import { builtInMediaModels, createMediaTypeSettings, normalizeProviderMediaSettings, mediaSettingFields, mediaModelTypeDefinitions, type MediaTypeSettings } from '@cjfclonedeep/capability-sdk/media/model-settings';
+import { mediaModelDrivers, mediaModelDriver, type MediaModelKind, type MediaModelDriver } from '@cjfclonedeep/capability-sdk/media/models';
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, arrayMove, rectSortingStrategy, sortableKeyboardCoordinates, useSortable } from '@dnd-kit/sortable';
 import { CSS as DndCSS } from '@dnd-kit/utilities';
@@ -244,12 +244,11 @@ const settingsSectionIcons: Record<string, LucideIcon> = {
   '对话运行': MessagesSquare,
   '上下文管理': Layers,
   '个性化记忆': Brain,
-  '工作流程': Workflow,
   '代码沙箱': CodeXml,
   '计算机': Monitor,
   '文件能力': Files,
   '数据与文件': Database,
-  'Git': GitBranch,
+  '本地终端': Terminal,
   '知识库': BookOpen,
   '媒体': ImageIcon,
   '图表': ChartNoAxesCombined,
@@ -268,7 +267,7 @@ const integrationSettingsSections: Record<string, string> = {
   '数据': 'integration:data',
 };
 const browserRuntimeGroups = new Set(['浏览器 Agent']);
-const capabilityRuntimeGroups = new Set(['代码沙箱', '计算机', '文件能力', 'Git', '知识库', '媒体', '地图', '数据与文件', ...Object.keys(integrationSettingsSections)]);
+const capabilityRuntimeGroups = new Set(['代码沙箱', '计算机', '文件能力', '本地终端', '知识库', '媒体', '地图', '数据与文件', ...Object.keys(integrationSettingsSections)]);
 
 function SettingsSecondaryNav({
   activeId,
@@ -381,17 +380,12 @@ function runtimeSettingGroup(tab: SettingsTab, key: string, configuredGroup?: st
 function groupVisibleEnvSettings(tab: SettingsTab, settings: VisibleEnvSetting[]) {
   const groups = new Map<string, VisibleEnvSetting[]>();
   for (const setting of settings) {
-    const title = normalizeSettingsGroupTitle(tab, runtimeSettingGroup(tab, setting.item.key, setting.definition?.group));
+    const title = runtimeSettingGroup(tab, setting.item.key, setting.definition?.group);
     const group = groups.get(title) || [];
     group.push(setting);
     groups.set(title, group);
   }
   return [...groups.entries()].map(([title, items]) => ({ title, items }));
-}
-
-function normalizeSettingsGroupTitle(tab: SettingsTab, title: string) {
-  if (tab === 'runtime' && title === '工作流程（高级）') return '工作流程';
-  return title;
 }
 
 function envSettingDisplayTab(setting: VisibleEnvSetting): SettingsTab {
@@ -405,7 +399,7 @@ function envSettingDisplayTab(setting: VisibleEnvSetting): SettingsTab {
 
 function envSettingSectionId(setting: VisibleEnvSetting) {
   const tab = envSettingDisplayTab(setting);
-  const group = normalizeSettingsGroupTitle(tab, runtimeSettingGroup(tab, setting.item.key, setting.definition?.group));
+  const group = runtimeSettingGroup(tab, setting.item.key, setting.definition?.group);
   return integrationSettingsSections[group] || group;
 }
 
@@ -2572,10 +2566,7 @@ export function EnvironmentSettings({
         key: setting.item.key,
         title: t(setting.definition?.label || setting.item.key),
         description: t(setting.definition?.description || '网页配置项。'),
-        group: t(normalizeSettingsGroupTitle(
-          envSettingDisplayTab(setting),
-          runtimeSettingGroup(envSettingDisplayTab(setting), setting.item.key, setting.definition?.group),
-        )),
+        group: t(runtimeSettingGroup(envSettingDisplayTab(setting), setting.item.key, setting.definition?.group)),
         section: envSettingSectionId(setting),
         tab: envSettingDisplayTab(setting),
       })),

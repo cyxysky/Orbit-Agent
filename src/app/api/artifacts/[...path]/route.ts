@@ -6,7 +6,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requestApplicationUserId } from '@/server/auth/user-context';
 import { resolveOwnedArtifact } from '@/server/storage/artifact-access';
 import { ApiRequestError, apiError, apiRequestId } from '@/server/http/api-request';
-import { artifactContentType } from '@webpilot/capability-file';
+import { artifactContentType } from '@cjfclonedeep/capability-sdk/file';
 
 type RouteContext = {
   params: Promise<{ path: string[] }>;
@@ -41,7 +41,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
       && /\.(pptx?|pptm|ppsx?|odp)$/i.test(filePath);
     let previewPdf: Buffer | undefined;
     if (nativePreview) {
-      const { readOfficePreviewPdf } = await import('@webpilot/capability-file/node/office');
+      const { readOfficePreviewPdf } = await import('@cjfclonedeep/capability-sdk/file/node/office');
       previewPdf = await readOfficePreviewPdf({ absolutePath: filePath, extension: path.extname(filePath) });
       if (!previewPdf) throw new ApiRequestError('Presentation preview is unavailable', { code: 'preview_unavailable', status: 503 });
     }

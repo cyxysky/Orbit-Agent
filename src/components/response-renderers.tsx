@@ -1,8 +1,8 @@
 'use client';
 
-import { coreResponseRenderers, ResponseRendererRegistry } from '@webpilot/capability-response/react';
-import { createChartResponseRenderers } from '@webpilot/capability-chart/response-react';
-import { mapResponseRenderers } from '@webpilot/capability-maps/response-react';
+import { coreResponseRenderers, ResponseRendererRegistry } from '@cjfclonedeep/capability-sdk/responses/react';
+import { createChartResponseRenderers } from '@cjfclonedeep/capability-sdk/chart/response-react';
+import { mapResponseRenderers } from '@cjfclonedeep/capability-sdk/maps/response-react';
 import { responseRegistry } from '@/lib/response-registry';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 

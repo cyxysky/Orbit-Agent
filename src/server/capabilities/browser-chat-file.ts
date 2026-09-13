@@ -6,18 +6,18 @@ import {
   type FileReadInput,
   type FileToolInput,
   type FileVisualToolInput,
-} from '@webpilot/capability-file';
-import type { CapabilityConfiguration, CapabilityExecutionContext } from '@webpilot/capability-sdk';
+} from '@cjfclonedeep/capability-sdk/file';
+import type { CapabilityConfiguration, CapabilityExecutionContext } from '@cjfclonedeep/capability-sdk';
 import {
   fileOperationToCapabilityResult,
   normalizeFileReadLimit as normalizeBrowserChatFileReadLimit,
   resolveLibreOfficeExecutable,
   resolveLibreOfficePythonExecutable,
   resolveUnoProgramWorker,
-} from '@webpilot/capability-file/node';
-import type { BrowserActionResult } from '@webpilot/capability-browser/node';
-import { browserOperationSummary } from '@webpilot/capability-browser';
-import type { FileGenerationProgress } from '@webpilot/capability-file/node/workspace';
+} from '@cjfclonedeep/capability-sdk/file/node';
+import type { BrowserActionResult } from '@cjfclonedeep/capability-sdk/browser/node';
+import { browserOperationSummary } from '@cjfclonedeep/capability-sdk/browser';
+import type { FileGenerationProgress } from '@cjfclonedeep/capability-sdk/file/node/workspace';
 import {
   browserActionResultToCapabilityResult,
   capabilityResultToBrowserActionResult,

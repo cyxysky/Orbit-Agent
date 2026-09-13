@@ -5,7 +5,7 @@ const { copyProductionRuntime, copyServerRuntime } = require('./server-package-l
 const {
   assertSensitiveDataRuntime,
   copySensitiveDataRuntime,
-} = require('../packages/capability-sensitive-data/scripts/runtime-layout.cjs');
+} = require('../packages/capability-sdk/scripts/sensitive-data/runtime-layout.cjs');
 
 const root = path.resolve(__dirname, '..');
 const outputRoot = path.join(root, 'dist-desktop');
@@ -23,15 +23,15 @@ copyInto(path.join(root, 'public'), path.join(serverOutput, 'public'));
 const serverRuntimeFiles = copyServerRuntime(root, serverOutput);
 copySensitiveDataRuntime(path.join(serverOutput, 'sensitive-data-runtime'));
 copyInto(
-  path.join(root, 'packages', 'capability-file', 'runtime'),
+  path.join(root, 'packages', 'capability-sdk', 'runtime', 'file'),
   path.join(serverOutput, 'capability-runtime', 'file'),
 );
 copyInto(
-  path.join(root, 'packages', 'capability-browser', 'runtime'),
+  path.join(root, 'packages', 'capability-sdk', 'runtime', 'browser'),
   path.join(serverOutput, 'capability-runtime', 'browser'),
 );
 copyInto(
-  path.join(root, 'packages', 'capability-computer', 'runtime'),
+  path.join(root, 'packages', 'capability-sdk', 'runtime', 'computer'),
   path.join(serverOutput, 'capability-runtime', 'computer'),
 );
 

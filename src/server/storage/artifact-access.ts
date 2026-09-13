@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { readFile, realpath, stat } from 'node:fs/promises';
-import { artifactContentType } from '@webpilot/capability-file';
-import type { CommunicationMediaOperations } from '@webpilot/capability-communication';
+import { artifactContentType } from '@cjfclonedeep/capability-sdk/file';
+import type { CommunicationMediaOperations } from '@cjfclonedeep/capability-sdk/integrations/communication';
 import { normalizeApplicationUserId } from '@/server/auth/user-context';
 import type { BrowserChatSessionSnapshot } from '@/server/ai/agents/browser-chat.service';
 import { readBrowserChatSessionHeader } from './browser-chat-history-store';
