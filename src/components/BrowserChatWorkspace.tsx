@@ -1,5 +1,6 @@
 'use client';
 
+import { browserChatSessionListTimestamp, compareBrowserChatSessionCreation, upsertBrowserChatSessionByCreation } from '@/lib/browser-chat-session-order';
 import { responseRegistry } from '@/lib/response-registry';
 
 import { Dock, DockIcon } from '@/components/ui/dock';
@@ -2056,40 +2057,6 @@ function mergeBrowserChatSessionRealtimePatch(
   return normalized;
 }
 
-function sessionSortTime(session: BrowserChatSession) {
-  return session.updatedAt || session.createdAt || '';
-}
-
-function upsertBrowserChatSessionByRecency(
-  current: BrowserChatSession[],
-  incoming: BrowserChatSession,
-) {
-  const existingIndex = current.findIndex((item) => item.id === incoming.id);
-  if (existingIndex >= 0) {
-    const incomingTime = sessionSortTime(incoming);
-    const previousTime = existingIndex > 0 ? sessionSortTime(current[existingIndex - 1]) : undefined;
-    const followingTime = existingIndex + 1 < current.length
-      ? sessionSortTime(current[existingIndex + 1])
-      : undefined;
-    const remainsInPlace = (previousTime === undefined || previousTime >= incomingTime)
-      && (followingTime === undefined || incomingTime >= followingTime);
-    if (remainsInPlace) {
-      if (current[existingIndex] === incoming) return current;
-      const next = [...current];
-      next[existingIndex] = incoming;
-      return next;
-    }
-  }
-
-  const remaining = existingIndex < 0
-    ? [...current]
-    : [...current.slice(0, existingIndex), ...current.slice(existingIndex + 1)];
-  const incomingTime = sessionSortTime(incoming);
-  const insertionIndex = remaining.findIndex((item) => sessionSortTime(item) < incomingTime);
-  remaining.splice(insertionIndex < 0 ? remaining.length : insertionIndex, 0, incoming);
-  return remaining;
-}
-
 function removeBrowserChatSessionById(current: BrowserChatSession[], sessionId: string) {
   const index = current.findIndex((item) => item.id === sessionId);
   return index < 0
@@ -2098,7 +2065,7 @@ function removeBrowserChatSessionById(current: BrowserChatSession[], sessionId: 
 }
 
 function sessionSidebarTime(session: BrowserChatSession, language: 'zh' | 'en') {
-  const timestamp = Date.parse(sessionSortTime(session));
+  const timestamp = Date.parse(browserChatSessionListTimestamp(session));
   if (!Number.isFinite(timestamp)) return '';
   return new Intl.DateTimeFormat(language === 'en' ? 'en-US' : 'zh-CN', {
     hour: '2-digit',
@@ -2108,7 +2075,8 @@ function sessionSidebarTime(session: BrowserChatSession, language: 'zh' | 'en') 
 }
 
 function sessionTimeValue(session: BrowserChatSession) {
-  const timestamp = Date.parse(sessionSortTime(session));
+  // Freshness uses update time even though the sidebar uses creation time.
+  const timestamp = Date.parse(session.updatedAt || session.createdAt || '');
   return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
@@ -8158,7 +8126,7 @@ export function BrowserChatWorkspace({
     const normalized = incoming.map((item) => compactBrowserChatSessionForList(normalizeSession(item)));
     setSessions((current) => {
       let next = current;
-      for (const item of normalized) next = upsertBrowserChatSessionByRecency(next, item);
+      for (const item of normalized) next = upsertBrowserChatSessionByCreation(next, item);
       return next;
     });
   }, []);
@@ -8658,7 +8626,7 @@ export function BrowserChatWorkspace({
   }, [browserChatApiUrl, loadingEarlierHistory, session]);
   const sidebarSessions = useMemo(() => {
     const merged = session
-      ? upsertBrowserChatSessionByRecency(sessions, compactBrowserChatSessionForList(session))
+      ? upsertBrowserChatSessionByCreation(sessions, compactBrowserChatSessionForList(session))
       : sessions;
     return merged.filter((item) => item.hasMessages || item.messages.length);
   }, [session, sessions]);
@@ -8673,7 +8641,7 @@ export function BrowserChatWorkspace({
     const list = recentSessionListRef.current;
     const listEnd = recentSessionListEndRef.current;
     if (!list || !listEnd) return undefined;
-    const cursorKey = `${sessionListPage.next.beforeUpdatedAt || ''}\u0000${sessionListPage.next.beforeId || ''}`;
+    const cursorKey = `${sessionListPage.next.beforeCreatedAt || ''}\u0000${sessionListPage.next.beforeId || ''}`;
     const observer = new IntersectionObserver((entries) => {
       if (!entries.some((entry) => entry.isIntersecting) || recentSessionListFailedCursorRef.current === cursorKey) return;
       void loadMoreSessions().catch((loadError) => {
@@ -8858,7 +8826,7 @@ export function BrowserChatWorkspace({
       const existing = current.find((item) => item.id === normalized.id);
       const merged = mergeBrowserChatSessionWindow(existing, normalized);
       const accepted = isOlderSessionSnapshot(merged, existing) ? existing || merged : merged;
-      return upsertBrowserChatSessionByRecency(current, compactBrowserChatSessionForList(accepted));
+      return upsertBrowserChatSessionByCreation(current, compactBrowserChatSessionForList(accepted));
     });
     return normalized;
   }, []);
@@ -8927,7 +8895,7 @@ export function BrowserChatWorkspace({
       if (guarded.release) interruptGuardsRef.current.delete(normalized.id);
       return compactBrowserChatSessionForList(guarded.session);
     });
-    setSessions(nextSessions);
+    setSessions(nextSessions.sort(compareBrowserChatSessionCreation));
     if (sessionSelectionIntentRef.current !== selectionIntent) return;
     await loadRequestedBrowserChatSessionDetail(requestedSessionId, async (requestedSessionId) => {
       if (!shouldActivateRequestedBrowserChatSession({
@@ -9067,7 +9035,7 @@ export function BrowserChatWorkspace({
         if (!nextSummary) continue;
         const guarded = applyBrowserChatInterruptGuard(nextSummary, interruptGuardsRef.current.get(event.id));
         if (guarded.release) interruptGuardsRef.current.delete(event.id);
-        next = upsertBrowserChatSessionByRecency(next, compactBrowserChatSessionForList(guarded.session));
+        next = upsertBrowserChatSessionByCreation(next, compactBrowserChatSessionForList(guarded.session));
       }
       return next;
     });
@@ -9872,6 +9840,7 @@ export function BrowserChatWorkspace({
               ) : null}
               getKey={(item) => item.id}
               items={filteredRecentSessions}
+              getTimestamp={browserChatSessionListTimestamp}
               language={language}
               onScroll={(event) => {
                 const list = event.currentTarget;

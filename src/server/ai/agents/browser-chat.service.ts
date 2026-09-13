@@ -1,3 +1,4 @@
+import { compareBrowserChatSessionCreation } from '@/lib/browser-chat-session-order';
 import { markdownBlock } from '@cjfclonedeep/capability-sdk/responses';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, statSync } from 'node:fs';
@@ -3575,7 +3576,7 @@ export async function listBrowserChatSessions(input: { userId?: string | number 
   for (const session of sessions.values()) summaries.set(session.id, summarySnapshot(session));
   return [...summaries.values()]
     .filter((session) => session.hasMessages && sessionBelongsToUser(session, input.userId))
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    .sort(compareBrowserChatSessionCreation);
 }
 
 async function closeBlockedBrowserChatSubagents(

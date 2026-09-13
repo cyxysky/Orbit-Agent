@@ -296,7 +296,7 @@ const markdownComponents: Components = {
     const language = /language-([^\s]+)/.exec(code.props.className || '')?.[1] || '';
     return <BrowserChatCodeBlock code={String(code.props.children || '')} language={language} />;
   },
-  a: ({ href, onClick, ...props }) => (
+  a: ({ href, onClick, ...props }) => href ? (
     <a
       {...props}
       href={href}
@@ -304,10 +304,10 @@ const markdownComponents: Components = {
         onClick?.(event);
         handleBrowserChatMarkdownLinkClick(event, href);
       }}
-      target="_blank"
+      target={isBrowserChatDownloadHref(href || '') ? '_self' : '_blank'}
       rel="noopener noreferrer"
     />
-  ),
+  ) : <span>{props.children}</span>,
   table: ({ children }) => <BrowserChatMarkdownTable>{children}</BrowserChatMarkdownTable>,
   thead: ({ children }) => <thead className="table__header">{children}</thead>,
   tbody: ({ children }) => <tbody className="table__body">{children}</tbody>,

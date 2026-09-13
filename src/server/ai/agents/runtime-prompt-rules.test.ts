@@ -133,7 +133,7 @@ test('browser chat keeps code-action capabilities in a compact non-duplicated ru
   assert.match(rules, /persistent top-level-await JavaScript kernel/);
   assert.match(rules, /incremental domChanges/);
   assert.match(rules, /never an automatic axTree/);
-  assert.match(rules, /bundled prerequisiteResults entry supplies browser\.user\.openTabs/i);
+  assert.match(rules, /Browser code and human-verification calls do not trigger an automatic state read/i);
   assert.match(rules, /browser\.user\.openTabs/);
   assert.match(rules, /requested browser action still executes and returns its own result in the same response/i);
   assert.match(rules, /targeted read-only action=code cell only when/i);

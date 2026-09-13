@@ -2,6 +2,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { browserChatArtifactsFromSteps, mergeBrowserChatArtifactSummaries, resolveBrowserChatArtifactReference } from './browser-chat-artifacts';
 
+test('review-only artifact metadata preserves the supplied download URL', () => {
+  const id = 'chat/generated/doc/version/演示.pptx';
+  const url = `/webpilot/api/artifacts/${id.split('/').map(encodeURIComponent).join('/')}?download=1`;
+  const artifacts = [{ fileName: '演示.pptx', id: `file:${id}`, kind: 'file' as const }];
+  assert.equal(resolveBrowserChatArtifactReference(url, artifacts), url);
+  assert.equal(resolveBrowserChatArtifactReference(`attachment://${encodeURIComponent(id)}`, artifacts), '');
+});
+
 test('resolves a legacy Markdown screenshot filename using the delivered screenshot path', () => {
   const fileName = 'step-16-browser-code-1-8ee36f13.png';
   const artifacts = [{ fileName, id: 'screenshot:hotel', kind: 'screenshot' as const,

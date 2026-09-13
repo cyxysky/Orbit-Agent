@@ -136,11 +136,6 @@ export type BrowserActionResult = {
   data?: unknown;
   /** Compact transport-facing description of a structured result. */
   summary?: string;
-  /** Results from prerequisite tools executed inside this same model tool call, in execution order. */
-  prerequisiteResults?: Array<{
-    toolName: string;
-    result: BrowserActionResult;
-  }>;
   /** Stable runtime failure category used for category-specific recovery guidance. */
   failureCategory?: string;
   /** Signals a host-owned human-verification pause when no waiter is installed. */

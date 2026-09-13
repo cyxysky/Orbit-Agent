@@ -28,7 +28,7 @@ export async function GET(request: NextRequest) {
     sessionPage: {
       hasMore: sessionPage.length > sessionLimit,
       next: sessionPage.length > sessionLimit && lastSession
-        ? { beforeId: lastSession.id, beforeUpdatedAt: lastSession.updatedAt }
+        ? { beforeId: lastSession.id, beforeCreatedAt: lastSession.createdAt }
         : undefined,
     },
     skills,

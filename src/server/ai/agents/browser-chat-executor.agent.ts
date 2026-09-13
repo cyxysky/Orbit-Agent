@@ -98,12 +98,8 @@ import {
 } from './runtime-retry-policy';
 
 import {
-  browserToolPrerequisiteNames,
-  browserStatePrerequisiteToolName,
   isBrowserHumanVerificationCall,
-  requiresBrowserStatePreflight,
   runtimeAllowedToolTypes,
-  runtimeBrowserSessionToolNames,
   runtimeToolRequiresBrowserSession,
   runtimeToolLoopStopToolNames,
 } from './runtime-tool-selection';
@@ -1211,53 +1207,6 @@ async function reportBrowserChatDefect(
   };
 }
 
-async function bundledBrowserToolPrerequisiteResults(input: {
-  toolName: string;
-  toolInput: unknown;
-  preflightPending: boolean;
-  session: BrowserSession;
-  runId?: string;
-  stepIndex?: number;
-  abortSignal?: AbortSignal;
-  ensureBrowserStarted?: () => Promise<void>;
-}) {
-  const prerequisiteNames = browserToolPrerequisiteNames(
-    input.toolName,
-    input.toolInput,
-    input.preflightPending,
-    runtimeBrowserSessionToolNames,
-  );
-  const results: NonNullable<BrowserActionResult['prerequisiteResults']> = [];
-
-  for (const prerequisiteName of prerequisiteNames) {
-    if (prerequisiteName !== browserStatePrerequisiteToolName) continue;
-    await input.ensureBrowserStarted?.();
-    results.push({
-      toolName: prerequisiteName,
-      result: await readCurrentBrowserState(input.session, {
-        runId: input.runId,
-        stepIndex: input.stepIndex,
-        abortSignal: input.abortSignal,
-      }),
-    });
-  }
-  return results;
-}
-
-function attachPrerequisiteResults(
-  result: BrowserActionResult,
-  prerequisiteResults: NonNullable<BrowserActionResult['prerequisiteResults']>,
-) {
-  if (!prerequisiteResults.length) return result;
-  return {
-    ...result,
-    prerequisiteResults: [
-      ...prerequisiteResults,
-      ...(result.prerequisiteResults || []),
-    ],
-  } satisfies BrowserActionResult;
-}
-
 async function makeBrowserTools(
   session: BrowserSession,
   traces: ToolTrace[],
@@ -1287,7 +1236,6 @@ async function makeBrowserTools(
     attachmentBindings?: BrowserCodeAttachmentBinding[];
     credentialBindings?: BrowserCodeCredentialBinding[];
     getCredentialBindings?: () => BrowserCodeCredentialBinding[] | undefined;
-    browserStatePreflightComplete?: () => boolean;
     loadedHiddenRuntimeSkillIds?: Set<string>;
   },
 ) {
@@ -1359,21 +1307,8 @@ async function makeBrowserTools(
       const actionAfterBrowserStart = async (actionSignal?: AbortSignal, trace?: ToolTrace) => {
         const skillGateFailure = requireHiddenRuntimeSkillRead(name, input, loadedHiddenRuntimeSkillIds);
         if (skillGateFailure) return skillGateFailure;
-        const prerequisiteResults = await bundledBrowserToolPrerequisiteResults({
-          toolName: name,
-          toolInput: input,
-          preflightPending: referenceOptions?.browserStatePreflightComplete
-            ? !referenceOptions.browserStatePreflightComplete()
-            : false,
-          session,
-          runId: referenceOptions?.runId,
-          stepIndex: referenceOptions?.stepIndex,
-          abortSignal: actionSignal,
-          ensureBrowserStarted: referenceOptions?.ensureBrowserStarted,
-        });
         if (runtimeToolRequiresBrowserSession(name)) await referenceOptions?.ensureBrowserStarted?.();
-        const result = await action(actionSignal, trace);
-        return attachPrerequisiteResults(result, prerequisiteResults);
+        return action(actionSignal, trace);
       };
       const traceVisualContext = referenceOptions?.visualContext;
       return executeTracedBrowserAction({
@@ -1715,7 +1650,7 @@ function runtimePrompt(input: { runtimeRecord: BrowserChatRuntimeRecord; fileVis
     '- Before using browser, file, chart, an infrastructure capability, or subagent spawn, read its required system Skill. Capability schemas are visible from the start; if one is called before its Skill is loaded, the Agent returns the complete Skill content and skips the requested operation. That returned content satisfies the read prerequisite: apply it directly and retry the original operation in the next model step without calling skill again. In one model step call at most one relevant tool.',
     `- Optional infrastructure tools are ${agentInfrastructureToolNames.join(', ')}. Use only a configured tool that directly helps the current request. Knowledge is durable reference storage; connectors, data, media, communication, local terminal, isolated code execution, and computer control retain their separate permission boundaries. Use terminal for local CLI commands, including Git; its cwd is not a sandbox and its processes are stopped when this runtime ends.`,
     '- The latest user message is the scope authority. If it explicitly narrows the current turn to one action (for example, "just click Search"), perform and verify only that action, then stop. Do not silently resume a broader goal from an earlier message unless the latest message explicitly asks you to continue it.',
-    '- The single browser tool is the real browser mechanism. action=state returns a fresh fixed top-level snapshot, action=code performs targeted Playwright reads and interactions, and action=waitForHumanVerification pauses for user-owned verification. The action field is authoritative; unrelated fields are discarded. Use action=code for iframe, selector, DOM, screenshot, and targeted page-state inspection. A pending browser-state prerequisite is executed internally and returned in prerequisiteResults while the requested action still executes in the same call. Never say navigation/clicking is unavailable, substitute a file download, or ask the user to navigate manually while browser action=code is available unless a real attempt failed and you report that failure. One code cell may execute multiple bounded operations.',
+    '- The single browser tool is the real browser mechanism. action=state returns a fresh fixed top-level snapshot, action=code performs targeted Playwright reads and interactions, and action=waitForHumanVerification pauses for user-owned verification. The action field is authoritative; unrelated fields are discarded. Use action=code for iframe, selector, DOM, screenshot, and targeted page-state inspection. No state snapshot is automatically collected or appended. Navigate and read directly; request current-state evidence explicitly only when the next operation needs it. Never say navigation/clicking is unavailable, substitute a file download, or ask the user to navigate manually while browser action=code is available unless a real attempt failed and you report that failure. One code cell may execute multiple bounded operations.',
     '- Keep tool input limited to exact arguments, a concise semantic reason, and confirmation fields only when loaded safety rules require them. Set needChange: true on browser action=code only when incremental domChanges from this cell is needed; it defaults to false and skips reading and returning domChanges. Results never include an automatic axTree; page.domSnapshot() returns surfaces/topSurfaceIds/surfaceStack plus a most-recent-surface-scoped AX read by default, and the model may instead write targeted Playwright or DOM reads.',
     '- Never expose internal JSON, tool parameters, UIDs, coordinates, screenshot paths, credential references, or other implementation details in the visible answer. An external-app candidate only attempts a native protocol launch; unchanged page state does not prove failure or native success.',
     '- For ordinary document/content tasks, progress messages and tool reason labels describe user-visible work: organizing content, creating pages, checking layout, or exporting the file. Do not narrate Python entrypoints, UNO APIs, source rewrites, stack traces, Skill-loading mechanics, or each retry. Keep technical diagnostics in tool details. Explain a persistent failure briefly and honestly when it affects delivery; never claim completion while still repairing. Technical explanations are appropriate when the user asks about implementation or debugging.',
@@ -2066,7 +2001,6 @@ async function executeRuntimeStep(input: {
     background?: ModelMessage;
   }) => void | Promise<void>;
   getRuntimeOperationalContext?: () => BrowserChatOperationalContext | Promise<BrowserChatOperationalContext>;
-  browserStatePreflightComplete?: boolean;
   requestToolConfirmation?: (request: BrowserToolConfirmationRequest) => Promise<BrowserToolConfirmationDecision>;
   allowedToolTypes?: string[];
   disabledTools?: string[];
@@ -2425,11 +2359,10 @@ async function executeRuntimeStep(input: {
       const requiredSubagentDirective = requiredSubagentUuid
         ? requiredSubagentReadDirective(requiredSubagentUuid, pendingSubagentUuids.length)
         : '';
-      const browserStateGatePending = requiresBrowserStatePreflight(Boolean(input.browserStatePreflightComplete), traces);
       const stepAllowedToolTypes = runtimeToolTypesWithLoadedSkills(allowedToolTypes, loadedHiddenRuntimeSkillIds, {
         allowSubagentRead: Boolean(requiredSubagentUuid),
       });
-      const availableStepNames = browserStateGatePending || stepAllowedToolTypes.length !== allowedToolTypes.length
+      const availableStepNames = stepAllowedToolTypes.length !== allowedToolTypes.length
         ? stepAllowedToolTypes : requiredSubagentUuid ? ['subagent'] : Object.keys(nativeToolsRef.current || {});
       requestAllowedToolNames = new Set(availableStepNames);
       // The schema prefix stays fixed; execution eligibility is enforced below.
@@ -2659,10 +2592,6 @@ async function executeRuntimeStep(input: {
         runSubagents: input.runSubagents,
         readSubagent: input.readSubagent,
         requiredSubagentUuid: input.requiredSubagentUuid,
-        browserStatePreflightComplete: !requiresBrowserStatePreflight(
-          Boolean(input.browserStatePreflightComplete),
-          traces,
-        ),
         readFile: input.readFile,
         readFileVisuals: input.readFileVisuals,
         readSkill: input.readSkill,
@@ -2757,10 +2686,6 @@ async function executeRuntimeStep(input: {
       attachmentBindings: input.attachmentBindings,
       credentialBindings: input.credentialBindings,
       getCredentialBindings: () => activeCredentialBindings,
-      browserStatePreflightComplete: () => !requiresBrowserStatePreflight(
-        Boolean(input.browserStatePreflightComplete),
-        traces,
-      ),
       onReferenceImage: queueReferenceImage,
       ensureBrowserStarted: input.ensureBrowserStarted,
       onDebug: onAttemptDebug,
@@ -3591,7 +3516,6 @@ export async function executeInteractiveBrowserTurn(input: {
   let acceptedFinalResponse: StructuredResponse | undefined;
   let endedWithFinalAnswer = false;
   let missingFinalResponseAttempts = 0;
-  let browserStatePreflightComplete = false;
   // A resumed run may already contain the full installed Skill in completed
   // tool evidence. Reuse it only on exact content match, never from summaries.
   const loadedHiddenRuntimeSkillIds = hiddenRuntimeSkillIdsInModelContext(input.conversation || []);
@@ -3642,7 +3566,6 @@ export async function executeInteractiveBrowserTurn(input: {
         },
         referenceImagePaths: input.referenceImagePaths,
         getRuntimeOperationalContext: input.getRuntimeOperationalContext,
-        browserStatePreflightComplete,
         abortSignal: input.abortSignal,
         shouldContinue: input.shouldContinue,
         requestToolConfirmation: input.requestToolConfirmation,
@@ -3710,7 +3633,6 @@ export async function executeInteractiveBrowserTurn(input: {
       ensureActive();
       contextCompression = actionResult.contextCompression || contextCompression;
       activeContinuationSummary = actionResult.contextCompression?.continuationSummary || activeContinuationSummary;
-      browserStatePreflightComplete = !requiresBrowserStatePreflight(browserStatePreflightComplete, operationalTraces);
 
     } catch (error) {
       if (isBrowserChatAbortError(error, input.abortSignal) || (input.shouldContinue && !input.shouldContinue())) throw browserChatAbortError(input.abortSignal);
@@ -4157,7 +4079,6 @@ async function executeCodexRuntimeObject(input: {
   runSubagents?: BrowserChatSubagentRunner;
   readSubagent?: BrowserChatSubagentReader;
   requiredSubagentUuid?: string;
-  browserStatePreflightComplete?: boolean;
   readFile?: (input: BrowserChatReadFileInput, context?: import('@cjfclonedeep/capability-sdk').CapabilityExecutionContext) => Promise<BrowserActionResult>;
   readFileVisuals?: (input: BrowserChatFileVisualInput) => Promise<BrowserActionResult>;
   readSkill?: BrowserChatReadSkill;
@@ -4169,7 +4090,7 @@ async function executeCodexRuntimeObject(input: {
   onToolTrace?: (trace: ToolTrace, progress?: ToolTraceProgress) => void | Promise<void>;
   onReferenceImage?: (input: { path: string; source: string; label?: string }) => void;
 }) {
-  const { session, runId, stepIndex, type, message, params, allowedTypes, traces, aiRequest, visualContext, abortSignal, shouldContinue, requestToolConfirmation, runSubagents, readSubagent, requiredSubagentUuid, browserStatePreflightComplete, readFile, readFileVisuals, readSkill, attachmentBindings, credentialBindings, ensureBrowserStarted, onVisualContextChange, onToolTrace, onReferenceImage } = input;
+  const { session, runId, stepIndex, type, message, params, allowedTypes, traces, aiRequest, visualContext, abortSignal, shouldContinue, requestToolConfirmation, runSubagents, readSubagent, requiredSubagentUuid, readFile, readFileVisuals, readSkill, attachmentBindings, credentialBindings, ensureBrowserStarted, onVisualContextChange, onToolTrace, onReferenceImage } = input;
   const loadedHiddenRuntimeSkillIds = input.loadedHiddenRuntimeSkillIds || new Set<string>();
   if (!input.loadedHiddenRuntimeSkillIds) for (const skillId of hiddenRuntimeSkillIdsReadFromTraces(traces)) loadedHiddenRuntimeSkillIds.add(skillId);
   throwIfStopped(abortSignal, shouldContinue);
@@ -4326,16 +4247,6 @@ async function executeCodexRuntimeObject(input: {
     action: async (actionSignal, trace) => {
       const skillGateFailure = requireHiddenRuntimeSkillRead(type, normalizedParams, loadedHiddenRuntimeSkillIds);
       if (skillGateFailure) return skillGateFailure;
-      const prerequisiteResults = await bundledBrowserToolPrerequisiteResults({
-        toolName: type,
-        toolInput: normalizedParams,
-        preflightPending: !Boolean(browserStatePreflightComplete),
-        session,
-        runId,
-        stepIndex,
-        abortSignal: actionSignal,
-        ensureBrowserStarted,
-      });
       const approval = await requestBrowserToolApproval({
         toolName: type,
         toolInput: normalizedParams,
@@ -4344,21 +4255,20 @@ async function executeCodexRuntimeObject(input: {
       });
       throwIfStopped(abortSignal, shouldContinue);
       if (approval === 'denied') {
-        return attachPrerequisiteResults({
+        return {
           ok: true,
           actual: 'Skipped before execution because the user cancelled this server-approved tool call. Do not retry the same operation in this turn unless the user explicitly asks again.',
-        }, prerequisiteResults);
+        };
       }
       if (runtimeToolRequiresBrowserSession(type)) await ensureBrowserStarted?.();
       const result = await runTool(trace?.id);
-      const resultWithPrerequisites = attachPrerequisiteResults(result, prerequisiteResults);
       if (approval === 'approved') {
         return {
-          ...resultWithPrerequisites,
-          summary: `用户已确认本次工具调用，现已执行。\n${browserOperationSummary(resultWithPrerequisites)}`,
+          ...result,
+          summary: `用户已确认本次工具调用，现已执行。\n${browserOperationSummary(result)}`,
         } satisfies BrowserActionResult;
       }
-      return resultWithPrerequisites;
+      return result;
     },
   });
   const imagePaths = result.referenceImagePaths?.length

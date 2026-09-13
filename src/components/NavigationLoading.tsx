@@ -14,6 +14,14 @@ function isInternalNavigationLink(anchor: HTMLAnchorElement) {
 
   const url = new URL(anchor.href, window.location.href);
   if (url.origin !== window.location.origin) return false;
+  // File responses do not change the application route, so no route-complete
+  // event will arrive to dismiss a navigation overlay.
+  if (withoutWebPilotBasePath(url.pathname).startsWith('/api/')) return false;
+  const download = url.searchParams.get('download');
+  if (download !== null && !/^(0|false|no)$/i.test(download)) return false;
+  if (['content-disposition', 'response-content-disposition'].some((key) => (
+    /attachment/i.test(url.searchParams.get(key) || '')
+  ))) return false;
   return `${url.pathname}${url.search}${url.hash}` !== `${window.location.pathname}${window.location.search}${window.location.hash}`;
 }
 

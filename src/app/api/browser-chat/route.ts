@@ -14,7 +14,7 @@ export async function GET(request: NextRequest) {
   const limit = boundedQueryInteger(request.nextUrl.searchParams.get('limit'), { fallback: 10, max: 100 });
   const page = await listBrowserChatSessionSummaries(requestUserId(request), {
     beforeId: request.nextUrl.searchParams.get('beforeId')?.trim() || undefined,
-    beforeUpdatedAt: request.nextUrl.searchParams.get('beforeUpdatedAt')?.trim() || undefined,
+    beforeCreatedAt: request.nextUrl.searchParams.get('beforeCreatedAt')?.trim() || undefined,
     limit: limit + 1,
   });
   const sessions = page.slice(0, limit);
@@ -23,7 +23,7 @@ export async function GET(request: NextRequest) {
     sessions,
     page: {
       hasMore: page.length > limit,
-      next: page.length > limit && last ? { beforeId: last.id, beforeUpdatedAt: last.updatedAt } : undefined,
+      next: page.length > limit && last ? { beforeId: last.id, beforeCreatedAt: last.createdAt } : undefined,
     },
   });
 }

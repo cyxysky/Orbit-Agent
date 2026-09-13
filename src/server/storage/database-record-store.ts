@@ -410,7 +410,7 @@ export async function readBrowserChatSessionRecord<T extends { logs?: unknown[];
 
 export async function readBrowserChatSessionSummaries<T>(input: {
   beforeId?: string;
-  beforeUpdatedAt?: string;
+  beforeCreatedAt?: string;
   hasMessagesOnly?: boolean;
   limit?: number;
   userId?: string;
@@ -424,9 +424,9 @@ export async function readBrowserChatSessionSummaries<T>(input: {
   if (input.hasMessagesOnly) clauses.push(`EXISTS (
     SELECT 1 FROM browser_chat_message WHERE browser_chat_message.session_id = browser_chat_session.id
   )`);
-  if (input.beforeUpdatedAt && input.beforeId) {
-    clauses.push('(updated_at < ? OR (updated_at = ? AND id < ?))');
-    values.push(input.beforeUpdatedAt, input.beforeUpdatedAt, input.beforeId);
+  if (input.beforeCreatedAt && input.beforeId) {
+    clauses.push('(created_at < ? OR (created_at = ? AND id < ?))');
+    values.push(input.beforeCreatedAt, input.beforeCreatedAt, input.beforeId);
   }
   const limit = Number.isFinite(input.limit)
     ? Math.max(1, Math.min(501, Math.floor(Number(input.limit))))
@@ -435,7 +435,7 @@ export async function readBrowserChatSessionSummaries<T>(input: {
   const rows = await queryDatabase<{ summary_json?: string }>(`
     SELECT summary_json FROM browser_chat_session
     ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''}
-    ORDER BY updated_at DESC, id DESC
+    ORDER BY created_at DESC, id DESC
     ${limit ? 'LIMIT ?' : ''}
   `, values);
   return rows.map((row) => parseDatabaseJson<T | undefined>(row.summary_json, undefined))

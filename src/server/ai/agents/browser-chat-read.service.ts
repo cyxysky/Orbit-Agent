@@ -216,7 +216,7 @@ function resolvedContextUsage(
 
 export async function listBrowserChatSessionSummaries(
   userId?: string | number,
-  input: { beforeId?: string; beforeUpdatedAt?: string; limit?: number } = {},
+  input: { beforeId?: string; beforeCreatedAt?: string; limit?: number } = {},
 ) {
   return (await readBrowserChatSessionSummaries<BrowserChatPersistedHeader>({
     ...input,

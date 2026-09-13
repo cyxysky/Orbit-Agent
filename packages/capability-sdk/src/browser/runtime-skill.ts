@@ -26,19 +26,39 @@ This Skill is the authoritative API reference and operating contract supplied by
 
 Provider-neutral call notation: \`skill({ action: "read", skillId: "${browserCodeRuntimeSkillId}" })\`.
 
-2. Call \`browser({ action: "code", reason, code })\` directly for every new or resumed browser request. When live-state preflight is pending, the execution layer runs action=state internally, includes its complete result in \`prerequisiteResults\`, and still executes the supplied code in the same tool call. Call \`browser({ action: "state", reason })\` explicitly only when its snapshot is itself the desired result.
-3. Inspect the bundled prerequisite result and the requested code-action result together. Do not repeat the same tabs/URL/title/snapshot inventory in another code cell. Add a targeted read only when an exact locator, frame, or surface fact needed for the next action is absent or stale.
+2. Call \`browser({ action: "code", reason, code })\` directly for every new or resumed browser request. There is no automatic state preflight or appended page snapshot. For a known URL, navigate and read the new page in the same cell without first reading the page being left. Call \`browser({ action: "state", reason })\` explicitly only when its snapshot is itself the desired result.
+3. Use the requested code-action result. Add a targeted read only when an exact locator, frame, or surface fact needed for the next action is absent or stale; it may share a cell with the action when the read supplies enough evidence. Do not add a mandatory tabs/URL/title/snapshot inventory call.
 4. Use browser action=code for bounded read or action cells. A cell may contain multiple dependent operations only when each later target is confirmed by an intervening targeted read.
-5. Verify the requested business outcome with a final read-only cell. Also inspect \`await page.activeSurface()\` and resolve or disclose any unexpected remaining popup.
+5. Verify the requested outcome with a read after the action, preferably at the end of the same cell. This is not a requirement for a separate tool call. For read-only research, the returned relevant page content is the outcome evidence; do not re-read the same page just to verify that it was read. For interactive workflows also inspect \`await page.activeSurface()\` and resolve or disclose unexpected remaining popups.
 
 If the runtime rejects a governed call, preserve its complete error and any \`requiredSkillId\`, refresh only the evidence that became stale, and continue the same page transaction.
+
+## Efficient lookup and search
+
+- Combine navigation and content acquisition in one browser action=code: await page.goto(url), then read the loaded page and return its useful evidence. Returning only title/URL and making another tool call for the content is unnecessary unless an actual loading or interaction dependency prevents the read. A DOM snapshot taken after navigation can be returned in that same cell. Only later actions whose targets require the model to inspect new evidence need another model step.
+- Keep the user's names and terms verbatim in a plain query string. Construct query parameters with encodeURIComponent(query), never handwritten percent escapes or guessed Unicode code points. Return query with the result and check the displayed query when results are irrelevant before changing sources. Do not change an unfamiliar term into a different word silently.
+- For a simple factual question, start with one focused query on one engine. Open the strongest relevant source and answer once it supports the fact. Search engines are discovery channels, not independent evidence. Switching among many engines is not corroboration.
+- Use one alternate engine only for a concrete access failure or irrelevant results after checking the actual query. After two focused attempts add no useful evidence, stop reformulating the same query: explain the uncertainty, use an already found source, or ask a narrow clarification. Broader searches are appropriate for explicitly broad research or distinct unanswered subquestions, not for repeating one simple lookup.
+- Every further search must address a named missing fact and be likely to add new evidence. Do not loop through URL encodings, language/domain variants, empty queries, or repeated "final attempts". Record useful findings and access failures so recovery or context compression does not restart the same search.
+- A successful navigation is not a successful search. Read the result, distinguish a real empty result from CAPTCHA/access failure/loading, and preserve read errors rather than swallowing them with catch(() => ''). A relevant excerpt is enough; do not repeatedly dump navigation menus or the whole page.
+- Explain the concrete lookup in reason (query/purpose and, for fallback, why the previous source was unusable). Keep returned evidence bounded and include source URLs for claims.
+
+Example of a single navigation-and-read call (the domain/query are illustrative):
+
+\`\`\`js
+var query = '船蟹 梭子蟹 区别';
+await page.goto('https://www.bing.com/search?q=' + encodeURIComponent(query));
+nodeRepl.write({ query, url: page.url(), snapshot: await page.domSnapshot() });
+\`\`\`
+
+The returned snapshot supplies both content and exact links for the next decision. If a known source URL is already available, navigate directly to it and read its content in the same call instead of searching again.
 
 ## Host tool boundary
 
 These are model tools, not JavaScript globals:
 
 - \`skill({ action: "read", skillId, reason })\` loads one exact Skill for the current Agent run.
-- \`browser({ action: "state", reason })\` explicitly returns the non-mutating browser preflight. When another browser action needs it, the host executes it internally, appends its complete result to \`prerequisiteResults\`, and then executes the requested action; use action=state explicitly only when the snapshot is the requested output.
+- \`browser({ action: "state", reason })\` explicitly returns a non-mutating browser snapshot. Other actions do not trigger this read or append its output; use action=state only when the snapshot is the requested output.
 - \`browser({ action: "code", reason, code, needChange?, maxOutputChars? })\` executes one JavaScript cell. \`reason\` is a concise description of the exact read/action; \`code\` is 1-40,000 characters; \`maxOutputChars\`, when supplied, is at least 1,000.
 - \`browser({ action: "waitForHumanVerification", reason, maxMs? })\` pauses for user-owned CAPTCHA, OTP, QR, login, identity, or device verification.
 
@@ -445,11 +465,11 @@ For UI debugging, responsive layout review or browser/Electron acceptance tasks,
 
 ## Completion contract
 
-Playwright delivery alone is not business success. Before claiming completion, run a final read-only check for the requested URL, value, row/table state, toast, dialog, confirmation identifier, or other direct fact, plus \`page.activeSurface()\`. Report an unresolved failure or residual popup when it materially limits the outcome. Never describe a page as ready for a consequential final click if the latest verified state is on another page or no longer contains that control.
+Playwright delivery alone is not business success. Check the requested URL, value, row/table state, toast, dialog, confirmation identifier, or other direct fact after an interaction, preferably in the same cell; also inspect \`page.activeSurface()\` for interactive workflows. For read-only research, relevant content returned by the navigation-and-read cell is sufficient evidence; no separate verification cell is required. Report an unresolved failure or residual popup when it materially limits the outcome. Never describe a page as ready for a consequential final click if the latest verified state is on another page or no longer contains that control.
 `;
 
 const browserRuntimeCoreHeadings = new Set([
-  'Required state machine', 'Host tool boundary', 'Cell syntax and result contract',
+  'Required state machine', 'Efficient lookup and search', 'Host tool boundary', 'Cell syntax and result contract',
   'Failure recovery', 'Completion contract',
 ]);
 const browserRuntimeSections = browserCodeRuntimeManual.split(/(?=^## )/m).slice(1).map((content) => ({

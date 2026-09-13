@@ -54,6 +54,9 @@ export function resolveBrowserChatArtifactReference(
   const artifact = matches[0];
   const url = image ? artifact.url || artifactApiUrl(artifact.path) || artifact.downloadUrl
     : artifact.downloadUrl || artifact.url || artifactApiUrl(artifact.path);
+  // Validation/review results may identify an artifact without supplying its
+  // delivery URL. They must not erase a URL already present in the message.
+  if (!url) return alias ? '' : value;
   return image ? (url || '').replace(/([?&])download=1(&|$)/, '$1').replace(/[?&]$/, '') : url || '';
 }
 

@@ -60,7 +60,7 @@ test('bootstrap returns a bounded first page with a continuation cursor', async 
       },
     }));
     const body = await response.json() as {
-      sessionPage?: { hasMore?: boolean; next?: { beforeId?: string; beforeUpdatedAt?: string } };
+      sessionPage?: { hasMore?: boolean; next?: { beforeId?: string; beforeCreatedAt?: string } };
       sessions?: Array<{ id: string }>;
     };
     assert.equal(response.status, 200);
@@ -68,7 +68,7 @@ test('bootstrap returns a bounded first page with a continuation cursor', async 
     assert.equal(body.sessions?.some((session) => session.id.startsWith('empty-session-')), false);
     assert.equal(body.sessionPage?.hasMore, true);
     assert.ok(body.sessionPage?.next?.beforeId);
-    assert.ok(body.sessionPage?.next?.beforeUpdatedAt);
+    assert.ok(body.sessionPage?.next?.beforeCreatedAt);
   } finally {
     closeDatabase();
     if (previousDataRoot === undefined) delete process.env.APP_DATA_DIR;
