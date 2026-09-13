@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Add `generate.body` for Word, Excel, PPT and PDF authoring: the SDK supplies UNO/ExcelJS lifecycle code or the HTML shell. Keep advanced complete `program` input.
+- Remove structured Office `spec` generation, its compiler, public semantic types/exports and plan recommendations. Legacy spec calls fail explicitly; existing executable drafts remain editable/renderable.
+- Include format-specific variables, starter bodies and installed core API guidance in document plans; retain guidance in model-facing results and avoid redundant API lookups.
+
 ## 0.3.0
 
 - Add the unified `capability-mcp` CLI, Cursor initialization, grouped project configuration and JSON Schema.

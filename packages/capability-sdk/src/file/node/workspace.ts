@@ -1,7 +1,9 @@
 import { htmlOfficeGuidance } from '../office/html.ts';
+import { officeAuthoringGuidance } from './office-authoring.ts';
+import { compileOfficeBody } from './office-body.ts';
 import { recordOfficeVisualQaProgress, verifyCurrentUnoRenderedArtifact } from './workspace-visual-qa.ts';
 export { verifyCurrentUnoRenderedArtifact, recordOfficeVisualQaProgress } from './workspace-visual-qa.ts';
-import { officeValidationRepairHints, semanticGenerationPlan } from './workspace-result.ts';
+import { officeValidationRepairHints } from './workspace-result.ts';
 export { officeValidationRepairHints, formatFileArtifactResult } from './workspace-result.ts';
 import { loadDraft, saveDraft, saveWorkingDraft, withDraftLock, requireDocumentId, DOCUMENT_ID_PATTERN, artifactDir, sanitizeFileName, draftProgramPath } from './workspace-draft-store.ts';
 
@@ -27,12 +29,11 @@ import { inspectUnoApi, isUnoBridgeStartupError, isUnoStylePropertyInfoError, is
 import { validateOfficeArtifact, type OfficeElementMapEntry } from './office/validation.ts';
 import { validateOfficeRendererMatrix } from './office/render-validation.ts';
 import { analyzeOfficeProgram, diagnoseOfficeProgramRuntimeError, type OfficeProgramDiagnostic } from './office/program-analysis.ts';
-import type { OfficeDocumentDraft, OfficeDocumentKind, OfficeSemanticDocumentInput } from '../office/types.ts';
+import type { OfficeDocumentDraft, OfficeDocumentKind } from '../office/types.ts';
 import { registerOfficePreview, type FilePreviewResult } from './office/preview.ts';
 import { createFileVisualIndex } from './visual-index.ts';
 import { officeGenerationRuntimeFingerprint } from './office/runtime-fingerprint.ts';
 import { beginOfficeValidation, currentUnoWorkerDigest, officeValidationEvidence } from './office/validation-evidence.ts';
-import { compileOfficeSemanticDocument } from './office/semantic.ts';
 import { officeDesignBriefSchema, officeDesignGuidance } from '../design-guidance.ts';
 
 function officeOperationWasInterrupted(error: unknown, abortSignal?: AbortSignal) {
@@ -61,8 +62,7 @@ export type GenerateUnoProgramInput = {
   runId?: string;
   documentId?: string;
   program?: string;
-  /** Compact semantic create input compiled into the existing validated UNO draft pipeline. */
-  spec?: OfficeSemanticDocumentInput;
+  body?: string;
   render?: boolean;
   includeVisualVerification?: boolean;
   attachmentBindings?: FileAttachmentBinding[];
@@ -1393,7 +1393,6 @@ async function validateDraft(input: {
         documentChanged: input.documentChanged || false,
         cacheHit: candidate.cacheHit,
         generationDiagnostics: candidate.generated.diagnostics,
-        semantic: input.draft.semantic,
         automaticValidation: candidate.validation,
         workflow: input.draft.workflow,
         qualityGate: officeQualityGate(candidate.validation, visualVerification),
@@ -1430,7 +1429,6 @@ async function validateDraft(input: {
         validationEvidence: officeValidationEvidence(input.draft, await currentUnoWorkerDigest()),
         validationFailureCount: infrastructureFailure ? input.draft.validationFailureCount || 0 : input.draft.validationFailureCount || 1,
         diagnostics: compactValidationDiagnosticsForTool(input.draft.validationDiagnostics),
-        semantic: input.draft.semantic,
         repairHints: transientUnoFailure
           ? ['LibreOffice startup retries were exhausted before source validation completed; the current source was preserved.']
           : officeValidationRepairHints(input.draft.validationDiagnostics || [], validationError),
@@ -1894,8 +1892,7 @@ async function planFileArtifactUnlocked(input: PlanArtifactInput): Promise<FileA
           sourceDocument: existing.sourceDocument,
           sourceFileName: path.basename(draftProgramPath(input.runId, existing.documentId, existing.generator)),
           sourceCharacters: existing.program?.length || 0,
-          sourceGuidance: (existing.generator === 'html' ? htmlOfficeGuidance : undefined),
-          semanticGeneration: semanticGenerationPlan(existing.operation || 'create', existing.generator || 'uno', officeDesignGuidance(existing)),
+          sourceGuidance: await officeAuthoringGuidance(existing),
           design: existing.design,
           designGuidance: officeDesignGuidance(existing),
           workflow: existing.workflow,
@@ -1927,8 +1924,7 @@ async function planFileArtifactUnlocked(input: PlanArtifactInput): Promise<FileA
           sourceDocument: existing.sourceDocument,
           sourceFileName: path.basename(draftProgramPath(input.runId, existing.documentId, existing.generator)),
           sourceCharacters: 0,
-          sourceGuidance: (existing.generator === 'html' ? htmlOfficeGuidance : undefined),
-          semanticGeneration: semanticGenerationPlan(existing.operation || 'create', existing.generator || 'uno', officeDesignGuidance(existing)),
+          sourceGuidance: await officeAuthoringGuidance(existing),
           design: existing.design,
           designGuidance: officeDesignGuidance(existing),
           workflow: existing.workflow,
@@ -1961,8 +1957,7 @@ async function planFileArtifactUnlocked(input: PlanArtifactInput): Promise<FileA
       sourceDocument: draft.sourceDocument,
       sourceFileName: path.basename(draftProgramPath(input.runId, draft.documentId, draft.generator)),
       sourceCharacters: 0,
-      sourceGuidance: draft.generator === 'html' ? htmlOfficeGuidance : undefined,
-      semanticGeneration: semanticGenerationPlan(draft.operation || 'create', draft.generator || 'uno', officeDesignGuidance(draft)),
+      sourceGuidance: await officeAuthoringGuidance(draft),
       design: draft.design,
       designGuidance: officeDesignGuidance(draft),
       workflow: draft.workflow,
@@ -1980,9 +1975,10 @@ async function generateUnoFileArtifactUnlocked(input: GenerateUnoProgramInput): 
     const documentId = String(input.documentId || '').trim();
     if (!documentId) return { ok: false, actual: 'file action=generate requires documentId from action=plan.' };
     const submittedProgram = String(input.program || '').trim();
-    const semanticSpec = input.spec && typeof input.spec === 'object' ? input.spec : undefined;
-    if (Boolean(submittedProgram) === Boolean(semanticSpec)) {
-      return { ok: false, actual: 'file action=generate requires exactly one of program or spec.' };
+    const submittedBody = typeof input.body === 'string' ? input.body : '';
+    if ('spec' in input) return { ok: false, actual: 'spec generation has been removed. Use body or program.' };
+    if (Number(Boolean(submittedProgram)) + Number(Boolean(submittedBody.trim())) !== 1) {
+      return { ok: false, actual: 'file action=generate requires exactly one of body or program.' };
     }
     let persistedDraft: OfficeDocumentDraft;
     try {
@@ -1996,64 +1992,11 @@ async function generateUnoFileArtifactUnlocked(input: GenerateUnoProgramInput): 
       }
       throw error;
     }
-    let program = submittedProgram;
-    let semantic: OfficeDocumentDraft['semantic'];
-    if (semanticSpec) {
-      if ((persistedDraft.operation || 'create') !== 'create') {
-        return {
-          ok: false,
-          actual: 'Semantic generation is available only for new documents. Existing-file modification must preserve the source through the UNO program workflow.',
-        };
-      }
-      if (semanticSpec.documentType && semanticSpec.documentType !== persistedDraft.documentType) {
-        return {
-          ok: false,
-          actual: `Semantic spec documentType=${semanticSpec.documentType} does not match the planned ${persistedDraft.documentType} workspace.`,
-        };
-      }
-      if (semanticSpec.fileName && sanitizeFileName(semanticSpec.fileName, '') !== persistedDraft.fileName) {
-        return {
-          ok: false,
-          actual: `Semantic spec fileName=${semanticSpec.fileName} does not match the planned fileName=${persistedDraft.fileName}.`,
-        };
-      }
-      let compiled: ReturnType<typeof compileOfficeSemanticDocument>;
-      try {
-        compiled = compileOfficeSemanticDocument({
-          ...semanticSpec,
-          documentType: persistedDraft.documentType,
-          fileName: persistedDraft.fileName,
-        }, persistedDraft.generator || 'uno');
-      } catch (error) {
-        const diagnostics = error && typeof error === 'object' && 'diagnostics' in error
-          ? (error as { diagnostics?: unknown }).diagnostics
-          : undefined;
-        return {
-          ok: false,
-          actual: JSON.stringify({
-            kind: 'semantic-document-validation',
-            documentId,
-            fileName: persistedDraft.fileName,
-            documentType: persistedDraft.documentType,
-            saved: false,
-            diagnostics,
-            error: error instanceof Error ? error.message : String(error),
-          }),
-        };
-      }
-      program = compiled.program;
-      semantic = {
-        schemaVersion: '1.0',
-        theme: compiled.theme,
-        layout: compiled.layout,
-        diagnostics: compiled.diagnostics,
-      };
-    }
+    const program = submittedBody.trim() ? await compileOfficeBody(submittedBody, persistedDraft, input.abortSignal) : submittedProgram;
     const draft = structuredClone(persistedDraft);
     draft.program = program;
     delete draft.lastSourceEdit;
-    if (semantic) draft.semantic = semantic;
-    else delete draft.semantic;
+    delete (draft as OfficeDocumentDraft & { semantic?: unknown }).semantic;
     draft.validationStatus = 'pending';
     draft.validationFailureCount = 0;
     draft.validationDiagnostics = [];
@@ -2165,9 +2108,9 @@ async function editUnoFileArtifactUnlocked(input: EditUnoProgramInput): Promise<
     }
     const edited = patchResult.source;
     draft.program = requestedUnit ? replaceSourceUnit(persistedDraft.program, requestedUnit, edited) : edited;
-    // A raw source patch detaches the executable draft from its compact semantic input.
+    // Discard legacy metadata after changing the authoritative source.
     // Validation still applies, but stale theme/reflow provenance must not be reported.
-    delete draft.semantic;
+    delete (draft as OfficeDocumentDraft & { semantic?: unknown }).semantic;
     if (draft.program === normalizedDraftSource(persistedDraft.program)) {
       return {
         ok: patchResult.failedHunks.length === 0 && persistedDraft.validationStatus !== 'failed',

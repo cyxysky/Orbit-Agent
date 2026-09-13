@@ -7436,14 +7436,14 @@ def facade_module_example_keys(document_type):
 def office_facade_cookbook(document_type, query=''):
     """Return an exact, example-complete module from the model-facing facade."""
     shared_rules = [
-        'Write exactly one synchronous create_document(job) function.',
-        'Create the Office facade inside create_document(job), keep all authored calls inside it, then call facade.save() exactly once followed by facade.close() exactly once.',
+        'Prefer generate body: write only content/layout operations using the provided deck (presentation), document (word), or workbook (spreadsheet). The SDK supplies create_document(job), document creation, save and close. Complete examples below illustrate advanced program input.',
+        'Only for advanced program: write exactly one synchronous create_document(job), create the Office facade inside it, keep authored calls inside it, then call facade.save() exactly once followed by facade.close() exactly once.',
         'Use only the returned high-level facade and versioned feature recipes. Never import uno or access com.sun.star services.',
         'Every document, slide, paragraph, table, chart, image, sheet, range, and feature call has a stable elementId.',
         'When the plan names an exact presentation capability such as CaptionShape, MeasureShape, or ConnectorShape, use the matching presentation.shape example and confirm its exact generated featureCounts key is non-zero. A visually similar shape never satisfies a semantic capability requirement.',
         'CaptionShape and MeasureShape are authored as native UNO services by the facade. Because LibreOffice drops those two services during PPTX export, the facade also emits one named editable DrawingML fallback at the same geometry; do not create a second manual lookalike.',
         'elementId accepts 1-128 non-whitespace Unicode characters, including Chinese. Child IDs on slide and worksheet facades are parent-scoped, so helpers may reuse role IDs across different parents.',
-        "Query unoApi one module at a time before using that module. Each module response contains every matching installed signature, accepted value schema, and copyable example; copy these patterns instead of guessing.",
+        "Use the installed signatures already supplied by plan.sourceGuidance. Query unoApi only for additional modules, one at a time; each response contains matching installed signatures, accepted value schemas and copyable examples. Follow these patterns instead of guessing.",
         "For presentation text, use only the exact style keys returned by presentation.text. letter_spacing/tracking/margin/autofit/word_wrap are deliberately unsupported; use padding, line_spacing, min_font_size, box geometry, or auto_height instead.",
         "Presentation slide.add_* explicit box values default to inches, accept w/h aliases, and may set unit='in'|'mm'|'cm'|'pt'|'hmm'. Layout slots are already normalized.",
         "New presentation decks are always 13.333 x 7.5 inches with horizontal center x=6.6665. Never use a 10 x 7.5 inch canvas; align='CENTER' affects text inside a box, not the box position. Prefer named slots or derive freeform boxes from deck.bounds()/deck.content_box().",

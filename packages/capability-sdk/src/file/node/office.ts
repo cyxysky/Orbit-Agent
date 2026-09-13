@@ -5,6 +5,5 @@ export * from './office/javascript.ts';
 export * from './office/program-analysis.ts';
 export * from './office/preview.ts';
 export * from './office/render-validation.ts';
-export * from './office/semantic.ts';
 export * from './office/uno.ts';
 export * from './office/validation.ts';

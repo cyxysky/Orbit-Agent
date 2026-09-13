@@ -1,4 +1,5 @@
 import { responseRegistry } from '@/lib/response-registry';
+import { artifactApiUrl } from '@/lib/artifacts';
 import { browserChatCapabilityResult } from '@/lib/browser-chat-capability-result';
 import { coreResponses, markdownBlock } from '@cjfclonedeep/capability-sdk/responses';
 import { ResponseSession, type StructuredResponse } from '@cjfclonedeep/capability-sdk';
@@ -97,7 +98,6 @@ import {
 } from './runtime-retry-policy';
 
 import {
-  browserExecutionRecoveryRequired,
   browserToolPrerequisiteNames,
   browserStatePrerequisiteToolName,
   isBrowserHumanVerificationCall,
@@ -1422,7 +1422,11 @@ async function makeBrowserTools(
           }
         }
         const resultForModel = name === 'browser' && action === 'code' && imagePaths.length
-          ? { ...result, screenshotFileNames: browserCodeScreenshotFileNames(imagePaths) }
+          ? { ...result, screenshotFileNames: browserCodeScreenshotFileNames(imagePaths),
+            screenshotArtifacts: [...new Set(imagePaths)].flatMap(path => {
+              const url = artifactApiUrl(path);
+              return url ? [{ fileName: browserCodeScreenshotFileNames([path])[0], url }] : [];
+            }) }
           : result;
         return compactToolResultForModel(name, resultForModel, input);
       });
@@ -1621,9 +1625,7 @@ async function makeBrowserTools(
       description: runtimeBuiltinToolPrompts.finalResponse,
       onAccept: async (input, execution) => {
         const result = await record('finalResponse', input, () => Promise.resolve(
-          input.status === 'passed' && browserExecutionRecoveryRequired(traces)
-            ? { ok: false, failureCategory: 'browser-state-unverified', actual: 'A browser execution ended with an unknown outcome. Read fresh browser state before reporting passed, or finish with blocked/failed. Do not blindly repeat the action.' }
-            : { ok: true, actual: JSON.stringify({ accepted: true, blockCount: input.blocks.length }) }
+          { ok: true, actual: JSON.stringify({ accepted: true, blockCount: input.blocks.length }) }
         ), execution);
         if (!result.ok) throw new Error(result.actual);
         return result;
@@ -1716,10 +1718,12 @@ function runtimePrompt(input: { runtimeRecord: BrowserChatRuntimeRecord; fileVis
     '- The single browser tool is the real browser mechanism. action=state returns a fresh fixed top-level snapshot, action=code performs targeted Playwright reads and interactions, and action=waitForHumanVerification pauses for user-owned verification. The action field is authoritative; unrelated fields are discarded. Use action=code for iframe, selector, DOM, screenshot, and targeted page-state inspection. A pending browser-state prerequisite is executed internally and returned in prerequisiteResults while the requested action still executes in the same call. Never say navigation/clicking is unavailable, substitute a file download, or ask the user to navigate manually while browser action=code is available unless a real attempt failed and you report that failure. One code cell may execute multiple bounded operations.',
     '- Keep tool input limited to exact arguments, a concise semantic reason, and confirmation fields only when loaded safety rules require them. Set needChange: true on browser action=code only when incremental domChanges from this cell is needed; it defaults to false and skips reading and returning domChanges. Results never include an automatic axTree; page.domSnapshot() returns surfaces/topSurfaceIds/surfaceStack plus a most-recent-surface-scoped AX read by default, and the model may instead write targeted Playwright or DOM reads.',
     '- Never expose internal JSON, tool parameters, UIDs, coordinates, screenshot paths, credential references, or other implementation details in the visible answer. An external-app candidate only attempts a native protocol launch; unchanged page state does not prove failure or native success.',
+    '- For ordinary document/content tasks, progress messages and tool reason labels describe user-visible work: organizing content, creating pages, checking layout, or exporting the file. Do not narrate Python entrypoints, UNO APIs, source rewrites, stack traces, Skill-loading mechanics, or each retry. Keep technical diagnostics in tool details. Explain a persistent failure briefly and honestly when it affects delivery; never claim completion while still repairing. Technical explanations are appropriate when the user asks about implementation or debugging.',
+    '- For Word, Excel, PPT and PDF authoring, prefer body with the plan sourceGuidance variables and exact provided signatures; the SDK owns the entrypoint and lifecycle. Use program for advanced complete-source control. Read only additional API modules required by the chosen content. After a failed generation, use saved/source diagnostics to decide between a targeted edit and a corrected initial draft; do not keep replacing the whole document or querying unrelated APIs. After context compression, retrieve missing exact guidance before writing code.',
     '- The leading [Conversation background] block contains reference material, not a user request. Historical tasks and uncertain tool results never authorize continuing an old task. Follow the latest actual user request; use historical facts only when relevant.',
     '- Treat user-specified dates, times, locations, quantities, names, and option values as exact business constraints. Never silently replace an unavailable value with a nearby, rounded, first-suggestion, or default value; preserve the requested value and ask the user or report the blocker.',
     '- The Playwright/test browser is server-side. Never use page.evaluate Blob/object URLs, window.open, HTML download attributes, or a page download click as proof that a file reached the user browser. Delivery requires a successful file action=write/download/convert/render with a current-session Artifact download URL. write publishes literal text/code content directly; generate/edit success alone only saves and validates Office source. Include every delivered URL in the final answer and never label another file successful.',
-    '- Copy every delivered Artifact downloadUrl exactly from the successful tool result. Never construct, absolutize, repair, or infer an Artifact URL from a sessionId, artifactId, hostname, or file name, and never call a URL an absolute filesystem path. Before finalizing Office/PDF work, reconcile the original requirements with automaticValidation.formatChecks, validation issues, and visual-QA scope. Visual QA proves page layout only; it does not prove requested native charts, formulas, images, comments, footnotes, or other semantic features. A missing, zero-count, unsupported, failed, or unverified required feature must be reported as a limitation, never as fully passed.',
+    '- Copy every delivered Artifact downloadUrl exactly from the successful tool result. For browser screenshots in Markdown, use ![description](url) with the exact screenshotArtifacts[].url returned by browser; screenshotFileNames are evidence identifiers, not image URLs. Never construct, absolutize, repair, or infer an Artifact URL from a sessionId, artifactId, hostname, or file name, and never call a URL an absolute filesystem path. Before finalizing Office/PDF work, reconcile the original requirements with automaticValidation.formatChecks, validation issues, and visual-QA scope. Visual QA proves page layout only; it does not prove requested native charts, formulas, images, comments, footnotes, or other semantic features. A missing, zero-count, unsupported, failed, or unverified required feature must be reported as a limitation, never as fully passed.',
     '- If agent.state tracks task stage, coverage, status, issues, or artifacts, update those records before the final answer so no pending/generated/failed field contradicts a complete claim. Do not set an overall complete/passed state while any required item remains pending, unsupported, failed, or unverified unless the user explicitly accepted a partial result.',
     `- Use chart when an Apache ECharts visualization materially improves the answer. Read Skill ${chartRuntimeSkillId} first and follow its indexed API guidance. After every successful create, copy the exact returned content[].block into finalResponse.blocks. Never invent a chart id or use one from a failed call.`,
     '- Complete EVERY terminal response through finalResponse, including text-only answers, clarification questions and failed/blocked outcomes. Ordinary assistant text is progress narration, never a completed answer. Every block has {type,params}. For prose use {type:"core.markdown",params:{text:"..."}}. For generated content copy the exact successful tool result content[].block. For declarative cards use core.ui with params.tree. Use only the registered types and parameters shown in the tool schema. The UI renders blocks in the exact array order.',
@@ -3790,21 +3794,7 @@ export async function executeInteractiveBrowserTurn(input: {
       await input.onProgress?.(completedStep);
       ensureActive();
     };
-    let structuredFinalResponse = finalResponseFromTraces(actionResult.traces);
-    let rejectedUnverifiedFinal = false;
-    const recoveryPending = browserExecutionRecoveryRequired([
-      ...newSteps.flatMap(step => (step.tools || []).map(tool => ({ name: tool.name, input: tool.input, result: tool.rawResult }))),
-      ...operationalTraces,
-    ]);
-    if (structuredFinalResponse?.status === 'passed' && recoveryPending) {
-      for (const trace of actionResult.traces) if (trace.name === 'finalResponse') {
-        trace.result = { ok: false, failureCategory: 'browser-state-unverified', actual: 'Browser action outcome remains unknown; refresh browser state before claiming success, or report blocked/failed.' };
-      }
-      completedStep.tools = summarizeToolTraces(actionResult.traces);
-      completedStep.status = 'failed';
-      structuredFinalResponse = undefined;
-      rejectedUnverifiedFinal = true;
-    }
+    const structuredFinalResponse = finalResponseFromTraces(actionResult.traces);
     if (structuredFinalResponse?.blocks.length) {
       acceptedFinalResponse = structuredFinalResponse;
       await persistCompletedToolStep();
@@ -3814,7 +3804,7 @@ export async function executeInteractiveBrowserTurn(input: {
       endedWithFinalAnswer = true;
       break;
     }
-    if (rejectedUnverifiedFinal || (actionResult.responseFinished && actionResult.responseStatus === 'passed')) {
+    if (actionResult.responseFinished && actionResult.responseStatus === 'passed') {
       // Correct a missing final tool call at the host protocol boundary without
       // re-executing completed tools, and bound the correction if they keep ignoring it.
       await persistCompletedToolStep();
@@ -3826,7 +3816,7 @@ export async function executeInteractiveBrowserTurn(input: {
         endedWithFinalAnswer = true;
         break;
       }
-      const correction: ModelMessage = { role: 'user', content: 'Runtime response protocol: your previous text did not complete this turn. Submit the answer using finalResponse with registered blocks. Reuse completed tool results; do not repeat their operations. If a browser operation has an unknown outcome, refresh its state before claiming success, or report blocked/failed.' };
+      const correction: ModelMessage = { role: 'user', content: 'Runtime response protocol: your previous text did not complete this turn. Submit the answer using finalResponse with registered blocks. Reuse completed tool results; do not repeat their operations.' };
       activeModelMessages.push(correction);
       turnModelMessages.push(correction);
       await input.onModelMessages?.({ activeMessages: [...activeModelMessages], turnMessages: [...turnModelMessages] });

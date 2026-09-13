@@ -52,12 +52,12 @@ export function officeDesignGuidance(draft: DesignContext) {
     briefRecorded: Boolean(draft.design),
     selectedDirection: selected?.id,
     concept: selected?.concept,
-    authoring: draft.operation === 'modify' || mode === 'bespoke' ? 'program' : 'spec-when-available',
+    authoring: 'body',
     instruction: draft.operation === 'modify'
       ? 'Preserve the existing document, content and native objects unless the user requests redesign. Apply any design brief only within the requested changes.'
       : mode === 'bespoke'
-        ? 'Use a content-led custom program, not the default semantic template. Record a compact design brief in the initial plan. Keep typography/color roles coherent, but choose composition by each page’s purpose; named slots are optional and blank/grid/stack composition is supported. Do not repeat a title/subtitle/rule/card shell or randomize layouts just for variety.'
-        : 'Use semantic templates for fast conventional documents when available. Presets are starting tokens, not mandatory brand styles; custom colors, fonts and type scales are allowed within readability constraints.',
+        ? 'Use body for content-led custom composition, or program for complete-source control. Record a compact design brief in the initial plan. Keep typography/color roles coherent, but choose composition by each page’s purpose; named slots are optional and blank/grid/stack composition is supported. Do not repeat a title/subtitle/rule/card shell or randomize layouts just for variety.'
+        : 'Use body for conventional documents with clear content hierarchy, readable fonts and suitable spacing. Choose colors, fonts and layout for the requested content.',
     representativeReview: mode === 'bespoke'
       ? 'For substantial new work, resolve up to three representative compositions (opening, densest evidence, conclusion) before expanding. Inspect these first in the first valid render. If required-feature validation needs the complete document, author it once before rendering; do not omit requirements to force a partial prototype. Small tasks need no extra prototype. Reuse the same draft and existing evidence, never generate several full alternatives. Final QA covers every page.'
       : undefined,

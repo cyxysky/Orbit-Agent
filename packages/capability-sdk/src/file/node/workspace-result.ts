@@ -9,7 +9,7 @@ export type ArtifactToolPayload = {
   documentType?: OfficeDocumentKind;
   sourceFileName?: string;
   sourceDocument?: OfficeDocumentDraft['sourceDocument'];
-  semanticGeneration?: ReturnType<typeof semanticGenerationPlan>;
+  sourceGuidance?: unknown;
   design?: OfficeDocumentDraft['design'];
   designGuidance?: ReturnType<typeof officeDesignGuidance>;
   workflow?: OfficeDocumentDraft['workflow'];
@@ -89,33 +89,6 @@ export type ArtifactToolPayload = {
 
 export function escapeMarkdownLinkLabel(value: string) {
   return value.replace(/[[\]\\]/g, '\\$&');
-}
-
-export function semanticGenerationPlan(
-  operation: 'create' | 'modify',
-  generator: OfficeDocumentDraft['generator'],
-  design: ReturnType<typeof officeDesignGuidance>,
-) {
-  const available = operation === 'create' && generator === 'uno';
-  const recommended = available && design.mode === 'template';
-  return {
-    available,
-    schemaVersion: '1.0',
-    defaultTheme: 'clean',
-    defaultLayout: { enabled: true, mode: 'repair', overflow: 'split', imageFit: 'contain' },
-    recommended,
-    ...(available ? {
-      nextAction: recommended ? 'generate' : 'unoApi',
-      input: recommended ? 'spec' : 'program',
-      note: recommended
-        ? 'Semantic generation skips API-catalog authoring; theme tokens may be customized. Fixed geometry is a convenience for conventional files, not a requirement for original design.'
-        : 'Bespoke design should use a custom program so the compiler does not replace composition with fixed templates. Query only the API modules needed for the selected direction.',
-    } : {
-      reason: operation === 'modify'
-        ? 'Existing files preserve their original layout through the raw UNO editing workflow.'
-        : generator === 'html' ? 'Author complete HTML in program; read jsApi for the HTML contract.' : 'This workspace uses JavaScript/ExcelJS for spreadsheets.',
-    }),
-  };
 }
 
 export function compactAutomaticValidation(payload: ArtifactToolPayload) {
@@ -394,13 +367,14 @@ export function formatFileArtifactResult(toolName: string, actual?: string) {
           .filter(Boolean)
         : [];
       // Routing and design decisions must survive the model-facing compaction.
-      // Do not turn this back into an identity-only string or include the draft source.
+      // Preserve the API scaffold; it is guidance, not the user's full draft source.
       return JSON.stringify({
         kind: payload.kind, documentId: payload.documentId, fileName: payload.fileName,
         documentType: payload.documentType, operation: payload.operation || 'create',
         generator: payload.generator || 'uno', sourceCharacters: payload.sourceCharacters || 0,
         sourceFileName: payload.sourceFileName, sourceDocument: payload.sourceDocument,
-        semanticGeneration: payload.semanticGeneration, design: payload.design,
+        sourceGuidance: payload.sourceGuidance,
+        design: payload.design,
         designGuidance: payload.designGuidance, workflow: payload.workflow,
         reused: payload.reused, instruction: payload.instruction, availableAssets: assets,
       });

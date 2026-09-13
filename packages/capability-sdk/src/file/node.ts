@@ -10,7 +10,6 @@ export * from './node/office/javascript.ts';
 export * from './node/office/program-analysis.ts';
 export * from './node/office/preview.ts';
 export * from './node/office/render-validation.ts';
-export * from './node/office/semantic.ts';
 export * from './node/office/uno.ts';
 export * from './node/office/validation.ts';
 export * from './node/read.ts';

@@ -11,121 +11,6 @@ import {
 
 export const FILE_READ_MAX_CHARS = 40_000;
 
-const semanticCellSchema = z.union([
-  z.string().max(20_000), z.number().finite(), z.boolean(), z.null(),
-]);
-const semanticBlockSchema: z.ZodType<Record<string, unknown>> = z.lazy(() => z.object({
-  id: z.string().min(1).max(128).optional(),
-  type: z.enum([
-    'page', 'sheet', 'text', 'heading', 'list', 'quote', 'code', 'image', 'svg',
-    'chart', 'table', 'card', 'columns', 'metric', 'timeline', 'shape', 'divider',
-    'spacer', 'pageBreak',
-  ]),
-  template: z.enum([
-    'cover', 'section', 'content', 'two-column', 'comparison', 'kpi', 'chart',
-    'image', 'reference', 'report', 'worksheet',
-  ]).optional(),
-  title: z.string().max(2_000).optional(),
-  subtitle: z.string().max(4_000).optional(),
-  name: z.string().max(500).optional(),
-  language: z.string().max(40).optional(),
-  level: z.number().int().min(0).max(9).optional(),
-  ordered: z.boolean().optional(),
-  breakBefore: z.literal('page').optional(),
-  fit: z.literal('contain').optional(),
-  shapeType: z.string().max(80).optional(),
-  chartType: z.string().max(80).optional(),
-  text: z.string().max(40_000).optional(),
-  markdown: z.string().max(40_000).optional(),
-  source: z.string().max(500).optional(),
-  alt: z.string().max(1_000).optional(),
-  caption: z.string().max(2_000).optional(),
-  items: z.array(z.unknown()).max(500).optional(),
-  rows: z.array(z.array(semanticCellSchema).max(64)).max(5_000).optional(),
-  children: z.array(semanticBlockSchema).max(240).optional(),
-  columns: z.array(z.object({
-    width: z.union([z.number().positive(), z.string().regex(/^\d+(?:\.\d+)?%$/)]).optional(),
-    blocks: z.array(semanticBlockSchema).max(120).optional(),
-  }).strict()).max(4).optional(),
-  data: z.record(z.string(), z.unknown()).optional(),
-  style: z.record(z.string(), z.unknown()).optional(),
-}).strict());
-
-const semanticSpecSchema = z.object({
-  schemaVersion: z.literal('1.0').optional(),
-  documentType: z.enum(['word', 'spreadsheet', 'presentation']).optional(),
-  fileName: z.string().max(180).optional(),
-  document: z.object({
-    title: z.string().max(2_000).optional(),
-    description: z.string().max(4_000).optional(),
-    author: z.string().max(500).optional(),
-    language: z.string().max(40).optional(),
-    metadata: z.record(z.string(), z.unknown()).optional(),
-    defaultStyle: z.record(z.string(), z.unknown()).optional(),
-    page: z.object({
-      backgroundColor: z.string().max(20).optional(),
-      footer: z.string().max(2_000).optional(),
-      header: z.string().max(2_000).optional(),
-      height: z.number().positive().optional(),
-      marginBottom: z.number().nonnegative().optional(),
-      marginLeft: z.number().nonnegative().optional(),
-      marginRight: z.number().nonnegative().optional(),
-      marginTop: z.number().nonnegative().optional(),
-      orientation: z.enum(['landscape', 'portrait']).optional(),
-      showPageNumber: z.boolean().optional(),
-      unit: z.enum(['cm', 'in', 'mm', 'pt', 'px']).optional(),
-      width: z.number().positive().optional(),
-    }).strict().optional(),
-  }).strict().optional(),
-  theme: z.union([
-    z.enum(['clean', 'editorial', 'executive', 'signal']),
-    z.object({
-      version: z.literal('1').optional(),
-      preset: z.enum(['clean', 'editorial', 'executive', 'signal']).optional(),
-      colors: z.object({
-        accent: z.string().max(20).optional(),
-        background: z.string().max(20).optional(),
-        border: z.string().max(20).optional(),
-        muted: z.string().max(20).optional(),
-        primary: z.string().max(20).optional(),
-        secondary: z.string().max(20).optional(),
-        surface: z.string().max(20).optional(),
-        text: z.string().max(20).optional(),
-      }).strict().optional(),
-      fonts: z.object({
-        body: z.string().max(120).optional(),
-        heading: z.string().max(120).optional(),
-        mono: z.string().max(120).optional(),
-      }).strict().optional(),
-      typography: z.object({
-        body: z.number().finite().optional(),
-        caption: z.number().finite().optional(),
-        heading: z.number().finite().optional(),
-        metric: z.number().finite().optional(),
-        title: z.number().finite().optional(),
-      }).strict().optional(),
-    }).strict(),
-  ]).optional(),
-  layout: z.object({
-    enabled: z.boolean().optional(),
-    mode: z.enum(['repair', 'strict']).optional(),
-    overflow: z.enum(['split', 'shrink', 'error']).optional(),
-    imageFit: z.literal('contain').optional(),
-    safeMargin: z.number().positive().optional(),
-    minPresentationBodyFontSize: z.number().positive().optional(),
-    minWordBodyFontSize: z.number().positive().optional(),
-    minSpreadsheetFontSize: z.number().positive().optional(),
-    maxCharactersPerSlide: z.number().int().positive().optional(),
-    maxContentUnitsPerSlide: z.number().positive().optional(),
-    maxListItemsPerSlide: z.number().int().positive().optional(),
-    maxTableRowsPerSlide: z.number().int().positive().optional(),
-    maxTableColumns: z.number().int().positive().optional(),
-  }).strict().optional(),
-  blocks: z.array(semanticBlockSchema).min(1).max(240),
-}).strict().describe(
-  'Compact semantic create spec. Templates own layout geometry; layout repair/splitting is enabled by default. Use only for a newly created UNO document.',
-);
-
 const fileToolShape = {
   reason: z.string().min(1).max(300).optional()
     .describe('User-visible explanation only. Saying "read source" here does NOT select source reading; action and identity fields control behavior.'),
@@ -166,9 +51,9 @@ const fileToolShape = {
   urlOrPath: z.string().max(8_000).optional()
     .describe('For download: real HTTP(S) file URL or page-relative URL path resolved against sourcePageUrl. Not an operating-system path. Local assets must be uploaded/host-bound attachments. Supply exactly one of urlOrPath/url/path.'),
   program: z.string().optional()
-    .describe('For generate: complete HTML when plan.generator=html; executable Python/JavaScript for UNO/ExcelJS drafts. Saved as the complete current source of documentId. Provide program or spec, never both; HTML requires program. Prefer edit for revisions and repairs.'),
-  spec: semanticSpecSchema.optional()
-    .describe('For generate: compact Word, spreadsheet, or presentation content using versioned themes and semantic templates. Provide spec or program, never both.'),
+    .describe('Advanced generate input: complete HTML, or complete Python/JavaScript source with the engine entrypoint. UNO requires def create_document(job): and exactly one document save/close. Prefer body to omit this boilerplate. Choose exactly one of body or program. readSource returns the complete stored source; use edit for repairs.'),
+  body: z.string().min(1).max(1_000_000).optional()
+    .describe('Preferred custom generate input. UNO: Python content operations using the provided deck (presentation), document (Word/flowing PDF), or workbook (Excel) variable. ExcelJS: JavaScript using provided workbook; await is allowed. HTML: a fragment, with section[data-slide] for PPTX. The SDK creates the document and adds entrypoint/save/close or HTML shell. Do not include those yourself. Follow plan.sourceGuidance. Choose exactly one of body or program. Repairs use edit on the complete source returned by readSource.'),
   patch: z.string().max(200_000).optional()
     .describe("For edit, use patch OR replacements. Codex patch: Begin Patch, Update File: draft.py, @@ hunks, End Patch. Literal -old/+new markers are separate from ALL source indentation. Every target must match uniquely and exactly in the current source. Any conflict rejects the WHOLE call; no partial saves or fuzzy matching. Prefer replacements for small fixes."),
   replacements: z.array(z.object({
@@ -327,16 +212,14 @@ function createFileToolSchema(visualInputAvailable: boolean) {
     }
     if (input.action === 'generate') {
       const hasProgram = typeof input.program === 'string' && Boolean(input.program.trim());
-      const hasSpec = Boolean(input.spec);
-      if (hasProgram === hasSpec) {
+      const hasBody = typeof input.body === 'string' && Boolean(input.body.trim());
+      if (Number(hasProgram) + Number(hasBody) !== 1) {
         context.addIssue({
           code: 'custom',
-          message: 'generate requires exactly one of program or spec.',
-          path: hasProgram ? ['spec'] : ['program'],
+          message: 'generate requires exactly one of body or program.',
+          path: hasBody ? ['body'] : ['program'],
         });
       }
-    } else if (input.spec) {
-      context.addIssue({ code: 'custom', message: 'spec is accepted only for action=generate.', path: ['spec'] });
     }
     if (visualInputAvailable) validateVisualInput(input as FileToolInput, context);
   });

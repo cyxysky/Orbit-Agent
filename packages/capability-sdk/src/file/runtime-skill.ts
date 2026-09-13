@@ -98,25 +98,6 @@ When recovering after context compression, read the conversation registry's sour
 
 \`\`\`ts
 type DocumentType = "word" | "spreadsheet" | "presentation";
-type SemanticBlock = {
-  id?: string;
-  type: "page" | "sheet" | "text" | "heading" | "list" | "quote" | "code" | "image" | "chart" | "table" | "card" | "columns" | "metric" | "timeline" | "divider" | "spacer" | "pageBreak";
-  template?: "cover" | "section" | "content" | "two-column" | "comparison" | "kpi" | "chart" | "image" | "reference" | "report" | "worksheet";
-  title?: string; subtitle?: string; text?: string; source?: string; alt?: string; caption?: string;
-  items?: unknown[]; rows?: Array<Array<string | number | boolean | null>>;
-  data?: unknown; children?: SemanticBlock[];
-  columns?: Array<{ width?: number; blocks?: SemanticBlock[] }>;
-  style?: Record<string, unknown>;
-};
-type SemanticDocumentSpec = {
-  schemaVersion?: "1.0";
-  documentType?: DocumentType;
-  fileName?: string;
-  document?: { title?: string; author?: string; language?: string; page?: Record<string, unknown> };
-  theme?: "clean" | "executive" | "editorial" | "signal" | { version?: "1"; preset?: "clean" | "executive" | "editorial" | "signal"; colors?: Record<string, string>; fonts?: Record<string, string> };
-  layout?: { enabled?: boolean; mode?: "repair" | "strict"; overflow?: "split" | "shrink" | "error"; imageFit?: "contain"; safeMargin?: number };
-  blocks: SemanticBlock[];
-};
 type FileInput =
   | { action: "write"; reason?: string; fileName: string; content: string }
   | { action: "list"; reason?: string }
@@ -194,7 +175,7 @@ type FileInput =
       reason?: string;
       documentId: string;
       program?: string;
-      spec?: SemanticDocumentSpec;
+      body?: string; // exactly one of body or program
       render?: boolean; // legacy; publishing always requires action=render
     }
   | {
@@ -222,7 +203,7 @@ Action requirements:
 - \`convert\`: sourceArtifactId identifies an existing Office file; The bundled converter currently supports PDF output only: omit fileName or use a .pdf name; do not request arbitrary Office-to-Office conversions. Conversion creates a file, not an editable code draft. It is not the repair path for an authored document.
 - \`plan\`: \`documentType\` is required. For a new plan, omitted documentId is generated and omitted fileName is derived from intent/title plus .docx/.xlsx/.pptx. Supply fileName explicitly for PDF or another supported extension. Reuse the returned documentId for later actions and existing-draft re-planning. The extension must match the document type (Word: doc/docx/odt; spreadsheet: xls/xlsx/ods; presentation: ppt/pptx/odp; PDF is valid for each). operation defaults to create; sourceAttachmentId is required for modify.
 - \`unoApi\` and \`jsApi\`: documentation can be read before plan, without a documentId. Omit both documentId/documentType for the type index, or provide documentType for its unbound API. For an existing draft, pass its documentId and follow the planned engine. For UNO, omit query to receive the module index, then query only modules the draft uses (for example presentation.shape). Each module contains exact installed signatures, schemas and registered examples. Copy these instead of guessing; repeated planned-module queries are cached. Raw UNO reflection is not exposed.
-- \`generate\`: create the initial source with exactly one of \`spec\` or \`program\`. Prefer \`spec\` only when plan returns \`semanticGeneration.recommended=true\` and fixed geometry fits the content. \`available=true\` alone does not recommend a template. Use \`program\` for bespoke design, advanced freeform requirements, JavaScript-planned work, or existing-file modification; it has the same validation/render safety gates. If the result already contains a saved source and \`patchBaseDigest\`, normally use \`edit\` for repairs or revisions instead of starting over. Do not regenerate unchanged source to publish or preview it. Calling \`generate\` on the same documentId replaces its complete source; no replacement flag or source-version parameter is required. For HTML drafts, program is complete HTML; for Python/JavaScript drafts, preserve the required entrypoint and save/close lifecycle.
+- \`generate\`: create the initial source with exactly one of \`body\` or \`program\`. Prefer \`body\` for bespoke design and freeform content/layout using the variables supplied by plan.sourceGuidance. The SDK owns entrypoint, document creation, saving and closing. HTML body is a fragment; JavaScript body uses workbook. Use \`program\` only for advanced complete-source control; it has the same validation/render safety gates. If the result already contains a saved source and \`patchBaseDigest\`, normally use \`edit\` for repairs or revisions instead of starting over. Do not regenerate unchanged source to publish or preview it. Calling \`generate\` on the same documentId replaces its complete source; no replacement flag or source-version parameter is required. For HTML drafts, program is complete HTML; for Python/JavaScript drafts, preserve the required entrypoint and save/close lifecycle.
 - \`edit\`: prefer exact \`replacements\` for small changes, or submit one Codex-format \`patch\`; never both. Patch grammar: one \`*** Begin Patch\` / \`*** End Patch\` envelope, \`*** Update File: draft.py\`, and \`@@\` hunks. Context/deletion/addition markers are one space / \`-\` / \`+\`, separate from ALL source indentation. draft.py is the staging alias for Python and JavaScript, not a filesystem path. All targets must match uniquely on the same pre-edit snapshot. The entire call is atomic: any conflict saves NOTHING, including otherwise valid hunks. Correct the failed targets and resubmit the complete related batch; blocked hunks were not applied. A successful source edit can still fail validation; inspect saved/validation separately. Edits apply to the current source with no fuzzy matching.
 - In an edit hunk, replacing a line always means \`-old line\` followed by \`+new line\`. A space-prefixed old line is unchanged context, so writing \` old line\` followed only by \`+new line\` inserts a duplicate; never use that form for replacement. Every hunk must contain a real \`+\` or \`-\` change; a context-only hunk is rejected before matching. Copy indentation from the exact unnumbered read result for both \`-\` and \`+\` lines.
 - \`render\`: publishes the current validated source. After render succeeds, inspect or deliver that artifact instead of rewriting it without a concrete reason. If the user request, validation result, or visual review identifies a real change, readSource and edit the same documentId, then render the updated source.
@@ -231,7 +212,7 @@ Action requirements:
 
 Quality words such as world-class, Swiss, restrained, cinematic, premium, or editorial are ambitions, not a page template. Do not translate them automatically into blue/amber colors, a dark cover, an English eyebrow, an accent rule, and repeated equal-width cards. A different palette alone is not a different design direction.
 
-For ordinary quick files, use the semantic fast path. For explicit original/high-design requests, record \`design.mode="bespoke"\` in the initial plan, before writing source:
+For ordinary quick files, use body with the provided document variable. For explicit original/high-design requests, record \`design.mode="bespoke"\` in the initial plan, before writing source:
 
 - Include audience and objective. Describe what the reader must understand or decide, not merely the topic.
 - Compare 2–3 short directions with distinct concept, composition, typography, and imagery strategies. Select one by id and explain why it fits the content. If the user supplied a binding reference, one direction plus that actual reference is enough; preserve its instructed structure. Do not require another approval unless the user requested a design choice or essential information is missing.
@@ -248,44 +229,12 @@ Repairs preserve the selected direction and user requirements. Reflow the affect
 
 ${fileDiagramReferenceRouting}
 
-## Semantic create fast path
-
-Use this path only when the latest plan returns \`semanticGeneration.available=true\`. It deliberately owns layout geometry, so do not put absolute \`x\`/\`y\` coordinates into semantic blocks.
-
-- Presentation pages use \`type="page"\` with templates \`cover\`, \`section\`, \`content\`, \`two-column\`, \`comparison\`, \`kpi\`, \`chart\`, \`image\`, or \`reference\`. Put content in \`children\`. Chart data is \`{ categories: string[], series: [{ name, values }], chartType? }\`.
-- Writer may use ordinary flow blocks directly or group them in \`page\` blocks. Native flow handles pagination; semantic headings, text, lists, tables, images, cards, timelines, and page breaks remain editable.
-- Calc uses \`type="sheet"\`, \`name\`, and \`children\`. Tables receive frozen/filterable headers, content-based column widths, wrapping, print area, repeat rows, and portrait/landscape selection. Chart blocks create native charts from their semantic series.
-- Theme presets are versioned under schema v1: \`clean\` (default), \`executive\`, \`editorial\`, and \`signal\`. They are starting tokens, not mandatory visual identities. Override colors, fonts and typography for a justified content-led direction even without user-supplied brand tokens; respect actual brand constraints and installed font support. Semantic geometry remains template-owned: choose program authoring when changing tokens cannot express the intended composition.
-- Layout defaults are \`enabled=true\`, \`mode="repair"\`, \`overflow="split"\`, and \`imageFit="contain"\`. The compiler assigns missing IDs, clamps unreadable type, repairs low contrast, splits long slide text/lists/tables, repeats table headers, and reflows dense slides. Review returned \`semantic.diagnostics\`; errors stop before Office execution and repaired warnings explain deterministic changes.
-- Each image needs the exact workspace asset name in \`source\`; add \`alt\` or \`caption\` when it conveys meaning. Generated media is already saved and automatically mounted, so do not download it again. Use availableAssets from plan/list to map the returned artifactId to assetName. Never invent an asset name.
-
-Example:
-
-\`\`\`json
-{
-  "action": "generate",
-  "documentId": "quarterly-review",
-  "spec": {
-    "schemaVersion": "1.0",
-    "theme": "executive",
-    "blocks": [
-      { "id": "cover", "type": "page", "template": "cover", "title": "Quarterly review", "subtitle": "Decisions and outlook" },
-      { "id": "summary", "type": "page", "template": "kpi", "title": "At a glance", "children": [
-        { "id": "revenue", "type": "metric", "title": "Revenue", "text": "$4.2M" },
-        { "id": "growth", "type": "metric", "title": "Growth", "text": "+18%" }
-      ] }
-    ]
-  }
-}
-\`\`\`
-
-
 ## JavaScript mode: Excel and HTML documents
 
-For generator=javascript, author XLSX with createDocument(job) and job.ExcelJS.
-For generator=html, author a complete static HTML document in program. Query jsApi with documentId for the HTML contract. DOCX uses semantic Word paragraphs/tables; PPTX uses one explicitly sized section[data-slide] per slide with native editable text/tables/shapes; PDF prints HTML/CSS directly. Use local downloaded images or inline SVG for artwork, not whole-slide screenshots. Arbitrary browser CSS is not a lossless Office layout format. Read the returned conversion limitations before authoring.
+For generator=javascript, prefer body using the provided ExcelJS workbook; advanced program uses createDocument(job) and job.ExcelJS.
+For generator=html, prefer body containing an HTML fragment; program accepts complete HTML. Follow plan.sourceGuidance and query jsApi only for additional features. DOCX uses semantic Word paragraphs/tables; PPTX uses one explicitly sized section[data-slide] per slide with native editable text/tables/shapes; PDF prints HTML/CSS directly. Use local downloaded images or inline SVG for artwork, not whole-slide screenshots. Arbitrary browser CSS is not a lossless Office layout format. Read the returned conversion limitations before authoring.
 
-HTML drafts use readSource and exact edit replacements against .html source, then render and visual QA. Do not use createDocument, UNO, semantic spec, or JavaScript/Python source-unit markers in HTML. XLSX formulas and worksheets keep the original ExcelJS path.
+HTML drafts use readSource and exact edit replacements against .html source, then render and visual QA. Do not use createDocument, UNO, or JavaScript/Python source-unit markers in HTML. XLSX formulas and worksheets keep the original ExcelJS path.
 
 Markdown, TXT, HTML, JSON, YAML, CSV, JS, CSS and other text/code files use file.write with literal content in every mode. The generation mode controls Office authoring only; never route a Markdown file through an Office generator.
 
@@ -296,7 +245,7 @@ UNO remains the internal Office engine, but authored source uses only the return
 - Create the requested document with \`job.writer(elementId)\`, \`job.presentation(elementId)\`, or \`job.spreadsheet(elementId)\`. Use \`deck.slide(...)\` for Impress and \`workbook.sheet(...)\` for Calc; never retain or manipulate a raw UNO page, sheet, cell, cursor, controller, enum, struct, or component.
 - Every generated document, slide, paragraph, list, table, chart, image, worksheet, range, cell, and feature call must have a stable \`elementId\`. Element IDs may use Unicode (including Chinese), must fit 1-128 characters, and child IDs passed to a slide facade are automatically scoped and whitespace-normalized under that parent. Prefer role/index IDs instead of deriving identifiers from visible labels. A reusable helper may therefore reuse role IDs such as \`background\` on different slides.
 - Calc setters for the same cell/range, cell formatting, row height or column width may reuse the same ID when updating the exact same target. Their source mapping follows the latest setter. A reused ID for a different target or a newly created object is still a collision. Non-blocking ID warnings alone do not require another read/edit/render cycle.
-- The queried \`unoApi\` modules are authoritative for the APIs they cover. Query every module the draft uses. If a module marks a capability \`preserve-only\` or \`unsupported\`, do not invent a raw UNO fallback. Preserve-only features may survive an existing-file edit but may not be created or materially rewritten.
+- Plan sourceGuidance and queried \`unoApi\` modules are authoritative for the APIs they cover. Prefer sourceGuidance.starterBody when supplied and replace its sample content with the complete planned design. Do not include the entrypoint/factory/save/close in body; the SDK adds them. starterProgram is an advanced complete-source alternative. Do not query operations already documented in sourceGuidance; query only additional modules the draft needs. If a module marks a capability \`preserve-only\` or \`unsupported\`, do not invent a raw UNO fallback. Preserve-only features may survive an existing-file edit but may not be created or materially rewritten.
 - Exact presentation capability names in the plan are a semantic contract. Query \`presentation.shape\` and use its complete specialized-shape example for \`RectangleShape\`, \`EllipseShape\`, \`CustomShape\`, \`CaptionShape\`, \`ConnectorShape\`, \`LineShape\`, \`MeasureShape\`, \`TextShape\`, and \`GraphicObject\`; each explicitly requested item must have its own non-zero generated \`featureCounts\` key. A lookalike, visual-QA claim, or reopened generic shape count cannot substitute for the named capability.
 - \`shape_type='caption'\` and \`shape_type='measure'\` invoke the real native UNO services and automatically pair them with one named editable export fallback because LibreOffice drops raw CaptionShape and MeasureShape during PPTX export. Use the one facade call shown by \`presentation.shape\`; never add a second manual lookalike or claim the exporter preserves the raw service.
 - For Impress, create \`slide = deck.slide(id, layout=..., title=...)\`. Named slots are useful when they fit; \`layout='blank'\` also supports custom content/data pages, not just covers. Use \`slide.add_text/image/table/chart/card/timeline\` with allocated slots or boxes. Passing \`title\` fills a title slot; do not add another title over it. Supply \`title_style\` when the design or requested minimum differs from the default title size. Never emulate a connector arrowhead with a separate \`triangle\` shape: making the triangle box touch the target does not put its top-center apex on the line endpoint, so the visible arrow tip lands above or beside the target. Use \`slide.connect(..., end_arrow=True)\`; when complete endpoint boxes are already allocated, add the connector before the node shapes, otherwise create the child IDs first and pass those IDs. Headers, footers and accent rules are optional. When needed, \`slide.add_header(...)\` and \`slide.add_footer(...)\` stay inside layout-reserved margins; never draw a manual rule through the title or body slots. Use \`slide.grid(...)\` and \`slide.stack(...)\` for freeform composition. They return one flat row-major list (never nested rows) of mapping cells with \`x/y/width/height\`, PptxGenJS-compatible \`w/h\` aliases, and a unit marker. Iterate that list directly and pass \`box=cell\`; never flatten/extend it or tuple-index a cell. \`deck.content_box/grid/stack\` return the same unit-tagged rectangles. Use \`add_card\` or \`add_timeline\` only when those components fit the content; native tables/charts and allocated cells avoid fragile hand-layering. Omit text-box height or set \`auto_height=True\` when subsequent elements are allocated from a stack rather than hand-positioned.
@@ -346,7 +295,7 @@ file({
 })
 \`\`\`
 
-Plan a new presentation, then read the mode-specific API and generate. These are three separate model-tool steps:
+Plan a new presentation and use the returned sourceGuidance. Read additional mode-specific APIs only when the selected features are not already covered, then generate. For example, a design using shapes needs the additional shape module:
 
 \`\`\`js
 file({
@@ -577,8 +526,8 @@ file({
 
 1. Call file action=list before starting or resuming Office/PDF authoring, and reuse an existing documentId when it represents the requested work.
 2. Call action=plan for that documentId, including a compact bespoke design brief for original/high-design work. For an existing attachment, use operation=modify with the exact sourceAttachmentId; for a new file, use operation=create. Prefer one complete initial plan; do not repeatedly plan after authoring.
-3. Follow designGuidance and semanticGeneration.recommended, not available alone. For conventional files with recommended=true and suitable fixed geometry, go directly to action=generate with spec; for bespoke work use program, calling action=unoApi only for an UNO plan or action=jsApi only for a JavaScript plan and only for modules actually needed.
-4. Call action=generate with exactly one of spec or program to create the initial editable source. A failed generate may still return a saved source and patchBaseDigest, so inspect the result before choosing the next action.
+3. Follow designGuidance and use body with the plan's sourceGuidance variables/API signatures. Use program for advanced complete-source control. Query only missing modules: unoApi for UNO, jsApi for JavaScript/HTML. After context compression, retrieve missing exact guidance before authoring; do not guess calls or repeat completed operations.
+4. Call action=generate with exactly one of body or program to create the initial editable source. A failed generate may still return a saved source and patchBaseDigest, so inspect the result before choosing the next action.
 5. When a usable source already exists, prefer action=edit on that same documentId for repairs and revisions. If no source checkpoint was created, correct the input and retry generate. Use generate for full replacement only when bounded edits cannot coherently implement the requested change, after understanding the current structure. Never reconstruct a large source through consecutive reads just to replace it.
 6. Call action=render only after the current source passes validation and the complete requested content is present; render publishes that exact source.
 7. After render, use its visualIndex.nextRead to inspect the latest artifact directly when visual QA is available; do not retrieve the same screenshot list again. Do not rewrite it speculatively. If the user request, validator, or visual inspection reveals a concrete issue, read and edit the same documentId and render again; otherwise return the artifact in finalResponse.
@@ -600,7 +549,6 @@ The plan result selects the mode; do not choose a different branch afterward.
 
 download accepts HTTP(S) URLs and page-relative URL paths, not Windows drive paths, UNC paths or file: URLs. Existing local files must already be uploaded or host-bound attachments; use their exact workspace asset names. A sourcePageUrl cannot turn a local path into a downloadable asset. If jsApi reports generator=uno, use its returned unoApi nextCall; do not switch engines or retry jsApi.
 
-- Semantic: when semanticGeneration.recommended=true and template geometry fits the request, action=generate with spec compiles to the planned UNO facade and requires no unoApi lookup. available=true only means the engine can accept specs. Bespoke design uses program; both paths retain the normal validation, edit, render, and visual-QA workflow.
 - UNO: read the unoApi module index before authoring, then query each module actually used by the draft. Reuse that module's apiReference, valueSchemas, examples, support matrix, and versioned capabilities. Module results are exhaustive for their registered examples and intentionally omit unrelated APIs. Raw UNO reflection is unavailable.
 - Facade element IDs must resolve to non-empty unique stable strings at runtime. Deterministic loop expressions such as \`"slide-" + str(i)\` are allowed. Child IDs passed to slide and sheet facades are automatically scoped under their parent.
 - Presentation uses \`deck.slide(...)\`; Writer uses flow methods on \`document\`; Calc uses \`workbook.sheet(...)\` with A1 addresses. Use only signatures returned by the corresponding queried module. A missing feature is unavailable for authored creation unless a module explicitly marks it supported.

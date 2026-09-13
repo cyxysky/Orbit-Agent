@@ -1,12 +1,55 @@
 # @cjfclonedeep/capability-sdk/file
 
+当前工作区优化（尚未发布）：Word、Excel、PPT 和 PDF 的 `plan` 都返回对应引擎的 `sourceGuidance`。新增 `generate.body`，让模型只写内容和排版操作，SDK 自动创建文档并补齐入口、保存和关闭，或补齐 HTML 外壳。模型侧结果摘要保留变量、已安装 API 签名和示例，额外能力才按需查询 `unoApi` / `jsApi`。重新规划已有源码不会返回可覆盖它的初始示例。
+
+## 内容编写：无需手写入口骨架
+
+`generate` 仅接受 `body` 或 `program`，必须二选一。`spec` 生成入口及其模板编译器已移除，旧调用会收到明确错误；已有草稿的完整源码仍可读取、编辑和渲染。
+
+| 输入 | 适用情况 | 模型提交什么 |
+| --- | --- | --- |
+| `body` | 自由内容和排版，推荐 | 内容操作代码或 HTML 片段；不写入口和保存逻辑 |
+| `program` | 需要完全控制源码的高级用法 | 完整 Python / JavaScript 程序或 HTML 文档；兼容原有调用 |
+
+先 `plan`，再遵循它的 `sourceGuidance` 编写 `body`。示例内容不是固定视觉模板，应替换成用户需要的全部内容。
+
+| 计划引擎与格式 | `body` 可直接使用的变量 / 结构 |
+| --- | --- |
+| UNO：PPTX | Python `deck`，通过 `deck.slide(...)` 创建页面 |
+| UNO：DOCX、流式 PDF | Python `document`，添加标题、段落等 |
+| UNO：XLSX | Python `workbook`，通过 `workbook.sheet(...)` 操作工作表 |
+| UNO：分页演示型 PDF | 计划使用 `documentType: "presentation"`，通过 `deck` 排版 |
+| JavaScript：XLSX | ExcelJS `workbook`，可以使用 `await` |
+| HTML：DOCX、PDF | HTML 片段，如 `h1`、`p`、`table`；默认 A4、18mm 页边距 |
+| HTML：PPTX | 顶层 `section[data-slide]`；默认 1280×720、48px 内边距 |
+
+例如，在 UNO 模式下创建 Word 或流式 PDF，依次提交以下 `file` 工具输入：
+
+```json
+{"action":"plan","documentId":"report","documentType":"word","fileName":"report.docx","intent":"项目进展报告"}
+```
+
+```json
+{"action":"generate","documentId":"report","body":"document.add_heading('title', '项目进展', level=1)\ndocument.add_paragraph('summary', '本周完成了文档生成能力优化。')"}
+```
+
+```json
+{"action":"render","documentId":"report"}
+```
+
+输出 PDF 时，将计划的 `fileName` 换成 `report.pdf`。PPT、Excel 使用计划提供的对应 `starterBody` 和 API。HTML 片段允许自定义 `style`，需要完整控制外壳时用 `program`。
+
+`body` 不能包含 `def create_document(job):`、文档工厂、保存和关闭；JavaScript 也不需要 `createDocument(job)`。SDK 会将内容编译成完整源码，再走原有校验和渲染流程。Python 使用语法树封装，保留多行字符串的值，但会规范化源码格式并去掉注释。`readSource` 返回的是编译后的完整源码，后续修改使用 `edit`，而不是再提交一份局部 `body`。已有文档的修改计划仍保留源文件，SDK 会传入准确的源附件名称。
+
+普通 Markdown、TXT、CSV、JSON 等仍使用 `write`，无需上述骨架。实际页面排版质量仍需通过渲染后的视觉检查确认。
+
 ## JavaScript 模式：Excel 与 HTML 文档
 
-本指南描述 `@cjfclonedeep/capability-sdk@0.2.1` 的子入口，不再是独立 npm 包。工具包已包含这些示例所需的工具依赖。
+本指南描述统一包的 `/file` 子入口。已发布的 0.3.0 使用完整 `program`；上面的 `body` 优化目前仅在工作区版本中可用。工具包包含这些示例所需的工具依赖。
 
 选择 JavaScript 模式后，XLSX 继续使用原有 ExcelJS 程序；DOCX、PPTX、PDF 使用完整 HTML 源码生成。设置值仍为 `javascript`，文档计划会返回实际引擎 `html` 和 `.html` 源码文件名。
 
-通过 `jsApi(documentId)` 读取 HTML 规则，将完整 HTML 放入 `generate.program`，之后沿用 `readSource → edit → render` 和视觉检查流程。PPTX 每页使用等尺寸的 `section[data-slide]`；正文、表格和简单色块保留为可编辑对象。DOCX 使用语义化段落和表格，PDF 使用 Chromium 排版。复杂图形可使用 SVG/图片；不承诺将任意 CSS 无损转换成 Office 对象。
+优先按计划中的 HTML 规则提交 `generate.body` 片段，需要完整外壳时提交 `generate.program`；额外规则可查询 `jsApi(documentId)`。之后沿用 `readSource → edit → render` 和视觉检查流程。PPTX 每页使用等尺寸的 `section[data-slide]`；正文、表格和简单色块保留为可编辑对象。DOCX 使用语义化段落和表格，PDF 使用 Chromium 排版。复杂图形可使用 SVG/图片；不承诺将任意 CSS 无损转换成 Office 对象。
 
 Markdown、TXT、HTML、JS、CSS、JSON、YAML、CSV 等文本文件在所有模式下都使用 `file.write({fileName,content})` 直接生成，保留原始 UTF-8 内容，无需 Office 引擎。HTML 排版需要 Chromium；DOCX、PPTX、XLSX 的重新打开和预览仍需要 LibreOffice。显式 UNO 模式及已有 Office 文件的保留式修改继续使用 UNO。
 
@@ -354,7 +397,7 @@ edit 使用当前 patchBaseDigest，支持精确 replacements 或 Codex patch。
 
 UNO API 优先匹配准确的带版本/无版本模块 ID；未知版本返回模块索引。关键词检索忽略数字版本并要求所有关键词匹配。目录缓存含 worker digest，元数据写入使用文档锁。
 
-新 Office 可使用语义 spec；默认布局控制字体、边距、图片包含、长文本/表格分页、重复表头、表格列宽/冻结标题/打印布局。plan 返回 semanticGeneration.available 才表示可用，是否选择还应遵循 recommended。原创设计可在 plan.design 中给出 mode=bespoke、受众、目标、2–3 个方向（id/concept/composition/typography/imagery）、selectedDirection、selectionReason、rhythm；绑定用户 reference 时可只有一个方向，preserve/avoid 记录约束。template 模式适合常规快速文档，其预设视觉参数可修改。
+新 Office 统一使用 `body` 编写内容和排版，或使用 `program` 完全控制源码。`plan.sourceGuidance` 提供对应引擎的变量与 API。原创设计可在 plan.design 中给出 mode=bespoke、受众、目标、2–3 个方向（id/concept/composition/typography/imagery）、selectedDirection、selectionReason、rhythm；绑定用户 reference 时可只有一个方向，preserve/avoid 记录约束。`design.mode=template` 仅表示常规设计方向，也使用相同的源码流程，不调用模板编译器。
 
 设计简报会校验并随草稿保存，plan 和紧凑模型结果保留 designGuidance。bespoke 推荐从空白版面用自定义 program、grid/stack、内容驱动几何编写，仍进行边界、原生对象、字体与渲染校验，不强制换引擎或固定主题。先确定代表性构图，在首次有效渲染中核对，再扩展并复用同一草稿；若功能校验要求完整文档，不强行提交局部原型。最终检查所有页，bespoke 增加 deckReview.checks.designIntent 与 compositionRhythm。这是有证据的模型评审，不是自动审美打分。一致性不要求每页布局相同或变化数量达标。
 

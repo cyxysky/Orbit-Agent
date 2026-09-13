@@ -4,6 +4,8 @@ import type { FileToolInput } from './types.ts';
 export function fileActionInputIssues(input: FileToolInput) {
   const issues: Array<{ field: string; message: string }> = [];
   const action = input.action;
+  if ('spec' in input) issues.push({ field: 'spec', message: 'spec generation has been removed. Use body or program.' });
+  if (action !== 'generate' && input.body !== undefined) issues.push({ field: 'body', message: 'body is only supported by generate. Use edit on readSource output for repairs.' });
   const has = (key: string) => input[key] !== undefined && input[key] !== null
     && (typeof input[key] !== 'string' || Boolean((input[key] as string).trim()));
   const requireField = (field: string, message: string) => {
@@ -20,7 +22,7 @@ export function fileActionInputIssues(input: FileToolInput) {
     if (typeof input.content !== 'string' || input.content.length > 1_000_000) {
       issues.push({ field: 'content', message: 'write requires string content, at most 1,000,000 characters; an empty string is allowed.' });
     }
-    forbid(['documentId', 'documentType', 'artifactId', 'attachmentId', 'sourceArtifactId', 'sourceAttachmentId', 'program', 'spec', 'patch', 'render', 'path', 'url', 'urlOrPath', 'operation', 'fileType'],
+    forbid(['documentId', 'documentType', 'artifactId', 'attachmentId', 'sourceArtifactId', 'sourceAttachmentId', 'program', 'patch', 'render', 'path', 'url', 'urlOrPath', 'operation', 'fileType'],
       'write publishes fileName + content as a new text artifact. It does not use an Office draft, execute a program, fetch a URL, or overwrite an existing artifact.');
   }
   if (action !== 'readSource') forbid(['includeDiagnostics'], 'includeDiagnostics is only supported by readSource. It reads saved validation details, not file content or page images.');
@@ -60,10 +62,10 @@ export function fileActionInputIssues(input: FileToolInput) {
     if (Number(has('patch')) + Number(has('replacements')) !== 1) {
       issues.push({ field: 'patch', message: 'edit requires exactly one of replacements (exact oldText/newText pairs, preferred for indentation) or patch (Codex diff). Read the affected source first and preserve every space.' });
     }
-    forbid(['program', 'spec'], 'edit accepts patch, not replacement program/spec. Use a focused source patch.');
+    forbid(['program'], 'edit accepts patch, not replacement program. Use a focused source patch.');
   }
   if (action === 'render') {
-    forbid(['program', 'spec', 'patch', 'render'], 'render publishes the current draft; it does not author source. Use generate/edit first, then render once after validation.');
+    forbid(['program', 'patch', 'render'], 'render publishes the current draft; it does not author source. Use generate/edit first, then render once after validation.');
   }
   if (action === 'convert') {
     requireField('sourceArtifactId', 'convert requires sourceArtifactId of the existing file; this is format conversion, not draft generation or editing.');

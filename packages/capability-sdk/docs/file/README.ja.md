@@ -352,7 +352,7 @@ edit は現在の patchBaseDigest と正確な replacements または Codex patc
 
 UNO API は正確な版付き/版なしモジュール ID を優先し、未知の版には索引を返します。キーワード検索は数字の版を無視して全語一致を求め、索引キャッシュに worker digest を含め、メタデータ更新も文書ロックを使います。
 
-新規 Office は意味的 spec を使えます。既定配置は読みやすい字体、余白、画像の内包、長文/表の分割、表見出し反復、列幅・固定見出し・印刷配置を設定します。plan の semanticGeneration.available は利用可能性であり、選択には recommended に従います。独自設計は plan.design に mode=bespoke、対象者、目的、2–3 方向（id/concept/composition/typography/imagery）、selectedDirection、selectionReason、rhythm を指定し、拘束力のある reference がある場合は 1 方向でも構いません。preserve/avoid は制約です。template は通常の短時間作成向けで既定トークンは変更可能です。
+新規 Office は `body`（内容・配置コード）または `program`（完全なソース）のどちらかで生成します。`spec` とそのテンプレートコンパイラは削除され、旧入力は明示的なエラーになります。既存のソースは引き続き編集・レンダリングできます。`plan.sourceGuidance` に従ってください。独自設計は plan.design に mode=bespoke、対象者、目的、2–3 方向、selectedDirection、selectionReason、rhythm を指定し、拘束力のある reference がある場合は 1 方向でも構いません。preserve/avoid は制約です。template は通常の設計方針のみを表し、生成経路は共通です。この変更は未公開のワークスペース版に含まれます。
 
 設計ブリーフは検証して下書きに保存し、plan と簡略モデル結果も designGuidance を保持します。bespoke は空白面、独自 program、grid/stack、内容に基づく形状を推奨し、境界・ネイティブ要素・字体・描画検証を維持します。エンジン変更や固定テーマは強制しません。代表的構図を最初の有効な描画で確認してから同じ下書きを拡張します。機能検証が全文書を必要とするなら部分試作を無理に通しません。最終確認は全ページで行い、bespoke は deckReview.checks.designIntent と compositionRhythm を追加します。これは証拠に基づくモデル評価で、自動美的採点ではありません。一貫性は全ページ同一配置や変化数のノルマを意味しません。
 

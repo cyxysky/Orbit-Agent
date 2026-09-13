@@ -6,7 +6,6 @@ import type {
 import type {
   OfficeDocumentKind,
   OfficeDesignBrief,
-  OfficeSemanticDocumentInput,
   OfficeVisualQaCheckStatus,
   OfficeVisualQaDeckChecks,
   OfficeVisualQaIssue,
@@ -66,8 +65,8 @@ export type FileToolInput = {
   includeDiagnostics?: boolean;
   urlOrPath?: string;
   program?: string;
-  /** Compact semantic create spec. Generate accepts exactly one of spec or program. */
-  spec?: OfficeSemanticDocumentInput;
+  /** Content operations only; the SDK supplies the document and lifecycle. */
+  body?: string;
   patch?: string;
   replacements?: Array<{ oldText: string; newText: string }>;
   render?: boolean;

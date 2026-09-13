@@ -80,7 +80,6 @@ export function normalizeFileToolInput(value: unknown) {
   if ('reviews' in input) input.reviews = arrayFromJsonString(input.reviews);
   if ('replacements' in input) input.replacements = arrayFromJsonString(input.replacements);
   if ('deckReview' in input) input.deckReview = jsonValueFromString(input.deckReview);
-  if ('spec' in input) input.spec = jsonValueFromString(input.spec);
   if ('design' in input) input.design = jsonValueFromString(input.design);
   return input;
 }

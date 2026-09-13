@@ -1,6 +1,28 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { browserChatArtifactsFromSteps, mergeBrowserChatArtifactSummaries } from './browser-chat-artifacts';
+import { browserChatArtifactsFromSteps, mergeBrowserChatArtifactSummaries, resolveBrowserChatArtifactReference } from './browser-chat-artifacts';
+
+test('resolves a legacy Markdown screenshot filename using the delivered screenshot path', () => {
+  const fileName = 'step-16-browser-code-1-8ee36f13.png';
+  const artifacts = [{ fileName, id: 'screenshot:hotel', kind: 'screenshot' as const,
+    path: `C:/data/artifacts/chat/hotel/${fileName}` }];
+  const expected = `/api/artifacts/chat/hotel/${fileName}`;
+  assert.equal(resolveBrowserChatArtifactReference(fileName, artifacts, true), expected);
+  assert.equal(resolveBrowserChatArtifactReference(`./${fileName}`, artifacts, true), expected);
+  assert.equal(resolveBrowserChatArtifactReference(`attachment://${fileName}`, artifacts, true), expected);
+  assert.equal(resolveBrowserChatArtifactReference(fileName, artifacts, false), fileName);
+});
+
+test('does not guess a screenshot when a filename is missing or ambiguous, or replace external images', () => {
+  const artifacts = [
+    { fileName: 'room.png', id: 'one', kind: 'screenshot' as const, path: 'C:/data/artifacts/one/room.png' },
+    { fileName: 'room.png', id: 'two', kind: 'screenshot' as const, path: 'C:/data/artifacts/two/room.png' },
+  ];
+  assert.equal(resolveBrowserChatArtifactReference('room.png', artifacts, true), '');
+  assert.equal(resolveBrowserChatArtifactReference('missing.png', artifacts, true), 'missing.png');
+  assert.equal(resolveBrowserChatArtifactReference('https://hotel.example/room.png', artifacts, true), 'https://hotel.example/room.png');
+  assert.equal(resolveBrowserChatArtifactReference('/assets/logo.png', artifacts, true), '/assets/logo.png');
+});
 
 test('extracts compact file and screenshot summaries from persisted steps', () => {
   const artifacts = browserChatArtifactsFromSteps([{

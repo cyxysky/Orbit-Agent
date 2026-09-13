@@ -1,4 +1,5 @@
 import { jsonRecordFromUnknown, jsonValueFromString } from '@cjfclonedeep/capability-sdk';
+import { artifactApiUrl } from './artifacts';
 import type { StepExecutionResult, StepToolCall } from '@/server/ai/schemas/runtime.schema';
 
 export type BrowserChatArtifactSummary = {
@@ -27,27 +28,32 @@ export function browserChatArtifactIdFromUrl(value: string) {
   }
 }
 
-/** Resolve links against delivered artifacts, including URLs whose origin was invented by the model. */
+/** Resolve references only against artifacts delivered with this message. */
 export function resolveBrowserChatArtifactReference(
   value: string,
   artifacts: readonly BrowserChatArtifactSummary[],
   image = false,
 ) {
   const alias = /^attachment:\/\//i.test(value);
+  // Browser tools historically returned screenshot file names. A name is not a
+  // page-relative URL: resolve it only when the message identifies one artifact.
+  const localImageReference = image && !alias && !/^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(value);
   let reference: string;
   try {
-    reference = alias ? decodeURIComponent(value.slice('attachment://'.length)) : browserChatArtifactIdFromUrl(value) || '';
+    reference = alias ? decodeURIComponent(value.slice('attachment://'.length))
+      : browserChatArtifactIdFromUrl(value) || (localImageReference ? decodeURIComponent(value).replace(/^\.\//, '') : '');
   } catch { return ''; }
   if (!reference) return value;
   const matches = artifacts.filter((artifact) => (
-    (alias && artifact.fileName === reference) || artifact.id === reference
+    ((alias || localImageReference) && artifact.fileName === reference) || artifact.id === reference
     || artifact.id === `file:${reference}` || artifact.path === reference
     || browserChatArtifactIdFromUrl(artifact.url || '') === reference
     || browserChatArtifactIdFromUrl(artifact.downloadUrl || '') === reference
   ));
-  if (matches.length !== 1) return alias ? '' : value;
+  if (matches.length !== 1) return alias || (localImageReference && matches.length > 1) ? '' : value;
   const artifact = matches[0];
-  const url = image ? artifact.url || artifact.downloadUrl : artifact.downloadUrl || artifact.url;
+  const url = image ? artifact.url || artifactApiUrl(artifact.path) || artifact.downloadUrl
+    : artifact.downloadUrl || artifact.url || artifactApiUrl(artifact.path);
   return image ? (url || '').replace(/([?&])download=1(&|$)/, '$1').replace(/[?&]$/, '') : url || '';
 }
 
@@ -151,6 +157,7 @@ export function browserChatArtifactsFromTool(tool: StepToolCall) {
       id: `screenshot:${path}`,
       kind: 'screenshot',
       path,
+      url: artifactApiUrl(path),
       title: screenshot.title?.trim() || '截图',
     });
   }

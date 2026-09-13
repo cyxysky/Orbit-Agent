@@ -175,7 +175,7 @@ export function createFileTools(
         ? 'File workflow: readSource(documentId) reads editable HTML/Python/JavaScript; readContent(artifactId OR attachmentId) reads file text/data, NOT source. To repair layout: readSource → edit → render → visualRead using render.visualIndex.nextRead → visualReport. render includes screenshot IDs; call visualIndex only for missing index entries. list discovers drafts; plan selects engine; generate creates source; download fetches assets; convert changes file format; unoApi/jsApi describe the planned engine. Never substitute IDs or infer behavior from reason.'
         : 'File workflow: readSource(documentId) reads editable HTML/Python/JavaScript; readContent(artifactId OR attachmentId) reads file text/data, NOT source. To repair: readSource → edit → render. list discovers drafts; plan selects engine; generate creates source; download fetches assets; convert changes file format; unoApi/jsApi describe the planned engine. No visual inspection is available; do not claim visual QA.')
         + ' For text/code/config files use write(fileName, content): publishes exact UTF-8 content immediately, including empty files, without plan, Office engines or rendering. Markdown, TXT, HTML, JS, CSS, JSON, YAML, CSV and custom text extensions use the same write action. Saved code is not executed.'
-        + ' Office design: original/high-design work starts with plan.design (bespoke audience, objective, distinct directions, selection and rhythm), then custom program composition. For fast conventional files, follow semanticGeneration.recommended, not available alone. Consistent visual rules do not mean identical page layouts.'
+        + ' Office design: original/high-design work starts with plan.design (bespoke audience, objective, distinct directions, selection and rhythm), then body for content/layout or program for complete-source control. Consistent visual rules do not mean identical page layouts.'
         + ' Edit is atomic: prefer exact replacements, uniquely matched on one pre-edit snapshot; any conflict saves nothing. Preserve indentation; never rely on fuzzy matching. After saved=true, inspect validation separately and use the returned patchBaseDigest. Only an identical request confirmed by a saved edit receipt is deduplicated. unoApi exact module IDs return only that module.'
         + ' Recovery: readSource/list return saved diagnostics, not a new execution. Check validationEvidence freshness. Do not infer bridge failure from NoneType or source correctness from a runtime blocker. Respect retryable/retryAfter; no unchanged retry loops.',
       input: createFileToolInput(visualInputAvailable),
@@ -195,15 +195,9 @@ export function createFileTools(
         },
         {
           action: 'generate',
-          reason: 'Create the planned presentation with semantic templates',
+          reason: 'Create the planned presentation using the UNO body contract',
           documentId: 'travel-guide',
-          spec: {
-            schemaVersion: '1.0',
-            theme: 'clean',
-            blocks: [
-              { id: 'cover', type: 'page', template: 'cover', title: 'Travel guide', subtitle: 'A concise itinerary' },
-            ],
-          },
+          body: "slide = deck.slide('cover', title='Travel guide')",
         },
         { action: 'render', reason: 'Render the current document', documentId: 'travel-guide' },
         ...(visualInputAvailable ? [

@@ -378,8 +378,7 @@ through `FileCapabilityOperations` and `@cjfclonedeep/capability-sdk`.
 - an Office-to-PDF artifact converter with injected artifact URL, conversion,
   runtime-health, and preview-rendering contracts;
 - JavaScript and Python/UNO Office authoring runtimes with package-owned workers;
-- semantic Word, PowerPoint, and Excel templates with versioned themes, default
-  layout repair, and deterministic compilation into the validated UNO pipeline;
+- Word, PowerPoint, Excel and PDF source authoring with body or complete program input
 - DOCX structure inspection and DOCX/XLSX/PPTX generation;
 - Office source analysis, artifact validation, rendering validation, preview
   generation, attachment reading, and bounded worker-based text extraction.
@@ -536,41 +535,25 @@ versions return the module index, not unrelated search matches. Keyword searches
 ignore numeric version tokens and require all terms. Catalog caching includes
 the worker digest; metadata writes use the same document lock as source edits.
 
-New Office documents can use the compact semantic path instead of authoring a
-raw program. The default layout policy enforces readable type and safe margins,
-uses contained images, splits long slide text/lists/tables, repeats table
-headers, and configures spreadsheet widths, frozen headers, and print layout:
+Office authoring uses exactly one of `body` or `program` after `plan`.
+With `body`, write content/layout operations using the variable documented by
+`plan.sourceGuidance`: UNO `deck`, `document` or `workbook`, ExcelJS
+`workbook`, or an HTML fragment. The SDK supplies the entrypoint and lifecycle
+or HTML shell. Advanced `program` accepts complete source. Both paths use
+`readSource -> edit -> render` for later changes.
 
-```ts
-import { generateFileBuffer } from '@cjfclonedeep/capability-sdk/file/node/generate';
-
-const result = await generateFileBuffer({
-  schemaVersion: '1.0',
-  documentType: 'presentation',
-  fileName: 'review.pptx',
-  document: { title: 'Quarterly review', language: 'en' },
-  theme: 'executive',
-  blocks: [
-    { id: 'cover', type: 'page', template: 'cover', title: 'Quarterly review' },
-    { id: 'summary', type: 'page', template: 'kpi', title: 'At a glance', children: [
-      { id: 'revenue', type: 'metric', title: 'Revenue', text: '$4.2M' },
-      { id: 'growth', type: 'metric', title: 'Growth', text: '+18%' },
-    ] },
-  ],
-});
-```
-
-The workspace tool exposes the same path as `action=generate` with `spec` when
-the preceding plan returns `semanticGeneration.available=true`. Follow
-`semanticGeneration.recommended` when selecting this path: availability is not
-a recommendation to use fixed geometry for original design.
+Structured `spec` generation and its compiler/exports have been removed in the
+unreleased workspace version. Old spec calls fail explicitly; existing source
+drafts remain editable and renderable. The low-level `generateFileBuffer`
+requires Office `program` or `programPath`; `generateFileToPaths` requires
+`programPath`. Use the workspace tool for body compilation.
 
 #### Content-led design
 
 Initial `plan` calls may include a compact `design` brief:
 
-- `mode: "template"`: conventional fast documents. Preset colors, fonts and
-  typography are editable starting tokens, even without supplied brand assets.
+- `mode: "template"`: conventional fast documents. This selects a design direction,
+  not a separate compiler or generation path.
 - `mode: "bespoke"`: audience, objective, 2–3 directions (each with `id`,
   `concept`, `composition`, `typography`, `imagery`), `selectedDirection`,
   `selectionReason`, and `rhythm`. A binding user `reference` allows one
@@ -579,9 +562,8 @@ Initial `plan` calls may include a compact `design` brief:
 
 The brief is validated and saved with the draft. Plan results, including the
 model-facing compact result, preserve the brief and `designGuidance`.
-Bespoke work is recommended to use custom `program` authoring, with blank
-slides, grids/stacks and content-led geometry rather than the semantic
-compiler's fixed slots. Bounds, native object, font and render validation
+Bespoke work uses custom `body` or advanced `program` authoring, with blank
+slides, grids/stacks and content-led geometry. Bounds, native object, font and render validation
 remain in force. No engine switch or fixed theme is implied. High-design
 intent can recommend this route for older callers, but keyword matching does
 not reject existing workflows or override an explicit mode.

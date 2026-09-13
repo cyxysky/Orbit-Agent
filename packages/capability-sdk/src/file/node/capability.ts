@@ -257,7 +257,7 @@ export async function createNodeFileOperations(
         runId,
         documentId: input.documentId,
         program: input.program,
-        spec: input.spec,
+        body: input.body,
         render: input.render,
         includeVisualVerification,
         attachmentBindings,
