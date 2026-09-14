@@ -5,6 +5,8 @@ const path = require('node:path');
 const requiredProductionRuntimeEntries = [
   path.join('.next', 'BUILD_ID'),
   path.join('.next', 'required-server-files.json'),
+  path.join('dist-backend', 'src', 'backend', 'http-server.js'),
+  path.join('dist-backend', 'manifest.json'),
   'node_modules',
   'package.json',
   'package-lock.json',
@@ -106,6 +108,7 @@ function copyProductionRuntime(projectRoot, target) {
   fs.mkdirSync(target, { recursive: true });
 
   copyBuildOutput(projectRoot, target);
+  fs.cpSync(path.join(projectRoot, 'dist-backend'), path.join(target, 'dist-backend'), { recursive: true });
   fs.cpSync(path.join(projectRoot, 'package.json'), path.join(target, 'package.json'));
   const envSource = path.join(projectRoot, '.env');
   if (fs.existsSync(envSource)) fs.cpSync(envSource, path.join(target, '.env'));

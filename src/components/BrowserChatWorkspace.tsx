@@ -35,6 +35,7 @@ import {
 import { CSS as DndCss } from '@dnd-kit/utilities';
 import { createPortal } from 'react-dom';
 import { DefaultChatTransport } from 'ai';
+import { browserChatStreamFetch } from '@/lib/browser-chat-stream-fetch';
 import { Chat, useChat } from '@ai-sdk/react';
 import { Button } from '@heroui/react/button';
 import { Checkbox } from '@heroui/react/checkbox';
@@ -8213,6 +8214,7 @@ export function BrowserChatWorkspace({
   const [savingConversationTitle, setSavingConversationTitle] = useState(false);
   const cancelConversationTitleSaveRef = useRef(false);
   const uiChatTransport = useMemo(() => new DefaultChatTransport<BrowserChatUIMessage>({
+    fetch: browserChatStreamFetch,
     api: browserChatApiUrl('/api/browser-chat/unbound/message'),
     prepareSendMessagesRequest: ({ body, messages: requestMessages }) => {
       const latest = [...requestMessages].reverse().find((message) => message.role === 'user');

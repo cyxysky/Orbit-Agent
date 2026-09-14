@@ -15,7 +15,7 @@
     "sensitive-data:install": "npm run install-runtime --workspace @cjfclonedeep/capability-sdk",
     "sensitive-data:start": "npm run start-runtime --workspace @cjfclonedeep/capability-sdk",
     "sensitive-data:bundle": "npm run bundle-runtime --workspace @cjfclonedeep/capability-sdk",
-    "build": "next build",
+    "build": "npm run backend:build && next build",
     "server:package": "npm run build && npm run sensitive-data:bundle && node scripts/package-server.js",
     "server:installer": "npm run server:package && node scripts/package-server-installer.js",
     "desktop:prepare": "npm run build && npm run sensitive-data:bundle && node scripts/prepare-electron-server.js",
@@ -30,7 +30,10 @@
     "docker:build": "docker build -t orbit:latest .",
     "docker:up": "docker compose up -d --build",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "backend:build": "node scripts/build-backend.mjs",
+    "backend:check": "node scripts/build-backend.mjs --check",
+    "backend:typecheck": "tsc -p tsconfig.backend.json --noEmit"
   },
   "dependencies": {
     "@ai-sdk/alibaba": "^2.0.30",
@@ -56,6 +59,7 @@
     "@ai-sdk/togetherai": "^3.0.30",
     "@ai-sdk/vercel": "^3.0.29",
     "@ai-sdk/xai": "^4.0.34",
+    "@cjfclonedeep/capability-sdk": "0.2.1",
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
@@ -68,7 +72,6 @@
     "@openrouter/ai-sdk-provider": "^3.0.0",
     "@radix-ui/react-slot": "^1.3.3",
     "@tanstack/react-virtual": "^3.14.3",
-    "@cjfclonedeep/capability-sdk": "0.2.1",
     "ai": "^7.0.59",
     "ai-sdk-provider-codex-cli": "^2.1.2",
     "better-sqlite3": "^12.11.1",
@@ -98,6 +101,7 @@
     "tailwind-merge": "^3.6.0",
     "three": "~0.184.0",
     "typeorm": "^1.1.1",
+    "ws": "8.21.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {

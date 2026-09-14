@@ -14,6 +14,7 @@ const eslintConfig = defineConfig([
     '.workflow-vitest/**',
     'artifacts/**',
     'dist-desktop/**',
+    'dist-backend/**',
     'dist-electron/**',
     'dist-server/**',
     'electron/**',

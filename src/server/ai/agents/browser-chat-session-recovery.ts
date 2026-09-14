@@ -1,4 +1,5 @@
 import type { BrowserChatTurnState } from '@/server/ai/agents/browser-chat-session-state';
+import { browserChatExecutionIsActive } from '@/server/runtime/execution-ownership';
 
 type RecoverableBrowserChatSession = {
   id: string;
@@ -17,6 +18,9 @@ const browserChatRuntimeGlobal = globalThis as typeof globalThis & {
 };
 
 function hasActiveBrowserChatTurn(sessionId: string) {
+  // The API's local Agent registry is empty by design. Consult its supervisor's
+  // IPC ownership instead of falsely turning live sessions into orphaned ones.
+  if (process.env.WEBPILOT_SERVER_ROLE === 'api') return browserChatExecutionIsActive(sessionId) ?? true;
   return browserChatRuntimeGlobal.__browserChatRuntimeState?.activeTurns?.has(sessionId) === true;
 }
 

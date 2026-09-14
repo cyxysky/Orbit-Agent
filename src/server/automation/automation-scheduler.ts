@@ -1,10 +1,10 @@
-import { WEBPILOT_BASE_PATH, withWebPilotBasePath } from '@/lib/webpilot-base-path';
 import type { AutomationScheduleRecord } from '@/server/automation/automation.schema';
 import { incrementMetric, structuredLog } from '@/server/observability/runtime-observability';
 import {
   createAutomationScheduleOccurrence,
   listAutomationRuns,
   listDueAutomationSchedules,
+  updateAutomationRunIfStatus,
 } from '@/server/storage/automation-store';
 
 export type AutomationScheduleTiming = Pick<
@@ -151,43 +151,12 @@ function schedulerLog(message: string) {
   };
 }
 
-function internalServerOrigin() {
-  const configured = String(process.env.WEBPILOT_INTERNAL_ORIGIN || '').trim();
-  if (configured) {
-    const parsed = new URL(configured);
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      throw new Error('WEBPILOT_INTERNAL_ORIGIN must use http or https.');
-    }
-    return parsed.origin;
-  }
-  const configuredPort = Number(process.env.PORT || 3000);
-  const port = Number.isInteger(configuredPort) && configuredPort > 0 && configuredPort <= 65_535
-    ? configuredPort
-    : 3000;
-  return `http://127.0.0.1:${port}`;
-}
-
 function launchRun(runId: string, userId: string) {
-  const pathname = withWebPilotBasePath(
-    `/api/automation/runs/${encodeURIComponent(runId)}`,
-    WEBPILOT_BASE_PATH,
-  );
-  void fetch(new URL(pathname, internalServerOrigin()), {
-    method: 'POST',
-    headers: {
-      'x-webpilot-automation-scheduler': '1',
-      'x-webpilot-internal-token': String(process.env.WEBPILOT_INTERNAL_REQUEST_TOKEN || ''),
-      'x-webpilot-internal-user-id': userId,
-    },
-    cache: 'no-store',
-  }).then(async (response) => {
-    if (response.ok) return;
-    const detail = (await response.text().catch(() => '')).trim();
-    throw new Error(`HTTP ${response.status}${detail ? `: ${detail}` : ''}`);
-  }).catch((error: unknown) => {
-    incrementMetric('automation_scheduler_errors_total', { phase: 'launch' });
-    structuredLog({ event: 'automation.scheduler.launch_failed', level: 'warn', runId, error });
-  });
+  void import('./automation-runner').then(({ executeAutomationRun }) => executeAutomationRun(runId, { userId }))
+    .catch((error: unknown) => {
+      incrementMetric('automation_scheduler_errors_total', { phase: 'launch' });
+      structuredLog({ event: 'automation.scheduler.launch_failed', level: 'warn', runId, error });
+    });
 }
 
 async function recoverDurableRuns(now: Date) {
@@ -202,7 +171,10 @@ async function recoverDurableRuns(now: Date) {
   for (const run of running) {
     const leaseExpiry = run.lease ? Date.parse(run.lease.expiresAt) : Number.NaN;
     if (run.lease && Number.isFinite(leaseExpiry) && leaseExpiry > now.getTime()) continue;
-    launchRun(run.id, run.userId);
+    await updateAutomationRunIfStatus(run.id, ['running'], {
+      status: 'cancelled', lease: null, finishedAt: now.toISOString(),
+      error: 'Execution lease expired. The interrupted run was not replayed; start a new run explicitly.',
+    }, run.userId, run.lease?.owner);
     recovered += 1;
   }
   return recovered;

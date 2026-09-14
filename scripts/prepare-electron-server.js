@@ -39,6 +39,8 @@ if (
   !fs.existsSync(path.join(serverOutput, '.next', 'BUILD_ID'))
   || !fs.existsSync(path.join(serverOutput, '.next', 'required-server-files.json'))
   || !fs.existsSync(path.join(serverOutput, 'webpilot-server.js'))
+  || !fs.existsSync(path.join(serverOutput, 'start-backend.js'))
+  || !fs.existsSync(path.join(serverOutput, 'dist-backend', 'src', 'backend', 'http-server.js'))
   || !fs.existsSync(path.join(serverOutput, 'webpilot-identity.js'))
   || !fs.existsSync(path.join(serverOutput, 'realtime-refresh-hub.js'))
   || !fs.existsSync(path.join(serverOutput, 'node_modules', 'next', 'package.json'))

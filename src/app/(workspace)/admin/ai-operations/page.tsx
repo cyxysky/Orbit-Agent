@@ -1,19 +1,18 @@
 import { redirect } from 'next/navigation';
 import { AiOperationsWorkspace } from '@/components/AiOperationsWorkspace';
-import { isAiOperationsAdmin } from '@/server/auth/ai-operations-admin';
-import { readAiOperationsDashboard } from '@/server/observability/ai-operations-dashboard';
-import { readWorkspacePageContext } from '@/server/workspace/workspace-page-context';
+import { readBackendPageData, readWorkspacePageContext } from '@/lib/backend-page-data';
+import type { ComponentProps } from 'react';
 import '../../../styles/domains/ai-operations-workspace.css';
 
 export const dynamic = 'force-dynamic';
 
 export default async function AiOperationsPage() {
   const context = await readWorkspacePageContext();
-  if (!isAiOperationsAdmin(context.userId)) redirect('/browser-chat');
+  if (!context.admin) redirect('/browser-chat');
   return (
     <main className="browser-chat-shell ai-operations-page-shell">
       <AiOperationsWorkspace
-        initialData={await readAiOperationsDashboard(30)}
+        initialData={await readBackendPageData<ComponentProps<typeof AiOperationsWorkspace>['initialData']>('/api/admin/ai-operations?days=30')}
         initialSidebarCollapsed={context.sidebarCollapsed}
       />
     </main>

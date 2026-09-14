@@ -1,3 +1,5 @@
+import { reportExecutionTask } from '@/server/runtime/execution-ownership';
+
 export type InterruptibleBrowserChatRuntime = {
   activeAbortController?: AbortController;
   activeAssistantMessageId?: string;
@@ -38,6 +40,7 @@ export function registerBrowserChatTurn<TSession>(
     registered.hardTimeout.unref?.();
   }
   registry.set(sessionId, registered);
+  reportExecutionTask({ kind: 'chat', id: sessionId, turnId: turn.assistantMessageId }, true);
 }
 
 export function registeredBrowserChatTurnIsActive<TSession>(
@@ -67,6 +70,7 @@ export function clearRegisteredBrowserChatTurn<TSession>(
   ) return false;
   if (registered.hardTimeout) clearTimeout(registered.hardTimeout);
   registry.delete(sessionId);
+  reportExecutionTask({ kind: 'chat', id: sessionId, turnId: assistantMessageId }, false);
   return true;
 }
 
@@ -79,6 +83,7 @@ export function revokeRegisteredBrowserChatTurn<TSession>(
   if (!registered) return undefined;
   if (registered.hardTimeout) clearTimeout(registered.hardTimeout);
   registry.delete(sessionId);
+  reportExecutionTask({ kind: 'chat', id: sessionId, turnId: registered.assistantMessageId }, false);
   const abortDispatched = !registered.abortController.signal.aborted;
   if (abortDispatched) registered.abortController.abort(reason);
   return { ...registered, abortDispatched };

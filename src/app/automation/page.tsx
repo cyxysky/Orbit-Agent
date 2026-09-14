@@ -1,10 +1,5 @@
 import { AutomationWorkspace } from '@/components/AutomationWorkspace';
-import { requestApplicationPrincipal } from '@/server/auth/user-context';
-import { cookies, headers } from 'next/headers';
-import {
-  SIDEBAR_COLLAPSED_COOKIE_NAME,
-  sidebarCollapsedFromCookie,
-} from '@/lib/sidebar-collapse';
+import { readWorkspacePageContext } from '@/lib/backend-page-data';
 import '../styles/domains/automation-workspace.css';
 
 export const dynamic = 'force-dynamic';
@@ -19,16 +14,14 @@ function firstQueryValue(value: string | string[] | undefined) {
 
 export default async function AutomationPage({ searchParams }: AutomationPageProps) {
   const query = await searchParams;
-  const requestHeaders = await headers();
-  const requestCookies = await cookies();
-  const userId = requestApplicationPrincipal({ headers: requestHeaders }).userId;
+  const context = await readWorkspacePageContext();
   const initialCaseId = firstQueryValue(query.caseId)?.trim() || '';
   return (
     <div className="browser-chat-shell automation-page-shell">
       <AutomationWorkspace
-        defaultUserId={userId}
+        defaultUserId={context.userId}
         initialCaseId={initialCaseId}
-        initialSidebarCollapsed={sidebarCollapsedFromCookie(requestCookies.get(SIDEBAR_COLLAPSED_COOKIE_NAME)?.value)}
+        initialSidebarCollapsed={context.sidebarCollapsed}
       />
     </div>
   );

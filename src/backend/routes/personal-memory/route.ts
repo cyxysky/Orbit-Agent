@@ -1,0 +1,43 @@
+import {
+  listPersonalMemoryItems,
+  personalMemoryDiagnostics,
+  savePersonalMemoryItem,
+} from '@/server/ai/personal-memory';
+import { requestApplicationUserId } from '@/server/auth/user-context';
+import { apiError, apiJson, boundedQueryInteger, parseJsonRequest } from '@/server/http/api-request';
+import { personalMemoryRequestSchema } from '@/server/http/personal-memory-request.schema';
+import { idempotencyFingerprint, runIdempotentJson } from '@/server/http/idempotency';
+
+
+function requestUserId(request: Request) {
+  return requestApplicationUserId(request);
+}
+
+export async function GET(request: Request) {
+  const url = new URL(request.url);
+  const userId = requestUserId(request);
+  const domain = url.searchParams.get('domain') || '';
+  const includeDisabled = url.searchParams.get('includeDisabled') === 'true';
+  const limit = boundedQueryInteger(url.searchParams.get('limit'), { fallback: 200, max: 500 });
+  return apiJson(request, {
+    items: await listPersonalMemoryItems({ userId, domain, includeDisabled, limit }),
+    diagnostics: personalMemoryDiagnostics(),
+  });
+}
+
+export async function POST(request: Request) {
+  try {
+    const body = await parseJsonRequest(request, personalMemoryRequestSchema, { maxBytes: 64 * 1024 });
+    const userId = requestUserId(request);
+    return runIdempotentJson(request, {
+      fingerprint: idempotencyFingerprint(body),
+      scope: 'personal-memory.create',
+      userId,
+    }, async () => {
+      const item = await savePersonalMemoryItem({ ...body, userId });
+      return apiJson(request, { item });
+    });
+  } catch (error) {
+    return apiError(request, error, { fallback: 'Failed to save personal memory item' });
+  }
+}

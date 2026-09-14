@@ -8,11 +8,9 @@ const test = require('node:test');
 const {
   applyTrustedIdentityHeaders,
   applicationBasePath,
-  boundedDevelopmentMemoryThreshold,
   createApiRuntimeSupervisor,
   configureCompiledNextRuntime,
   configureNextDevelopmentRuntime,
-  developmentMemoryRestartStats,
   loadCompiledNextConfig,
   nextDevelopmentUpgrade,
   normalizeBasePath,
@@ -25,28 +23,6 @@ const {
 } = require('./webpilot-server');
 
 const ticket = 'a'.repeat(43);
-
-test('restarts only the development child after configurable V8 heap pressure', () => {
-  assert.equal(boundedDevelopmentMemoryThreshold('0.2'), 0.5);
-  assert.equal(boundedDevelopmentMemoryThreshold('0.9'), 0.9);
-  assert.equal(boundedDevelopmentMemoryThreshold('invalid'), 0.8);
-
-  const originalArgv = process.argv;
-  process.argv = [...originalArgv, '--development-child'];
-  try {
-    const heap = { heap_size_limit: 100, used_heap_size: 81 };
-    assert.deepEqual(developmentMemoryRestartStats(true, false, {}, heap), {
-      heapSizeLimit: 100,
-      heapUsed: 81,
-      threshold: 0.8,
-    });
-    assert.equal(developmentMemoryRestartStats(false, false, {}, heap), undefined);
-    assert.equal(developmentMemoryRestartStats(true, true, {}, heap), undefined);
-    assert.equal(developmentMemoryRestartStats(true, false, { WEBPILOT_DEV_MEMORY_RESTART: 'false' }, heap), undefined);
-  } finally {
-    process.argv = originalArgv;
-  }
-});
 
 test('replaces identity headers in both normalized and raw request views', () => {
   const request = {
@@ -116,17 +92,19 @@ test('drops undefined request header values before API runtime proxying', () => 
   });
 });
 
-test('isolates API routes in the runtime process while keeping shutdown in the UI host', () => {
+test('isolates all API routes including browser shutdown in the Node runtime', () => {
   assert.equal(runtimeApiRequest('/api/browser-chat/chat-1/message'), true);
   assert.equal(runtimeApiRequest('/api/artifacts/chat-1/image.png'), true);
-  assert.equal(runtimeApiRequest('/api/system/shutdown'), false);
+  assert.equal(runtimeApiRequest('/api/system/shutdown'), true);
+  assert.equal(runtimeApiRequest('/embed/orbit.js'), true);
+  assert.equal(runtimeApiRequest('/embed/webpilot.js'), true);
   assert.equal(runtimeApiRequest('/browser-chat'), false);
 });
 
 test('isolates the API runtime in development and production', () => {
   assert.equal(splitRuntimeEnabled(true, false, {}), true);
   assert.equal(splitRuntimeEnabled(false, false, {}), true);
-  assert.equal(splitRuntimeEnabled(false, false, { WEBPILOT_SPLIT_RUNTIME: 'false' }), false);
+  assert.equal(splitRuntimeEnabled(false, false, { WEBPILOT_SPLIT_RUNTIME: 'false' }), true);
   assert.equal(splitRuntimeEnabled(false, true, {}), false);
 });
 
@@ -146,6 +124,7 @@ test('restarts the API runtime after the child process exits', async () => {
       child.kill = () => {
         child.killed = true;
         child.exitCode = 0;
+        child.emit('exit', 0, null);
       };
       const runtime = {
         child,
@@ -166,7 +145,7 @@ test('restarts the API runtime after the child process exits', async () => {
   assert.equal(first.port, 41_001);
   assert.equal(second.port, 41_002);
   assert.equal(starts, 2);
-  supervisor.stop();
+  await supervisor.stop();
   assert.equal(runtimes[1].child.killed, true);
 });
 

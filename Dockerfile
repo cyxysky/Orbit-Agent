@@ -86,6 +86,7 @@ ENV GLINER_BATCH_SIZE=8
 COPY --from=build /app/package*.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/.next ./.next
+COPY --from=build /app/dist-backend ./dist-backend
 COPY --from=build /app/next.config.ts ./next.config.ts
 COPY --from=build /app/electron/product.json /app/electron/product-brand.js ./electron/
 COPY --from=build /app/server ./server

@@ -488,13 +488,26 @@ async function tick() {
 }
 
 export function startCommunicationRuntime() {
-  if (state.started || process.env.WEBPILOT_SERVER_ROLE === 'ui') return;
+  if (state.started || ['ui', 'api'].includes(process.env.WEBPILOT_SERVER_ROLE || '')) return;
   state.started = true;
   const schedule = () => {
+    if (!state.started) return;
     state.timer = setTimeout(() => { void tick().finally(schedule); }, 1_000);
     state.timer.unref?.();
   };
   void tick().finally(schedule);
+}
+
+export function stopCommunicationRuntime() {
+  state.started = false;
+  if (state.timer) clearTimeout(state.timer);
+  for (const timer of streamTimers.values()) clearTimeout(timer);
+  streamTimers.clear();
+  for (const receiver of state.receivers.values()) receiver.stop();
+  for (const watcher of state.watchers.values()) watcher.stop();
+  state.receivers.clear();
+  state.watchers.clear();
+  closeUnusedWeComConnections(new Set());
 }
 
 export async function refreshCommunicationRuntime() {

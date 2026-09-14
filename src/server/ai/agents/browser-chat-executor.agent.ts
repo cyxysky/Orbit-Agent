@@ -173,6 +173,7 @@ type ToolTrace = {
   elapsedMs?: number;
   aiRequestElapsedMs?: number;
   actionElapsedMs?: number;
+  executionError?: { name: string; message: string; stack?: string };
   postprocessTimings?: Record<string, number>;
   progress?: StepToolCall['progress'];
   contextBefore?: AiToolContextSnapshot;
@@ -1084,6 +1085,9 @@ async function executeTracedBrowserAction(input: {
       }).catch(() => undefined);
       throw browserChatAbortError(abortSignal);
     }
+    trace.executionError = error instanceof Error
+      ? { name: error.name, message: error.message, stack: error.stack?.slice(0, 12_000) }
+      : { name: 'Error', message: String(error) };
     result = {
       ok: false,
       actual: `Tool ${name} threw after execution started: ${infrastructureError(error)}`,

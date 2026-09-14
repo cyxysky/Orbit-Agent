@@ -1,6 +1,8 @@
 # Orbit
 
-An agent workspace built with Next.js and AI SDK, with capabilities for browsers, files, code, knowledge, data, and connected tools.
+An agent workspace with a Next.js UI, an independent Node.js API, and a separate Agent execution process, with capabilities for browsers, files, code, knowledge, data, and connected tools.
+
+See [Node backend architecture](docs/node-backend-architecture.md) for process boundaries, source/production entry points, packaging, and recovery behavior.
 
 Orbit combines an Agent Harness for persistent sessions, context management, tool execution, and recovery with a workspace for reviewing results and controlling tasks.
 
@@ -1352,6 +1354,8 @@ http://localhost:3000/*
 8 项针对性检查及模拟地图界面检查通过，真实 Google 调用待配置 Key 后验证。未运行 dev/build；全量类型检查仍有项目既有错误，本次地图改动无相关诊断。
 
 
+> Historical note from before the Node migration. See [the current architecture and validation scope](docs/node-backend-architecture.md).
+
 **这次修改没有发现明确的漏包问题，但还不能说 Docker、Electron、server 包都已验证通过。**
 
 核对了实际入口：
@@ -1361,7 +1365,6 @@ http://localhost:3000/*
 | 开发 API 目录镜像、React 解析配置、404 路由拦截 | 只在 `--dev` 的 API 子进程启用，三种生产入口均不执行 |
 | 新增服务端文件 | Docker 复制整个 `server`；Electron/server 包递归复制，都会包含 |
 | 代理错误处理、浏览器初始化、标准 `Response` | 会进入生产包 |
-| 内存日志和自动快照 | 生产也生效，会占用磁盘；同步快照仍会暂停被采集进程 |
 
 因此，**源码检查没有发现这次改动破坏打包布局，但尚未重新构建和启动三种发布产物**。全仓已有类型错误也需要与本次修改分开判断。
 

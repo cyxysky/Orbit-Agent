@@ -5,6 +5,7 @@
 /.next-dev-runtime
 /out
 /dist
+/dist-backend
 /packages/*/dist/
 /tmp
 /.capability-runtime/

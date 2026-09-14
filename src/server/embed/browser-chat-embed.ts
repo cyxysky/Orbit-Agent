@@ -1,5 +1,4 @@
 import crypto from 'node:crypto';
-import type { NextRequest } from 'next/server';
 import { joinWebPilotUrl, WEBPILOT_BASE_PATH } from '@/lib/webpilot-base-path';
 
 type EmbedTokenClaims = {
@@ -151,7 +150,7 @@ export function verifyEmbedToken(token: string, expectedSessionId?: string): Emb
   return claims;
 }
 
-export function readEmbedAuth(request: NextRequest | Request, expectedSessionId?: string): EmbedAuthContext {
+export function readEmbedAuth(request: Request | Request, expectedSessionId?: string): EmbedAuthContext {
   const authorization = request.headers.get('authorization') || '';
   const bearer = authorization.match(/^Bearer\s+(.+)$/i)?.[1];
   const url = new URL(request.url);
@@ -181,7 +180,7 @@ export function normalizeSafetyMode(value: unknown) {
   return value === 'full' ? 'full' : 'strict';
 }
 
-export function publicBaseUrl(request: NextRequest | Request) {
+export function publicBaseUrl(request: Request | Request) {
   const requestUrl = new URL(request.url);
   const browserOrigin = normalizeString(request.headers.get('origin'));
   if (browserOrigin) {
@@ -202,6 +201,6 @@ export function publicBaseUrl(request: NextRequest | Request) {
   return joinWebPilotUrl(publicOrigin, WEBPILOT_BASE_PATH).replace(/\/+$/g, '');
 }
 
-export function requestOrigin(request: NextRequest | Request) {
+export function requestOrigin(request: Request | Request) {
   return normalizeString(request.headers.get('origin'));
 }

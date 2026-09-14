@@ -17,6 +17,9 @@ function temporaryDirectory() {
 }
 
 function writeProductionRuntimeSource(root) {
+  fs.mkdirSync(path.join(root, 'dist-backend', 'src', 'backend'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'dist-backend', 'src', 'backend', 'http-server.js'), 'export function startBackend() {}');
+  fs.writeFileSync(path.join(root, 'dist-backend', 'manifest.json'), '{}');
   const nextRoot = path.join(root, '.next');
   fs.mkdirSync(path.join(nextRoot, 'cache'), { recursive: true });
   fs.mkdirSync(path.join(nextRoot, 'standalone'), { recursive: true });
@@ -70,6 +73,7 @@ test('production runtime package copies all installed production packages and ex
     assert.equal(packagePaths.includes(path.join('node_modules', 'runtime-package')), true);
     assert.equal(packagePaths.includes(path.join('node_modules', 'dev-package')), false);
     assert.equal(fs.readFileSync(path.join(target, '.next', 'BUILD_ID'), 'utf8'), 'build-id');
+    assert.equal(fs.existsSync(path.join(target, 'dist-backend', 'src', 'backend', 'http-server.js')), true);
     assert.equal(fs.existsSync(path.join(target, '.next', 'cache')), false);
     assert.equal(fs.existsSync(path.join(target, '.next', 'standalone')), false);
     const copiedLinkedPackage = path.join(target, '.next', 'node_modules', 'linked-runtime-hash');
@@ -119,18 +123,18 @@ test('custom server packaging includes every runtime file and excludes tests', (
     const source = path.join(root, 'server');
     const target = path.join(root, 'package', 'server');
     fs.mkdirSync(path.join(source, 'support'), { recursive: true });
-    fs.writeFileSync(path.join(source, 'webpilot-server.js'), "require('./process-memory-monitor');\n");
-    fs.writeFileSync(path.join(source, 'process-memory-monitor.js'), 'module.exports = {};\n');
+    fs.writeFileSync(path.join(source, 'webpilot-server.js'), "require('./process-tree');\n");
+    fs.writeFileSync(path.join(source, 'process-tree.js'), 'module.exports = {};\n');
     fs.writeFileSync(path.join(source, 'webpilot-server.test.js'), 'throw new Error();\n');
     fs.writeFileSync(path.join(source, 'support', 'runtime.json'), '{}');
 
     assert.deepEqual(serverRuntimeFilePaths(root), [
-      'process-memory-monitor.js',
+      'process-tree.js',
       path.join('support', 'runtime.json'),
       'webpilot-server.js',
     ]);
     assert.deepEqual(copyServerRuntime(root, target), serverRuntimeFilePaths(root));
-    assert.equal(fs.existsSync(path.join(target, 'process-memory-monitor.js')), true);
+    assert.equal(fs.existsSync(path.join(target, 'process-tree.js')), true);
     assert.equal(fs.existsSync(path.join(target, 'support', 'runtime.json')), true);
     assert.equal(fs.existsSync(path.join(target, 'webpilot-server.test.js')), false);
   } finally {

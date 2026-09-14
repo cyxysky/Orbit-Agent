@@ -1,5 +1,7 @@
 .git/
 .next/
+dist-backend/
+.webpilot-dev-api/
 .next-dev/
 .next-dev-*/
 .tmp/

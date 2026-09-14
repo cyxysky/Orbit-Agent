@@ -3,18 +3,9 @@ import type { Language } from '@/i18n/language';
 export type { Language } from '@/i18n/language';
 
 const en: Record<string, string> = {
-  '内存诊断': 'Memory diagnostics',
-  '堆快照会暂停后端并可能包含敏感数据，仅保存到本机。建议在空闲时分别采集基线和增长后的快照。': 'Heap snapshots pause the backend and may contain sensitive data. They are saved locally only. Capture an idle baseline and another snapshot after memory grows.',
-  '正在采集堆快照…': 'Capturing heap snapshot…',
-  '采集堆快照': 'Capture heap snapshot',
-  '采集堆快照失败': 'Failed to capture heap snapshot',
-  '轮转日志': 'Rotating log',
-  '重启后端服务后启用落盘诊断。': 'Restart the backend to enable persisted diagnostics.',
-  '最近堆快照': 'Latest heap snapshot',
   '持久化队列': 'Persistence queue',
   '等待写入': 'Waiting to write',
   '正在写入': 'Writing',
-  '会话分类体量（估算）': 'Session payload by category (estimated)',
   'Codex CLI（内置）': 'Codex CLI (built-in)',
   '内置图片生成，复用本机 Codex 登录，无需配置 Key、地址或模型。': 'Built-in image generation using local Codex login. No key, URL, or model configuration required.',
   '代码、文件、桌面、连接器、通信和数据': 'Code, files, desktop, connectors, messaging, and data',

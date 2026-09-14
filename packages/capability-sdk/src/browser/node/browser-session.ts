@@ -1379,21 +1379,30 @@ export class BrowserSession {
 
   // 启动 Playwright 浏览器并注入事件监听记录脚本，用于后续识别可交互元素。
   async start() {
-    if (this.closePromise) await this.closePromise;
-    if (this.lifecycle === 'ready' && this.isUsable()) return;
     if (this.startPromise) return this.startPromise;
-    if (this.lifecycle === 'ready') await this.closeNow({ force: true });
-
-    this.lifecycle = 'starting';
-    const attempt = this.startNow();
+    const pendingClose = this.closePromise;
+    // Publish the shared promise before waiting for shutdown or stale-session
+    // cleanup. Otherwise two callers can both clean up, and the later cleanup
+    // can tear down the browser that the earlier caller has just started.
+    const attempt = Promise.resolve().then(async () => {
+      await pendingClose;
+      if (this.lifecycle === 'ready' && this.isUsable()) return;
+      // A missing tab does not mean the shared browser process is dead. Release
+      // this session's lease without terminating other conversations' pages.
+      if (this.lifecycle === 'ready') await this.closeNow({ preservePages: true });
+      this.lifecycle = 'starting';
+      try {
+        await this.startNow();
+        this.lifecycle = 'ready';
+      } catch (error) {
+        this.lifecycle = 'failed';
+        await this.closeNow({ force: true }).catch(() => undefined);
+        throw error;
+      }
+    });
     this.startPromise = attempt;
     try {
       await attempt;
-      this.lifecycle = 'ready';
-    } catch (error) {
-      this.lifecycle = 'failed';
-      await this.closeNow({ force: true }).catch(() => undefined);
-      throw error;
     } finally {
       if (this.startPromise === attempt) this.startPromise = undefined;
     }

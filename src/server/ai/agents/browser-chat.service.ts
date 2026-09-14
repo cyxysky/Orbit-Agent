@@ -489,117 +489,6 @@ const browserIdleTimers = browserChatRuntimeState.browserIdleTimers;
 const browserPreviewCounts = browserChatRuntimeState.browserPreviewCounts;
 const uiStreamListeners = browserChatRuntimeState.uiStreamListeners;
 
-type BrowserChatMemoryEstimate = {
-  bytes: number;
-  nodes: number;
-  truncated: boolean;
-  seen: WeakSet<object>;
-};
-
-function estimateBrowserChatRetainedValue(value: unknown, estimate: BrowserChatMemoryEstimate, depth = 0) {
-  if (estimate.nodes >= 50_000) {
-    estimate.truncated = true;
-    return;
-  }
-  if (typeof value === 'string') {
-    estimate.nodes += 1;
-    estimate.bytes += value.length * 2;
-    return;
-  }
-  if (typeof value !== 'object' || value === null) return;
-  if (depth >= 12) { estimate.truncated = true; return; }
-  if (estimate.seen.has(value)) return;
-  estimate.seen.add(value);
-  estimate.nodes += 1;
-  if (Buffer.isBuffer(value)) {
-    estimate.bytes += value.byteLength;
-    return;
-  }
-  if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
-    estimate.bytes += value.byteLength;
-    return;
-  }
-  if (Array.isArray(value) || value instanceof Map || value instanceof Set) {
-    for (const item of value instanceof Map ? value.values() : value) {
-      if (estimate.nodes >= 50_000) { estimate.truncated = true; break; }
-      estimateBrowserChatRetainedValue(item, estimate, depth + 1);
-    }
-    return;
-  }
-  for (const key in value) {
-    if (estimate.nodes >= 50_000) { estimate.truncated = true; break; }
-    if (Object.hasOwn(value, key)) estimateBrowserChatRetainedValue((value as Record<string, unknown>)[key], estimate, depth + 1);
-  }
-}
-
-function browserChatMemoryDiagnostics() {
-  const totals = {
-    messages: 0,
-    steps: 0,
-    logs: 0,
-    outputCycles: 0,
-    subagents: 0,
-    queuedTurns: 0,
-    modelTranscriptMessages: 0,
-    activeModelMessages: 0,
-  };
-  const estimate: BrowserChatMemoryEstimate = {
-    bytes: 0,
-    nodes: 0,
-    truncated: false,
-    seen: new WeakSet(),
-  };
-  let sessionsWithBrowser = 0;
-  const sessionPayloads: Array<{ sessionId: string; busy: boolean; bytes: number; sampledNodes: number;
-    truncated: boolean; categories: Record<string, number> }> = [];
-  for (const session of sessions.values()) {
-    if (session.browser) sessionsWithBrowser += 1;
-    totals.messages += session.messages.length;
-    totals.steps += session.steps.length;
-    totals.logs += session.logs.length;
-    totals.outputCycles += session.outputCycles.length;
-    totals.subagents += session.subagents.length;
-    totals.queuedTurns += session.queuedTurns.length;
-    totals.modelTranscriptMessages += session.modelContext.history.length;
-    totals.activeModelMessages += session.modelContext.active.length;
-    const beforeBytes = estimate.bytes;
-    const beforeNodes = estimate.nodes;
-    const categories: Record<string, number> = {};
-    for (const [name, value] of Object.entries({ messages: session.messages, steps: session.steps,
-      logs: session.logs, outputCycles: session.outputCycles, subagents: session.subagents,
-      modelContext: session.modelContext, queuedTurns: session.queuedTurns, pendingPersistence: dirtyRecords.get(session.id) })) {
-      const before = estimate.bytes;
-      estimateBrowserChatRetainedValue(value, estimate);
-      categories[name] = estimate.bytes - before;
-    }
-    sessionPayloads.push({ sessionId: session.id, busy: session.busy, bytes: estimate.bytes - beforeBytes,
-      sampledNodes: estimate.nodes - beforeNodes, truncated: estimate.truncated, categories });
-  }
-  return {
-    runtimeSessions: sessions.size,
-    sessionsWithBrowser,
-    selectedSessions: selectedSessionIds.size,
-    activeTurns: activeTurns.size,
-    browserStarts: browserStartPromises.size,
-    blockedSubagents: blockedSubagents.size,
-    subagentResultSessions: subagentResults.size,
-    pendingToolConfirmations: toolConfirmations.size,
-    pendingPersistTimers: pendingPersistTimers.size,
-    pendingDatabaseWrites: pendingDatabaseWrites.size,
-    persistenceCursors: persistenceCursors.size,
-    dirtyRecordSets: dirtyRecords.size,
-    memoryExtractionActive: browserChatRuntimeState.memoryExtractionActive,
-    memoryExtractionQueued: browserChatRuntimeState.memoryExtractionQueue.length,
-    browserPreviewSessions: browserPreviewCounts.size,
-    retained: totals,
-    retainedPayloadEstimateMb: Math.round(estimate.bytes / 1024 / 1024 * 10) / 10,
-    retainedPayloadSampleNodes: estimate.nodes,
-    retainedPayloadEstimateTruncated: estimate.truncated,
-    estimateMethod: 'Bounded payload walk: UTF-16 string bytes and binary byteLength; shared objects counted once; excludes object overhead and SDK/compiler state',
-    largestSessions: sessionPayloads.sort((a, b) => b.bytes - a.bytes).slice(0, 20),
-  };
-}
-
 export type BrowserChatRuntimeBrowser = {
   id: string;
   kind: 'session' | 'subagent';
@@ -649,7 +538,6 @@ export function readBrowserChatRuntimeStatus() {
     });
   }
   return {
-    diagnostics: browserChatMemoryDiagnostics(),
     activeConversations: new Set([
       ...activeTurns.keys(),
       ...[...sessions.values()]
@@ -660,11 +548,6 @@ export function readBrowserChatRuntimeStatus() {
     browsers: browsers.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
   };
 }
-
-const memoryDiagnosticProviders = ((globalThis as typeof globalThis & {
-  __webpilotMemoryDiagnosticProviders?: Map<string, () => unknown>;
-}).__webpilotMemoryDiagnosticProviders ??= new Map());
-memoryDiagnosticProviders.set('browserChat', browserChatMemoryDiagnostics);
 
 scheduleBrowserChatArtifactMaintenance(async () => (
   (await readBrowserChatSessionSummaries<BrowserChatSessionSnapshot>()).map((session) => session.id)
@@ -3336,12 +3219,9 @@ async function browserForTurnDecision(
   if (session.browser && session.started && !session.browser.isUsable()) {
     assertTurnActive?.();
     appendLog(session, 'browser:stale', '历史对话的浏览器已关闭或页面已失效，正在重新接管本会话。');
-    const staleBrowser = session.browser;
-    await session.browser.close({ keepOpen: true }).catch(() => undefined);
-    assertTurnActive?.();
     // Browser tools are created once per model turn and retain this object.
-    // Restart it in place so the current turn also reconnects to the tab group.
-    session.browser = staleBrowser;
+    // Let BrowserSession.start serialize cleanup and restart together. Closing
+    // here can race a startup already requested through the capability layer.
     session.started = false;
     session.updatedAt = now();
     persistAndNotify(session.id);

@@ -4,7 +4,6 @@ const net = require('node:net');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
-const v8 = require('node:v8');
 const { createRequire } = require('node:module');
 const { randomBytes } = require('node:crypto');
 const {
@@ -13,76 +12,10 @@ const {
   requestIdentity,
 } = require('./webpilot-identity');
 const { createRealtimeRefreshHub } = require('./realtime-refresh-hub');
-const { startProcessMemoryMonitor } = require('./process-memory-monitor');
 const { applyOrbitEnvironment } = require('./orbit-environment');
 const { startDevelopmentCodeSandboxRunner } = require('./development-code-sandbox-runner');
-const { prepareDevelopmentApiProject } = require('./development-api-project');
-
-const DEVELOPMENT_CHILD_FLAG = '--development-child';
-const DEVELOPMENT_RESTART_EXIT_CODE = 77;
-
-function boundedDevelopmentMemoryThreshold(value) {
-  const parsed = Number(value || 0.8);
-  return Number.isFinite(parsed) ? Math.min(0.95, Math.max(0.5, parsed)) : 0.8;
-}
-
-function developmentMemoryRestartStats(dev, runtimeChildMode, environment = process.env, heap = v8.getHeapStatistics()) {
-  if (!dev || runtimeChildMode || !process.argv.includes(DEVELOPMENT_CHILD_FLAG)) return undefined;
-  if (String(environment.WEBPILOT_DEV_MEMORY_RESTART || '').trim().toLowerCase() === 'false') return undefined;
-  const threshold = boundedDevelopmentMemoryThreshold(environment.WEBPILOT_DEV_MEMORY_RESTART_THRESHOLD);
-  return heap.used_heap_size > threshold * heap.heap_size_limit
-    ? { heapSizeLimit: heap.heap_size_limit, heapUsed: heap.used_heap_size, threshold }
-    : undefined;
-}
-
-function startDevelopmentSupervisor() {
-  let child;
-  let restartTimer;
-  let stopped = false;
-
-  const stop = (signal) => {
-    if (stopped) return;
-    stopped = true;
-    if (restartTimer) clearTimeout(restartTimer);
-    if (child && !child.killed) child.kill(signal);
-  };
-  process.once('SIGINT', () => stop('SIGINT'));
-  process.once('SIGTERM', () => stop('SIGTERM'));
-
-  const start = () => {
-    if (stopped) return;
-    child = spawn(process.execPath, [
-      ...process.execArgv,
-      __filename,
-      ...process.argv.slice(2),
-      DEVELOPMENT_CHILD_FLAG,
-    ], {
-      cwd: process.cwd(),
-      env: process.env,
-      stdio: 'inherit',
-      windowsHide: true,
-    });
-    child.once('error', (error) => {
-      console.error('[webpilot-server] Development child failed.', error);
-    });
-    child.once('exit', (code, signal) => {
-      child = undefined;
-      if (stopped) {
-        process.exitCode = 0;
-        return;
-      }
-      if (code === DEVELOPMENT_RESTART_EXIT_CODE) {
-        console.log('[webpilot-server] Restarting the development runtime after memory pressure.');
-        restartTimer = setTimeout(start, 250);
-        return;
-      }
-      process.exitCode = typeof code === 'number' ? code : 1;
-      if (signal) console.error(`[webpilot-server] Development child exited from ${signal}.`);
-    });
-  };
-
-  start();
-}
+const { stopProcessTree } = require('./process-tree.cjs');
+const { browserChatStreamPath, createBrowserChatStreamHub } = require('./browser-chat-stream');
 
 function normalizeBasePath(value) {
   const normalized = String(value || '').trim().replace(/^\/+|\/+$/g, '');
@@ -255,13 +188,11 @@ function proxyRequestHeaders(requestHeaders, target) {
 }
 
 function runtimeApiRequest(pathname) {
-  return pathname.startsWith('/api/') && pathname !== '/api/system/shutdown';
+  return pathname.startsWith('/api/') || pathname === '/embed/orbit.js' || pathname === '/embed/webpilot.js';
 }
 
 function splitRuntimeEnabled(dev, runtimeChildMode, environment = process.env) {
-  // The development API child has its own generated project and type files.
-  // Keep the React page renderer's async debugging hooks away from Agent work.
-  return !runtimeChildMode && environment.WEBPILOT_SPLIT_RUNTIME !== 'false';
+  return !runtimeChildMode;
 }
 
 function availableInternalPort(hostname) {
@@ -327,9 +258,7 @@ async function startApiRuntimeChild({ appDir, dev, externalPort }) {
   const port = Number.isInteger(configuredPort) && configuredPort > 0 && configuredPort <= 65_535
     ? configuredPort
     : await availableInternalPort(hostname);
-  const memoryArgs = process.execArgv.filter(arg => /^--max-(old|semi)-space-size=/.test(arg));
-  const args = [...memoryArgs, __filename, '--runtime-child', ...(dev ? ['--dev'] : []),
-    ...(process.argv.includes('--webpack') ? ['--webpack'] : [])];
+  const args = ['--max-old-space-size=' + (Number(process.env.ORBIT_API_HEAP_MB) || 1024), path.join(__dirname, 'start-backend.js'), ...(dev ? ['--dev'] : [])];
   const child = spawn(process.execPath, args, {
     cwd: appDir,
     env: {
@@ -337,16 +266,17 @@ async function startApiRuntimeChild({ appDir, dev, externalPort }) {
       HOSTNAME: hostname,
       PORT: String(port),
       WEBPILOT_REALTIME_PUBLISH_PORT: String(externalPort),
-      WEBPILOT_SERVER_ROLE: 'runtime',
+      WEBPILOT_SERVER_ROLE: 'api',
+      WEBPILOT_APP_DIR: appDir,
     },
-    stdio: 'inherit',
+    stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
     windowsHide: true,
   });
   child.once('error', (error) => {
     console.error('[webpilot-server] API runtime child failed.', error);
   });
   const stopChildOnExit = () => {
-    if (!child.killed) child.kill('SIGTERM');
+    stopProcessTree(child, { force: true });
   };
   process.once('exit', stopChildOnExit);
   child.once('exit', () => process.off('exit', stopChildOnExit));
@@ -400,6 +330,9 @@ function createApiRuntimeSupervisor({
     try {
       await runtime.ready;
       if (current !== runtime) throw new Error('API runtime exited before it became available.');
+      process.env.WEBPILOT_API_ORIGIN = `http://${runtime.hostname}:${runtime.port}`;
+      const update = globalThis[Symbol.for('webpilot.updateInitialRuntimeEnv')];
+      update?.({ WEBPILOT_API_ORIGIN: process.env.WEBPILOT_API_ORIGIN });
       return runtime;
     } catch (error) {
       if (current === runtime) current = undefined;
@@ -431,7 +364,7 @@ function createApiRuntimeSupervisor({
     clearRestartTimer();
     const runtime = current;
     current = undefined;
-    if (runtime?.child && !runtime.child.killed) runtime.child.kill('SIGTERM');
+    return runtime?.child ? stopProcessTree(runtime.child) : Promise.resolve();
   };
 
   return { ensure, stop };
@@ -440,7 +373,7 @@ function createApiRuntimeSupervisor({
 function proxyHttpRequest(request, response, target) {
   let clientDisconnected = false;
   const upstream = http.request({
-    headers: proxyRequestHeaders(request.headers, target),
+    headers: { ...proxyRequestHeaders(request.headers, target), 'x-webpilot-backend-token': process.env.WEBPILOT_INTERNAL_REQUEST_TOKEN },
     hostname: target.hostname,
     method: request.method,
     path: request.url,
@@ -569,7 +502,7 @@ function proxyUpgrade(request, clientSocket, head, port, targetPath) {
 async function main() {
   applyOrbitEnvironment();
   const dev = process.argv.includes('--dev');
-  const runtimeChildMode = process.argv.includes('--runtime-child');
+  const runtimeChildMode = false;
   configureNextDevelopmentRuntime(dev);
   // Only a dedicated UI process may skip the background runtime loops.
   process.env.WEBPILOT_SERVER_ROLE = splitRuntimeEnabled(dev, runtimeChildMode) ? 'ui' : 'runtime';
@@ -586,7 +519,6 @@ async function main() {
   const codeSandboxRunner = dev && !runtimeChildMode
     ? await startDevelopmentCodeSandboxRunner({ appDir })
     : undefined;
-  const memoryMonitor = startProcessMemoryMonitor();
   process.env.WEBPILOT_REALTIME_PUBLISH_TOKEN ||= randomBytes(32).toString('base64url');
   process.env.WEBPILOT_IDENTITY_HEADER_SECRET ||= randomBytes(32).toString('base64url');
   process.env.WEBPILOT_IDENTITY_SECRET ||= randomBytes(32).toString('base64url');
@@ -599,9 +531,11 @@ async function main() {
   ].map((key) => [key, process.env[key]])));
   const identityHeaderSecret = process.env.WEBPILOT_IDENTITY_HEADER_SECRET;
   const compiledConfig = dev ? undefined : loadCompiledNextConfig(appDir);
-  const apiRuntimeSupervisor = splitRuntimeEnabled(dev, runtimeChildMode)
-    ? createApiRuntimeSupervisor({ appDir, dev, externalPort: port })
-    : undefined;
+  const resolvedBasePath = applicationBasePath(dev, compiledConfig);
+  process.env.ORBIT_BASE_PATH = resolvedBasePath;
+  process.env.WEBPILOT_BASE_PATH = resolvedBasePath;
+  updateInitialEnv({ ORBIT_BASE_PATH: resolvedBasePath, WEBPILOT_BASE_PATH: resolvedBasePath });
+  const apiRuntimeSupervisor = createApiRuntimeSupervisor({ appDir, dev, externalPort: port });
   process.env.WEBPILOT_SERVER_ROLE = apiRuntimeSupervisor ? 'ui' : 'runtime';
   updateInitialEnv({ WEBPILOT_SERVER_ROLE: process.env.WEBPILOT_SERVER_ROLE });
 
@@ -614,21 +548,13 @@ async function main() {
   // process-level NODE_PATH initialization.
   const next = requireRuntimeDependency(appDir, 'next');
 
-  let developmentApiProject;
-  if (dev && runtimeChildMode) {
-    const loadConfig = requireRuntimeDependency(appDir, 'next/dist/server/config').default;
-    const { PHASE_DEVELOPMENT_SERVER } = requireRuntimeDependency(appDir, 'next/constants');
-    const developmentConfig = await loadConfig(PHASE_DEVELOPMENT_SERVER, appDir);
-    developmentApiProject = prepareDevelopmentApiProject(appDir, developmentConfig);
-  }
-
   const developmentWebpack = dev && process.argv.includes('--webpack');
   if (dev) {
     console.info(`[webpilot-server] Development compiler: ${developmentWebpack ? 'Webpack' : 'Turbopack'}`);
   }
   const application = next({
     dev,
-    dir: developmentApiProject?.directory || appDir,
+    dir: appDir,
     hostname,
     port,
     // Use Next's incremental development compiler by default. Keep Webpack an
@@ -636,35 +562,26 @@ async function main() {
     turbopack: dev && !developmentWebpack,
     webpack: developmentWebpack,
     ...(compiledConfig ? { conf: compiledConfig } : {}),
-    ...(developmentApiProject ? { conf: developmentApiProject.config } : {}),
   });
   const handle = application.getRequestHandler();
-  // Next's TS config loader also uses a temporary compiled config in appDir.
-  // Finish the UI's first load before the API child reads the source config.
-  await application.prepare();
+  // Page rendering reads initialization data from the independent Node API.
   await apiRuntimeSupervisor?.ensure();
+  await application.prepare();
   const handleNextUpgrade = dev ? application.getUpgradeHandler() : undefined;
 
   // In production the build manifest is the sole source of truth for basePath.
   const basePath = applicationBasePath(dev, compiledConfig);
 
   const refreshHub = createRealtimeRefreshHub({ appDir });
-  let activeRequestCount = 0;
-  let developmentRestartRequested = false;
-  const requestDevelopmentRestartIfNeeded = () => {
-    if (developmentRestartRequested || activeRequestCount > 0) return;
-    const stats = developmentMemoryRestartStats(dev, runtimeChildMode);
-    if (!stats) return;
-    developmentRestartRequested = true;
-    console.warn(
-      `[webpilot-server] Development runtime reached ${Math.round(stats.heapUsed / stats.heapSizeLimit * 100)}% of its V8 heap limit; restarting to prevent an out-of-memory crash.`,
-    );
-    process.exit(DEVELOPMENT_RESTART_EXIT_CODE);
-  };
-  const developmentMemoryTimer = setInterval(requestDevelopmentRestartIfNeeded, 10_000);
-  developmentMemoryTimer.unref?.();
+  const chatStreamHub = createBrowserChatStreamHub({
+    getRuntime: () => apiRuntimeSupervisor.ensure(),
+    authenticateRequest: request => {
+      const principal = requestIdentity(request);
+      applyTrustedIdentityHeaders(request, principal, identityHeaderSecret);
+      return Boolean(principal);
+    },
+  });
   const server = http.createServer((request, response) => {
-    activeRequestCount += 1;
     void (async () => {
       removeUntrustedProxyHeaders(request);
       const requestUrl = new URL(request.url || '/', `http://${request.headers.host || `${hostname}:${port}`}`);
@@ -709,27 +626,21 @@ async function main() {
         }
         return;
       }
-      // Unknown API URLs also enter Next's default 404 page renderer. Match the
-      // real API route table (including dynamic routes) before invoking Next.
-      if (developmentApiProject && !developmentApiProject.matchesPath(pathname)) {
-        response.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-        response.end(JSON.stringify({ error: 'Not Found' }));
-        return;
-      }
       await handle(request, response);
     })().catch((error) => {
       console.error('[webpilot-server] HTTP request failed.', error);
       if (!response.headersSent) response.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
       response.end('Internal Server Error');
-    }).finally(() => {
-      activeRequestCount = Math.max(0, activeRequestCount - 1);
-      requestDevelopmentRestartIfNeeded();
     });
   });
 
   server.on('upgrade', (request, socket, head) => {
     removeUntrustedProxyHeaders(request);
     const requestUrl = new URL(request.url || '/', `http://${request.headers.host || `${hostname}:${port}`}`);
+    if (browserChatStreamPath(stripBasePath(requestUrl.pathname, basePath))) {
+      chatStreamHub.acceptUpgrade(request, socket, head);
+      return;
+    }
     const target = webSocketUpgradeTarget(requestUrl, basePath);
     if (!target) {
       if (handleNextUpgrade && nextDevelopmentUpgrade(requestUrl, basePath, dev)) {
@@ -754,30 +665,30 @@ async function main() {
     console.log(`[webpilot-server] ${role} ready on http://${hostname}:${port}${basePath || '/'}`);
   });
 
-  const close = () => {
-    developmentApiProject?.close();
+  let closing = false;
+  const close = async () => {
+    if (closing) return;
+    closing = true;
     codeSandboxRunner?.stop();
-    clearInterval(developmentMemoryTimer);
-    memoryMonitor.stop();
     refreshHub.close();
-    apiRuntimeSupervisor?.stop();
-    server.close(() => {
-      process.exit(0);
-    });
+    chatStreamHub.close();
+    server.close();
+    await apiRuntimeSupervisor.stop();
+    server.closeAllConnections();
+    await application.close();
+    process.exit(0);
   };
   process.once('SIGINT', close);
   process.once('SIGTERM', close);
+  process.on('message', message => { if (message?.type === 'shutdown') void close(); });
+  if (process.connected) process.once('disconnect', () => void close());
 }
 
 if (require.main === module) {
-  if (process.argv.includes('--dev') && !process.argv.includes('--runtime-child') && !process.argv.includes(DEVELOPMENT_CHILD_FLAG)) {
-    startDevelopmentSupervisor();
-  } else {
-    main().catch((error) => {
-      console.error('[webpilot-server] Failed to start.', error);
-      process.exitCode = 1;
-    });
-  }
+  main().catch((error) => {
+    console.error('[webpilot-server] Failed to start.', error);
+    process.exitCode = 1;
+  });
 }
 
 module.exports = {
@@ -786,8 +697,6 @@ module.exports = {
   createApiRuntimeSupervisor,
   configureCompiledNextRuntime,
   configureNextDevelopmentRuntime,
-  boundedDevelopmentMemoryThreshold,
-  developmentMemoryRestartStats,
   loadCompiledNextConfig,
   nextDevelopmentUpgrade,
   normalizeBasePath,

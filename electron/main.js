@@ -26,6 +26,9 @@ const { applyOrbitEnvironment } = require(app.isPackaged
   ? path.join(process.resourcesPath, 'server', 'orbit-environment.js')
   : '../server/orbit-environment');
 applyOrbitEnvironment();
+const { stopProcessTree } = require(app.isPackaged
+  ? path.join(process.resourcesPath, 'server', 'process-tree.cjs')
+  : '../server/process-tree.cjs');
 
 const APP_NAME = product.name;
 const APP_TITLE = APP_NAME;
@@ -2548,7 +2551,7 @@ async function startServer(appDataDir) {
   serverProcess = spawn(process.execPath, args, {
     cwd: serverDir,
     env,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     windowsHide: true,
   });
   serverProcess.stdout?.on('data', (chunk) => rememberServerOutput('server stdout', chunk));
@@ -2947,7 +2950,7 @@ function destroyElectronResources() {
   destroyEmbeddedBrowserLibraryView();
   detachEmbeddedBrowserView();
   for (const tab of Array.from(embeddedBrowserTabs.values())) destroyEmbeddedBrowserTab(tab);
-  if (serverProcess && !serverProcess.killed) serverProcess.kill();
+  if (serverProcess) void stopProcessTree(serverProcess, { force: true });
   electronStateDatabase?.close();
   electronStateDatabase = undefined;
 }
@@ -2962,6 +2965,8 @@ app.on('before-quit', (event) => {
   applicationShutdownStarted = true;
   void requestLocalServerShutdown()
     .catch((error) => appendLog(`Server browser cleanup failed before quit: ${error instanceof Error ? error.message : String(error)}`))
+    .then(() => stopProcessTree(serverProcess))
+    .catch((error) => appendLog(`Server process cleanup failed: ${error.message}`))
     .finally(() => {
       destroyElectronResources();
       applicationShutdownReady = true;

@@ -1,3 +1,5 @@
+> Historical diagnosis of the previous Next-based API runtime. The API source mirror, React aliases and Next 404 interception described below have been removed. See [the current Node backend architecture](node-backend-architecture.md). The measurements below describe the old runtime, not validation of the new production artifacts.
+
 # Browser runtime memory diagnosis — 2026-09-14
 
 ## Current fix and measured result

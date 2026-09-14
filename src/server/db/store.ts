@@ -1,4 +1,3 @@
-import { updateInitialEnv as updateBundledInitialEnv } from '@next/env';
 import {
   defaultModelByProvider,
   defaultModelForProvider,
@@ -187,7 +186,8 @@ function normalizeStoredModelConfig(input?: ModelConfigRecord): ModelConfigRecor
 function updateInitialEnv(values: Record<string, string | undefined>) {
   const update = Reflect.get(globalThis, Symbol.for('webpilot.updateInitialRuntimeEnv'));
   if (typeof update === 'function') update(values);
-  else updateBundledInitialEnv(values);
+  // Node processes own their environment; only the UI host maintains Next's
+  // initial-environment snapshot. Never load Next in an API/Agent process.
 }
 
 function applyModelConfig(config?: ModelConfigRecord) {

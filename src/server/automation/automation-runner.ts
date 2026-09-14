@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { reportExecutionTask } from '@/server/runtime/execution-ownership';
 import { executeInteractiveBrowserTurn } from '@/server/ai/agents/browser-chat-executor.agent';
 import type { StepExecutionResult } from '@/server/ai/schemas/runtime.schema';
 import { store } from '@/server/db/store';
@@ -222,6 +223,8 @@ function agentStepRecord(step: StepExecutionResult, previous?: AutomationRunStep
 }
 
 async function executeAutomationRunNow(runId: string, options: ExecuteAutomationRunOptions): Promise<AutomationRunRecord> {
+  // Scheduled executions also need settings saved by the separate API process.
+  await store.applyRuntimeEnv();
   const requestedUserId = options.userId === undefined ? undefined : userId(options.userId);
   const initialRun = await getAutomationRun(runId, requestedUserId);
   if (!initialRun) throw new Error('Automation run not found.');
@@ -492,7 +495,9 @@ export function executeAutomationRun(runId: string, options: ExecuteAutomationRu
     if (active?.promise !== execution) return;
     for (const detach of active.detachAbortSignals) detach();
     activeRunExecutions.delete(runId);
+    reportExecutionTask({ kind: 'automation', id: runId }, false);
   });
   activeRunExecutions.set(runId, { controller, promise: execution, detachAbortSignals });
+  reportExecutionTask({ kind: 'automation', id: runId }, true);
   return execution;
 }

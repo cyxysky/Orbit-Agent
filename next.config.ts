@@ -19,19 +19,11 @@ const { brandPrefix, brandText } = resolveWorkspaceBrand({
   prefix: process.env.ORBIT_BRAND_PREFIX ?? process.env.WEBPILOT_BRAND_PREFIX,
   text: process.env.ORBIT_BRAND_TEXT ?? process.env.WEBPILOT_BRAND_TEXT,
 });
-const serverRole = process.env.WEBPILOT_SERVER_ROLE === 'runtime' ? 'runtime' : 'ui';
 const capabilitySource = process.env.WEBPILOT_CAPABILITY_SOURCE === 'npm' ? 'npm' : 'workspace';
 
 export default function nextConfig(phase: string): NextConfig {
   return {
     basePath,
-    outputFileTracingIncludes: {
-      '/api/chart-assets/excalidraw/*': [
-        './node_modules/@excalidraw/excalidraw/package.json',
-        './node_modules/@excalidraw/excalidraw/dist/prod/index.js',
-        './node_modules/@excalidraw/excalidraw/dist/prod/fonts/**/*',
-      ],
-    },
     typescript: {
       tsconfigPath: capabilitySource === 'npm' ? 'tsconfig.npm.json' : 'tsconfig.json',
     },
@@ -52,7 +44,7 @@ export default function nextConfig(phase: string): NextConfig {
     ],
     // A running development server must never write into the production build
     // directory. Sharing .next lets dev hot updates corrupt next build manifests.
-    distDir: phase === PHASE_DEVELOPMENT_SERVER ? `.next-dev-${serverRole}` : '.next',
+    distDir: phase === PHASE_DEVELOPMENT_SERVER ? '.next-dev-ui' : '.next',
     env: {
       NEXT_PUBLIC_ORBIT_BASE_PATH: basePath,
       NEXT_PUBLIC_ORBIT_BRAND_PREFIX: brandPrefix,
@@ -68,7 +60,7 @@ export default function nextConfig(phase: string): NextConfig {
     },
     // Retain recently visited development routes across normal navigation and
     // editing pauses. The defaults evict inactive entries after just one minute.
-    // Keep this bounded because UI and API routes share the development process.
+    // Keep this bounded because large UI routes share the development process.
     onDemandEntries: {
       maxInactiveAge: 5 * 60 * 1000,
       pagesBufferLength: 10,
