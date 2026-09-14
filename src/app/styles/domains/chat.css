@@ -1239,8 +1239,21 @@
   color: var(--muted);
   font-size: 12px;
   font-weight: 500;
+  line-height: 16px;
   min-height: 24px;
   padding: 4px 0;
+}
+
+.browser-chat-process-summary > span,
+.browser-chat-process-summary > small {
+  align-items: center;
+  display: inline-flex;
+  line-height: inherit;
+  min-height: 16px;
+}
+
+.browser-chat-process-summary > svg {
+  flex-shrink: 0;
 }
 
 .browser-chat-process-summary:hover {

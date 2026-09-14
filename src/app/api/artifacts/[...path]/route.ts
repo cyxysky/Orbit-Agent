@@ -2,7 +2,7 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import path from 'node:path';
-import { NextRequest, NextResponse } from 'next/server';
+import type { NextRequest } from 'next/server';
 import { requestApplicationUserId } from '@/server/auth/user-context';
 import { resolveOwnedArtifact } from '@/server/storage/artifact-access';
 import { ApiRequestError, apiError, apiRequestId } from '@/server/http/api-request';
@@ -49,7 +49,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
     const size = previewPdf ? previewPdf.length : fileStat.size;
     const range = requestedByteRange(request.headers.get('range'), size);
     if (range === null) {
-      return new NextResponse(null, {
+      return new Response(null, {
         status: 416,
         headers: { 'Content-Range': `bytes */${size}`, 'x-request-id': requestId },
       });
@@ -76,7 +76,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
     const body = previewPdf
       ? new Uint8Array(range ? previewPdf.subarray(range.start, range.end + 1) : previewPdf)
       : Readable.toWeb(createReadStream(filePath, range || undefined)) as unknown as BodyInit;
-    return new NextResponse(body, { headers, status: range ? 206 : 200 });
+    return new Response(body, { headers, status: range ? 206 : 200 });
   } catch (error) {
     return apiError(request, error, {
       code: 'not_found',

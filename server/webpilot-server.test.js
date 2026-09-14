@@ -123,8 +123,8 @@ test('isolates API routes in the runtime process while keeping shutdown in the U
   assert.equal(runtimeApiRequest('/browser-chat'), false);
 });
 
-test('uses one Next compiler in development and isolates the production API runtime', () => {
-  assert.equal(splitRuntimeEnabled(true, false, {}), false);
+test('isolates the API runtime in development and production', () => {
+  assert.equal(splitRuntimeEnabled(true, false, {}), true);
   assert.equal(splitRuntimeEnabled(false, false, {}), true);
   assert.equal(splitRuntimeEnabled(false, false, { WEBPILOT_SPLIT_RUNTIME: 'false' }), false);
   assert.equal(splitRuntimeEnabled(false, true, {}), false);

@@ -495,7 +495,9 @@ export async function acquireSharedBrowser(input: {
   }
 
   const browserStillConnected = !sharedBrowserState.browser || sharedBrowserState.browser.isConnected();
-  if (!sharedBrowserState.initPromise || sharedBrowserState.key !== key || !browserStillConnected || !sharedBrowserState.context) {
+  const initializing = sharedBrowserState.lifecycle === 'initializing' && sharedBrowserState.initPromise;
+  if (!sharedBrowserState.initPromise || sharedBrowserState.key !== key
+    || (!initializing && (!browserStillConnected || !sharedBrowserState.context))) {
     const initGeneration = ++sharedBrowserState.generation;
     sharedBrowserState.lifecycle = 'initializing';
     sharedBrowserState.key = key;
@@ -556,8 +558,14 @@ export async function acquireSharedBrowser(input: {
         launchOptions: input.launchOptions,
         contextOptions: input.contextOptions,
       });
-    })().then((lease) => {
-      if (sharedBrowserState.generation !== initGeneration) throw new Error('Shared browser initialization was superseded.');
+    })().then(async (lease) => {
+      if (sharedBrowserState.generation !== initGeneration) {
+        // An abandoned launch must not leave an unowned connection/process.
+        if (lease.ownership === 'persistent') await lease.context.close().catch(() => undefined);
+        else await lease.browser?.close().catch(() => undefined);
+        if ('browserServer' in lease) await lease.browserServer?.close().catch(() => undefined);
+        throw new Error('Shared browser initialization was superseded.');
+      }
       sharedBrowserState.browser = lease.browser;
       sharedBrowserState.browserServer = 'browserServer' in lease ? lease.browserServer : undefined;
       sharedBrowserState.browserCodeConnection = lease.browserCodeConnection;
@@ -575,8 +583,16 @@ export async function acquireSharedBrowser(input: {
     });
   }
 
-  const lease = await sharedBrowserState.initPromise;
+  // Pending acquisitions also own the shared runtime: idle cleanup must not
+  // close it while callers are still waiting for the first connection.
   sharedBrowserState.refCount += 1;
+  let lease;
+  try {
+    lease = await sharedBrowserState.initPromise;
+  } catch (error) {
+    sharedBrowserState.refCount = Math.max(0, sharedBrowserState.refCount - 1);
+    throw error;
+  }
   let released = false;
   return {
     ...lease,

@@ -359,9 +359,14 @@ Incoming text starts or continues the existing Browser Chat Agent
 under the channel owner's account in full mode, without per-tool confirmation.
 Group callback text has its leading routing mention removed before command
 parsing and Agent submission; single-chat text and mentions within the body remain intact.
-`/start` creates and selects a new session;
-`/delete` deletes the selected session; `/list` lists all sessions belonging to
-the channel's web account, including sessions created in the web UI;
+`/help` lists the available commands. `/start` creates and selects a new session;
+`/delete` deletes the selected session; `/list [offset] [limit]` pages through sessions belonging to
+the channel's web account, including sessions created in the web UI, newest first.
+The offset is zero-based and the limit is 1–500. Defaults are `/list 10 10`;
+`/list 10 5` skips ten sessions and returns five, while `/list 0 10` reads the first page.
+`/model-list` lists enabled conversation models and marks the currently selected model.
+`/model-switch id` accepts the full stable ID from that list and persists the selection
+for subsequent messages in this communication conversation, without changing global settings or running turns.
 `/select chat_xxx` selects any session owned by that account. Group chat members
 share the selected context. Sessions owned by other web accounts remain inaccessible.
 

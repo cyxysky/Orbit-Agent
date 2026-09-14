@@ -1,5 +1,7 @@
 import v8 from 'node:v8';
 import { readBrowserChatRuntimeStatus } from '@/server/ai/agents/browser-chat.service';
+import { databaseWriteQueueSnapshot } from '@/server/storage/database-write-queue';
+import { ApiRequestError } from '@/server/http/api-request';
 
 export type BackendMemoryTrendPoint = {
   time: string;
@@ -13,6 +15,9 @@ export type BackendMemoryTrendPoint = {
 export type BackendRuntimeStatus = ReturnType<typeof readBackendRuntimeStatus>;
 
 type MemoryMonitorState = {
+  diagnosticFiles?: () => { directory: string; logPath: string; maxFileBytes: number; retainedLogFiles: number;
+    retainedHeapSnapshots: number; lastError?: string; lastHeapSnapshot?: { file: string; bytes: number; createdAt: string; pid: number } };
+  captureHeapSnapshot?: () => { file: string; bytes: number; createdAt: string; pid: number };
   latest?: {
     time: string;
     pid: number;
@@ -75,5 +80,14 @@ export function readBackendRuntimeStatus() {
     activeConversations: browserChat.activeConversations,
     browsers: browserChat.browsers,
     diagnostics: browserChat.diagnostics,
+    persistenceQueue: databaseWriteQueueSnapshot(),
+    diagnosticFiles: monitor?.diagnosticFiles?.(),
   };
+}
+
+export function captureBackendHeapSnapshot() {
+  const monitor = (globalThis as typeof globalThis & { __webpilotProcessMemoryMonitor?: MemoryMonitorState }).__webpilotProcessMemoryMonitor;
+  if (!monitor?.captureHeapSnapshot) throw new ApiRequestError('内存诊断尚未加载，请重启后端服务后重试。', { status: 503 });
+  try { return monitor.captureHeapSnapshot(); }
+  catch (error) { throw new ApiRequestError(error instanceof Error ? error.message : String(error), { status: 409 }); }
 }

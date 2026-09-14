@@ -2,6 +2,7 @@
 const os = require('node:os');
 const v8 = require('node:v8');
 const { monitorEventLoopDelay } = require('node:perf_hooks');
+const { createMemoryDiagnosticFiles } = require('./memory-diagnostic-files');
 
 const memoryMonitorStateKey = '__webpilotProcessMemoryMonitor';
 const diagnosticProvidersKey = '__webpilotMemoryDiagnosticProviders';
@@ -67,6 +68,35 @@ function startProcessMemoryMonitor() {
   eventLoop.enable();
   let previous;
   const history = [];
+  const files = createMemoryDiagnosticFiles();
+  let highWaterHeap = 0;
+  let lastReportedHighWater = 0;
+  let lastPressure = 'normal';
+  let lastPersistedAt = 0;
+  const automaticCaptures = new Map();
+  const automaticSnapshotsEnabled = process.env.WEBPILOT_AUTOMATIC_HEAP_SNAPSHOTS !== 'false';
+  const growthThreshold = Math.min(512 * 1024 * 1024, v8.getHeapStatistics().heap_size_limit * 0.1);
+  // Take the comparison snapshot while a full graph can still fit in memory.
+  // The 75% pressure alarm is too late for a multi-GiB heap snapshot.
+  const captureHighWaterThreshold = Math.min(1024 * 1024 * 1024, v8.getHeapStatistics().heap_size_limit * 0.5);
+  const startupHeap = process.memoryUsage().heapUsed;
+  const captureAutomatically = (reason) => {
+    if (!automaticSnapshotsEnabled) return;
+    const previousAttempt = automaticCaptures.get(reason);
+    if (previousAttempt?.complete || (previousAttempt && Date.now() - previousAttempt.at < 60_000)) return;
+    const attempt = { at: Date.now(), complete: false };
+    automaticCaptures.set(reason, attempt);
+    try {
+      const result = files.captureHeapSnapshot(reason);
+      attempt.complete = true;
+      console.warn(`[memory-diagnostics] Automatic ${reason} heap snapshot: ${result.file}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      files.write({ time: new Date().toISOString(), event: 'process.memory.heap-snapshot.auto-failed',
+        pid: process.pid, reason, error: message, retryAfterMs: 60_000 });
+      console.warn(`[memory-diagnostics] Automatic ${reason} heap snapshot failed: ${message}`);
+    }
+  };
 
   const writeSnapshot = (reason = 'interval') => {
     const usage = process.memoryUsage();
@@ -75,6 +105,9 @@ function startProcessMemoryMonitor() {
     const systemTotal = os.totalmem();
     const systemFree = os.freemem();
     const pressure = memoryPressure(usage.heapUsed, heap.heap_size_limit);
+    const highWater = pressure !== 'normal' && (pressure !== lastPressure || usage.heapUsed >= lastReportedHighWater + 128 * 1024 * 1024);
+    highWaterHeap = Math.max(highWaterHeap, usage.heapUsed);
+    if (highWater) lastReportedHighWater = usage.heapUsed;
     const payload = {
       time: new Date().toISOString(),
       level: pressure === 'normal' ? 'info' : 'warn',
@@ -120,6 +153,9 @@ function startProcessMemoryMonitor() {
       maxRssMb: mib(resourceUsage.maxRSS * 1024),
       activeResources: activeResourceCounts(),
       diagnostics: providerSnapshots(),
+      highWaterHeapMb: mib(highWaterHeap),
+      ...(highWater ? { heapSpaces: v8.getHeapSpaceStatistics().map(space => ({ name: space.space_name,
+        usedMb: mib(space.space_used_size), sizeMb: mib(space.space_size), availableMb: mib(space.space_available_size) })) } : {}),
     };
     previous = { heapUsed: usage.heapUsed, rss: usage.rss };
     state.latest = payload;
@@ -132,7 +168,18 @@ function startProcessMemoryMonitor() {
       arrayBuffersMb: payload.memoryMb.arrayBuffers,
     });
     if (history.length > 180) history.splice(0, history.length - 180);
+    if (reason !== 'admin-request' || Date.now() - lastPersistedAt >= 10_000 || highWater) {
+      files.write({ ...payload, event: highWater ? 'process.memory.high-water' : payload.event });
+      lastPersistedAt = Date.now();
+    }
+    if (highWater) console.warn(`[memory-diagnostics] pid=${process.pid} ${pressure}: heap ${payload.memoryMb.heapUsed}/${payload.memoryMb.heapLimit} MiB; log=${files.status().logPath}`);
+    lastPressure = pressure;
     eventLoop.reset();
+    if (reason !== 'before-heap-snapshot' && reason !== 'after-heap-snapshot') {
+      if (reason === 'startup') captureAutomatically('startup');
+      else if (usage.heapUsed >= captureHighWaterThreshold) captureAutomatically('high-water');
+      else if (usage.heapUsed - startupHeap >= growthThreshold) captureAutomatically('growth');
+    }
     return payload;
   };
 
@@ -141,10 +188,16 @@ function startProcessMemoryMonitor() {
   const pressureTimer = setInterval(() => {
     const usage = process.memoryUsage();
     const heap = v8.getHeapStatistics();
-    if (memoryPressure(usage.heapUsed, heap.heap_size_limit) !== 'normal') {
+    const growthAttempt = automaticCaptures.get('growth');
+    const highWaterAttempt = automaticCaptures.get('high-water');
+    if ((memoryPressure(usage.heapUsed, heap.heap_size_limit) !== 'normal' && Date.now() - lastPersistedAt >= 10_000)
+      || (!highWaterAttempt?.complete && (!highWaterAttempt || Date.now() - highWaterAttempt.at >= 60_000)
+        && usage.heapUsed >= captureHighWaterThreshold)
+      || (!growthAttempt?.complete && (!growthAttempt || Date.now() - growthAttempt.at >= 60_000)
+        && usage.heapUsed - startupHeap >= growthThreshold)) {
       writeSnapshot('pressure-watch');
     }
-  }, Math.min(intervalMs, 10_000));
+  }, 1_000);
   pressureTimer.unref?.();
   const state = {
     history,
@@ -153,6 +206,13 @@ function startProcessMemoryMonitor() {
     pressureTimer,
     timer,
     writeSnapshot,
+    diagnosticFiles: files.status,
+    captureHeapSnapshot: () => {
+      writeSnapshot('before-heap-snapshot');
+      const result = files.captureHeapSnapshot();
+      writeSnapshot('after-heap-snapshot');
+      return result;
+    },
     stop() {
       clearInterval(timer);
       clearInterval(pressureTimer);

@@ -11,12 +11,14 @@ type PendingWrite = {
   reject: (error: unknown) => void;
   resolve: () => void;
   startedAt: number;
+  payloadBytes: number;
 };
 
 type DatabaseWriteQueueState = {
   draining?: Promise<void>;
   idleWaiters: Set<() => void>;
   pending: PendingWrite[];
+  current?: PendingWrite;
 };
 
 const state = ((globalThis as typeof globalThis & {
@@ -37,6 +39,7 @@ function updateQueueGauge() {
 async function drainQueue() {
   while (state.pending.length) {
     const pending = state.pending.shift()!;
+    state.current = pending;
     updateQueueGauge();
     try {
       await runDatabaseTransaction(async (manager) => {
@@ -49,6 +52,8 @@ async function drainQueue() {
     } catch (error) {
       recordMetricTiming('database_write_ms', performance.now() - pending.startedAt, { status: 'error' });
       pending.reject(error);
+    } finally {
+      state.current = undefined;
     }
   }
 }
@@ -64,7 +69,10 @@ export function queueDatabaseWrite(statements: DatabaseWriteStatement[]) {
     return Promise.reject(new Error('Database write queue is full'));
   }
   const promise = new Promise<void>((resolve, reject) => {
-    state.pending.push({ statements, reject, resolve, startedAt: performance.now() });
+    const payloadBytes = statements.reduce((total, statement) => total + statement.sql.length * 2
+      + (statement.params || []).reduce<number>((size, value) => size + (typeof value === 'string' ? value.length * 2
+        : ArrayBuffer.isView(value) || value instanceof ArrayBuffer ? value.byteLength : 8), 0), 0);
+    state.pending.push({ statements, reject, resolve, startedAt: performance.now(), payloadBytes });
   });
   updateQueueGauge();
   if (!state.draining) {
@@ -88,5 +96,18 @@ export async function closeDatabaseWriteQueue() {
 }
 
 export function databaseWriteQueueSnapshot() {
-  return { pending: state.pending.length, workerActive: Boolean(state.draining) };
+  const waitingBytes = state.pending.reduce((total, item) => total + item.payloadBytes, 0);
+  const writes = state.current ? [state.current, ...state.pending] : state.pending;
+  return { pending: state.pending.length, workerActive: Boolean(state.draining),
+    waitingPayloadBytes: waitingBytes, activePayloadBytes: state.current?.payloadBytes || 0,
+    statementCount: writes.reduce((total, item) => total + item.statements.length, 0),
+    largestWriteBytes: writes.reduce((largest, item) => Math.max(largest, item.payloadBytes), 0),
+    oldestWriteAgeMs: writes.length ? Math.round(performance.now() - writes[0].startedAt) : 0,
+    estimateMethod: 'SQL and parameter payload; strings estimated as UTF-16 bytes, excluding object overhead',
+  };
 }
+
+const diagnosticProviders = ((globalThis as typeof globalThis & {
+  __webpilotMemoryDiagnosticProviders?: Map<string, () => unknown>;
+}).__webpilotMemoryDiagnosticProviders ??= new Map());
+diagnosticProviders.set('databaseWriteQueue', databaseWriteQueueSnapshot);

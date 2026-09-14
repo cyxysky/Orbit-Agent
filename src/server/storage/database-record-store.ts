@@ -413,6 +413,7 @@ export async function readBrowserChatSessionSummaries<T>(input: {
   beforeCreatedAt?: string;
   hasMessagesOnly?: boolean;
   limit?: number;
+  offset?: number;
   userId?: string;
 } = {}) {
   const clauses: string[] = [];
@@ -430,13 +431,16 @@ export async function readBrowserChatSessionSummaries<T>(input: {
   }
   const limit = Number.isFinite(input.limit)
     ? Math.max(1, Math.min(501, Math.floor(Number(input.limit))))
-    : undefined;
+    : input.offset !== undefined ? 501 : undefined;
+  const offset = Number.isSafeInteger(input.offset) ? Math.max(0, Number(input.offset)) : 0;
   if (limit) values.push(limit);
+  if (limit && offset) values.push(offset);
   const rows = await queryDatabase<{ summary_json?: string }>(`
     SELECT summary_json FROM browser_chat_session
     ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''}
     ORDER BY created_at DESC, id DESC
     ${limit ? 'LIMIT ?' : ''}
+    ${limit && offset ? 'OFFSET ?' : ''}
   `, values);
   return rows.map((row) => parseDatabaseJson<T | undefined>(row.summary_json, undefined))
     .filter((item): item is T => Boolean(item));

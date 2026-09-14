@@ -761,7 +761,7 @@ function weComAiBotDriver(): ExternalIntegrationDriver {
       { key: 'botSecret', label: 'Secret', control: 'password', secret: true, description: '机器人的长连接 Secret，将加密保存。无需额外配置媒体上传地址。' },
       { key: 'receiveMessages', label: '接收消息并运行 Agent', control: 'select', defaultValue: 'false',
         options: [{ label: '关闭', value: 'false' }, { label: '开启', value: 'true' }],
-        description: '单聊直接发送，群聊中 @机器人。支持 /start、/delete、/list、/select id；对话归属保存此配置的网页账号，以完全模式运行，无需逐次确认工具操作。' },
+        description: '单聊直接发送，群聊中 @机器人。支持 /help、/start、/delete、/list offset limit、/select id、/model-list、/model-switch id；对话归属保存此配置的网页账号，以完全模式运行，无需逐次确认工具操作。' },
       { key: 'ownerUserId', label: '对话所属账号', control: 'text', hidden: true },
       {
         key: 'defaultTargetKind', label: '已验证会话类型', control: 'select', hidden: true,

@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { NextRequest, NextResponse } from 'next/server';
+import type { NextRequest } from 'next/server';
 import { joinWebPilotUrl, WEBPILOT_BASE_PATH } from '@/lib/webpilot-base-path';
 
 type EmbedTokenClaims = {
@@ -50,7 +50,7 @@ function withEmbedHeaders(headers: Headers, cacheable = false) {
 
 export function embedJson<T>(body: T, init: ResponseInit = {}) {
   const headers = withEmbedHeaders(new Headers(init.headers));
-  return NextResponse.json(body, { ...init, headers });
+  return Response.json(body, { ...init, headers });
 }
 
 export function embedOptionsResponse() {

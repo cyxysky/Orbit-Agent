@@ -503,10 +503,11 @@ function estimateBrowserChatRetainedValue(value: unknown, estimate: BrowserChatM
   }
   if (typeof value === 'string') {
     estimate.nodes += 1;
-    estimate.bytes += Buffer.byteLength(value, 'utf8');
+    estimate.bytes += value.length * 2;
     return;
   }
-  if (typeof value !== 'object' || value === null || depth >= 8) return;
+  if (typeof value !== 'object' || value === null) return;
+  if (depth >= 12) { estimate.truncated = true; return; }
   if (estimate.seen.has(value)) return;
   estimate.seen.add(value);
   estimate.nodes += 1;
@@ -518,12 +519,16 @@ function estimateBrowserChatRetainedValue(value: unknown, estimate: BrowserChatM
     estimate.bytes += value.byteLength;
     return;
   }
-  if (Array.isArray(value)) {
-    for (const item of value) estimateBrowserChatRetainedValue(item, estimate, depth + 1);
+  if (Array.isArray(value) || value instanceof Map || value instanceof Set) {
+    for (const item of value instanceof Map ? value.values() : value) {
+      if (estimate.nodes >= 50_000) { estimate.truncated = true; break; }
+      estimateBrowserChatRetainedValue(item, estimate, depth + 1);
+    }
     return;
   }
-  for (const child of Object.values(value)) {
-    estimateBrowserChatRetainedValue(child, estimate, depth + 1);
+  for (const key in value) {
+    if (estimate.nodes >= 50_000) { estimate.truncated = true; break; }
+    if (Object.hasOwn(value, key)) estimateBrowserChatRetainedValue((value as Record<string, unknown>)[key], estimate, depth + 1);
   }
 }
 
@@ -545,6 +550,8 @@ function browserChatMemoryDiagnostics() {
     seen: new WeakSet(),
   };
   let sessionsWithBrowser = 0;
+  const sessionPayloads: Array<{ sessionId: string; busy: boolean; bytes: number; sampledNodes: number;
+    truncated: boolean; categories: Record<string, number> }> = [];
   for (const session of sessions.values()) {
     if (session.browser) sessionsWithBrowser += 1;
     totals.messages += session.messages.length;
@@ -553,14 +560,20 @@ function browserChatMemoryDiagnostics() {
     totals.outputCycles += session.outputCycles.length;
     totals.subagents += session.subagents.length;
     totals.queuedTurns += session.queuedTurns.length;
-    totals.modelTranscriptMessages += browserChatTranscript(session.modelContext).length;
-    totals.activeModelMessages += browserChatActiveMessages(session.modelContext).length;
-    estimateBrowserChatRetainedValue(session.messages, estimate);
-    estimateBrowserChatRetainedValue(session.steps, estimate);
-    estimateBrowserChatRetainedValue(session.logs, estimate);
-    estimateBrowserChatRetainedValue(session.outputCycles, estimate);
-    estimateBrowserChatRetainedValue(session.subagents, estimate);
-    estimateBrowserChatRetainedValue(session.modelContext, estimate);
+    totals.modelTranscriptMessages += session.modelContext.history.length;
+    totals.activeModelMessages += session.modelContext.active.length;
+    const beforeBytes = estimate.bytes;
+    const beforeNodes = estimate.nodes;
+    const categories: Record<string, number> = {};
+    for (const [name, value] of Object.entries({ messages: session.messages, steps: session.steps,
+      logs: session.logs, outputCycles: session.outputCycles, subagents: session.subagents,
+      modelContext: session.modelContext, queuedTurns: session.queuedTurns, pendingPersistence: dirtyRecords.get(session.id) })) {
+      const before = estimate.bytes;
+      estimateBrowserChatRetainedValue(value, estimate);
+      categories[name] = estimate.bytes - before;
+    }
+    sessionPayloads.push({ sessionId: session.id, busy: session.busy, bytes: estimate.bytes - beforeBytes,
+      sampledNodes: estimate.nodes - beforeNodes, truncated: estimate.truncated, categories });
   }
   return {
     runtimeSessions: sessions.size,
@@ -582,6 +595,8 @@ function browserChatMemoryDiagnostics() {
     retainedPayloadEstimateMb: Math.round(estimate.bytes / 1024 / 1024 * 10) / 10,
     retainedPayloadSampleNodes: estimate.nodes,
     retainedPayloadEstimateTruncated: estimate.truncated,
+    estimateMethod: 'Bounded payload walk: UTF-16 string bytes and binary byteLength; shared objects counted once; excludes object overhead and SDK/compiler state',
+    largestSessions: sessionPayloads.sort((a, b) => b.bytes - a.bytes).slice(0, 20),
   };
 }
 
@@ -3377,7 +3392,8 @@ async function ensureStartedNow(
   } catch (error) {
     await browser.close({ keepOpen: true }).catch(() => undefined);
     if (session.browser === browser) {
-      session.browser = undefined;
+      // Tools retain this instance for the whole turn. Retry its startup in
+      // place, as for stale browser recovery, instead of orphaning those tools.
       session.started = false;
       session.updatedAt = now();
       persistAndNotify(session.id);

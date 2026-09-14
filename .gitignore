@@ -39,5 +39,6 @@ id_ed25519.*
 /.workflow-vitest
 /.venv-gliner
 /.capability-sdk/
+/.webpilot-dev-api/
 **/__pycache__/
 *.py[cod]

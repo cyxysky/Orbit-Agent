@@ -16,6 +16,7 @@ const { createRealtimeRefreshHub } = require('./realtime-refresh-hub');
 const { startProcessMemoryMonitor } = require('./process-memory-monitor');
 const { applyOrbitEnvironment } = require('./orbit-environment');
 const { startDevelopmentCodeSandboxRunner } = require('./development-code-sandbox-runner');
+const { prepareDevelopmentApiProject } = require('./development-api-project');
 
 const DEVELOPMENT_CHILD_FLAG = '--development-child';
 const DEVELOPMENT_RESTART_EXIT_CODE = 77;
@@ -258,12 +259,9 @@ function runtimeApiRequest(pathname) {
 }
 
 function splitRuntimeEnabled(dev, runtimeChildMode, environment = process.env) {
-  // Every Next development server rewrites the same next-env.d.ts file. Running
-  // the UI and API compilers together makes them invalidate each other while
-  // Webpack is emitting chunks, which can leave a runtime referring to vendor
-  // chunks that have not been written yet. Keep process isolation in production
-  // and use one compiler for all development routes.
-  return !dev && !runtimeChildMode && environment.WEBPILOT_SPLIT_RUNTIME !== 'false';
+  // The development API child has its own generated project and type files.
+  // Keep the React page renderer's async debugging hooks away from Agent work.
+  return !runtimeChildMode && environment.WEBPILOT_SPLIT_RUNTIME !== 'false';
 }
 
 function availableInternalPort(hostname) {
@@ -329,7 +327,9 @@ async function startApiRuntimeChild({ appDir, dev, externalPort }) {
   const port = Number.isInteger(configuredPort) && configuredPort > 0 && configuredPort <= 65_535
     ? configuredPort
     : await availableInternalPort(hostname);
-  const args = [__filename, '--runtime-child', ...(dev ? ['--dev'] : [])];
+  const memoryArgs = process.execArgv.filter(arg => /^--max-(old|semi)-space-size=/.test(arg));
+  const args = [...memoryArgs, __filename, '--runtime-child', ...(dev ? ['--dev'] : []),
+    ...(process.argv.includes('--webpack') ? ['--webpack'] : [])];
   const child = spawn(process.execPath, args, {
     cwd: appDir,
     env: {
@@ -426,13 +426,6 @@ function createApiRuntimeSupervisor({
     return starting;
   };
 
-  const invalidate = (runtime) => {
-    if (current !== runtime || stopped) return;
-    current = undefined;
-    if (!runtime.child.killed) runtime.child.kill('SIGTERM');
-    scheduleRestart();
-  };
-
   const stop = () => {
     stopped = true;
     clearRestartTimer();
@@ -441,10 +434,11 @@ function createApiRuntimeSupervisor({
     if (runtime?.child && !runtime.child.killed) runtime.child.kill('SIGTERM');
   };
 
-  return { ensure, invalidate, stop };
+  return { ensure, stop };
 }
 
-function proxyHttpRequest(request, response, target, onUnavailable) {
+function proxyHttpRequest(request, response, target) {
+  let clientDisconnected = false;
   const upstream = http.request({
     headers: proxyRequestHeaders(request.headers, target),
     hostname: target.hostname,
@@ -452,21 +446,29 @@ function proxyHttpRequest(request, response, target, onUnavailable) {
     path: request.url,
     port: target.port,
   }, (upstreamResponse) => {
+    if (clientDisconnected) { upstreamResponse.destroy(); return; }
     response.writeHead(upstreamResponse.statusCode || 502, upstreamResponse.headers);
+    upstreamResponse.once('error', (error) => response.destroy(error));
     upstreamResponse.pipe(response);
   });
   upstream.once('error', (error) => {
+    if (clientDisconnected || response.destroyed) return;
     console.error('[webpilot-server] API runtime proxy failed.', error);
-    onUnavailable?.(error);
-    if (!response.headersSent) {
-      response.writeHead(503, {
-        'Content-Type': 'text/plain; charset=utf-8',
-        'Retry-After': '1',
-      });
+    // A reset belongs to this request, not the lifetime of the API process.
+    // The supervisor restarts the child only after its actual exit event.
+    if (response.headersSent) {
+      response.destroy(error);
+      return;
     }
-    response.end('API Runtime Unavailable');
+    response.writeHead(502, {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Retry-After': '1',
+    });
+    response.end('API request failed');
   });
-  request.once('aborted', () => upstream.destroy());
+  const disconnect = () => { clientDisconnected = true; upstream.destroy(); };
+  request.once('aborted', disconnect);
+  response.once('close', () => { if (!response.writableFinished) disconnect(); });
   request.pipe(upstream);
 }
 
@@ -612,13 +614,21 @@ async function main() {
   // process-level NODE_PATH initialization.
   const next = requireRuntimeDependency(appDir, 'next');
 
+  let developmentApiProject;
+  if (dev && runtimeChildMode) {
+    const loadConfig = requireRuntimeDependency(appDir, 'next/dist/server/config').default;
+    const { PHASE_DEVELOPMENT_SERVER } = requireRuntimeDependency(appDir, 'next/constants');
+    const developmentConfig = await loadConfig(PHASE_DEVELOPMENT_SERVER, appDir);
+    developmentApiProject = prepareDevelopmentApiProject(appDir, developmentConfig);
+  }
+
   const developmentWebpack = dev && process.argv.includes('--webpack');
   if (dev) {
     console.info(`[webpilot-server] Development compiler: ${developmentWebpack ? 'Webpack' : 'Turbopack'}`);
   }
   const application = next({
     dev,
-    dir: appDir,
+    dir: developmentApiProject?.directory || appDir,
     hostname,
     port,
     // Use Next's incremental development compiler by default. Keep Webpack an
@@ -626,12 +636,13 @@ async function main() {
     turbopack: dev && !developmentWebpack,
     webpack: developmentWebpack,
     ...(compiledConfig ? { conf: compiledConfig } : {}),
+    ...(developmentApiProject ? { conf: developmentApiProject.config } : {}),
   });
   const handle = application.getRequestHandler();
-  await Promise.all([
-    application.prepare(),
-    apiRuntimeSupervisor?.ensure(),
-  ]);
+  // Next's TS config loader also uses a temporary compiled config in appDir.
+  // Finish the UI's first load before the API child reads the source config.
+  await application.prepare();
+  await apiRuntimeSupervisor?.ensure();
   const handleNextUpgrade = dev ? application.getUpgradeHandler() : undefined;
 
   // In production the build manifest is the sole source of truth for basePath.
@@ -685,7 +696,7 @@ async function main() {
       if (apiRuntimeSupervisor && runtimeApiRequest(pathname)) {
         try {
           const apiRuntime = await apiRuntimeSupervisor.ensure();
-          proxyHttpRequest(request, response, apiRuntime, () => apiRuntimeSupervisor.invalidate(apiRuntime));
+          proxyHttpRequest(request, response, apiRuntime);
         } catch (error) {
           console.error('[webpilot-server] API runtime is unavailable.', error);
           if (!response.headersSent) {
@@ -696,6 +707,13 @@ async function main() {
           }
           response.end('API Runtime Unavailable');
         }
+        return;
+      }
+      // Unknown API URLs also enter Next's default 404 page renderer. Match the
+      // real API route table (including dynamic routes) before invoking Next.
+      if (developmentApiProject && !developmentApiProject.matchesPath(pathname)) {
+        response.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+        response.end(JSON.stringify({ error: 'Not Found' }));
         return;
       }
       await handle(request, response);
@@ -737,6 +755,7 @@ async function main() {
   });
 
   const close = () => {
+    developmentApiProject?.close();
     codeSandboxRunner?.stop();
     clearInterval(developmentMemoryTimer);
     memoryMonitor.stop();
@@ -751,7 +770,7 @@ async function main() {
 }
 
 if (require.main === module) {
-  if (process.argv.includes('--dev') && !process.argv.includes(DEVELOPMENT_CHILD_FLAG)) {
+  if (process.argv.includes('--dev') && !process.argv.includes('--runtime-child') && !process.argv.includes(DEVELOPMENT_CHILD_FLAG)) {
     startDevelopmentSupervisor();
   } else {
     main().catch((error) => {

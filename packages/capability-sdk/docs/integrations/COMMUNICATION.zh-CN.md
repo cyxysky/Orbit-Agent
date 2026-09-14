@@ -259,4 +259,4 @@ createWeComBotConnection({botId,secret}) 使用同一个官方 WebSocket 连接�
 
 transport=wecom-mcp 与 wecom-websocket 是不同目标空间，草稿复制目标 ID 和 transport。设置默认 MCP，附件上传需要明确 WebSocket 目标，回调回复保持来源连接。SQLite 原子 claimDelivery/finishDelivery 跨本机进程防止重复发送，草稿 ID 作为幂等 key；自定义持久存储也需原子实现，直接创建 store 时需 dispose。
 
-以下属于 Orbit 宿主集成，不会因安装本包自动获得：机器人会话绑定 web 账户，/start、/delete、/list、/select 管理 Browser Chat；群成员共享会话，其他账户会话不可访问。入站 ID 持久去重，出站逐部分记录回执；队列进入后重读持久记录，重启可补交已完成结果，不自动重放中断工具。混合图文进入同一轮；仅附件先下载并等待同一发件人、同一 web 会话后续文字，切换会话不移动附件，删除会话取消等待，遵循上传大小/配额/保留期。机器人创建轮次使用宿主 full 模式并自动回复来源会话。
+以下属于 Orbit 宿主集成，不会因安装本包自动获得：机器人会话绑定 web 账户，/help、/start、/delete、/list offset limit、/select、/model-list、/model-switch id 管理 Browser Chat；群成员共享会话，其他账户会话不可访问。入站 ID 持久去重，出站逐部分记录回执；队列进入后重读持久记录，重启可补交已完成结果，不自动重放中断工具。混合图文进入同一轮；仅附件先下载并等待同一发件人、同一 web 会话后续文字，切换会话不移动附件，删除会话取消等待，遵循上传大小/配额/保留期。机器人创建轮次使用宿主 full 模式并自动回复来源会话。

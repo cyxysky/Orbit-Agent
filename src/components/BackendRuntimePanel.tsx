@@ -27,6 +27,20 @@ export function BackendRuntimePanel() {
   const [loading, setLoading] = useState(true);
   const [closing, setClosing] = useState('');
   const [error, setError] = useState('');
+  const [capturing, setCapturing] = useState(false);
+  const [snapshotPath, setSnapshotPath] = useState('');
+
+  const captureHeap = async () => {
+    setCapturing(true);
+    setError('');
+    try {
+      const response = await fetch(withWebPilotBasePath('/api/admin/ai-operations/runtime'), { method: 'POST' });
+      const result = await readApiJson<{ file: string }>(response, '采集堆快照失败');
+      setSnapshotPath(result.file);
+    } catch (captureError) {
+      setError(captureError instanceof Error ? captureError.message : '采集堆快照失败');
+    } finally { setCapturing(false); }
+  };
 
   const load = useCallback(async () => {
     try {
@@ -41,10 +55,11 @@ export function BackendRuntimePanel() {
   }, []);
 
   useEffect(() => {
+    if (capturing) return;
     void load();
     const timer = window.setInterval(() => void load(), 10_000);
     return () => window.clearInterval(timer);
-  }, [load]);
+  }, [load, capturing]);
 
   const closeBrowser = async (browserId: string) => {
     setClosing(browserId);
@@ -104,6 +119,17 @@ export function BackendRuntimePanel() {
         <button onClick={() => void load()} type="button"><RefreshCw className={loading ? 'spin' : undefined} size={15} />{t("刷新")}</button>
       </div>
       {error ? <p className="ai-runtime-error" role="alert">{t(error)}</p> : null}
+      <section className="ai-operations-panel">
+        <header className="ai-operations-panel-header">
+          <div><h2>{t('内存诊断')}</h2><p>{t('堆快照会暂停后端并可能包含敏感数据，仅保存到本机。建议在空闲时分别采集基线和增长后的快照。')}</p></div>
+          <button type="button" disabled={capturing || !data?.diagnosticFiles} onClick={() => void captureHeap()}>{t(capturing ? '正在采集堆快照…' : '采集堆快照')}</button>
+        </header>
+        {data?.diagnosticFiles ? <p>{t('轮转日志')}：<code>{data.diagnosticFiles.logPath}</code></p> : <p>{t('重启后端服务后启用落盘诊断。')}</p>}
+        {data?.diagnosticFiles?.lastError ? <p role="alert">{data.diagnosticFiles.lastError}</p> : null}
+        {snapshotPath || data?.diagnosticFiles?.lastHeapSnapshot?.file ? <p>{t('最近堆快照')}：<code>{snapshotPath || data?.diagnosticFiles?.lastHeapSnapshot?.file}</code></p> : null}
+        <p>{t('持久化队列')}：{data?.persistenceQueue.pending || 0} · {t('等待写入')} {mb((data?.persistenceQueue.waitingPayloadBytes || 0) / 1024 / 1024)} · {t('正在写入')} {mb((data?.persistenceQueue.activePayloadBytes || 0) / 1024 / 1024)}</p>
+        <details><summary>{t('会话分类体量（估算）')}</summary><pre>{JSON.stringify(data?.diagnostics.largestSessions || [], null, 2)}</pre></details>
+      </section>
       <section className="ai-runtime-metrics">
         <article><MemoryStick size={18} /><span>{t("RSS 内存")}</span><strong>{mb(data?.process.memoryMb.rss)}</strong><small>{t('堆 {used} / {limit}', { used: mb(data?.process.memoryMb.heapUsed), limit: mb(data?.process.memoryMb.heapLimit) })}</small></article>
         <article><MemoryStick size={18} /><span>{t("原生与缓冲区")}</span><strong>{mb(data?.process.memoryMb.external)}</strong><small>ArrayBuffer {mb(data?.process.memoryMb.arrayBuffers)}</small></article>

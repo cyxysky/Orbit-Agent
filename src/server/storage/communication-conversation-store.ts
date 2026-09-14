@@ -3,11 +3,13 @@ import type { WeComInboundMessage, WeComInboundAttachment } from '@cjfclonedeep/
 import type { BrowserChatAttachment } from '@/server/ai/agents/browser-chat-attachments';
 import type { CommunicationContent } from '@cjfclonedeep/capability-sdk/integrations/communication';
 import { executeDatabase, queryDatabase, queryDatabaseOne } from '@/server/db/database';
+import type { RuntimeModelSelection } from '@/lib/model-selection';
 
 export type CommunicationConversation = {
   id: string; integrationId: string; botId: string; userId: string;
   target: WeComInboundMessage['target']; activeSessionId?: string;
   sessions: Array<{ id: string; title: string }>;
+  modelSelection?: RuntimeModelSelection;
 };
 export type CommunicationInbound = {
   id: string; conversationId: string; text: string; senderId: string;

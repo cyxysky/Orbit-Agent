@@ -9,6 +9,8 @@ import {
 import { communicationArtifactReader } from '@/server/storage/artifact-access';
 import { readBrowserChatSessionSummaries } from '@/server/storage/database-record-store';
 import { readBrowserChatSessionOwner } from '@/server/storage/browser-chat-history-store';
+import { store } from '@/server/db/store';
+import { enabledModelProviders, modelsForProvider, modelSelectionValue, resolveRuntimeModelSelection } from '@/lib/model-selection';
 import { browserChatAttachmentLimit } from '@/server/ai/agents/browser-chat-attachments';
 import {
   communicationId, readCommunicationConversation, saveCommunicationConversation,
@@ -314,22 +316,57 @@ async function createSession(conversation: CommunicationConversation, item: Comm
 }
 
 async function processReceived(conversation: CommunicationConversation, item: CommunicationInbound) {
-  const match = /^\/(start|delete|list|select)(?:\s+([^\s]+))?\s*$/i.exec(item.text);
-  if (item.text.startsWith('/') && !item.media?.length && !item.attachments?.length) {
-    if (!match || (match[1].toLowerCase() !== 'select' && match[2]) || (match[1].toLowerCase() === 'select' && !match[2])) {
-      await replyText(item, '命令：/start 新建对话；/delete 删除当前对话；/list 列表；/select chat_xxx 切换对话。');
+  const [commandToken, ...args] = item.text.trim().split(/\s+/);
+  const command = commandToken.toLowerCase();
+  const help = [
+    '/help 查看帮助',
+    '/start 新建对话',
+    '/delete 删除当前对话',
+    '/list [offset] [limit] 分页查看当前网页账号的对话，按创建时间从新到旧排列；offset 从 0 开始，limit 为 1～500，默认 /list 10 10。例：/list 10 5 跳过前 10 个，取后面 5 个；/list 0 10 查看第一页。',
+    '/select chat_xxx 切换对话',
+    '/model-list 查看已启用的对话模型及当前选中模型',
+    '/model-switch id 复制模型列表中的 ID，切换当前通信会话后续消息使用的模型；正在执行的消息不受影响。',
+  ].join('\n\n');
+  const offset = args[0] === undefined ? 10 : Number(args[0]);
+  const limit = args[1] === undefined ? 10 : Number(args[1]);
+  const valid = ['/help', '/start', '/delete', '/model-list'].includes(command) ? args.length === 0
+    : ['/select', '/model-switch'].includes(command) ? args.length === 1
+      : command === '/list' && args.length <= 2 && args.every(value => /^\d+$/.test(value))
+        && Number.isSafeInteger(offset) && offset >= 0 && Number.isSafeInteger(limit) && limit >= 1 && limit <= 500;
+  if (item.text.trimStart().startsWith('/') && !item.media?.length && !item.attachments?.length) {
+    if (!valid || command === '/help') {
+      await replyText(item, `${!valid ? '命令或参数无效。\n\n' : ''}${help}`);
     } else {
-      const command = match[1].toLowerCase();
-      if (command === 'start') {
+      if (command === '/start') {
         const id = await createSession(conversation, item);
         await replyText(item, `已开启新对话：${id}。后续消息将在此对话继续，网页中也可查看。`);
-      } else if (command === 'list') {
-        const sessions = await readBrowserChatSessionSummaries<{ id: string; title: string }>({ userId: conversation.userId });
-        if (!sessions.some(session => session.id === conversation.activeSessionId)) conversation.activeSessionId = undefined;
-        await saveCommunicationConversation(conversation);
-        await replyText(item, sessions.length ? sessions.map(session => `${session.id === conversation.activeSessionId ? '当前：' : ''}${session.id} · ${session.title || '新对话'}`).join('\n\n') : '当前网页账号还没有对话，发送消息或 /start 即可创建。');
-      } else if (command === 'select') {
-        const session = await getBrowserChatSession(match[2], conversation.userId);
+      } else if (command === '/list') {
+        const sessions = await readBrowserChatSessionSummaries<{ id: string; title: string }>({ userId: conversation.userId, offset, limit: limit + 1 });
+        const page = sessions.slice(0, limit);
+        await replyText(item, page.length
+          ? [`对话列表：offset=${offset}，本页 ${page.length} 个`, ...page.map(session => `${session.id === conversation.activeSessionId ? '当前：' : ''}${session.id} · ${session.title || '新对话'}`),
+            sessions.length > limit ? `下一页：/list ${offset + limit} ${limit}` : '已到最后一页。'].join('\n\n')
+          : offset ? '该位置之后没有对话。使用 /list 0 10 查看第一页。' : '当前网页账号还没有对话，发送消息或 /start 即可创建。');
+      } else if (command === '/model-list' || command === '/model-switch') {
+        const config = await store.getModelConfig();
+        const available = enabledModelProviders(config).flatMap(provider => modelsForProvider(config, provider)
+          .map(model => ({ provider, model, id: modelSelectionValue(provider, model) })));
+        if (command === '/model-list') {
+          const selected = resolveRuntimeModelSelection(config, conversation.modelSelection);
+          const selectedId = modelSelectionValue(selected.provider, selected.model);
+          await replyText(item, available.length ? available.map(model => `${model.id === selectedId ? '当前选中：' : ''}${model.provider} / ${model.model}\nID：${model.id}`).join('\n\n')
+            : '当前没有已启用的对话模型，请先在网页模型设置中配置。');
+        } else {
+          const selected = available.find(model => model.id === args[0]);
+          if (!selected) await replyText(item, '模型 ID 不存在或未启用，请用 /model-list 查看并复制完整 ID。');
+          else {
+            conversation.modelSelection = { provider: selected.provider, model: selected.model };
+            await saveCommunicationConversation(conversation);
+            await replyText(item, `已选中 ${selected.provider} / ${selected.model}，当前通信会话的后续消息将使用此模型。`);
+          }
+        }
+      } else if (command === '/select') {
+        const session = await getBrowserChatSession(args[0], conversation.userId);
         if (!session || session.status === 'closed') await replyText(item, '对话不存在、已关闭或不属于当前网页账号。请用 /list 查看可用 ID。');
         else {
           if (!conversation.sessions.some(entry => entry.id === session.id)) conversation.sessions.push({ id: session.id, title: session.title });
@@ -386,7 +423,7 @@ async function processReceived(conversation: CommunicationConversation, item: Co
   item.sessionId = sessionId; item.status = 'running'; await saveCommunicationInbound(item);
   watch(conversation, item);
   try {
-    await sendBrowserChatMessage(sessionId, item.text, 'full', undefined, undefined, item.id, attachments, undefined, conversation.userId);
+    await sendBrowserChatMessage(sessionId, item.text, 'full', conversation.modelSelection?.provider, conversation.modelSelection?.model, item.id, attachments, undefined, conversation.userId);
   } catch (error) {
     state.watchers.get(item.id)?.stop(); state.watchers.delete(item.id);
     if (attachments.length) {
