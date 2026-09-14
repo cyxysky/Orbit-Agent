@@ -55,7 +55,7 @@ test('child browser sessions share parent auth state while owning independent pa
     stepIndex: 1,
   });
   assert.equal(childAuth.ok, true, childAuth.actual);
-  const childAuthResult = JSON.parse(childAuth.actual) as {
+  const childAuthResult = childAuth.data as {
     result?: { cookie?: string; session?: string | null };
   };
   assert.match(childAuthResult.result?.cookie || '', /auth=parent-cookie/);

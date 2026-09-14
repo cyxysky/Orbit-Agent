@@ -1393,6 +1393,9 @@ export class BrowserSession {
       this.lifecycle = 'starting';
       try {
         await this.startNow();
+        if (!this.isUsable()) throw new Error('Browser startup completed without an owned, open page.');
+        // Reclaimed tabs may arrive without an active-page selection.
+        void this.activePage;
         this.lifecycle = 'ready';
       } catch (error) {
         this.lifecycle = 'failed';
@@ -3439,10 +3442,11 @@ export class BrowserSession {
 
   // 获取当前可用页面；如果活动页关闭，会从浏览器上下文中寻找替代页面。
   private get activePage() {
-    if (!this.page) throw new Error('Browser session has not started');
-    if (this.page.isClosed()) {
+    if (!this.page || this.page.isClosed()) {
       const replacement = this.sessionPages()[0];
-      if (!replacement) throw new Error('Active browser page has been closed and no replacement page is available.');
+      if (!replacement) throw new Error(this.page
+        ? 'Active browser page has been closed and no replacement page is available.'
+        : 'Browser session has not started');
       this.page = replacement;
       this.notifyLivePreviewTabsChanged();
       this.attachPageListeners(replacement);
@@ -4259,12 +4263,15 @@ export class BrowserSession {
     const executionContext = this.context;
     const pagesBeforeExecution = new Set(executionContext?.pages() || []);
     const pagesCreatedDuringExecution = new Set<Page>();
-    const claimCodeCreatedPage = (candidate: Page) => {
+    const claimCodeCreatedPage = async (candidate: Page) => {
       if (candidate.isClosed() || pagesBeforeExecution.has(candidate)) return;
-      pagesCreatedDuringExecution.add(candidate);
-      this.claimPage(candidate, { makeActive: false });
+      // Context page events include other conversations' startup tabs. Only
+      // claim our own popups or pages explicitly marked by this code kernel.
+      const opener = await candidate.opener().catch(() => null);
+      if (!this.ownedPages.has(candidate) && !(opener && this.ownedPages.has(opener))
+        && await this.readPageGroupId(candidate) !== this.pageGroupId) return;
+      if (this.claimPage(candidate, { makeActive: false })) pagesCreatedDuringExecution.add(candidate);
     };
-    executionContext?.on('page', claimCodeCreatedPage);
     const downloads = this.browserDownloads();
     const downloadStart = downloads?.begin(input.runId, input.abortSignal) ?? 0;
     let downloaded: BrowserDownloadResult[] = [];
@@ -4281,8 +4288,7 @@ export class BrowserSession {
       });
     } finally {
       try { downloaded = await downloads?.collect(downloadStart) || []; } finally { downloads?.end(); }
-      executionContext?.off('page', claimCodeCreatedPage);
-      for (const candidate of executionContext?.pages() || []) claimCodeCreatedPage(candidate);
+      for (const candidate of executionContext?.pages() || []) await claimCodeCreatedPage(candidate);
       await Promise.all([
         ...Array.from(pagesCreatedDuringExecution, (candidate) => this.ensurePageGroup(candidate)),
         ...(!page.isClosed() ? [this.ensurePageGroup(page)] : []),
