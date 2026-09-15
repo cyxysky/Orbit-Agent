@@ -4,6 +4,7 @@ import { copyFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { parse } from 'acorn';
+import { createBrowserCodeCdpScope } from './browser-code-cdp-scope.ts';
 import { raceWithAbort } from '../../index.ts';
 import {
   applyEditableTextSelection,
@@ -21,6 +22,8 @@ export type BrowserCodeConnection = {
 type BrowserCodeKernelInit = {
   connection: BrowserCodeConnection;
   playwrightEntryPath: string;
+  websocketEntryPath: string;
+  targetIds?: string[];
   sessionGroupId?: string;
 };
 
@@ -66,7 +69,8 @@ export type BrowserCodeRunResult = {
   elapsedMs: number;
   logs: BrowserCodeExecutionLog[];
   images?: BrowserCodeImage[];
-  selectedExecutionId?: string;
+  selectedTargetId?: string;
+  ownedTargetIds?: string[];
   activity?: BrowserCodeActivity;
   aborted?: boolean;
   executionState?: BrowserCodeExecutionState;
@@ -289,6 +293,8 @@ export type BrowserCodeAttachmentBinding = {
 export type BrowserCodeExecutionInput = {
   code: string;
   executionId: string;
+  targetIds?: string[];
+  executionTargetId?: string;
   maxOutputChars?: number;
   attachments?: BrowserCodeAttachmentBinding[];
   credentials?: BrowserCodeCredentialBinding[];
@@ -326,7 +332,7 @@ type PendingExecution = {
 const maxDiagnosticChars = 4_000;
 const defaultBrowserCodeKernelReadyTimeoutMs = 10_000;
 const defaultBrowserCodeExecutionTimeoutMs = 90_000;
-export const BROWSER_CODE_KERNEL_RUNTIME_REVISION = 38;
+export const BROWSER_CODE_KERNEL_RUNTIME_REVISION = 40;
 
 function boundedInteger(value: unknown, fallback: number, min: number, max: number) {
   const parsed = typeof value === 'number' ? value : Number(value);
@@ -491,6 +497,7 @@ function browserCodeKernelMain() {
       : `${value.slice(0, 2000)}...[truncated; length=${value.length}]`
   );
   let browser: import('playwright').Browser | undefined;
+  let cdpScope: Awaited<ReturnType<typeof createBrowserCodeCdpScope>> | undefined;
   let replServer: import('node:repl').REPLServer | undefined;
   let selectedRuntimePage: import('playwright').Page | undefined;
   let sessionGroupId = '';
@@ -2777,8 +2784,18 @@ function browserCodeKernelMain() {
     // A bare import here probes ancestors of the temporary kernel directory
     // before NODE_PATH, which can fail the permission check during resolution.
     const { chromium } = childRequire(input.playwrightEntryPath) as typeof import('playwright');
+    if (input.connection.protocol === 'cdp' && input.targetIds) {
+      send({ type: 'startup-stage', stage: 'scoped-cdp-connection' });
+      cdpScope = await createBrowserCodeCdpScope({
+        endpoint: input.connection.endpoint,
+        targetIds: input.targetIds,
+        timeoutMs: 5_000,
+        websocketModule: childRequire(input.websocketEntryPath) as typeof import('ws'),
+      });
+    }
+    send({ type: 'startup-stage', stage: 'playwright-page-initialization' });
     browser = input.connection.protocol === 'cdp'
-      ? await chromium.connectOverCDP(input.connection.endpoint)
+      ? await chromium.connectOverCDP(cdpScope?.endpoint || input.connection.endpoint)
       : await chromium.connect(input.connection.endpoint);
     for (const candidateContext of browser.contexts()) {
       candidateContext.on('page', decoratePage);
@@ -2786,6 +2803,7 @@ function browserCodeKernelMain() {
     }
 
     const inputStream = new PassThrough();
+    send({ type: 'startup-stage', stage: 'javascript-repl' });
     const outputStream = new PassThrough();
     outputStream.resume();
     replServer = repl.start({
@@ -2814,8 +2832,34 @@ function browserCodeKernelMain() {
     send({ type: 'ready' });
   };
 
-  const findExecutionPage = async (executionId: string) => {
+  const pageTargetIds = new WeakMap<import('playwright').Page, Promise<string>>();
+  const targetIdForPage = (page: import('playwright').Page) => {
+    let id = pageTargetIds.get(page);
+    if (!id) {
+      id = (async () => {
+        const client = await page.context().newCDPSession(page);
+        try { return (await client.send('Target.getTargetInfo')).targetInfo.targetId; }
+        finally { await client.detach(); }
+      })();
+      pageTargetIds.set(page, id);
+    }
+    return id;
+  };
+  const findExecutionPage = async (executionId: string, targetId?: string) => {
     if (!browser) throw new Error('browserCode browser connection is not initialized.');
+    if (targetId) {
+      // Newly attached host-created tabs initialize asynchronously in Playwright.
+      // Wait for the exact target, never fall back to the previously selected tab.
+      const deadline = Date.now() + browserCodeActionTimeoutMs;
+      do {
+        for (const candidate of browser.contexts().flatMap((context) => context.pages())) {
+          if (candidate.isClosed()) continue;
+          if (await targetIdForPage(candidate) === targetId) return candidate;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      } while (Date.now() < deadline);
+      throw new Error('browserCode could not initialize the selected session page.');
+    }
     const candidates = browser.contexts()
       .flatMap((browserContext) => browserContext.pages())
       .filter((candidate) => !candidate.isClosed());
@@ -2841,11 +2885,14 @@ function browserCodeKernelMain() {
     credentials?: BrowserCodeCredentialBinding[];
     uidReferences?: BrowserCodeUidReference[];
     executionId: string;
+    targetIds?: string[];
+    executionTargetId?: string;
     maxOutputChars?: number;
     requestId: string;
   }) => {
     if (!replServer) throw new Error('browserCode JavaScript kernel is not initialized.');
-    const page = await findExecutionPage(input.executionId);
+    if (cdpScope && input.targetIds) await cdpScope.updateTargets(input.targetIds);
+    const page = await findExecutionPage(input.executionId, input.executionTargetId);
     const browserContext = page.context();
     const initialPage = page;
     const initialUrl = page.url();
@@ -2923,20 +2970,9 @@ function browserCodeKernelMain() {
         tabChanged,
         ...(activeExecution.verification ? { verification: activeExecution.verification } : {}),
       };
-      let selectedExecutionId: string | undefined;
-      if (selectedPage && typeof selectedPage.evaluate === 'function' && !selectedPage.isClosed()) {
-        selectedExecutionId = childRandomUUID();
-        await selectedPage.evaluate((id) => {
-          Object.defineProperty(window, '__aiBrowserCodeSelectedExecutionId', {
-            configurable: true,
-            enumerable: false,
-            value: id,
-            writable: false,
-          });
-        }, selectedExecutionId).catch(() => {
-          selectedExecutionId = undefined;
-        });
-      }
+      const selectedTargetId = finalPage ? await targetIdForPage(finalPage) : undefined;
+      const ownedTargetIds = cdpScope?.targetIds()
+        || await Promise.all(browserContext.pages().filter((candidate) => !candidate.isClosed()).map(targetIdForPage));
       const value = outputs.length === 0 ? null : outputs.length === 1 ? outputs[0] : outputs;
       send({
         type: 'result',
@@ -2945,7 +2981,8 @@ function browserCodeKernelMain() {
         value: jsonSafe(value, input.maxOutputChars),
         logs,
         images,
-        selectedExecutionId,
+        selectedTargetId,
+        ownedTargetIds,
         activity,
         memoryUsage: hostProcess.memoryUsage(),
       });
@@ -2956,6 +2993,7 @@ function browserCodeKernelMain() {
         requestId: input.requestId,
         ok: false,
         error: error instanceof Error ? error.message : String(error),
+        ownedTargetIds: cdpScope?.targetIds(),
         images: activeExecution.images,
         logs: activeExecution.logs,
         activity: {
@@ -2967,7 +3005,7 @@ function browserCodeKernelMain() {
         memoryUsage: hostProcess.memoryUsage(),
       });
     } finally {
-      await clearExecutionUidBindings();
+      await settleKernelTask(clearExecutionUidBindings(), 1000, 'UID binding cleanup');
       activeExecution = undefined;
     }
   };
@@ -3041,6 +3079,7 @@ function childSource() {
     `const readEditableText = ${readEditableText.toString()};`,
     `const applyEditableTextSelection = ${applyEditableTextSelection.toString()};`,
     `const resolveEditableTextSelection = ${resolveEditableTextSelection.toString()};`,
+    `const createBrowserCodeCdpScope = ${createBrowserCodeCdpScope.toString()};`,
     `(${browserCodeKernelMain.toString()})();`,
   ].join('\n');
 }
@@ -3054,7 +3093,7 @@ const browserCodeHostRequire = browserCodeNodeModule.createRequire(path.join(pro
 function browserCodeResolvedPackageReadRoots(playwrightEntryPath: string) {
   const roots: string[] = [];
   const playwrightRequire = browserCodeNodeModule.createRequire(playwrightEntryPath);
-  for (const resolvedPath of [playwrightEntryPath, playwrightRequire.resolve('playwright-core')]) {
+  for (const resolvedPath of [playwrightEntryPath, playwrightRequire.resolve('playwright-core'), browserCodeHostRequire.resolve('ws')]) {
     let current = path.dirname(path.resolve(resolvedPath));
     roots.push(current);
     while (path.basename(current).toLowerCase() !== 'node_modules') {
@@ -3154,6 +3193,7 @@ export class BrowserCodeKernel {
   private readyResolve?: () => void;
   private readyTimer?: ReturnType<typeof setTimeout>;
   private stderr = '';
+  private startupStage = 'process-start';
   private tail = Promise.resolve();
   private tempDir?: string;
 
@@ -3185,7 +3225,7 @@ export class BrowserCodeKernel {
     }
 
     try {
-      await raceWithAbort(this.ensureReady(), input.abortSignal);
+      await raceWithAbort(this.ensureReady(input.targetIds), input.abortSignal);
     } catch (error) {
       const normalized = error instanceof Error ? error : new Error(String(error));
       this.rejectReady(normalized);
@@ -3283,6 +3323,8 @@ export class BrowserCodeKernel {
             : undefined,
         })),
         executionId: input.executionId,
+        targetIds: input.targetIds,
+        executionTargetId: input.executionTargetId,
         maxOutputChars,
         requestId,
       }, (error) => {
@@ -3293,7 +3335,7 @@ export class BrowserCodeKernel {
     });
   }
 
-  private ensureReady() {
+  private ensureReady(targetIds?: string[]) {
     if (this.closed) return Promise.reject(new Error('browserCode JavaScript kernel is closed.'));
     if (this.readyPromise) return this.readyPromise;
 
@@ -3313,6 +3355,7 @@ export class BrowserCodeKernel {
     }
     this.tempDir = tempDir;
     this.stderr = '';
+    this.startupStage = 'process-start';
     const readyPromise = new Promise<void>((resolve, reject) => {
       this.readyResolve = resolve;
       this.readyReject = reject;
@@ -3368,7 +3411,7 @@ export class BrowserCodeKernel {
     );
     this.readyTimer = setTimeout(() => {
       if (this.child !== child) return;
-      const error = new Error(`browserCode JavaScript kernel startup timed out after ${readyTimeoutMs}ms.`);
+      const error = new Error(`browserCode JavaScript kernel startup timed out after ${readyTimeoutMs}ms (stage: ${this.startupStage}).${this.stderr.trim() ? ` ${this.stderr.trim()}` : ''}`);
       error.name = 'TimeoutError';
       this.rejectReady(error);
       this.stopChild();
@@ -3377,6 +3420,8 @@ export class BrowserCodeKernel {
       type: 'init',
       connection: this.connection,
       playwrightEntryPath,
+      websocketEntryPath: browserCodeHostRequire.resolve('ws'),
+      targetIds,
       sessionGroupId: String(this.options.sessionGroupId || '').trim(),
     }, (error) => {
       if (!error) return;
@@ -3425,6 +3470,10 @@ export class BrowserCodeKernel {
   private handleMessage(message: unknown) {
     if (!message || typeof message !== 'object') return;
     const record = message as Record<string, unknown>;
+    if (record.type === 'startup-stage' && typeof record.stage === 'string') {
+      this.startupStage = record.stage.slice(0, 100);
+      return;
+    }
     if (record.type === 'ready') {
       this.resolveReady();
       return;
@@ -3457,7 +3506,8 @@ export class BrowserCodeKernel {
         value: record.value,
         logs,
         images,
-        selectedExecutionId: typeof record.selectedExecutionId === 'string' ? record.selectedExecutionId : undefined,
+        selectedTargetId: typeof record.selectedTargetId === 'string' ? record.selectedTargetId : undefined,
+        ownedTargetIds: Array.isArray(record.ownedTargetIds) ? record.ownedTargetIds.filter((id): id is string => typeof id === 'string') : undefined,
         activity: record.activity && typeof record.activity === 'object'
           ? record.activity as BrowserCodeActivity
           : undefined,
@@ -3467,6 +3517,7 @@ export class BrowserCodeKernel {
       this.finishPending({
         ok: false,
         error: typeof record.error === 'string' ? record.error : 'browserCode execution failed.',
+        ownedTargetIds: Array.isArray(record.ownedTargetIds) ? record.ownedTargetIds.filter((id): id is string => typeof id === 'string') : undefined,
         images,
         logs,
         activity: record.activity && typeof record.activity === 'object'

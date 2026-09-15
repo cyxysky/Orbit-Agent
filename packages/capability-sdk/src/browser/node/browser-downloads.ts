@@ -1,3 +1,4 @@
+import { raceWithAbort } from '../../index.ts';
 import type { Download } from 'playwright';
 import type { Readable } from 'node:stream';
 
@@ -40,17 +41,19 @@ export class BrowserDownloadManager {
     else operation?.signal?.addEventListener('abort', onAbort, { once: true });
     const job: Job = { id, controller, pending: Promise.resolve().then(async (): Promise<BrowserDownloadResult> => {
       try {
-        const artifact = await this.receiver({ runId: operation?.runId || this.defaultRunId,
+        controller.signal.throwIfAborted();
+        const artifact = await raceWithAbort(this.receiver({ runId: operation?.runId || this.defaultRunId,
           fileName: download.suggestedFilename(), sourceUrl: download.url(), abortSignal: controller.signal,
           cancel: () => download.cancel(), stream: async () => {
             const stream = await download.createReadStream();
             if (!stream) throw new Error(await download.failure() || 'Browser download did not return a readable stream.');
             return stream;
           },
-        });
+        }), controller.signal);
+        controller.signal.throwIfAborted();
         return { ok: true, artifact };
       } catch (error) {
-        await download.cancel().catch(() => undefined);
+        cancelDownload();
         return { ok: false, fileName: download.suggestedFilename(), error: error instanceof Error ? error.message : String(error) };
       } finally {
         controller.signal.removeEventListener('abort', cancelDownload);
@@ -60,7 +63,7 @@ export class BrowserDownloadManager {
     this.jobs.set(id, job);
     void job.pending.then((result) => {
       job.result = result;
-      this.report(result);
+      if (!controller.signal.aborted) this.report(result);
       if (this.jobs.size > 100) for (const [key, previous] of this.jobs) {
         if (this.jobs.size <= 100) break;
         if (previous.result) this.jobs.delete(key);

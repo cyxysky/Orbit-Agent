@@ -3164,6 +3164,7 @@ function isDeadBrowserSessionError(error: unknown) {
 type BrowserChatTurnGuard = () => void;
 type BrowserChatStartOptions = {
   preferExistingPage?: boolean;
+  abortSignal?: AbortSignal;
 };
 
 async function ensureStarted(
@@ -3259,6 +3260,7 @@ async function ensureStartedNow(
     await browser.start();
     assertTurnActive?.();
     const savedCookies = await readBrowserDomainCookies(session.userId);
+    assertTurnActive?.();
     if (savedCookies.length) {
       const injectedCount = await browser.injectCookies(savedCookies);
       assertTurnActive?.();
@@ -3270,6 +3272,8 @@ async function ensureStartedNow(
       );
     }
   } catch (error) {
+    // Cancellation must not tear down a browser another operation can reuse.
+    if (options.abortSignal?.aborted) throw error;
     await browser.close({ keepOpen: true }).catch(() => undefined);
     if (session.browser === browser) {
       // Tools retain this instance for the whole turn. Retry its startup in
@@ -3284,6 +3288,7 @@ async function ensureStartedNow(
   if (savedTabs.length) {
     try {
       const restored = await browser.restoreTabsFromSnapshot(savedTabs);
+      assertTurnActive?.();
       session.tabs = restored.tabs;
       appendLog(
         session,
@@ -3292,9 +3297,11 @@ async function ensureStartedNow(
         { details: { attempted: restored.attempted, created: restored.created, restored: restored.restored, failed: restored.failedUrls.length } },
       );
     } catch (error) {
+      assertTurnActive?.();
       appendLog(session, 'browser:restore-tabs-failed', `标签页恢复失败，将继续打开会话目标地址：${userFacingErrorMessage(error)}`);
     }
   }
+  assertTurnActive?.();
   session.updatedAt = now();
   persistAndNotify(session.id);
   appendLog(session, 'browser:ready', `浏览器已就绪，用时 ${elapsedMs(startedAt)}ms`, { elapsedMs: elapsedMs(startedAt) });
@@ -5849,10 +5856,14 @@ async function runBrowserChatMessage(
         abortSignal: abortController.signal,
         shouldContinue: () => isActiveBrowserChatTurn(session, assistantMessageId, abortController),
         requestToolConfirmation: requestTurnToolConfirmation,
-        ensureBrowserStarted: async () => {
-          assertTurnActive();
-          const startedBrowser = await ensureStarted(session, assertTurnActive);
-          assertTurnActive();
+        ensureBrowserStarted: async (signal) => {
+          const assertBrowserOperationActive = () => {
+            assertTurnActive();
+            signal?.throwIfAborted();
+          };
+          assertBrowserOperationActive();
+          const startedBrowser = await ensureStarted(session, assertBrowserOperationActive, { abortSignal: signal });
+          assertBrowserOperationActive();
           if (startedBrowser !== browser) throw new Error('The active browser session was replaced after this turn started.');
         },
         runSubagents: (tasks, _abortSignal, toolCallId) => runBrowserChatSubagents({ session, assistantMessageId, abortController, tasks, toolCallId }),

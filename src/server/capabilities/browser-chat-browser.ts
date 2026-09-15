@@ -15,6 +15,7 @@ export type BrowserChatBrowserCapabilityOptions = {
   credentialBindings?: BrowserCodeCredentialBinding[];
   getCredentialBindings?: () => BrowserCodeCredentialBinding[] | undefined;
   imageInputAvailable: boolean;
+  ensureStarted?: (signal?: AbortSignal) => Promise<void>;
 };
 
 export function createBrowserChatBrowserCapability(
@@ -23,6 +24,7 @@ export function createBrowserChatBrowserCapability(
   return createBrowserCapability({
     createOperations: (context) => createNodeBrowserOperations({
       session: options.session,
+      ensureStarted: options.ensureStarted,
       runId: options.runId,
       stepIndex: options.stepIndex,
       attachments: options.attachmentBindings,

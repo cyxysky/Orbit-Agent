@@ -24,7 +24,7 @@ export type NodeBrowserOperationsOptions = {
   credentials?: BrowserCodeCredentialBinding[] | (() => BrowserCodeCredentialBinding[] | undefined);
   imageInputAvailable?: boolean;
   validateCode?: (code: string) => string | undefined;
-  ensureStarted?: () => Promise<void>;
+  ensureStarted?: (signal?: AbortSignal) => Promise<void>;
   disposeSession?: boolean;
   configuration?: CapabilityConfiguration;
 };
@@ -49,8 +49,8 @@ export function createNodeBrowserOperations(
         actual: 'Image operation rejected because this host does not provide model image input. Use exact Locator and boundingBox evidence instead.',
       });
     }
-    await ensureStarted();
     return browserOperationToCapabilityResult(await options.session.executeBrowserCode({
+      ensureStarted,
       code: input.code,
       needChange: input.needChange,
       maxOutputChars: input.maxOutputChars,
@@ -63,7 +63,8 @@ export function createNodeBrowserOperations(
   };
   return {
     async readBrowserState(input: ReadBrowserStateInput, context) {
-      await ensureStarted();
+      await ensureStarted(context.abortSignal);
+      context.abortSignal?.throwIfAborted();
       return browserOperationToCapabilityResult(await options.session.readBrowserState({
         ...input,
         abortSignal: context.abortSignal,
@@ -72,7 +73,8 @@ export function createNodeBrowserOperations(
     },
     browserCode: (input: BrowserCodeInput, context) => execute(input, context),
     async waitForHumanVerification(input: WaitForHumanVerificationInput, context) {
-      await ensureStarted();
+      await ensureStarted(context.abortSignal);
+      context.abortSignal?.throwIfAborted();
       return browserOperationToCapabilityResult(
         await options.session.waitForManualVerification(input.maxMs, context.abortSignal),
       );

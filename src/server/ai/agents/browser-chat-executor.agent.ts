@@ -1236,7 +1236,7 @@ async function makeBrowserTools(
     readFileVisuals?: (input: BrowserChatFileVisualInput) => Promise<BrowserActionResult>;
     readSkill?: BrowserChatReadSkill;
     onReferenceImage?: (input: { path: string; source: string; label?: string }) => void;
-    ensureBrowserStarted?: () => Promise<void>;
+    ensureBrowserStarted?: (signal?: AbortSignal) => Promise<void>;
     attachmentBindings?: BrowserCodeAttachmentBinding[];
     credentialBindings?: BrowserCodeCredentialBinding[];
     getCredentialBindings?: () => BrowserCodeCredentialBinding[] | undefined;
@@ -1308,10 +1308,9 @@ async function makeBrowserTools(
   ) {
     const run = async () => {
       throwIfStopped(referenceOptions?.abortSignal, referenceOptions?.shouldContinue);
-      const actionAfterBrowserStart = async (actionSignal?: AbortSignal, trace?: ToolTrace) => {
+      const actionAfterSkillCheck = async (actionSignal?: AbortSignal, trace?: ToolTrace) => {
         const skillGateFailure = requireHiddenRuntimeSkillRead(name, input, loadedHiddenRuntimeSkillIds);
         if (skillGateFailure) return skillGateFailure;
-        if (runtimeToolRequiresBrowserSession(name)) await referenceOptions?.ensureBrowserStarted?.();
         return action(actionSignal, trace);
       };
       const traceVisualContext = referenceOptions?.visualContext;
@@ -1329,7 +1328,7 @@ async function makeBrowserTools(
         aiRequestElapsedMs: referenceOptions?.getAiRequestElapsedMs?.(execution?.toolCallId),
         onToolTrace,
         onVisualContextChange: traceVisualContext ? referenceOptions?.onVisualContextChange : undefined,
-        action: actionAfterBrowserStart,
+        action: actionAfterSkillCheck,
       }).then((result) => {
         const imagePaths = result.referenceImagePaths?.length
           ? result.referenceImagePaths
@@ -1415,6 +1414,7 @@ async function makeBrowserTools(
     providers: [
       createBrowserChatBrowserCapability({
         session,
+        ensureStarted: referenceOptions?.ensureBrowserStarted,
         runId: referenceOptions?.runId || '',
         stepIndex: referenceOptions?.stepIndex,
         attachmentBindings: referenceOptions?.attachmentBindings,
@@ -2017,7 +2017,7 @@ async function executeRuntimeStep(input: {
   loadedHiddenRuntimeSkillIds?: Set<string>;
   attachmentBindings?: BrowserCodeAttachmentBinding[];
   credentialBindings?: BrowserCodeCredentialBinding[];
-  ensureBrowserStarted?: () => Promise<void>;
+  ensureBrowserStarted?: (signal?: AbortSignal) => Promise<void>;
   memoryTools?: ToolSet;
   useToolLoopAgent?: boolean;
 }) {
@@ -3495,7 +3495,7 @@ export async function executeInteractiveBrowserTurn(input: {
   readSkill?: BrowserChatReadSkill;
   attachmentBindings?: BrowserCodeAttachmentBinding[];
   credentialBindings?: BrowserCodeCredentialBinding[];
-  ensureBrowserStarted?: () => Promise<void>;
+  ensureBrowserStarted?: (signal?: AbortSignal) => Promise<void>;
   allowedToolTypes?: string[];
   disabledTools?: string[];
   memoryTools?: ToolSet;
@@ -3993,6 +3993,7 @@ function flowInput(input: unknown) {
 }
 
 export type RecordedBrowserOperationExecutionOptions = {
+  ensureBrowserStarted?: (signal?: AbortSignal) => Promise<void>;
   runId?: string;
   abortSignal?: AbortSignal;
   attachmentBindings?: BrowserCodeAttachmentBinding[];
@@ -4019,6 +4020,8 @@ export async function executeRecordedBrowserOperation(
   switch (flow.name) {
     case 'browser': {
       if (input.action === 'state') {
+        await options.ensureBrowserStarted?.(abortSignal);
+        abortSignal?.throwIfAborted();
         return readCurrentBrowserState(session, {
           runId,
           stepIndex: flow.index,
@@ -4026,6 +4029,8 @@ export async function executeRecordedBrowserOperation(
         });
       }
       if (input.action === 'waitForHumanVerification') {
+        await options.ensureBrowserStarted?.(abortSignal);
+        abortSignal?.throwIfAborted();
         return session.waitForManualVerification(
           typeof input.maxMs === 'number' ? input.maxMs : undefined,
           abortSignal,
@@ -4038,6 +4043,7 @@ export async function executeRecordedBrowserOperation(
       const violation = browserCodeServiceFileDeliveryViolation(code);
       if (violation) return { ok: false, actual: violation };
       return session.executeBrowserCode({
+        ensureStarted: options.ensureBrowserStarted,
         code,
         needChange: input.needChange === true,
         maxOutputChars: typeof input.maxOutputChars === 'number' ? input.maxOutputChars : undefined,
@@ -4089,7 +4095,7 @@ async function executeCodexRuntimeObject(input: {
   loadedHiddenRuntimeSkillIds?: Set<string>;
   attachmentBindings?: BrowserCodeAttachmentBinding[];
   credentialBindings?: BrowserCodeCredentialBinding[];
-  ensureBrowserStarted?: () => Promise<void>;
+  ensureBrowserStarted?: (signal?: AbortSignal) => Promise<void>;
   onVisualContextChange?: (snapshot: ReturnType<VisualContextManager['snapshot']>) => void | Promise<void>;
   onToolTrace?: (trace: ToolTrace, progress?: ToolTraceProgress) => void | Promise<void>;
   onReferenceImage?: (input: { path: string; source: string; label?: string }) => void;
@@ -4229,6 +4235,7 @@ async function executeCodexRuntimeObject(input: {
       return readSkill(skillId);
     }
     return executeRecordedBrowserOperation(session, flow, {
+      ensureBrowserStarted,
       runId,
       abortSignal,
       attachmentBindings,
@@ -4264,7 +4271,6 @@ async function executeCodexRuntimeObject(input: {
           actual: 'Skipped before execution because the user cancelled this server-approved tool call. Do not retry the same operation in this turn unless the user explicitly asks again.',
         };
       }
-      if (runtimeToolRequiresBrowserSession(type)) await ensureBrowserStarted?.();
       const result = await runTool(trace?.id);
       if (approval === 'approved') {
         return {

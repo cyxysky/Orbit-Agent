@@ -3,6 +3,7 @@ import { acquireSharedBrowser, connectOrLaunchPersistentBrowserOverCdp, launchPe
 import { BrowserDownloadManager, type BrowserDownloadReceiver, type BrowserDownloadResult } from './browser-downloads.ts';
 import { BrowserStateReader, type BrowserStateReadOptions } from './browser-state-reader.ts';
 import { BrowserSessionScheduler } from './browser-session-scheduler.ts';
+import { BrowserOperationDeadline } from './browser-operation-deadline.ts';
 import { BrowserNetworkDiagnostics } from './browser-network-diagnostics.ts';
 import { mkdir, open, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -1145,6 +1146,7 @@ export class BrowserSession {
   private browserServer?: BrowserServer;
   private browserCodeConnection?: BrowserCodeConnection;
   private browserCodeKernel?: BrowserCodeKernel;
+  private browserCodeTargetIds = new WeakMap<Page, string>();
   private browserCodeKernelRevision?: number;
   private lifecycle: BrowserSessionLifecycleState = 'idle';
   private startPromise?: Promise<void>;
@@ -1962,6 +1964,26 @@ export class BrowserSession {
     return Array.from(this.ownedPages).filter((page) => !page.isClosed());
   }
 
+  private async browserCodeTargetId(page: Page, signal?: AbortSignal) {
+    signal?.throwIfAborted();
+    const cached = this.browserCodeTargetIds.get(page);
+    if (cached) return cached;
+    const client = await page.context().newCDPSession(page);
+    try {
+      signal?.throwIfAborted();
+      const { targetInfo } = await client.send('Target.getTargetInfo');
+      signal?.throwIfAborted();
+      this.browserCodeTargetIds.set(page, targetInfo.targetId);
+      return targetInfo.targetId;
+    } finally {
+      await client.detach();
+    }
+  }
+
+  private async browserCodeOwnedTargetIds(signal?: AbortSignal) {
+    return Promise.all(this.sessionPages().map((page) => this.browserCodeTargetId(page, signal)));
+  }
+
   private browserSlowMoMs() {
     const configured = this.options.slowMoMs ?? Number(this.configuredValue('BROWSER_SLOW_MO_MS') || 0);
     if (!Number.isFinite(configured) || configured < 0) return 0;
@@ -2031,39 +2053,49 @@ export class BrowserSession {
     };
   }
 
-  private async markPageGroup(page: Page) {
+  private async markPageGroup(page: Page, signal?: AbortSignal) {
+    signal?.throwIfAborted();
     const markerInput = this.pageGroupMarkerInput();
     if (!this.pageGroupInitScriptPages.has(page)) {
       this.pageGroupInitScriptPages.add(page);
       await page.addInitScript(applyPageGroupMarker, markerInput).catch(() => {
         this.pageGroupInitScriptPages.delete(page);
       });
+      signal?.throwIfAborted();
     }
-    await this.ensureBrowserPageRuntime(page);
+    await this.ensureBrowserPageRuntime(page, signal);
+    signal?.throwIfAborted();
     await page.evaluate(applyPageGroupMarker, markerInput).catch(() => undefined);
+    signal?.throwIfAborted();
   }
 
-  private async ensurePageGroup(page: Page) {
+  private async ensurePageGroup(page: Page, signal?: AbortSignal) {
+    signal?.throwIfAborted();
     if (page.isClosed()) return;
-    await this.markPageGroup(page);
+    await this.markPageGroup(page, signal);
+    signal?.throwIfAborted();
     if (!this.nativeTabGrouperEnabled || page.isClosed()) return;
     await page.waitForFunction((groupId) => (
       document.documentElement?.getAttribute('data-ai-web-test-session-grouped-id') === groupId
     ), this.pageGroupId, { timeout: 1000 }).catch(() => undefined);
+    signal?.throwIfAborted();
   }
 
-  private async ensureBrowserPageRuntime(target: Page | Frame = this.activePage) {
-    if ('mainFrame' in target) await this.applyConfiguredViewport(target).catch(() => undefined);
+  private async ensureBrowserPageRuntime(target: Page | Frame = this.activePage, signal?: AbortSignal) {
+    signal?.throwIfAborted();
+    if ('mainFrame' in target) await this.applyConfiguredViewport(target, signal).catch(() => undefined);
+    signal?.throwIfAborted();
     const frame = 'mainFrame' in target ? target.mainFrame() : target;
     const navigationRevision = this.browserRuntimeRevisionByFrame.get(frame) || 0;
     const installedRevision = `${AI_DOM_RUNTIME_VERSION}:${navigationRevision}`;
     if (this.browserRuntimeInstalledRevisionByFrame.get(frame) === installedRevision) return;
     try {
       await target.evaluate(installAiBrowserPageRuntime, AI_DOM_RUNTIME_VERSION);
+      signal?.throwIfAborted();
       this.browserRuntimeInstalledRevisionByFrame.set(frame, installedRevision);
     } catch {
-      // Frames can disappear between discovery and script injection. The next
-      // operation will retry when the frame is still available.
+      signal?.throwIfAborted();
+      // Detached frames are retried by the next operation.
     }
   }
 
@@ -2370,7 +2402,8 @@ export class BrowserSession {
     this.notifyLivePreviewTabsChanged();
   }
 
-  private async applyConfiguredViewport(page: Page) {
+  private async applyConfiguredViewport(page: Page, signal?: AbortSignal) {
+    signal?.throwIfAborted();
     this.ensureLivePreviewState();
     if (page.isClosed()) return;
     const environment = this.runtimeEnvironment();
@@ -2407,11 +2440,13 @@ export class BrowserSession {
     } else {
       const viewportClient = await page.context().newCDPSession(page);
       try {
+        signal?.throwIfAborted();
         await viewportClient.send('Emulation.clearDeviceMetricsOverride');
       } finally {
         await viewportClient.detach().catch(() => undefined);
       }
     }
+    signal?.throwIfAborted();
     this.configuredViewportKeyByPage.set(page, settingKey);
   }
 
@@ -4055,7 +4090,8 @@ export class BrowserSession {
 
 
   // 返回当前活动标签页最近的 HTTP 请求，供 AI 定位接口错误、状态码异常和静态资源问题。
-  private async resetInterActionChangeJournal() {
+  private async resetInterActionChangeJournal(signal?: AbortSignal) {
+    signal?.throwIfAborted();
     const page = this.activePage;
     this.interActionChangeJournal = {
       id: `changes-${++this.interActionChangeJournalSequence}`,
@@ -4070,7 +4106,8 @@ export class BrowserSession {
     };
     this.domChangeErrors = [];
     await Promise.all(this.actionFrames().map(async (frame) => {
-      await this.ensureBrowserPageRuntime(frame);
+      await this.ensureBrowserPageRuntime(frame, signal);
+      signal?.throwIfAborted();
       await frame.evaluate(() => {
         const runtime = (window as WindowWithAiDomRuntime).__aiDomRuntime;
         return runtime?.discardDomJournal();
@@ -4214,8 +4251,26 @@ export class BrowserSession {
     attachments?: BrowserCodeAttachmentBinding[];
     credentials?: BrowserCodeCredentialBinding[];
     abortSignal?: AbortSignal;
+    ensureStarted?: (signal: AbortSignal) => Promise<void>;
   }): Promise<BrowserActionResult> {
-    return this.withSessionOperation(async (signal) => {
+    const operation = new BrowserOperationDeadline(boundedPositiveIntegerEnv(
+      'AI_BROWSER_CODE_EXECUTION_TIMEOUT_MS', 90_000, 100, 600_000, this.runtimeEnvironment(),
+    ), input.abortSignal);
+    let operationKernel: BrowserCodeKernel | undefined;
+    let executionStarted = false;
+    let executionFinished = false;
+    const stopKernel = () => {
+      if (!operationKernel) return;
+      if (this.browserCodeKernel === operationKernel) this.browserCodeKernel = undefined;
+      void operationKernel.close().catch(() => undefined);
+    };
+    try {
+    return await this.withSessionOperation(async (queueSignal) => {
+      operation.follow(queueSignal);
+      const signal = operation.signal;
+      const step = <T>(phase: string, work: () => Promise<T>) => operation.step(phase, work);
+      signal.throwIfAborted();
+      signal.addEventListener('abort', stopKernel, { once: true });
       this.stateReader?.clear();
       input = { ...input, abortSignal: signal };
 
@@ -4224,28 +4279,22 @@ export class BrowserSession {
     if (code.length > 40_000) return { ok: false, actual: 'browserCode JavaScript exceeds the 40000 character limit.' };
     const policyViolation = browserCodePolicyViolation(code);
     if (policyViolation) return { ok: false, actual: policyViolation };
+    if (input.ensureStarted) await step('browser-start', () => input.ensureStarted!(signal));
     if (!this.browserCodeConnection) {
       return { ok: false, actual: 'browserCode has no direct Playwright connection for this browser session.' };
     }
 
     const page = this.activePage;
-    await this.ensurePageGroup(page);
-    await this.ensureBrowserPageRuntime(page);
-    await this.resetInterActionChangeJournal().catch(() => undefined);
-    await this.discardDomChanges().catch(() => undefined);
+    await step('prepare-page', () => this.ensurePageGroup(page, signal));
+    await step('prepare-runtime', () => this.ensureBrowserPageRuntime(page, signal));
+    await step('prepare-dom-journal', () => this.resetInterActionChangeJournal(signal));
+    await step('prepare-dom-changes', () => this.discardDomChanges(signal));
     const initialUrl = page.url();
     const executionId = randomUUID();
-    await page.evaluate((id) => {
-      Object.defineProperty(window, '__aiBrowserCodeExecutionId', {
-        configurable: true,
-        enumerable: false,
-        value: id,
-        writable: false,
-      });
-    }, executionId);
+    const targetIds = await step('resolve-session-targets', () => this.browserCodeOwnedTargetIds(signal));
 
     if (this.browserCodeKernel && this.browserCodeKernelRevision !== BROWSER_CODE_KERNEL_RUNTIME_REVISION) {
-      await this.browserCodeKernel.close();
+      await step('replace-kernel', () => this.browserCodeKernel!.close());
       this.browserCodeKernel = undefined;
     }
     const browserCodeStateSessionId = this.options.browserCodeStateSessionId
@@ -4259,58 +4308,48 @@ export class BrowserSession {
         ? (operation) => runtimeState(browserCodeStateSessionId, operation)
         : undefined,
     });
+    operationKernel = kernel;
     this.browserCodeKernelRevision = BROWSER_CODE_KERNEL_RUNTIME_REVISION;
     const executionContext = this.context;
     const pagesBeforeExecution = new Set(executionContext?.pages() || []);
     const pagesCreatedDuringExecution = new Set<Page>();
-    const claimCodeCreatedPage = async (candidate: Page) => {
-      if (candidate.isClosed() || pagesBeforeExecution.has(candidate)) return;
-      // Context page events include other conversations' startup tabs. Only
-      // claim our own popups or pages explicitly marked by this code kernel.
-      const opener = await candidate.opener().catch(() => null);
-      if (!this.ownedPages.has(candidate) && !(opener && this.ownedPages.has(opener))
-        && await this.readPageGroupId(candidate) !== this.pageGroupId) return;
-      if (this.claimPage(candidate, { makeActive: false })) pagesCreatedDuringExecution.add(candidate);
-    };
     const downloads = this.browserDownloads();
     const downloadStart = downloads?.begin(input.runId, input.abortSignal) ?? 0;
     let downloaded: BrowserDownloadResult[] = [];
     let execution: Awaited<ReturnType<BrowserCodeKernel['execute']>>;
     try {
-      execution = await kernel.execute({
+      executionStarted = true;
+      execution = await step('kernel', () => kernel.execute({
         code,
+        targetIds,
+        executionTargetId: this.browserCodeTargetIds.get(page),
         attachments: input.attachments,
         credentials: input.credentials,
         executionId,
         maxOutputChars: input.maxOutputChars,
         uidReferences: this.browserCodeUidReferences(),
         abortSignal: input.abortSignal,
-      });
+      }));
+      executionFinished = true;
+      downloaded = await step('downloads', async () => await downloads?.collect(downloadStart) || []);
     } finally {
-      try { downloaded = await downloads?.collect(downloadStart) || []; } finally { downloads?.end(); }
-      for (const candidate of executionContext?.pages() || []) await claimCodeCreatedPage(candidate);
-      await Promise.all([
-        ...Array.from(pagesCreatedDuringExecution, (candidate) => this.ensurePageGroup(candidate)),
-        ...(!page.isClosed() ? [this.ensurePageGroup(page)] : []),
-      ]);
-      await Promise.all(this.sessionPages().map((candidate) => candidate.evaluate((id) => {
-        const win = window as Window & { __aiBrowserCodeExecutionId?: string };
-        if (win.__aiBrowserCodeExecutionId === id) delete win.__aiBrowserCodeExecutionId;
-      }, executionId).catch(() => undefined)));
+      // No renderer waits in finally: a hung page must not block cancellation.
+      downloads?.end();
     }
 
+    const returnedTargets = new Set(execution.ownedTargetIds || []);
+    for (const candidate of executionContext?.pages() || []) {
+      if (candidate.isClosed() || pagesBeforeExecution.has(candidate)) continue;
+      const id = await step('resolve-created-target', () => this.browserCodeTargetId(candidate, signal));
+      if (returnedTargets.has(id) && this.claimPage(candidate, { makeActive: false })) pagesCreatedDuringExecution.add(candidate);
+    }
     let selectedPage: Page | undefined;
-    if (execution.selectedExecutionId) {
-      for (const candidate of executionContext?.pages() || this.sessionPages()) {
-        const selected = await candidate.evaluate((id) => {
-          const win = window as Window & { __aiBrowserCodeSelectedExecutionId?: string };
-          if (win.__aiBrowserCodeSelectedExecutionId !== id) return false;
-          delete win.__aiBrowserCodeSelectedExecutionId;
-          return true;
-        }, execution.selectedExecutionId).catch(() => false);
-        if (selected && this.claimPage(candidate, { makeActive: false })) {
-          await this.ensurePageGroup(candidate);
+    if (execution.selectedTargetId) {
+      for (const candidate of this.sessionPages()) {
+        const id = await step('resolve-selected-target', () => this.browserCodeTargetId(candidate, signal));
+        if (id === execution.selectedTargetId) {
           selectedPage = candidate;
+          break;
         }
       }
     }
@@ -4320,7 +4359,8 @@ export class BrowserSession {
       this.notifyLivePreviewTabsChanged();
     }
     const finalUrl = finalPage.isClosed() ? '' : finalPage.url();
-    const finalTitle = finalPage.isClosed() ? '' : await finalPage.title().catch(() => '');
+    const finalTitle = !execution.ok || finalPage.isClosed() ? ''
+      : await step('result-page-title', () => finalPage.title());
     const inferredActivity: BrowserCodeActivity = {
       actions: execution.activity?.actions || [],
       navigationChanged: execution.activity?.navigationChanged === true || finalUrl !== initialUrl,
@@ -4330,11 +4370,12 @@ export class BrowserSession {
     let domChanges: BrowserActionResult['domChanges'];
     if (input.needChange === true && !finalPage.isClosed()) {
       try {
-        domChanges = (await this.readDomChanges()).domChanges;
+        domChanges = (await step('result-dom-changes', () => this.readDomChanges(signal))).domChanges;
       } catch {
         domChanges = undefined;
       } finally {
-        await this.resetInterActionChangeJournal().catch(() => undefined);
+        signal.throwIfAborted();
+        await step('result-dom-journal', () => this.resetInterActionChangeJournal(signal));
       }
     }
     const emittedImagePaths: string[] = [];
@@ -4342,11 +4383,11 @@ export class BrowserSession {
     if (execution.images?.length) {
       const dir = this.artifactDirectory(input.runId || 'browser-code');
       try {
-        await mkdir(dir, { recursive: true });
+        await step('save-image-directory', () => mkdir(dir, { recursive: true }));
         for (const [index, image] of execution.images.entries()) {
           const extension = image.mimeType === 'image/jpeg' ? 'jpg' : image.mimeType === 'image/webp' ? 'webp' : 'png';
           const filePath = path.join(dir, `step-${input.stepIndex}-browser-code-${index + 1}-${randomUUID().slice(0, 8)}.${extension}`);
-          await writeFile(filePath, Buffer.from(image.data, 'base64'));
+          await step('save-image', () => writeFile(filePath, Buffer.from(image.data, 'base64'), { signal }));
           emittedImagePaths.push(filePath);
         }
       } catch (error) {
@@ -4386,14 +4427,36 @@ export class BrowserSession {
           : `browser-${execution.executionState?.status || 'code-failed'}` } : {}),
       data: payload,
       summary: effectiveOk
-        ? `browserCode completed in ${execution.elapsedMs}ms.`
+        ? `browserCode completed in ${Date.now() - operation.startedAt}ms.`
         : effectiveError || 'browserCode execution failed.',
       ...(emittedImagePaths.length ? { referenceImagePath: emittedImagePaths[0], referenceImagePaths: emittedImagePaths } : {}),
       verification: inferredActivity.verification,
     };
+    signal.throwIfAborted();
     return result;
 
-    }, input.abortSignal);
+    }, operation.signal);
+    } catch (error) {
+      if (!operation.signal.aborted) throw error;
+      const reason = operation.signal.reason;
+      const timedOut = reason instanceof Error && reason.name === 'TimeoutError';
+      const message = reason instanceof Error ? reason.message : 'Browser tool aborted.';
+      return {
+        ok: false,
+        failureCategory: timedOut ? 'browser-timeout' : 'browser-aborted',
+        summary: message,
+        data: { error: message, operationPhase: operation.phase, elapsedMs: Date.now() - operation.startedAt,
+          ...(operationKernel ? { kernelReset: { reason: timedOut ? 'timeout' : 'aborted',
+            note: 'The browserCode kernel was stopped. Top-level JavaScript bindings from earlier cells are no longer available.' } } : {}),
+          executionState: { status: timedOut ? 'timeout' : 'aborted',
+            phase: executionFinished ? 'finished' : executionStarted ? 'running' : 'startup',
+            outcome: executionStarted ? 'unknown' : 'not-started', safeToRetry: false,
+            requiresStateRefresh: executionStarted } },
+      };
+    } finally {
+      operation.signal.removeEventListener('abort', stopKernel);
+      operation.dispose();
+    }
   }
 
   async waitForManualVerification(maxMs?: number, abortSignal?: AbortSignal): Promise<BrowserActionResult> {
@@ -7757,8 +7820,10 @@ export class BrowserSession {
    * are deleted from the authoritative UID registry before the result is
    * returned, so a later UID action cannot silently target a stale element.
    */
-  async readDomChanges(): Promise<BrowserActionResult> {
-    return this.withSessionOperation(async () => {
+  async readDomChanges(abortSignal?: AbortSignal): Promise<BrowserActionResult> {
+    return this.withSessionOperation(async (queueSignal) => {
+    const signal = abortSignal || queueSignal;
+    signal.throwIfAborted();
 
     const mainFrame = this.activePage.mainFrame();
     const frames = this.actionFrames();
@@ -7775,7 +7840,9 @@ export class BrowserSession {
     const frameDeltas = await mapWithConcurrency(frames, this.snapshotFrameConcurrency(), async (frame) => {
       const framePath = frame === mainFrame ? undefined : this.getFramePath(frame);
       if (frame !== mainFrame && framePath === undefined) return undefined;
-      await this.ensureBrowserPageRuntime(frame);
+      signal.throwIfAborted();
+      await this.ensureBrowserPageRuntime(frame, signal);
+      signal.throwIfAborted();
       const delta = await frame.evaluate(() => {
         const runtime = (window as WindowWithAiDomRuntime).__aiDomRuntime;
         return runtime?.visibleDomDelta();
@@ -7783,6 +7850,7 @@ export class BrowserSession {
       return delta ? { delta, frame, framePath } : undefined;
     });
 
+    signal.throwIfAborted();
     for (const entry of frameDeltas) {
       if (!entry) continue;
       const { delta, frame, framePath } = entry;
@@ -7898,12 +7966,14 @@ export class BrowserSession {
     });
   }
 
-  private async discardDomChanges() {
+  private async discardDomChanges(signal?: AbortSignal) {
+    signal?.throwIfAborted();
     const frames = this.activePage.frames();
     await Promise.all(frames.map((frame) => frame.evaluate(() => {
       const runtime = (window as WindowWithAiDomRuntime).__aiDomRuntime;
       return runtime?.discardDomChanges();
     }).catch(() => undefined)));
+    signal?.throwIfAborted();
     this.domChangeErrors = [];
   }
 

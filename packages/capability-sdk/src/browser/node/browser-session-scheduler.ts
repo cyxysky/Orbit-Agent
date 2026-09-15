@@ -8,7 +8,11 @@ export class BrowserSessionScheduler {
 
   run<T>(operation: (signal: AbortSignal) => Promise<T>, abortSignal?: AbortSignal): Promise<T> {
     const parent = this.scope.getStore();
-    if (parent?.active) return operation(parent.signal);
+    if (parent) {
+      parent.signal.throwIfAborted();
+      if (!parent.active) return Promise.reject(new Error('Browser operation has already finished.'));
+      return operation(parent.signal);
+    }
     return this.queue.run(async (signal) => {
       const scope = { active: true, signal };
       try { return await this.scope.run(scope, () => operation(signal)); }
