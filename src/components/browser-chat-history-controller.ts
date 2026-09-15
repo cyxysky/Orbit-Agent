@@ -11,7 +11,7 @@ export type BrowserChatHistoryState = {
   steps: BrowserChatHistoryPageState;
 };
 
-type MessageLike = { clientMessageId?: string; createdAt?: string; id: string; role?: string };
+type MessageLike = { status?: string; clientMessageId?: string; createdAt?: string; id: string; role?: string };
 type StepLike = { index: number };
 type LogLike = { id: string; time?: string };
 type HistorySession<TMessage extends MessageLike, TStep extends StepLike, TLog extends LogLike> = {
@@ -20,6 +20,7 @@ type HistorySession<TMessage extends MessageLike, TStep extends StepLike, TLog e
   logs: TLog[];
   messages: TMessage[];
   steps: TStep[];
+  queuedTurns?: Array<{ userMessageId: string }>;
   outputCycles?: unknown[];
   subagents?: unknown[];
 };
@@ -80,7 +81,12 @@ export function mergeBrowserChatSessionWindowData<
   TSession extends HistorySession<TMessage, TStep, TLog>,
 >(existing: TSession | null | undefined, incoming: TSession): TSession {
   if (!existing || existing.id !== incoming.id || !incoming.history) return incoming;
-  const messages = new Map(existing.messages.map((message) => [messageKey(message), message]));
+  // The queue is authoritative, unlike a paginated history window. Missing
+  // queued records were removed; incoming promoted messages are merged below.
+  const queuedIds = incoming.queuedTurns && new Set(incoming.queuedTurns.map((turn) => turn.userMessageId));
+  const messages = new Map(existing.messages.filter((message) => (
+    message.status !== 'queued' || !queuedIds || queuedIds.has(message.id)
+  )).map((message) => [messageKey(message), message]));
   for (const message of incoming.messages) messages.set(messageKey(message), message);
   const { steps } = mergeBrowserChatRealtimeCollections(existing, { steps: incoming.steps });
   const logs = new Map(existing.logs.map((log) => [log.id, log]));

@@ -280,3 +280,11 @@ export async function readBrowserChatSessionOwner(sessionId: string) {
   `, [sessionId]);
   return row ? { userId: row.user_id || undefined } : undefined;
 }
+
+export async function browserChatSessionHasQueuedTurns(sessionId: string) {
+  const row = await queryDatabaseOne<{ snapshot_json?: string }>(
+    'SELECT snapshot_json FROM browser_chat_session WHERE id = ?', [sessionId],
+  );
+  const snapshot = row?.snapshot_json ? parseJson<{ queuedTurns?: unknown[] }>(row.snapshot_json) : undefined;
+  return Boolean(snapshot?.queuedTurns?.length);
+}

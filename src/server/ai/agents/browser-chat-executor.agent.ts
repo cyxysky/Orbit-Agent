@@ -1,4 +1,5 @@
 import { responseRegistry } from '@/lib/response-registry';
+import { browserChatHasPendingManualVerification } from '@/lib/browser-chat-tools';
 import { artifactApiUrl } from '@/lib/artifacts';
 import { browserChatCapabilityResult } from '@/lib/browser-chat-capability-result';
 import { coreResponses, markdownBlock } from '@cjfclonedeep/capability-sdk/responses';
@@ -100,7 +101,6 @@ import {
 import {
   isBrowserHumanVerificationCall,
   runtimeAllowedToolTypes,
-  runtimeToolRequiresBrowserSession,
   runtimeToolLoopStopToolNames,
 } from './runtime-tool-selection';
 import { browserToolApprovalRequest } from './browser-tool-approval';
@@ -942,13 +942,6 @@ class VisualContextManager {
   }
 }
 
-function pushFailureFrameScreenshots(screenshots: ToolTrace['screenshots'], name: string, frame?: VisualFrameRecord) {
-  if (!frame?.path) return;
-  screenshots?.push({ title: `${name} failure evidence`, path: frame.path, kind: 'other' });
-  if (frame.originalPath) screenshots?.push({ title: `${name} failure original`, path: frame.originalPath, kind: 'original' });
-  if (frame.markerPath) screenshots?.push({ title: `${name} marker map`, path: frame.markerPath, kind: 'marker' });
-}
-
 const internalReferenceImageToolNames = new Set([
   'file',
 ]);
@@ -1001,7 +994,7 @@ async function finalizeToolTraceVisuals(input: {
   const { trace, stepIndex, visualContext, abortSignal, shouldContinue, onVisualContextChange } = input;
   throwIfStopped(abortSignal, shouldContinue);
   const result = input.result;
-  const screenshots = trace.screenshots || [];
+  const screenshots: NonNullable<ToolTrace['screenshots']> = [];
   const emittedImagePaths = result.referenceImagePaths?.length
     ? result.referenceImagePaths
     : result.referenceImagePath ? [result.referenceImagePath] : [];
@@ -1029,8 +1022,6 @@ async function finalizeToolTraceVisuals(input: {
       reason: `${trace.name} explicit visual evidence`,
     });
     await onVisualContextChange?.(visualContext.snapshot());
-  } else if (!result.ok && visualContext && runtimeToolRequiresBrowserSession(trace.name)) {
-    pushFailureFrameScreenshots(screenshots, trace.name, visualContext.current());
   }
 
   trace.result = result;
@@ -1665,7 +1656,7 @@ function runtimePrompt(input: { runtimeRecord: BrowserChatRuntimeRecord; fileVis
     '- Copy every delivered Artifact downloadUrl exactly from the successful tool result. For browser screenshots in Markdown, use ![description](url) with the exact screenshotArtifacts[].url returned by browser; screenshotFileNames are evidence identifiers, not image URLs. Never construct, absolutize, repair, or infer an Artifact URL from a sessionId, artifactId, hostname, or file name, and never call a URL an absolute filesystem path. Before finalizing Office/PDF work, reconcile the original requirements with automaticValidation.formatChecks, validation issues, and visual-QA scope. Visual QA proves page layout only; it does not prove requested native charts, formulas, images, comments, footnotes, or other semantic features. A missing, zero-count, unsupported, failed, or unverified required feature must be reported as a limitation, never as fully passed.',
     '- If agent.state tracks task stage, coverage, status, issues, or artifacts, update those records before the final answer so no pending/generated/failed field contradicts a complete claim. Do not set an overall complete/passed state while any required item remains pending, unsupported, failed, or unverified unless the user explicitly accepted a partial result.',
     `- Use chart when an Apache ECharts visualization materially improves the answer. Read Skill ${chartRuntimeSkillId} first and follow its indexed API guidance. After every successful create, copy the exact returned content[].block into finalResponse.blocks. Never invent a chart id or use one from a failed call.`,
-    '- Complete EVERY terminal response through finalResponse, including text-only answers, clarification questions and failed/blocked outcomes. Ordinary assistant text is progress narration, never a completed answer. Every block has {type,params}. For prose use {type:"core.markdown",params:{text:"..."}}. For generated content copy the exact successful tool result content[].block. For declarative cards use core.ui with params.tree. Use only the registered types and parameters shown in the tool schema. The UI renders blocks in the exact array order.',
+    '- Complete EVERY terminal response through finalResponse, including text-only answers, clarification questions and failed outcomes. Reports and clarification questions complete the current turn; use passed even when the report describes unavailable data or unfinished work. blocked is reserved for a successful browser waitForHumanVerification request for captcha, login or security verification. Ordinary assistant text is progress narration, never a completed answer. Every block has {type,params}. For prose use {type:"core.markdown",params:{text:"..."}}. For generated content copy the exact successful tool result content[].block. For declarative cards use core.ui with params.tree. Use only the registered types and parameters shown in the tool schema. The UI renders blocks in the exact array order.',
     '- For real place searches, routes and interactive geographic maps use maps after reading system.maps. Copy the exact successful maps result content[].block into finalResponse.blocks. Include the returned Google Maps link when replying to external messaging clients. Never invent places or routes and never retry an unchanged failed maps request automatically.',
     '- Preserve Markdown block structure: separate heading markers (# through ######) from their content with a space, including numbered headings (### 1. Title). Put headings on their own lines. Put every list item on its own line, indent nested items under the parent content, and retain newlines and indentation in Markdown blocks. Never flatten child items into inline hyphens.',
     '- Defect reporting is a mandatory part of every interface or product testing task. As soon as live browser evidence reveals a real defect or reproducible product problem (including functional, data, interaction, visual/layout, or compatibility problems), proactively reproduce it, use browser action=code to emit a screenshot that visibly proves it, and call reportDefect in the immediately following model step with the exact screenshotFileNames returned by browser before continuing unrelated test cases. Never wait for the user to ask, defer reporting until the final answer, or merely describe the problem in test notes or the final report. Create one report for each unique confirmed problem. Investigate permission, configuration, version, requirement, and environment explanations first; report only an observed product problem, never speculation or expected behavior, and do not report duplicates. Recording a defect does not end the requested test unless its full scope is complete.',
@@ -1932,7 +1923,7 @@ function deriveBrowserChatStepDecision(text: string, traces: ToolTrace[]): Runti
   const note = extractProgressNote(text);
   const toolReason = executed.map((trace) => readableActionFromTrace(trace)).find(Boolean);
 
-  if (last && isBrowserHumanVerificationCall(last.name, last.input)) {
+  if (last && !failed && isBrowserHumanVerificationCall(last.name, last.input)) {
     return {
       action: readableActionFromTrace(last) || toolReason || 'Wait for human verification',
       expected: 'The user should complete captcha, login, security verification, or other manual work in the visible browser.',
@@ -3806,7 +3797,7 @@ export async function executeInteractiveBrowserTurn(input: {
       endedWithFinalAnswer = true;
       break;
     }
-    if (lastTool && isBrowserHumanVerificationCall(lastTool.name, lastTool.input)) {
+    if (lastTool?.result?.ok === true && isBrowserHumanVerificationCall(lastTool.name, lastTool.input)) {
       finalStatus = 'blocked';
       if (!reply) reply = browserChatReplyFromDecision(decision);
       finalBlocks = [markdownBlock(reply)];
@@ -3816,6 +3807,12 @@ export async function executeInteractiveBrowserTurn(input: {
   }
 
   if (!endedWithFinalAnswer) reply = '';
+
+  // A final report or request for more information completes this turn. Only
+  // an actual successful browser verification request may suspend execution.
+  if (finalStatus === 'blocked' && !browserChatHasPendingManualVerification(
+    newSteps.flatMap((step) => step.tools || []),
+  )) finalStatus = 'passed';
 
   const completedTools = newSteps.flatMap((step) => (step.tools || []).map((toolCall) => ({
       name: toolCall.name,

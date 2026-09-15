@@ -59,6 +59,16 @@ export function readRuntimeContextMaterial(records: Record<string, ModelMessage>
     return { ...limitNotice, total: entries.length, records: page.map(([ref, message]) => ({ ref, role: message.role, preview: JSON.stringify(materialValue(message)).slice(0, 180) })), nextOffset: offset + page.length < entries.length ? offset + page.length : null };
   }
   if (!Object.hasOwn(records, input.ref)) return { ok: false, error: 'Unknown reference in this conversation.' };
+  const record = records[input.ref];
+  const sourceResults = record.role === 'tool' ? record.content.filter((part) => part.type === 'tool-result') : [];
+  const sourceResult = sourceResults.length === 1 ? sourceResults[0]
+    : input.pointer?.match(/^\/(\d+)(?:\/|$)/) ? sourceResults[Number(input.pointer.split('/')[1])] : undefined;
+  const sourceCall = sourceResult && Object.values(records).flatMap((message) => (
+    message.role === 'assistant' && Array.isArray(message.content) ? message.content : []
+  )).find((part) => part.type === 'tool-call' && part.toolCallId === sourceResult.toolCallId);
+  const sourceInput = sourceCall?.type === 'tool-call' ? sourceCall.input as JsonRecord | undefined : undefined;
+  const source = sourceResult ? { toolName: sourceResult.toolName, toolCallId: sourceResult.toolCallId,
+    ...(typeof sourceInput?.action === 'string' ? { action: sourceInput.action } : {}) } : undefined;
   let value = materialValue(records[input.ref]);
   if (input.pointer) {
     if (!input.pointer.startsWith('/')) return { ok: false, error: 'pointer must be an RFC 6901 JSON Pointer.' };
@@ -74,6 +84,7 @@ export function readRuntimeContextMaterial(records: Record<string, ModelMessage>
   const end = Math.min(content.length, start + limit);
   return {
     ...limitNotice, ok: true, ref: input.ref, pointer: input.pointer || '', historical: true,
+    ...(source ? { source } : {}),
     digest: createHash('sha256').update(content).digest('hex'), offset: start,
     content: content.slice(start, end), totalCharacters: content.length,
     complete: start === 0 && end === content.length,

@@ -1,3 +1,4 @@
+import { browserChatHasPendingManualVerification } from '@/lib/browser-chat-tools';
 import { compareBrowserChatSessionCreation } from '@/lib/browser-chat-session-order';
 import { markdownBlock } from '@cjfclonedeep/capability-sdk/responses';
 import { createHash, randomUUID } from 'node:crypto';
@@ -160,6 +161,7 @@ import {
 } from '@/server/storage/database-record-store';
 import {
   BROWSER_CHAT_MESSAGE_PAGE_SIZE,
+  browserChatSessionHasQueuedTurns,
   readBrowserChatFileMessages,
   readBrowserChatSessionHeader,
   readBrowserChatSessionOwner,
@@ -1656,7 +1658,7 @@ function safeJson(value: unknown) {
 type CompletedRunStatus = 'passed' | 'failed' | 'blocked';
 
 function statusFromSteps(steps: StepExecutionResult[]): CompletedRunStatus {
-  if (steps.some((step) => step.status === 'blocked')) return 'blocked';
+  if (browserChatHasPendingManualVerification(steps.flatMap((step) => step.tools || []))) return 'blocked';
   if (steps.some((step) => step.status === 'failed')) return 'failed';
   return 'passed';
 }
@@ -2228,7 +2230,7 @@ function recoveredStatusForStaleAssistantMessage(
     ? session.steps.filter((step) => linkedIndexes.has(step.index))
     : [];
   const steps = linkedSteps.length ? linkedSteps : session.steps.slice(-1);
-  if (steps.some((step) => step.status === 'blocked')) return 'blocked';
+  if (browserChatHasPendingManualVerification(steps.flatMap((step) => step.tools || []))) return 'blocked';
   if (steps.some((step) => step.status === 'failed')) return 'failed';
   if (steps.some((step) => step.status === 'passed')) return 'passed';
   return 'interrupted';
@@ -2379,7 +2381,7 @@ function recordFromSnapshot(
       if (step.status !== 'queued' && step.status !== 'running') return step;
       return {
         ...step,
-        status: 'blocked' as const,
+        status: 'failed' as const,
         actual: [
           step.actual,
           'This turn was interrupted by a server restart; completed tool results were preserved.',
@@ -3394,9 +3396,16 @@ async function durableBrowserChatSnapshot(session: BrowserChatSessionRecord) {
 }
 
 export async function selectBrowserChatSessionRuntime(sessionId: string, userId?: string | number) {
-  const runtimeSession = sessions.get(sessionId);
+  let runtimeSession = sessions.get(sessionId);
   const owner = runtimeSession || await readBrowserChatSessionOwner(sessionId);
   if (!owner || !sessionBelongsToUser(owner, userId)) return false;
+  // Reopening a conversation also resumes its accepted queue after a restart.
+  // Ordinary history reads do not load the model context into the worker.
+  if (!runtimeSession && await browserChatSessionHasQueuedTurns(sessionId)) {
+    runtimeSession = await hydrateSession(sessionId);
+  } else if (runtimeSession?.queuedTurns.length) {
+    await startNextQueuedBrowserChatTurn(runtimeSession);
+  }
   const userKey = browserChatUserRuntimeKey(owner.userId);
   const previouslySelectedSessionId = selectedSessionIds.get(userKey);
   selectedSessionIds.set(userKey, sessionId);
@@ -3905,6 +3914,7 @@ export async function generateBrowserChatMessagesSkill(
 }
 
 const browserChatQueuedTurnLimit = 50;
+const startingQueuedBrowserChatTurns = new Set<string>();
 
 function nextBrowserChatMessageTimestamp(session: BrowserChatSessionRecord) {
   const latestCreatedAt = session.messages.reduce((latest, message) => {
@@ -3914,14 +3924,17 @@ function nextBrowserChatMessageTimestamp(session: BrowserChatSessionRecord) {
   return new Date(Math.max(Date.now(), latestCreatedAt + 1)).toISOString();
 }
 
-async function startNextQueuedBrowserChatTurn(session: BrowserChatSessionRecord) {
+async function startNextQueuedBrowserChatTurn(session: BrowserChatSessionRecord, resumeBlocked = false) {
   if (
     session.status === 'closed'
     || session.busy
     || activeTurns.has(session.id)
-    || session.turnState === 'awaiting_human'
+    || startingQueuedBrowserChatTurns.has(session.id)
+    || (!resumeBlocked && session.turnState === 'awaiting_human' && latestManualVerificationAssistant(session))
   ) return false;
 
+  startingQueuedBrowserChatTurns.add(session.id);
+  try {
   let queued: BrowserChatQueuedTurn | undefined;
   let userMessageIndex = -1;
   while (session.queuedTurns.length) {
@@ -4017,6 +4030,9 @@ async function startNextQueuedBrowserChatTurn(session: BrowserChatSessionRecord)
     selectedSkills,
   );
   return true;
+  } finally {
+    startingQueuedBrowserChatTurns.delete(session.id);
+  }
 }
 
 export async function sendBrowserChatMessage(
@@ -4065,7 +4081,7 @@ export async function sendBrowserChatMessage(
     session.busy
     || activeTurns.has(session.id)
     || session.queuedTurns.length > 0
-    || session.turnState === 'awaiting_human'
+    || startingQueuedBrowserChatTurns.has(session.id)
   ) {
     if (session.queuedTurns.length >= browserChatQueuedTurnLimit) {
       throw new Error(`Browser chat message queue is full (${browserChatQueuedTurnLimit})`);
@@ -4101,6 +4117,9 @@ export async function sendBrowserChatMessage(
       messageId: null,
       details: { queuedTurnId: session.queuedTurns.at(-1)?.id, queueLength: session.queuedTurns.length },
     });
+    // A reply to a blocked turn is an instruction to continue, not another
+    // reason to leave an idle queue paused forever.
+    await startNextQueuedBrowserChatTurn(session, true);
     return clientSnapshot(session);
   }
   finalizeIdleRunningAssistantMessages(session);
@@ -4217,24 +4236,17 @@ export async function deleteQueuedBrowserChatMessage(
 function latestManualVerificationAssistant(session: BrowserChatSessionRecord) {
   for (let index = session.messages.length - 1; index >= 0; index -= 1) {
     const message = session.messages[index];
-    if (message.role !== 'assistant' || message.status !== 'blocked') continue;
-    const stepIndexes = new Set(message.stepIndexes || []);
-    const waiting = session.steps.some((step) => stepIndexes.has(step.index) && (step.tools || []).some((tool) => (
-      tool.name === 'browser'
-      && tool.input
-      && typeof tool.input === 'object'
-      && !Array.isArray(tool.input)
-      && (tool.input as Record<string, unknown>).action === 'waitForHumanVerification'
-    )));
-    if (waiting) return { message, messageIndex: index };
-  }
-  for (let index = session.messages.length - 1; index >= 0; index -= 1) {
-    const message = session.messages[index];
     if (message.role !== 'assistant') continue;
+    const stepIndexes = new Set(message.stepIndexes || []);
+    const waiting = message.status === 'blocked' && browserChatHasPendingManualVerification(session.steps
+      .filter((step) => stepIndexes.has(step.index)).flatMap((step) => step.tools || []));
+    if (waiting) return { message, messageIndex: index };
     const subagent = [...blockedSubagents.values()].find((item) => (
       item.sessionId === session.id && item.assistantMessageId === message.id
     ));
     if (subagent) return { message, messageIndex: index, subagent };
+    // A completed verification from an earlier turn cannot pause a new turn.
+    return undefined;
   }
   return undefined;
 }

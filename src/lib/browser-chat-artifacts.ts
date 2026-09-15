@@ -79,6 +79,13 @@ export function browserChatArtifactPayloads(value: unknown): Record<string, unkn
   });
 }
 
+/** Browser tool previews contain only images emitted by that invocation. */
+export function browserChatToolScreenshots(tool: Pick<StepToolCall, 'name' | 'screenshots'>) {
+  return (tool.screenshots || []).filter((image) => (
+    tool.name !== 'browser' || image.kind === 'current' || image.kind === 'history'
+  ));
+}
+
 export function browserChatScreenshotIsInternalDocumentPreview(
   screenshot: { path?: string; title?: string },
 ) {
@@ -151,7 +158,7 @@ function browserChatFileArtifacts(tool: StepToolCall): BrowserChatArtifactSummar
 export function browserChatArtifactsFromTool(tool: StepToolCall) {
   const artifacts: BrowserChatArtifactSummary[] = [];
   artifacts.push(...browserChatFileArtifacts(tool));
-  for (const screenshot of tool.screenshots || []) {
+  for (const screenshot of browserChatToolScreenshots(tool)) {
     if (browserChatScreenshotIsInternalDocumentPreview(screenshot)) continue;
     const path = screenshot.path?.trim();
     if (!path) continue;

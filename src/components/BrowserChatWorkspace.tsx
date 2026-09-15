@@ -1,6 +1,7 @@
 'use client';
 
 import { browserChatSessionListTimestamp, compareBrowserChatSessionCreation, upsertBrowserChatSessionByCreation } from '@/lib/browser-chat-session-order';
+import { browserChatToolSource, type BrowserChatToolSource } from '@/lib/browser-chat-tool-source';
 import { responseRegistry } from '@/lib/response-registry';
 
 import { Dock, DockIcon } from '@/components/ui/dock';
@@ -43,7 +44,7 @@ import { Popover } from '@heroui/react/popover';
 import { HoverCard } from '@/components/HoverCard';
 import { BrowserChatToolsHelp } from '@/components/BrowserChatToolsHelp';
 import { BrowserChatReasoning } from '@/components/BrowserChatReasoning';
-import { normalizeDisabledBrowserChatTools } from '@/lib/browser-chat-tools';
+import { browserChatHasPendingManualVerification, normalizeDisabledBrowserChatTools } from '@/lib/browser-chat-tools';
 import { IconAction } from '@/components/ui/icon-action';
 import { CopyTextButton } from '@/components/ui/copy-text-button';
 import { TextArea } from '@heroui/react/textarea';
@@ -102,7 +103,6 @@ import {
   RefreshCw,
   Route,
   ScanSearch,
-  Search,
   ScrollText,
   SendHorizontal,
   Settings,
@@ -224,6 +224,7 @@ import {
   browserChatArtifactFileName,
   browserChatArtifactIsImage,
   browserChatScreenshotIsInternalDocumentPreview,
+  browserChatToolScreenshots,
   type BrowserChatArtifactSummary,
 } from '@/lib/browser-chat-artifacts';
 import { LiquidGlassLoader } from '@/components/LiquidGlassLoader';
@@ -506,7 +507,7 @@ const BrowserChatScreenshotPreviewContext = createContext<{
 
 function browserChatRenderableScreenshots(tool: BrowserChatToolCall) {
   const paths = new Set<string>();
-  return (tool.screenshots || []).flatMap((screenshot): BrowserChatRenderableScreenshot[] => {
+  return browserChatToolScreenshots(tool).flatMap((screenshot): BrowserChatRenderableScreenshot[] => {
     if (browserChatScreenshotIsInternalDocumentPreview(screenshot)) return [];
     const path = screenshot.path?.trim();
     const url = artifactApiUrl(path);
@@ -1010,7 +1011,10 @@ function summarizeToolFields(fields: unknown, t: (value: string, params?: Record
     : t('{count} 项', { count: fields.length });
 }
 
-function browserChatToolLabel(name: string, input: unknown, t: (value: string) => string) {
+function browserChatToolLabel(name: string, input: unknown, t: (value: string) => string, source?: BrowserChatToolSource) {
+  if (source?.toolName === 'file') return t(source.action === 'readContent' ? '读取文件内容'
+    : source.action === 'readSource' ? '读取文件源码' : '读取文件结果');
+  if (source) return t('读取工具结果');
   if (name === 'media') {
     const action = toolInputValue(asRecord(input), ['action']);
     if (action === 'generateImage') return t('生成图片');
@@ -1028,7 +1032,7 @@ function browserChatToolLabel(name: string, input: unknown, t: (value: string) =
   const labels: Record<string, string> = {
     browserCode: '执行浏览器代码',
     contextCompression: '压缩上下文',
-    contextRead: '读取上下文',
+    contextRead: '读取内容',
     chart: '生成图表',
     maps: '地图',
     codeSandbox: '代码沙箱',
@@ -1078,7 +1082,7 @@ function browserChatToolMeta(name: string, input: unknown, t: (value: string, pa
       : toolInputValue(record, ['reason']) || String(record.action || 'Playwright');
   }
   if (name === 'browserCode') return toolInputValue(record, ['reason']) || 'Playwright';
-  if (name === 'contextRead') return toolInputValue(record, ['query']) || (record.ref ? t('读取历史原文') : t('查看历史记录'));
+  if (name === 'contextRead') return toolInputValue(record, ['query']) || (record.ref ? t('继续读取内容') : t('查看可读取内容'));
   if (name === 'contextCompression') {
     const before = typeof record.estimatedTokensBefore === 'number' ? Math.round(record.estimatedTokensBefore) : undefined;
     const after = typeof record.estimatedTokensAfter === 'number' ? Math.round(record.estimatedTokensAfter) : undefined;
@@ -2518,16 +2522,6 @@ function inlineSkillIconSvg() {
   return inlineTokenSvg('<path d="M8 3 4 7l4 4"/><path d="m16 3 4 4-4 4"/><path d="M14 21l4-18"/><path d="M10 21 6 3"/>');
 }
 
-function inlineReferenceIconSvg(kind: BrowserChatAttachmentKind) {
-  if (kind === 'image') {
-    return inlineTokenSvg('<rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>');
-  }
-  if (kind === 'tab') {
-    return inlineTokenSvg('<rect width="18" height="14" x="3" y="5" rx="2"/><path d="M3 9h18"/><path d="M8 5v4"/>');
-  }
-  return inlineTokenSvg('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h6"/>');
-}
-
 function browserChatReferenceKey(attachment: BrowserChatAttachment) {
   const kind = browserChatAttachmentKind(attachment);
   if (kind === 'tab') return `tab:${attachment.sourceUrl || attachment.url || attachment.id}`;
@@ -2572,6 +2566,17 @@ function dataTransferHasBrowserChatReferences(dataTransfer: DataTransfer) {
   return types.includes(WEBPILOT_TAB_DRAG_MIME) || Array.from(dataTransfer.items || []).some((item) => item.kind === 'file');
 }
 
+function BrowserChatReferenceContent({ attachment }: { attachment: BrowserChatAttachment }) {
+  const { t } = useI18n();
+  const kind = browserChatAttachmentKind(attachment);
+  return <>
+    <span className={`browser-chat-reference-icon ${kind}`}>
+      <BrowserChatReferenceIcon attachment={attachment} kind={kind} />
+    </span>
+    <span className="browser-chat-reference-name">{attachment.name || t(browserChatReferenceLabel(kind))}</span>
+  </>;
+}
+
 const BrowserChatReferenceChip = memo(function BrowserChatReferenceChip({
   attachment,
   className = '',
@@ -2583,17 +2588,9 @@ const BrowserChatReferenceChip = memo(function BrowserChatReferenceChip({
 }) {
   const { t } = useI18n();
   const kind = browserChatAttachmentKind(attachment);
-  const label = t(browserChatReferenceLabel(kind));
-  const children = (
-    <>
-      <span className={`browser-chat-reference-icon ${kind}`}>
-        <BrowserChatReferenceIcon attachment={attachment} kind={kind} />
-      </span>
-      {attachment.name || label}
-    </>
-  );
+  const children = <BrowserChatReferenceContent attachment={attachment} />;
   return (
-    <span className={`browser-chat-inline-token browser-chat-reference-chip ${kind}${className ? ` ${className}` : ''}`} title={t(browserChatReferenceMeta(attachment, kind))}>
+    <span className={`browser-chat-inline-token browser-chat-reference-chip ${kind}${className ? ` ${className}` : ''}`} title={`${attachment.name} · ${t(browserChatReferenceMeta(attachment, kind))}`}>
       {kind !== 'tab' ? (
         <button
           aria-label={t('预览 {name}', { name: attachment.name })}
@@ -3177,6 +3174,30 @@ function BrowserChatScreenshotPreviewDialog({
   );
 }
 
+const BrowserChatConfirmationPanel = memo(function BrowserChatConfirmationPanel({
+  title, description, children,
+}: { title: string; description: string; children: ReactNode }) {
+  return (
+    <BlurFade className="browser-chat-tool-confirmation" duration={0.34} offset={8} role="group" aria-label={title}>
+      <BorderBeam colorFrom="#d79a18" colorTo="#f5d584" duration={7.5} size={82} />
+      <div className="browser-chat-tool-confirmation-copy">
+        <span aria-hidden="true" className="browser-chat-tool-confirmation-icon">
+          <svg viewBox="0 0 16 16">
+            <circle cx="8" cy="8" r="7" />
+            <path d="M8 4.25v4.5" />
+            <circle className="browser-chat-tool-confirmation-icon-dot" cx="8" cy="11.35" r="0.8" />
+          </svg>
+        </span>
+        <span className="browser-chat-tool-confirmation-message">
+          <strong>{title}</strong>
+          <span>{description}</span>
+        </span>
+      </div>
+      <div className="browser-chat-tool-confirmation-actions">{children}</div>
+    </BlurFade>
+  );
+});
+
 const BrowserChatToolConfirmationActions = memo(function BrowserChatToolConfirmationActions({
   pending,
   resolvingConfirmationAction,
@@ -3198,22 +3219,7 @@ const BrowserChatToolConfirmationActions = memo(function BrowserChatToolConfirma
   const resolvingCancel = resolving && resolvingConfirmationAction === 'cancel';
   return (
     <>
-      <BlurFade className="browser-chat-tool-confirmation" duration={0.34} offset={8} role="group" aria-label={t('工具调用确认')}>
-        <BorderBeam colorFrom="#d79a18" colorTo="#f5d584" duration={7.5} size={82} />
-        <div className="browser-chat-tool-confirmation-copy">
-          <span aria-hidden="true" className="browser-chat-tool-confirmation-icon">
-            <svg viewBox="0 0 16 16">
-              <circle cx="8" cy="8" r="7" />
-              <path d="M8 4.25v4.5" />
-              <circle className="browser-chat-tool-confirmation-icon-dot" cx="8" cy="11.35" r="0.8" />
-            </svg>
-          </span>
-          <span className="browser-chat-tool-confirmation-message">
-            <strong>{t('需要你的确认')}</strong>
-            <span>{pending.reason || pending.prompt}</span>
-          </span>
-        </div>
-        <div className="browser-chat-tool-confirmation-actions">
+      <BrowserChatConfirmationPanel title={t('需要你的确认')} description={pending.reason || pending.prompt}>
           {pending.screenshotUrl ? (
             <button
               className="browser-chat-tool-screenshot"
@@ -3243,8 +3249,7 @@ const BrowserChatToolConfirmationActions = memo(function BrowserChatToolConfirma
             {resolvingConfirm ? <Loader2 className="spin" size={13} /> : <BadgeCheck size={13} />}
             {resolvingConfirm ? t('确认中') : t('确认执行')}
           </RainbowButton>
-        </div>
-      </BlurFade>
+      </BrowserChatConfirmationPanel>
       {screenshotOpen && pending.screenshotUrl ? (
         <AppModal
           ariaLabelledBy={screenshotTitleId}
@@ -3434,11 +3439,12 @@ const BrowserChatStepToolCards = memo(function BrowserChatStepToolCards({
   return (
     <>
       {toolCalls.map(({ tool, toolIndex }) => {
-        const label = browserChatToolLabel(tool.name, tool.input, t);
+        const source = browserChatToolSource(tool, allToolCalls);
+        const label = browserChatToolLabel(tool.name, tool.input, t, source);
         const failureMeta = browserChatToolFailureSummary(tool.rawResult ?? tool.error ?? tool.result);
         const meta = tool.invalid
           ? browserChatToolValidationSummary(tool.error || tool.result)
-          : compactText(failureMeta || tool.reason || browserChatToolMeta(tool.name, tool.input, t), 150);
+          : compactText(failureMeta || tool.reason || browserChatToolMeta(source?.toolName || tool.name, source ? { action: source.action } : tool.input, t), 150);
         const displayText = `${label}${meta ? `: ${meta}` : ''}`;
         const requestCreatedAt = tool.contextBefore?.requestCreatedAt;
         const supersededByLaterRequest = tool.ok === undefined && Boolean(requestCreatedAt) && allToolCalls
@@ -3472,7 +3478,7 @@ const BrowserChatStepToolCards = memo(function BrowserChatStepToolCards({
               <BrowserChatSubagentToolDisclosure
                 batchId={tool.id}
                 cardContent={(
-                  <BrowserChatToolCardContent active={isActiveTool} input={tool.input} label={label} meta={visibleMeta} name={tool.name} userAction={userAction} />
+                  <BrowserChatToolCardContent active={isActiveTool} input={source ? { action: source.action } : tool.input} label={label} meta={visibleMeta} name={source?.toolName || tool.name} userAction={userAction} />
                 )}
                 className={stateClass}
                 isActive={isActiveTool}
@@ -3498,7 +3504,7 @@ const BrowserChatStepToolCards = memo(function BrowserChatStepToolCards({
                   onClick={() => onSelectTool({ stepIndex: step.index, step, toolIndex, tool })}
                   type="button"
                 >
-                  <BrowserChatToolCardContent active={isActiveTool} input={tool.input} label={label} meta={visibleMeta} name={tool.name} userAction={userAction} />
+                  <BrowserChatToolCardContent active={isActiveTool} input={source ? { action: source.action } : tool.input} label={label} meta={visibleMeta} name={source?.toolName || tool.name} userAction={userAction} />
                   {isActiveTool ? <BrowserChatToolTailParticles /> : null}
                 </button>
                 <BrowserChatToolContextTokenInfo tool={tool} />
@@ -3614,11 +3620,12 @@ const BrowserChatAiCycleLine = memo(function BrowserChatAiCycleLine({
         }
         const { tool, toolDetail } = entry;
         const executedTool = toolDetail.tool;
-        const label = browserChatToolLabel(executedTool.name, executedTool.input, t);
+        const source = browserChatToolSource(executedTool, [...toolDetails.values()].map((detail) => detail.tool));
+        const label = browserChatToolLabel(executedTool.name, executedTool.input, t, source);
         const failureMeta = browserChatToolFailureSummary(executedTool.rawResult ?? executedTool.error ?? executedTool.result);
         const meta = executedTool.invalid
           ? browserChatToolValidationSummary(executedTool.error || executedTool.result)
-          : failureMeta || executedTool.reason || tool.reason || browserChatToolMeta(executedTool.name, executedTool.input, t);
+          : failureMeta || executedTool.reason || tool.reason || browserChatToolMeta(source?.toolName || executedTool.name, source ? { action: source.action } : executedTool.input, t);
         const presentation = browserChatToolPresentation(executedTool, toolDetail.step, running);
         const { isActive, stateClass, status } = presentation;
         const pendingConfirmation = pendingConfirmationForTool({
@@ -3636,10 +3643,10 @@ const BrowserChatAiCycleLine = memo(function BrowserChatAiCycleLine({
         const card = (
           <BrowserChatToolCardContent
             active={isActive}
-            input={executedTool.input}
+            input={source ? { action: source.action } : executedTool.input}
             label={label}
             meta={visibleMeta}
-            name={executedTool.name}
+            name={source?.toolName || executedTool.name}
             userAction={userAction}
           />
         );
@@ -3777,22 +3784,17 @@ const BrowserChatManualVerificationCard = memo(function BrowserChatManualVerific
 }) {
   const { t } = useI18n();
   return (
-    <section className="browser-chat-manual-verification" role="status">
-      <span aria-hidden="true" className="browser-chat-manual-verification-icon"><Lock size={18} /></span>
-      <div>
-        <strong>{t('需要人工完成验证')}</strong>
-        <p>{t('请在浏览器中完成验证码、登录/安全验证或其他需要本人确认的步骤。')}</p>
-        <small>{t('完成后点击按钮，AI 会从当前浏览器和当前对话回合继续执行。')}</small>
+    <BrowserChatConfirmationPanel
+      title={t('需要人工完成验证')}
+      description={t('请在浏览器中完成验证码、登录/安全验证或其他需要本人确认的步骤。')}
+    >
         {onResume ? (
-          <button className="ui-button ui-button--primary browser-chat-verification-resume" disabled={resuming} onClick={() => void onResume()} type="button">
-            <span aria-hidden="true" className="browser-chat-verification-resume-icon">
-              {resuming ? <Loader2 className="spin" size={14} /> : <CheckCircle2 size={14} />}
-            </span>
+          <RainbowButton className="browser-chat-tool-confirm" disabled={resuming} onClick={() => void onResume()} size="default">
+            {resuming ? <Loader2 className="spin" size={13} /> : <BadgeCheck size={13} />}
             {resuming ? t('正在继续') : t('校验完成，继续执行')}
-          </button>
+          </RainbowButton>
         ) : null}
-      </div>
-    </section>
+    </BrowserChatConfirmationPanel>
   );
 });
 
@@ -4624,10 +4626,8 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
     (cycle) => cycle.output.tools.some((_tool, index) => aiCycleToolDetails.has(aiCycleToolKey(cycle.id, index))),
   ), [aiCycleToolDetails, renderAiOutputCycles]);
   const shouldShowStepTimeline = currentTimelineEntries.length > 0 || waitingForTool;
-  const manualVerificationPaused = Boolean(manualVerificationRequired) || (message.status === 'blocked' && (
-    steps.some((step) => (step.tools || []).some((tool) => tool.name === 'browser' && asRecord(tool.input)?.action === 'waitForHumanVerification'))
-    || pairedAiOutputCycles.some((cycle) => cycle.output.tools.some((tool) => tool.name === 'browser' && asRecord(tool.input)?.action === 'waitForHumanVerification'))
-  ));
+  const manualVerificationPaused = Boolean(manualVerificationRequired)
+    && browserChatHasPendingManualVerification(steps.flatMap((step) => step.tools || []));
   const hasFinalText = Boolean(finalText.trim());
   const hasStructuredResponse = Boolean(message.parts?.some((part) => (
     part.type === 'text' || part.type === 'data-response'
@@ -4641,15 +4641,11 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
     ? t(message.activity.label)
     : t('正在分析页面状态并准备下一步操作');
   const processAutoOpen = running || hasPendingConfirmation;
-  const processLabel = running
+  const processLabel = running || manualVerificationPaused || hasPendingConfirmation
     ? t('处理中')
-    : message.status === 'blocked'
-      ? t('等待处理')
-      : message.status === 'failed'
-        ? t('处理失败')
-        : message.status === 'interrupted'
-          ? t('已中止')
-          : t('已处理');
+    : message.status === 'failed' || message.status === 'interrupted'
+      ? t('已停止')
+      : t('已完成');
   const aiCycleCommonProps: BrowserChatAiCycleCommonProps = {
     logs: confirmationLogs,
     onLoadSubagentRecords: loadSubagentRecords,
@@ -5847,6 +5843,8 @@ const BrowserChatComposer = memo(function BrowserChatComposer({
   const { t } = useI18n();
   const editorRef = useRef<HTMLDivElement | null>(null);
   const [draft, setDraft] = useState('');
+  const [referenceTokens, setReferenceTokens] = useState<Array<{ node: HTMLElement; attachment: BrowserChatAttachment }>>([]);
+  const referenceTokenNodes = useRef(new WeakSet<HTMLElement>());
   const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([]);
   const [dismissedSlashDraft, setDismissedSlashDraft] = useState('');
   const [activeSkillIndex, setActiveSkillIndex] = useState(0);
@@ -5862,6 +5860,7 @@ const BrowserChatComposer = memo(function BrowserChatComposer({
 
   useEffect(() => {
     setDraft('');
+    setReferenceTokens([]);
     setSelectedSkillIds([]);
     setDismissedSlashDraft('');
     setActiveSkillIndex(0);
@@ -5967,6 +5966,18 @@ const BrowserChatComposer = memo(function BrowserChatComposer({
     const skillIds = editor
       ? Array.from(editor.querySelectorAll<HTMLElement>('[data-skill-id]')).map((node) => node.dataset.skillId || '').filter(Boolean)
       : [];
+    const tokens = Array.from(editor?.querySelectorAll<HTMLElement>('[data-attachment-id]') || []).flatMap((node) => {
+      const attachment = attachmentFromToken(node);
+      if (!attachment) return [];
+      // Pasted tokens can contain cloned markup. React owns the content once mounted.
+      if (!referenceTokenNodes.current.has(node)) {
+        node.replaceChildren();
+        referenceTokenNodes.current.add(node);
+        node.dataset.referenceTokenKey = crypto.randomUUID();
+      }
+      return [{ node, attachment }];
+    });
+    setReferenceTokens(tokens);
     setDraft(editorPlainText(editor));
     setSelectedSkillIds(Array.from(new Set(skillIds)));
     if (options.revealCaret && editor) {
@@ -5985,7 +5996,7 @@ const BrowserChatComposer = memo(function BrowserChatComposer({
         else if (caretRect.bottom > bottom - 4) editor.scrollTop += caretRect.bottom - bottom + 4;
       });
     }
-  }, [editorPlainText, ensureEmptyEditorCaret]);
+  }, [attachmentFromToken, editorPlainText, ensureEmptyEditorCaret]);
 
   useEffect(() => {
     const readySkillIds = new Set(availableSkills.filter((skill) => skill.status === 'ready').map((skill) => skill.id));
@@ -6340,14 +6351,15 @@ const BrowserChatComposer = memo(function BrowserChatComposer({
     token.dataset.attachmentJson = JSON.stringify(attachment);
     token.dataset.attachmentKind = kind;
     token.title = `${t(browserChatReferenceLabel(kind))}: ${attachment.name}`;
-    token.innerHTML = `<span class="browser-chat-inline-reference-icon">${inlineReferenceIconSvg(kind)}</span>`;
-    token.append(document.createTextNode(attachment.name || t(browserChatReferenceLabel(kind))));
 
     finishInlineTokenInsertion(range, token);
   }
 
   return (
     <>
+      {referenceTokens.filter(({ node }) => editorRef.current?.contains(node)).map(({ node, attachment }) => (
+        createPortal(<BrowserChatReferenceContent attachment={attachment} />, node, node.dataset.referenceTokenKey)
+      ))}
       <form
         className="browser-chat-compose browser-chat-compose--reference composer"
         onDragOver={handleReferenceDragOver}
@@ -9089,6 +9101,11 @@ export function BrowserChatWorkspace({
         `/api/browser-chat/${encodeURIComponent(sessionId)}/queued-messages/${encodeURIComponent(messageId)}`,
       ), { method: 'DELETE' });
       const data = await readApiJson<{ session: BrowserChatSession }>(response, '删除排队消息失败');
+      const clientMessageId = session?.messages.find((message) => message.id === messageId)?.clientMessageId;
+      const chat = uiChatForSession(sessionId);
+      chat.messages = chat.messages.filter((message) => message.role !== 'user' || (
+        message.id !== messageId && (!clientMessageId || message.metadata?.clientMessageId !== clientMessageId)
+      ));
       upsertSession(data.session, { activate: activeSessionIdRef.current === sessionId });
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : '删除排队消息失败');
@@ -10346,7 +10363,7 @@ export function BrowserChatWorkspace({
           loadFailed={toolDialogLoadState === 'failed'}
           onRetry={() => showToolDetails(liveToolDialog)}
           onClose={closeToolDetails}
-          toolLabel={(name, input) => browserChatToolLabel(name, input, t)}
+          toolLabel={(name, input) => browserChatToolLabel(name, input, t, toolDialog ? browserChatToolSource(toolDialog.tool, steps.flatMap((step) => step.tools || [])) : undefined)}
         />
       ) : null}
 

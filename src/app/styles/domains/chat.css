@@ -2053,11 +2053,19 @@ html body .browser-chat-chat-pane .browser-chat-compose.browser-chat-compose--re
   white-space: nowrap;
 }
 
+.browser-chat-reference-name {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .browser-chat-inline-token :is(
   .browser-chat-reference-icon,
   .browser-chat-message-skill-icon,
-  .browser-chat-inline-skill-icon,
-  .browser-chat-inline-reference-icon
+  .browser-chat-inline-skill-icon
 ) {
   align-items: center;
   background: transparent;
@@ -2071,15 +2079,15 @@ html body .browser-chat-chat-pane .browser-chat-compose.browser-chat-compose--re
   width: 14px;
 }
 
-.browser-chat-inline-token.file :is(.browser-chat-reference-icon, .browser-chat-inline-reference-icon) {
+.browser-chat-inline-token.file .browser-chat-reference-icon {
   color: #4966a3;
 }
 
-.browser-chat-inline-token.image :is(.browser-chat-reference-icon, .browser-chat-inline-reference-icon) {
+.browser-chat-inline-token.image .browser-chat-reference-icon {
   color: #5f6b7a;
 }
 
-.browser-chat-inline-token.tab :is(.browser-chat-reference-icon, .browser-chat-inline-reference-icon) {
+.browser-chat-inline-token.tab .browser-chat-reference-icon {
   color: #80632d;
 }
 
