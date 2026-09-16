@@ -70,6 +70,8 @@ The outer browser action=code result is \`{ ok, summary, data, failureCategory?,
 
 ## Cell syntax and result contract
 
+- Each cell has a total time budget (90 seconds by default), including preparation, page operations and waits. Split repeated form submissions into small cells; persist confirmed record IDs in agent.state after each save. After a timeout, inspect the live result before repeating writes: earlier operations may have completed even though the cell returned no result.
+
 browser action=code accepts ordinary JavaScript with top-level await. The bindings \`page\`, \`context\`, \`browser\`, and \`tab\` already exist; do not import Playwright.
 
 - Top-level bindings persist between cells only while the current JavaScript kernel remains alive. Prefer \`var\` for short-lived reusable bindings or use a fresh name in each cell; redeclaring the same top-level \`let\` or \`const\` can fail. Use \`agent.state\` for anything needed after a kernel recycle or in a later turn.

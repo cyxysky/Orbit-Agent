@@ -179,7 +179,6 @@ export function BrowserChatWebPreviewModal({
   const pendingScrollRef = useRef<Extract<BrowserChatPreviewInput, { kind: 'scroll' }> | null>(null);
   const scrollFlushTimerRef = useRef<number | undefined>(undefined);
   const [frame, setFrame] = useState<BrowserChatPreviewFrame | null>(null);
-  const [previewTransport, setPreviewTransport] = useState<'image' | 'video'>('video');
   const [videoObjectUrl, setVideoObjectUrl] = useState('');
   const [videoDisplayReady, setVideoDisplayReady] = useState(false);
   const [status, setStatus] = useState<'connecting' | 'live' | 'reconnecting' | 'unavailable'>('connecting');
@@ -327,7 +326,6 @@ export function BrowserChatWebPreviewModal({
       }
     }, { once: true });
     setVideoObjectUrl(objectUrl);
-    setPreviewTransport('video');
     return true;
   }, [disposeVideoPipeline]);
 
@@ -343,7 +341,6 @@ export function BrowserChatWebPreviewModal({
 
   const fallbackToImagePreview = useCallback((message: string) => {
     forceImageTransportRef.current = true;
-    setPreviewTransport('image');
     disposeVideoPipeline();
     setStreamError(message);
     const stream = streamRef.current;
@@ -468,7 +465,6 @@ export function BrowserChatWebPreviewModal({
         const requestedTransport = data.transport === 'image' || forceImageTransportRef.current || !videoSupported
           ? 'image'
           : 'video';
-        setPreviewTransport(requestedTransport);
         disposeVideoPipeline();
         const url = new URL(data.url);
         url.searchParams.set('sessionId', sessionId);
@@ -573,7 +569,6 @@ export function BrowserChatWebPreviewModal({
               counters.sampledDisplayed = counters.displayed;
               counters.sampledReceived = counters.received;
             } else if (message.type === 'transportChanged' && message.transport) {
-              setPreviewTransport(message.transport);
               if (message.transport === 'image') {
                 forceImageTransportRef.current = true;
                 disposeVideoPipeline();
@@ -976,32 +971,7 @@ export function BrowserChatWebPreviewModal({
         ? '浏览器未运行'
         : '正在连接';
   const statusLabel = t(statusLabelSource);
-  const previewMetricsLabel = previewMetrics
-    ? t('{transport} · 目标 {target} · 截图 {capture} · 发送 {send} · 接收 {received} · 显示 {displayed} FPS', {
-        transport: previewTransport === 'video' ? 'H.264' : t('图片'),
-        target: Math.round(previewMetrics.targetFps || 0),
-        capture: (previewMetrics.captureFps || 0).toFixed(1),
-        send: (previewMetrics.sendFps || 0).toFixed(1),
-        received: previewMetrics.receivedFps.toFixed(1),
-        displayed: previewMetrics.displayedFps.toFixed(1),
-      })
-    : '';
-  const previewMetricsTitle = previewMetrics
-    ? [
-        previewTransport === 'video'
-          ? t('传输：H.264 fragmented MP4')
-          : previewMetrics.imageFormat === 'jpeg' ? t('JPEG 质量：{quality}', { quality: previewMetrics.imageQuality ?? '-' }) : 'PNG',
-        ...(previewTransport === 'video' ? [
-          t('编码：{profile} / Level {level} / {mime}', { profile: previewMetrics.h264Profile || '-', level: previewMetrics.h264Level || '-', mime: previewMetrics.mimeType || '-' }),
-          t('视频：{width}×{height} / {bitrate} Kbps', { width: previewMetrics.width || '-', height: previewMetrics.height || '-', bitrate: previewMetrics.bitrateKbps || '-' }),
-        ] : []),
-        t('最近一次截图耗时：{time} ms', { time: (previewMetrics.captureDurationMs || 0).toFixed(1) }),
-        t('平均截图耗时：{time} ms', { time: (previewMetrics.captureDurationMsAverage || 0).toFixed(1) }),
-        t('在途截图：{active}/{maximum}', { active: previewMetrics.activeCaptures || 0, maximum: previewMetrics.maxConcurrentCaptures || 1 }),
-        t('网络背压丢帧：{count}', { count: previewMetrics.backpressureDrops || 0 }),
-        t('待发送客户端帧：{count}', { count: previewMetrics.pendingClientFrames || 0 }),
-      ].join('\n')
-    : '';
+  const previewMetricsLabel = previewMetrics ? `${previewMetrics.displayedFps.toFixed(1)} FPS` : '';
   const hasPreviewVisual = videoDisplayReady || Boolean(frame?.imageUrl);
 
   return (
@@ -1012,29 +982,6 @@ export function BrowserChatWebPreviewModal({
       onClose={onClose}
       size="full"
     >
-        <header className="ui-modal-header browser-chat-web-preview-header">
-          <div className="ui-modal-heading">
-            <div className="browser-chat-web-preview-title-row">
-              <h2 className="ui-modal-title">{t('实时界面')}</h2>
-              <span className={`browser-chat-web-preview-status is-${status}`}>
-                <span />
-                {statusLabel}
-              </span>
-              {previewMetricsLabel ? (
-                <span className="browser-chat-web-preview-metrics" title={previewMetricsTitle}>
-                  {previewMetricsLabel}
-                </span>
-              ) : null}
-              <span className="browser-chat-web-preview-url" title={frame?.url || ''}>
-                {frame?.url || t('等待会话浏览器启动')}
-              </span>
-            </div>
-          </div>
-          <button aria-label={t('关闭实时界面')} className="browser-chat-web-preview-close" onClick={onClose} title={t('关闭')} type="button">
-            <X size={18} />
-          </button>
-        </header>
-
         {frame?.tabs?.length ? (
           <div className="browser-chat-web-preview-tabs">
             {frame.tabs.map((tab) => (
@@ -1051,6 +998,19 @@ export function BrowserChatWebPreviewModal({
             ))}
           </div>
         ) : null}
+
+        <header className="ui-modal-header browser-chat-web-preview-header">
+          <div className="browser-chat-web-preview-address" title={statusLabel}>
+              <Globe aria-hidden="true" size={14} />
+              <span className="browser-chat-web-preview-url" title={frame?.url || ''}>
+                {frame?.url || t('等待会话浏览器启动')}
+              </span>
+          </div>
+          {previewMetricsLabel ? <span className="browser-chat-web-preview-metrics">{previewMetricsLabel}</span> : null}
+          <button aria-label={t('关闭实时界面')} className="browser-chat-web-preview-close" onClick={onClose} title={t('关闭')} type="button">
+            <X size={18} />
+          </button>
+        </header>
 
         <div className="browser-chat-web-preview-body">
           <div

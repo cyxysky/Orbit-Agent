@@ -4,7 +4,7 @@ import { readBrowserChatSessionOwner } from './browser-chat-history-store';
 
 export async function publishBrowserChatRuntimeRecordsChanged(
   sessionId: string,
-  kind: 'defects' | 'variables',
+  kind: 'variables',
 ) {
   const owner = await readBrowserChatSessionOwner(sessionId);
   if (!owner) return;

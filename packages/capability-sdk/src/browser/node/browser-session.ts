@@ -155,7 +155,7 @@ export type BrowserActionResult = {
   referenceImagePath?: string;
   /** Images emitted by browserCode that should be attached to the next model request in order. */
   referenceImagePaths?: string[];
-  /** Safe basenames for emitted screenshots that may be cited by reportDefect. */
+  /** Safe basenames for emitted screenshots. */
   screenshotFileNames?: string[];
   /** A compact continuation cursor for paged snapshot readers. */
   nextCursor?: string;
@@ -4259,8 +4259,10 @@ export class BrowserSession {
     let operationKernel: BrowserCodeKernel | undefined;
     let executionStarted = false;
     let executionFinished = false;
+    let interruptedProgress: ReturnType<BrowserCodeKernel['executionProgress']> | undefined;
     const stopKernel = () => {
       if (!operationKernel) return;
+      interruptedProgress = operationKernel.executionProgress();
       if (this.browserCodeKernel === operationKernel) this.browserCodeKernel = undefined;
       void operationKernel.close().catch(() => undefined);
     };
@@ -4449,6 +4451,7 @@ export class BrowserSession {
           ...(operationKernel ? { kernelReset: { reason: timedOut ? 'timeout' : 'aborted',
             note: 'The browserCode kernel was stopped. Top-level JavaScript bindings from earlier cells are no longer available.' } } : {}),
           executionState: { status: timedOut ? 'timeout' : 'aborted',
+            ...interruptedProgress,
             phase: executionFinished ? 'finished' : executionStarted ? 'running' : 'startup',
             outcome: executionStarted ? 'unknown' : 'not-started', safeToRetry: false,
             requiresStateRefresh: executionStarted } },

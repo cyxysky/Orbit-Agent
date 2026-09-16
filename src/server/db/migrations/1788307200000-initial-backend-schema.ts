@@ -143,15 +143,6 @@ const statements = [
     PRIMARY KEY (session_id, namespace, key)
   )`,
   'CREATE INDEX IF NOT EXISTS browser_code_runtime_state_expiry_idx ON browser_code_runtime_state(expires_at) WHERE expires_at IS NOT NULL',
-  `CREATE TABLE IF NOT EXISTS browser_chat_defect (
-    session_id TEXT NOT NULL,
-    id TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    record_json TEXT NOT NULL,
-    PRIMARY KEY (session_id, id),
-    FOREIGN KEY (session_id) REFERENCES browser_chat_session(id) ON DELETE CASCADE
-  )`,
-  'CREATE INDEX IF NOT EXISTS browser_chat_defect_session_created_idx ON browser_chat_defect(session_id, created_at DESC)',
   `CREATE TABLE IF NOT EXISTS automation_case (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,

@@ -1,3 +1,4 @@
+/* Browser Chat styles: shared foundations followed by domain and responsive rules. */
 @import "../shared-base.css";
 @import "./chat-base.css";
 @import "./settings-base.css";

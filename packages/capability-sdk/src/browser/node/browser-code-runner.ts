@@ -3577,6 +3577,13 @@ export class BrowserCodeKernel {
       }, elapsedMs: Date.now() - pending.startedAt });
   }
 
+  executionProgress() {
+    return {
+      attemptedActions: [...(this.pending?.attemptedActions || [])],
+      completedActions: [...(this.pending?.completedActions || [])],
+    };
+  }
+
   private interrupted(reason: 'timeout' | 'aborted' | 'crashed', error: string, phase: 'startup' | 'running' = 'running'): Omit<BrowserCodeRunResult, 'elapsedMs'> {
     const attemptedActions = this.pending?.attemptedActions || [];
     const completedActions = this.pending?.completedActions || [];

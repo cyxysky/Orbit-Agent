@@ -134,7 +134,6 @@ import {
 } from './browser-chat-tool-input-coercion';
 import { racePromiseWithAbort } from './browser-chat-interrupt-state';
 import type { FileVisualInput as BrowserChatFileVisualInput } from '@cjfclonedeep/capability-sdk/file/node';
-import { createBrowserChatDefectReport } from '@/server/storage/browser-chat-defect-store';
 import { stringFromUnknown as textFromUnknown } from '@/lib/browser-chat-output-cycles';
 
 export type { BrowserChatSubagentTask } from './browser-chat-subagent-task';
@@ -1121,85 +1120,8 @@ async function readCurrentBrowserState(
   });
 }
 
-function screenshotFileName(filePath: string) {
-  return filePath.replace(/\\/g, '/').split('/').at(-1)?.trim() || '';
-}
-
 function browserCodeScreenshotFileNames(paths: string[]) {
-  return [...new Set(paths.map(screenshotFileName).filter(Boolean))];
-}
-
-const reportDefectInputSchema = z.object({
-  problemDescription: z.string().min(1).max(800).describe('A precise user-visible description of the observed defect.'),
-  whyItIsAProblem: z.string().min(1).max(1_200).describe('Why the observed behavior harms correctness, usability, or task completion.'),
-  reasons: z.array(z.string().min(1).max(500)).min(1).max(8).describe('Concrete evidence-based reasons that support classifying the behavior as a defect.'),
-  reproductionSteps: z.array(z.string().min(1).max(500)).min(1).max(20).describe('Ordered steps that reproduce the defect from a known page state.'),
-  screenshotFileNames: z.array(z.string().min(1).max(260).regex(/^[^\\/]+$/)).min(1).max(6).describe('One to six exact screenshot file names returned by prior successful browser action=code calls in this Agent run.'),
-}).strict();
-
-type ReportDefectInput = z.infer<typeof reportDefectInputSchema>;
-
-function resolveDefectScreenshotEvidence(traces: ToolTrace[], requestedFileNames: string[]) {
-  const candidates = new Map<string, { fileName: string; path: string }>();
-  for (const trace of traces) {
-    if (
-      trace.name !== 'browser'
-      || splitToolInputAndReason(trace.input).input.action !== 'code'
-      || trace.result?.ok !== true
-    ) continue;
-    for (const screenshot of trace.screenshots || []) {
-      if (screenshot.kind === 'marker') continue;
-      const fileName = screenshotFileName(screenshot.path);
-      if (fileName) candidates.set(fileName.toLocaleLowerCase(), { fileName, path: screenshot.path });
-    }
-  }
-  const missing: string[] = [];
-  const screenshots = requestedFileNames.flatMap((requested) => {
-    const fileName = screenshotFileName(requested);
-    const candidate = candidates.get(fileName.toLocaleLowerCase());
-    if (!candidate) {
-      missing.push(requested);
-      return [];
-    }
-    return [candidate];
-  });
-  return {
-    screenshots: [...new Map(screenshots.map((item) => [item.path, item])).values()],
-    missing,
-    availableFileNames: [...candidates.values()].map((item) => item.fileName),
-  };
-}
-
-async function reportBrowserChatDefect(
-  sessionId: string | undefined,
-  traces: ToolTrace[],
-  input: ReportDefectInput,
-): Promise<BrowserActionResult> {
-  if (!sessionId) return { ok: false, actual: 'reportDefect is unavailable because the conversation id is missing.' };
-  const evidence = resolveDefectScreenshotEvidence(traces, input.screenshotFileNames);
-  if (evidence.missing.length) {
-    return {
-      ok: false,
-      actual: `Screenshot evidence rejected because these files were not emitted by a successful browser action=code call in this Agent run: ${evidence.missing.join(', ')}. Available screenshot file names: ${evidence.availableFileNames.join(', ') || '[none]'}.`,
-    };
-  }
-  const report = await createBrowserChatDefectReport(sessionId, {
-    problemDescription: input.problemDescription,
-    whyItIsAProblem: input.whyItIsAProblem,
-    reasons: input.reasons,
-    reproductionSteps: input.reproductionSteps,
-    screenshots: evidence.screenshots,
-  });
-  return {
-    ok: true,
-    actual: JSON.stringify({
-      defectId: report.id,
-      title: report.title,
-      severity: report.severity,
-      screenshotFileNames: report.screenshots.map((screenshot) => screenshot.fileName),
-      stored: true,
-    }),
-  };
+  return [...new Set(paths.map((filePath) => filePath.replace(/\\/g, '/').split('/').at(-1)?.trim() || '').filter(Boolean))];
 }
 
 async function makeBrowserTools(
@@ -1475,22 +1397,6 @@ async function makeBrowserTools(
   };
 
   const sharedTools: ToolSet = {
-    reportDefect: tool({
-      description: runtimeBuiltinToolPrompts.reportDefect,
-      inputSchema: withToolInputExamples(reportDefectInputSchema, [{
-        problemDescription: '长表格向下滚动后，横向滚动条离开当前视口。',
-        whyItIsAProblem: '用户无法在浏览表格中段时横向查看右侧列。',
-        reasons: ['横向滚动条只有到达表格底部后才可操作。'],
-        reproductionSteps: ['打开包含宽表格的对话', '向下滚动到表格中段', '尝试横向滚动'],
-        screenshotFileNames: ['step-1-browser-code-1-example.png'],
-      }]),
-      execute: (input, execution) => record(
-        'reportDefect',
-        input,
-        () => reportBrowserChatDefect(referenceOptions?.runId, traces, input),
-        execution,
-      ),
-    }),
     ...((referenceOptions?.runSubagents || referenceOptions?.readSubagent) ? {
       subagent: tool({
         description: `Spawn independent child Agents or read one returned result UUID. action=spawn requires hidden Skill ${subagentRuntimeSkillId}; action=read is never gated so pending results remain recoverable.`,
@@ -1659,7 +1565,6 @@ function runtimePrompt(input: { runtimeRecord: BrowserChatRuntimeRecord; fileVis
     '- Complete EVERY terminal response through finalResponse, including text-only answers, clarification questions and failed outcomes. Reports and clarification questions complete the current turn; use passed even when the report describes unavailable data or unfinished work. blocked is reserved for a successful browser waitForHumanVerification request for captcha, login or security verification. Ordinary assistant text is progress narration, never a completed answer. Every block has {type,params}. For prose use {type:"core.markdown",params:{text:"..."}}. For generated content copy the exact successful tool result content[].block. For declarative cards use core.ui with params.tree. Use only the registered types and parameters shown in the tool schema. The UI renders blocks in the exact array order.',
     '- For real place searches, routes and interactive geographic maps use maps after reading system.maps. Copy the exact successful maps result content[].block into finalResponse.blocks. Include the returned Google Maps link when replying to external messaging clients. Never invent places or routes and never retry an unchanged failed maps request automatically.',
     '- Preserve Markdown block structure: separate heading markers (# through ######) from their content with a space, including numbered headings (### 1. Title). Put headings on their own lines. Put every list item on its own line, indent nested items under the parent content, and retain newlines and indentation in Markdown blocks. Never flatten child items into inline hyphens.',
-    '- Defect reporting is a mandatory part of every interface or product testing task. As soon as live browser evidence reveals a real defect or reproducible product problem (including functional, data, interaction, visual/layout, or compatibility problems), proactively reproduce it, use browser action=code to emit a screenshot that visibly proves it, and call reportDefect in the immediately following model step with the exact screenshotFileNames returned by browser before continuing unrelated test cases. Never wait for the user to ask, defer reporting until the final answer, or merely describe the problem in test notes or the final report. Create one report for each unique confirmed problem. Investigate permission, configuration, version, requirement, and environment explanations first; report only an observed product problem, never speculation or expected behavior, and do not report duplicates. Recording a defect does not end the requested test unless its full scope is complete.',
     screenshotAvailable && input.fileVisualAvailable
       ? `- Read ${fileArtifactRuntimeSkillId} before file visual actions. Reuse render.visualIndex.nextRead to inspect the current artifact directly; call visualIndex only for missing index entries. Follow the Skill's visualRead/visualReport guidance and report actual review coverage in the final response.`
       : screenshotAvailable
@@ -4203,22 +4108,6 @@ async function executeCodexRuntimeObject(input: {
         };
       }
       return readSubagent(uuid);
-    }
-    if (type === 'reportDefect') {
-      const parsed = reportDefectInputSchema.safeParse({
-        problemDescription: normalizedParams.problemDescription,
-        whyItIsAProblem: normalizedParams.whyItIsAProblem,
-        reasons: normalizedParams.reasons,
-        reproductionSteps: normalizedParams.reproductionSteps,
-        screenshotFileNames: normalizedParams.screenshotFileNames,
-      });
-      if (!parsed.success) {
-        return {
-          ok: false,
-          actual: `reportDefect input is invalid: ${parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; ')}`,
-        };
-      }
-      return await reportBrowserChatDefect(runId, traces, parsed.data);
     }
     if (type === 'skill' && normalizedParams.action === 'read') {
       const skillId = typeof normalizedParams.skillId === 'string' ? normalizedParams.skillId.trim() : '';

@@ -1047,7 +1047,6 @@ function browserChatToolLabel(name: string, input: unknown, t: (value: string) =
     knowledge: '知识库',
     memory: '记忆管理',
     media: '媒体',
-    reportDefect: '报告缺陷',
     skill: '读取 Skill',
     subagent: '子 Agent',
     readSubagent: '读取子 Agent',
@@ -1165,7 +1164,6 @@ function BrowserChatToolIcon({ input, name }: { input?: unknown; name: string })
   if (name === 'maps') return <MapPin size={13} />;
   if (name === 'skill') return <Sparkles size={13} />;
   if (name === 'memory') return <Brain size={13} />;
-  if (name === 'reportDefect') return <Bug size={13} />;
   if (name === 'finalResponse') return <MessageSquare size={13} />;
   const filePresentation = browserChatFileToolPresentation(name, input);
   if (filePresentation) {

@@ -45,6 +45,8 @@ export class BrowserDownloadManager {
         const artifact = await raceWithAbort(this.receiver({ runId: operation?.runId || this.defaultRunId,
           fileName: download.suggestedFilename(), sourceUrl: download.url(), abortSignal: controller.signal,
           cancel: () => download.cancel(), stream: async () => {
+            const failure = await download.failure();
+            if (failure) throw new Error(`Browser download failed: ${failure}`);
             const stream = await download.createReadStream();
             if (!stream) throw new Error(await download.failure() || 'Browser download did not return a readable stream.');
             return stream;

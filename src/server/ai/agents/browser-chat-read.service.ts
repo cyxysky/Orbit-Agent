@@ -34,7 +34,6 @@ import {
   readBrowserChatStepsByIndexes,
 } from '@/server/storage/browser-chat-history-store';
 import { executeBrowserCodeRuntimeStateOperation } from '@/server/storage/browser-code-runtime-state';
-import { readBrowserChatDefectReports } from '@/server/storage/browser-chat-defect-store';
 import { readBrowserChatSessionSummaries } from '@/server/storage/database-record-store';
 
 function browserChatLogDetails(value?: string) {
@@ -299,7 +298,6 @@ export async function readBrowserChatRuntimeState(sessionId: string, userId?: st
   });
   return {
     ...runtimeState,
-    defects: await readBrowserChatDefectReports(sessionId),
   };
 }
 

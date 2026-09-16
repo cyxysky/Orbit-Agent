@@ -1,7 +1,6 @@
 import { normalizeBrowserToolInput } from '@cjfclonedeep/capability-sdk/browser';
 import { normalizeFileToolInput } from '@cjfclonedeep/capability-sdk/file';
 import {
-  arrayFromJsonString,
   jsonRecordFromUnknown,
   unwrapToolTransport,
 } from '@cjfclonedeep/capability-sdk';
@@ -27,16 +26,6 @@ export function coerceBrowserChatToolInput(toolName: string, value: unknown) {
       ...source,
       ...('code' in source ? { code: browserCodeFromGeneratedMarkup(source.code) } : {}),
     });
-  }
-  if (toolName === 'reportDefect') {
-    const source = jsonRecordFromUnknown(unwrapToolTransport(value));
-    if (!source) return value;
-    return {
-      ...source,
-      reasons: arrayFromJsonString(source.reasons),
-      reproductionSteps: arrayFromJsonString(source.reproductionSteps),
-      screenshotFileNames: arrayFromJsonString(source.screenshotFileNames),
-    };
   }
   return toolName === 'file' ? normalizeFileToolInput(value) : value;
 }

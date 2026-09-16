@@ -47,6 +47,7 @@ export function createNodeFileDownloadReceiver(options: {
       } });
       await pipeline(stream, bound, createWriteStream(temporary, { flags: 'wx' }), { signal });
       signal.throwIfAborted();
+      if (bytes === 0) throw new Error('Browser download completed with an empty response (0 bytes); no readable file was received.');
       await rename(temporary, target);
       return { ...createNodeArtifactPayload(options, { bytes: (await stat(target)).size, fileName, filePath: target, kind: 'download' }), sourceUrl: input.sourceUrl };
     } catch (error) {
