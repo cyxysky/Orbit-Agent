@@ -45,7 +45,9 @@ export function BrowserChatHistoryRow({ children, keepMounted, turnId }: {
       // Width changes can invalidate a placeholder's old height. Keep the visible turn fixed.
       // Test the old geometry: a shrinking row may now end above the viewport
       // even though it previously contained the content the user was reading.
-      if (restoreRef.current && previous > 0 && root && bounds.top + previous <= root.getBoundingClientRect().top) {
+      if (restoreRef.current && previous > 0 && Math.abs(bounds.height - previous) > 0.5
+        && root && root.dataset.turnScrollActive !== 'true'
+        && bounds.top + previous <= root.getBoundingClientRect().top) {
         root.scrollTo({ top: root.scrollTop + bounds.height - previous, behavior: 'instant' });
       }
       if (root && bounds.bottom >= root.getBoundingClientRect().top) restoreRef.current = false;

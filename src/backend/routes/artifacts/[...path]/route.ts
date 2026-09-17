@@ -59,6 +59,7 @@ export async function GET(request: Request, context: RouteContext) {
       'Cache-Control': 'no-store',
       'Content-Length': String(range ? range.end - range.start + 1 : size),
       'Content-Type': contentType,
+      'Last-Modified': fileStat.mtime.toUTCString(),
       'X-Content-Type-Options': 'nosniff',
       'x-request-id': requestId,
     };
@@ -82,5 +83,24 @@ export async function GET(request: Request, context: RouteContext) {
       fallback: 'Artifact not found',
       status: 404,
     });
+  }
+}
+
+export async function HEAD(request: Request, context: RouteContext) {
+  try {
+    const { path: pathSegments } = await context.params;
+    const filePath = await resolveOwnedArtifact(pathSegments || [], requestApplicationUserId(request));
+    const fileStat = await stat(filePath);
+    if (!fileStat.isFile()) throw new ApiRequestError('Artifact not found', { code: 'not_found', status: 404 });
+    return new Response(null, { headers: {
+      'Content-Length': String(fileStat.size),
+      'Content-Type': artifactContentType(filePath),
+      'Last-Modified': fileStat.mtime.toUTCString(),
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
+      'x-request-id': apiRequestId(request),
+    } });
+  } catch (error) {
+    return apiError(request, error, { code: 'not_found', fallback: 'Artifact not found', status: 404 });
   }
 }

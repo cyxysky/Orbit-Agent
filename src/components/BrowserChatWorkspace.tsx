@@ -5,6 +5,7 @@ import { browserChatToolSource, type BrowserChatToolSource } from '@/lib/browser
 import { responseRegistry } from '@/lib/response-registry';
 
 import { Dock, DockIcon } from '@/components/ui/dock';
+import { fileFormatForName } from '@cjfclonedeep/capability-sdk/file/formats';
 import { readBrowserChatToolPreferences, saveBrowserChatToolPreferences } from '@/lib/browser-chat-tool-preferences';
 
 import { parseMediaModelSelection } from '@/lib/model-selection';
@@ -73,6 +74,7 @@ import {
   Clapperboard,
   Database,
   Download,
+  Eye,
   FileOutput,
   FilePlus2,
   FileSearch,
@@ -131,6 +133,7 @@ import { ModelBrandIcon } from '@/components/ModelBrandIcon';
 import { useEscapeDismiss } from '@/hooks/useEscapeDismiss';
 import { AppModal } from '@/components/ui/app-modal';
 import { AppInput } from '@/components/ui/app-input';
+import { BrowserChatTestCaseDialog } from '@/components/BrowserChatTestCaseDialog';
 import { AnimatedShinyText } from '@/components/ui/animated-shiny-text';
 import {
   browserChatDownloadPercent,
@@ -221,7 +224,6 @@ import {
 import { sortBrowserChatAiOutputCycles } from '@/lib/browser-chat-output-cycles';
 import {
   browserChatArtifactExtension,
-  browserChatArtifactFileName,
   browserChatArtifactIsImage,
   browserChatScreenshotIsInternalDocumentPreview,
   browserChatToolScreenshots,
@@ -2944,7 +2946,7 @@ function browserChatArtifactFileIcon(fileName: string, openUrl: string) {
         : /^PDF$/i.test(extension)
           ? { name: 'PDF', src: '/file-icons/pdf.svg' }
           : undefined;
-  if (!icon) return <FileTypeIcon fileName={fileName} size={20} />;
+  if (!icon) return <FileTypeIcon fileName={fileName} size={30} />;
   return (
     <img
       alt=""
@@ -2956,6 +2958,58 @@ function browserChatArtifactFileIcon(fileName: string, openUrl: string) {
   );
 }
 
+function BrowserChatArtifactMetadata({ file }: { file: BrowserChatArtifactSummary & { openUrl: string } }) {
+  const { t } = useI18n();
+  const ref = useRef<HTMLElement>(null);
+  const [details, setDetails] = useState<{ bytes?: number; modified?: string; dimensions?: string }>({});
+  useEffect(() => {
+    const row = ref.current?.closest('.browser-chat-output-file-row');
+    if (!row) return;
+    const controller = new AbortController();
+    const readDimensions = () => {
+      const image = row.querySelector<HTMLImageElement>('.is-image img');
+      if (image?.naturalWidth && image.naturalHeight) {
+        const dimensions = `${image.naturalWidth} × ${image.naturalHeight}`;
+        setDetails((current) => current.dimensions === dimensions ? current : { ...current, dimensions });
+      }
+    };
+    readDimensions();
+    row.addEventListener('load', readDimensions, true);
+    const load = async () => {
+      try {
+        const url = new URL(file.openUrl, window.location.href);
+        if (url.origin !== window.location.origin) return;
+        const response = await fetch(url, { method: 'HEAD', signal: controller.signal });
+        if (!response.ok) return;
+        const length = response.headers.get('content-length');
+        const bytes = length === null ? undefined : Number(length);
+        const modified = response.headers.get('last-modified');
+        if (!controller.signal.aborted) setDetails((current) => ({
+          ...current,
+          bytes: bytes !== undefined && Number.isFinite(bytes) && bytes >= 0 ? bytes : undefined,
+          modified: modified && Number.isFinite(Date.parse(modified)) ? new Date(modified).toLocaleString() : undefined,
+        }));
+      } catch { /* Keep available metadata when a file is inaccessible. */ }
+    };
+    // Only request metadata for rows the user is viewing, including old conversations.
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      observer.disconnect();
+      void load();
+    });
+    observer.observe(row);
+    return () => { controller.abort(); observer.disconnect(); row.removeEventListener('load', readDimensions, true); };
+  }, [file.openUrl]);
+  const bytes = details.bytes ?? file.bytes;
+  return <small ref={ref}>{[
+    details.dimensions,
+    typeof bytes === 'number' ? formatDownloadBytes(bytes) : '',
+    browserChatArtifactExtension(file.fileName),
+    file.pageCount ? t('{count} 页', { count: file.pageCount }) : '',
+    details.modified ? t('修改于 {time}', { time: details.modified }) : '',
+  ].filter(Boolean).join(' · ') || t('文件')}</small>;
+}
+
 function BrowserChatMessageArtifactCards({
   artifacts,
   expandedByDefault,
@@ -2964,152 +3018,68 @@ function BrowserChatMessageArtifactCards({
   expandedByDefault: boolean;
 }) {
   const { t } = useI18n();
-  const preview = useContext(BrowserChatScreenshotPreviewContext);
-  const messageArtifacts = useMemo(() => artifacts || [], [artifacts]);
-  const screenshots = useMemo(() => messageArtifacts.flatMap((artifact): BrowserChatRenderableScreenshot[] => {
-    if (artifact.kind !== 'screenshot' || !artifact.path) return [];
-    const url = browserChatArtifactOpenUrl(artifact);
-    if (!url) return [];
-    return [{
-      path: artifact.path,
-      title: artifact.title || '截图',
-      url,
-    }];
-  }), [messageArtifacts]);
-  const files = useMemo(() => messageArtifacts.flatMap((artifact) => {
-    if (artifact.kind === 'screenshot') return [];
-    const openUrl = browserChatArtifactOpenUrl(artifact);
-    return openUrl ? [{ ...artifact, openUrl }] : [];
-  }), [messageArtifacts]);
-  const [filesExpanded, setFilesExpanded] = useState(expandedByDefault);
-  useEffect(() => setFilesExpanded(expandedByDefault), [expandedByDefault]);
-  if (!files.length && !screenshots.length) return null;
+  const { openFilePreview } = useFilePreview();
+  const files = useMemo(() => {
+    return (artifacts || []).flatMap((artifact) => {
+      // Browser observations belong to their tool records, not the deliverable list.
+      if (artifact.kind === 'screenshot') return [];
+      const openUrl = browserChatArtifactOpenUrl(artifact);
+      if (!openUrl) return [];
+      const kind = fileFormatForName(artifact.fileName)?.kind;
+      const isImage = artifact.kind === 'image' || kind === 'image';
+      return [{ ...artifact, openUrl, isImage }];
+    });
+  }, [artifacts]);
+  const [expanded, setExpanded] = useState(expandedByDefault);
+  useEffect(() => setExpanded(expandedByDefault), [expandedByDefault]);
+  const id = useId();
+  const headingId = `${id}-heading`;
+  const contentId = `${id}-files`;
+  if (!files.length) return null;
   return (
-    <section aria-label={t('输出文件')} className={`browser-chat-message-artifacts${filesExpanded ? ' is-expanded' : ''}`}>
-          <button
-            aria-expanded={filesExpanded}
-            className="browser-chat-output-files-heading"
-            onClick={() => setFilesExpanded((current) => !current)}
-            type="button"
-          >
-            <ChevronDown aria-hidden="true" size={14} />
-            <span>{t('输出文件')}</span>
-          </button>
-          <div className="browser-chat-output-files-shell" inert={!filesExpanded}>
-            <div className="browser-chat-output-file-list">
-              {files.map((file) => {
-                const extension = browserChatArtifactExtension(file.fileName);
-                const metadata = [
-                  typeof file.bytes === 'number' ? formatDownloadBytes(file.bytes) : '',
-                  extension,
-                  file.pageCount ? t('{count} 页', { count: file.pageCount }) : '',
-                ].filter(Boolean);
-                return (
-                  <article className="browser-chat-output-file-row" key={file.id}>
-                    <a
-                      aria-label={t('打开文件 {name}', { name: file.fileName })}
-                      className="browser-chat-output-file-main"
-                      href={file.openUrl}
-                      rel="noopener noreferrer"
-                      target="_blank"
-                    >
-                      <span className={`browser-chat-output-file-icon${browserChatArtifactIsImage(file.fileName) ? ' is-image' : ''}`} aria-hidden="true">
-                        {browserChatArtifactFileIcon(file.fileName, file.openUrl)}
-                      </span>
-                      <span className="browser-chat-output-file-copy">
-                        <strong>{file.fileName}</strong>
-                        <small>{metadata.join(' · ') || t('文件')}</small>
-                      </span>
-                    </a>
-                    <span className="browser-chat-output-file-actions">
-                      <a
-                        aria-label={`${t('下载文件')}：${file.fileName}`}
-                        download={file.fileName}
-                        href={file.downloadUrl || file.openUrl}
-                        rel="noopener noreferrer"
-                        title={t('下载文件')}
-                      >
-                        <Download size={15} />
-                      </a>
-                      <a
-                        aria-label={t('打开文件 {name}', { name: file.fileName })}
-                        href={file.openUrl}
-                        rel="noopener noreferrer"
-                        target="_blank"
-                        title={t('打开文件 {name}', { name: file.fileName })}
-                      >
-                        <SquareArrowOutUpRight size={15} />
-                      </a>
-                    </span>
-                  </article>
-                );
-              })}
-              {screenshots.map((screenshot, index) => {
-                const rawTitle = screenshot.title.replace(/\s+explicit image\s+\d+$/i, '').trim();
-                const title = rawTitle && rawTitle !== 'browserCode'
-                  ? rawTitle
-                  : t('操作截图 {index}', { index: index + 1 });
-                const fileName = browserChatArtifactFileName(screenshot.path) || `screenshot-${index + 1}.png`;
-                const extension = browserChatArtifactExtension(fileName) || t('图片');
-                return (
-                  <article className="browser-chat-output-file-row is-screenshot" key={`screenshot:${screenshot.path}`}>
-                    {preview ? (
-                      <button
-                        aria-label={t('查看截图 {index}', { index: index + 1 })}
-                        className="browser-chat-output-file-main"
-                        onClick={() => preview.open(screenshots, index)}
-                        type="button"
-                      >
-                        <span className="browser-chat-output-file-icon is-image" aria-hidden="true">
-                          <img alt="" loading="lazy" src={screenshot.url} />
-                        </span>
-                        <span className="browser-chat-output-file-copy">
-                          <strong>{title}</strong>
-                          <small>{extension} · {t('截图')}</small>
-                        </span>
-                      </button>
-                    ) : (
-                      <a
-                        aria-label={t('打开文件 {name}', { name: title })}
-                        className="browser-chat-output-file-main"
-                        href={screenshot.url}
-                        rel="noopener noreferrer"
-                        target="_blank"
-                      >
-                        <span className="browser-chat-output-file-icon is-image" aria-hidden="true">
-                          <img alt="" loading="lazy" src={screenshot.url} />
-                        </span>
-                        <span className="browser-chat-output-file-copy">
-                          <strong>{title}</strong>
-                          <small>{extension} · {t('截图')}</small>
-                        </span>
-                      </a>
-                    )}
-                    <span className="browser-chat-output-file-actions">
-                      <a
-                        aria-label={`${t('下载文件')}：${title}`}
-                        download={fileName}
-                        href={screenshot.url}
-                        rel="noopener noreferrer"
-                        title={t('下载文件')}
-                      >
-                        <Download size={15} />
-                      </a>
-                      <a
-                        aria-label={t('打开文件 {name}', { name: title })}
-                        href={screenshot.url}
-                        rel="noopener noreferrer"
-                        target="_blank"
-                        title={t('打开文件 {name}', { name: title })}
-                      >
-                        <SquareArrowOutUpRight size={15} />
-                      </a>
-                    </span>
-                  </article>
-                );
-              })}
-            </div>
-          </div>
+    <section aria-label={t('输出文件')} className={`browser-chat-message-artifacts${expanded ? ' is-expanded' : ''}`}>
+      <button
+        aria-controls={contentId}
+        aria-expanded={expanded}
+        className="browser-chat-output-files-heading"
+        id={headingId}
+        onClick={() => setExpanded((current) => !current)}
+        type="button"
+      >
+        <ChevronDown aria-hidden="true" size={14} />
+        <span>{t('输出文件')}</span>
+      </button>
+      <div aria-labelledby={headingId} className="browser-chat-output-files-shell" id={contentId} inert={!expanded}>
+        <div className="browser-chat-output-file-list">
+          {files.map((file) => {
+            const openPreview = () => openFilePreview({ fileName: file.fileName, source: file.openUrl });
+            return (
+              <article className="browser-chat-output-file-row" key={file.id}>
+                <button className="browser-chat-output-file-main" onClick={openPreview} type="button" title={file.fileName}>
+                  <span className={`browser-chat-output-file-icon${file.isImage ? ' is-image' : ''}`} aria-hidden="true">
+                    {file.isImage ? <img alt="" loading="lazy" src={file.openUrl} /> : browserChatArtifactFileIcon(file.fileName, file.openUrl)}
+                  </span>
+                  <span className="browser-chat-output-file-copy">
+                    <strong>{file.fileName}</strong>
+                    <BrowserChatArtifactMetadata file={file} />
+                  </span>
+                </button>
+                <span className="browser-chat-output-file-actions">
+                  <button aria-label={t('预览文件 {name}', { name: file.fileName })} onClick={openPreview} title={t('预览')} type="button">
+                    <Eye size={15} /><span>{t('预览')}</span>
+                  </button>
+                  <a aria-label={`${t('下载文件')}：${file.fileName}`} download={file.fileName} href={file.downloadUrl || file.openUrl} rel="noopener noreferrer" title={t('下载文件')}>
+                    <Download size={15} /><span>{t('下载')}</span>
+                  </a>
+                  <a aria-label={t('打开文件 {name}', { name: file.fileName })} data-file-preview="false" href={file.openUrl} rel="noopener noreferrer" target="_blank" title={t('打开文件 {name}', { name: file.fileName })}>
+                    <SquareArrowOutUpRight size={15} /><span>{t('打开')}</span>
+                  </a>
+                </span>
+              </article>
+            );
+          })}
+        </div>
+      </div>
     </section>
   );
 }
@@ -5163,6 +5133,7 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
   const followLatestRef = useRef(true);
   const scrollingToLatestRef = useRef(false);
   const scrollToLatestTimerRef = useRef(0);
+  const cancelTurnScrollRef = useRef<(() => void) | null>(null);
   const earlierLoadInFlightRef = useRef(false);
   const earlierLoadArmedRef = useRef(true);
   const historyHeightFrameRef = useRef(0);
@@ -5260,17 +5231,59 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
     const anchor = Array.from(container.querySelectorAll<HTMLElement>('[data-browser-chat-turn-anchor]'))
       .find((candidate) => candidate.dataset.browserChatTurnAnchor === messageId);
     if (!anchor) return;
+    cancelTurnScrollRef.current?.();
+    if (scrollToLatestTimerRef.current) window.clearTimeout(scrollToLatestTimerRef.current);
+    scrollToLatestTimerRef.current = 0;
+    scrollingToLatestRef.current = false;
     followLatestRef.current = false;
-    const containerRect = container.getBoundingClientRect();
-    const targetTop = container.scrollTop + anchor.getBoundingClientRect().top - containerRect.top - 28;
-    container.scrollTo({ behavior: 'smooth', top: Math.max(0, targetTop) });
+    container.dataset.turnScrollActive = 'true';
+    // A native smooth scroll has a fixed destination and is cancelled by row
+    // height compensation. Own the animation and remeasure the anchor instead.
+    const duration = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 360;
+    const startedAt = performance.now();
+    let frame = 0;
+    let previousProgress = 0;
+    let settledFrames = 0;
+    const cancel = () => {
+      cancelAnimationFrame(frame);
+      delete container.dataset.turnScrollActive;
+      cancelTurnScrollRef.current = null;
+      container.removeEventListener('wheel', cancel);
+      container.removeEventListener('touchstart', cancel);
+      container.removeEventListener('pointerdown', cancel);
+      container.removeEventListener('keydown', cancel);
+    };
+    const animate = (now: number) => {
+      if (!anchor.isConnected || !container.contains(anchor)) { cancel(); return; }
+      const targetTop = Math.max(0, Math.min(
+        container.scrollHeight - container.clientHeight,
+        container.scrollTop + anchor.getBoundingClientRect().top - container.getBoundingClientRect().top - 28,
+      ));
+      const fraction = duration ? Math.min(1, (now - startedAt) / duration) : 1;
+      const progress = 1 - (1 - fraction) ** 3;
+      const remaining = targetTop - container.scrollTop;
+      const weight = previousProgress < 1 ? (progress - previousProgress) / (1 - previousProgress) : 1;
+      container.scrollTo({ behavior: 'instant', top: container.scrollTop + remaining * weight });
+      previousProgress = progress;
+      setShowScrollToBottom(container.scrollHeight - container.scrollTop - container.clientHeight > 72);
+      settledFrames = fraction === 1 && Math.abs(remaining) <= 1 ? settledFrames + 1 : 0;
+      // Allow restored rows to settle, but never keep ownership indefinitely.
+      if (settledFrames >= 3 || now - startedAt >= duration + 500) { cancel(); return; }
+      frame = requestAnimationFrame(animate);
+    };
+    cancelTurnScrollRef.current = cancel;
+    container.addEventListener('wheel', cancel, { passive: true });
+    container.addEventListener('touchstart', cancel, { passive: true });
+    container.addEventListener('pointerdown', cancel, { passive: true });
+    container.addEventListener('keydown', cancel);
+    frame = requestAnimationFrame(animate);
   }, [getScrollContainer]);
   const firstMessageId = messages[0]?.id || '';
 
   const addLoadedHistoryHeight = useCallback(() => {
     const pending = pendingHistoryHeightRef.current;
     const container = getScrollContainer();
-    if (!pending || !container) return;
+    if (!pending || !container || cancelTurnScrollRef.current) return;
     const addedHeight = Math.max(0, container.scrollHeight - pending.baselineScrollHeight);
     const unappliedHeight = addedHeight - pending.appliedAddedHeight;
     if (Math.abs(unappliedHeight) > 0.5) {
@@ -5309,6 +5322,7 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
     const messageList = scrollRef.current;
     const initialPositioning = messageList?.dataset.scrollReady !== 'true';
     if (sessionChanged) {
+      cancelTurnScrollRef.current?.();
       if (historyHeightFrameRef.current) cancelAnimationFrame(historyHeightFrameRef.current);
       historyHeightFrameRef.current = 0;
       pendingHistoryHeightRef.current = null;
@@ -5361,6 +5375,11 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
       return;
     }
     const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    if (cancelTurnScrollRef.current) {
+      followLatestRef.current = false;
+      setShowScrollToBottom(distanceFromBottom > 72);
+      return;
+    }
     if (scrollingToLatestRef.current) {
       followLatestRef.current = true;
       setShowScrollToBottom(false);
@@ -5373,6 +5392,7 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
   const scrollToLatest = useCallback(() => {
     const container = getScrollContainer();
     if (!container) return;
+    cancelTurnScrollRef.current?.();
     if (scrollToLatestTimerRef.current) window.clearTimeout(scrollToLatestTimerRef.current);
     scrollingToLatestRef.current = true;
     followLatestRef.current = true;
@@ -5403,7 +5423,7 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
     const startedAt = performance.now();
     const cancelPinning = () => { cancelled = true; };
     const pinToBottom = () => {
-      if (cancelled) return;
+      if (cancelled || !followLatestRef.current) return;
       container.scrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
       followLatestRef.current = true;
       setShowScrollToBottom(false);
@@ -5467,6 +5487,7 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
   }, [getScrollContainer, trackScrollPosition]);
 
   const loadEarlier = useCallback(async () => {
+    if (cancelTurnScrollRef.current) return;
     if (!onLoadEarlier || !historyHasMore || historyLoading || earlierLoadInFlightRef.current) return;
     const container = getScrollContainer();
     if (!container || container.scrollTop > 0) return;
@@ -5520,6 +5541,7 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
   }, [getScrollContainer, historyHasMore, loadEarlier, onLoadEarlier]);
 
   useEffect(() => () => {
+    cancelTurnScrollRef.current?.();
     if (historyHeightFrameRef.current) cancelAnimationFrame(historyHeightFrameRef.current);
     if (scrollToLatestTimerRef.current) window.clearTimeout(scrollToLatestTimerRef.current);
   }, []);
@@ -6578,6 +6600,47 @@ const BrowserChatComposer = memo(function BrowserChatComposer({
 });
 
 type BrowserChatManagementTab = 'accounts' | 'memory' | 'skills';
+
+function BrowserChatManagementMenu({ onSelect, onGenerateTestCases }: {
+  onSelect: (tab: BrowserChatManagementTab) => void;
+  onGenerateTestCases: () => void;
+}) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  const select = (tab: BrowserChatManagementTab) => {
+    setOpen(false);
+    onSelect(tab);
+  };
+  return (
+    <Dock aria-label={t('快捷管理')} className="browser-chat-management-dock" role="group" iconSize={30} disableMagnification direction="bottom">
+      <DockIcon>
+        <Popover isOpen={open} onOpenChange={setOpen}>
+          <Button isIconOnly aria-label={t('更多')} className="ui-icon-button browser-chat-more-button" variant="ghost" type="button">
+            <MoreHorizontal aria-hidden="true" />
+          </Button>
+          <Popover.Content className="browser-chat-more-popover" placement="top" offset={10} containerPadding={12}>
+            <Popover.Arrow />
+            <Popover.Dialog aria-label={t('更多操作')} className="browser-chat-more-menu">
+              <div className="browser-chat-more-group" role="group" aria-label={t('快捷操作')}>
+                <span className="browser-chat-more-group-title">{t('快捷操作')}</span>
+                <Button variant="ghost" onPress={() => { setOpen(false); onGenerateTestCases(); }}><ClipboardCheck size={17} aria-hidden="true" />{t('生成测试用例')}</Button>
+              </div>
+              <div className="browser-chat-more-group" role="group" aria-label={t('会话工具')}>
+                <span className="browser-chat-more-group-title">{t('会话工具')}</span>
+                <Button variant="ghost" onPress={() => select('skills')}><Braces size={17} aria-hidden="true" />{t('技能管理')}</Button>
+              </div>
+              <div className="browser-chat-more-group" role="group" aria-label={t('个人设置')}>
+                <span className="browser-chat-more-group-title">{t('个人设置')}</span>
+                <Button variant="ghost" onPress={() => select('memory')}><Brain size={17} aria-hidden="true" />{t('个性化记忆')}</Button>
+                <Button variant="ghost" onPress={() => select('accounts')}><UserRound size={17} aria-hidden="true" />{t('登录账号')}</Button>
+              </div>
+            </Popover.Dialog>
+          </Popover.Content>
+        </Popover>
+      </DockIcon>
+    </Dock>
+  );
+}
 
 function BrowserChatManagementSettingsLoading() {
   const { t } = useI18n();
@@ -8193,6 +8256,7 @@ export function BrowserChatWorkspace({
   const [messageGenerationDialog, setMessageGenerationDialog] = useState<BrowserChatMessageGenerationDialog | null>(null);
   const [messageGenerationError, setMessageGenerationError] = useState('');
   const [managementTab, setManagementTab] = useState<BrowserChatManagementTab | null>(null);
+  const [testCaseDialogOpen, setTestCaseDialogOpen] = useState(false);
   const personalMemoryRefreshToken = session?.logs.reduce(
     (token, log) => log.phase === 'memory:extract:done' ? log.id : token,
     '',
@@ -8677,7 +8741,7 @@ export function BrowserChatWorkspace({
   const allSelectableRecentSessionsSelected = selectableRecentSessionIds.length > 0
     && selectableRecentSessionIds.every((id) => selectedSessionIdSet.has(id));
   const embeddedBrowserActive = embeddedBrowserEnabled;
-  const embeddedBrowserCovered = Boolean(toolDialog || logDialogMessageId || filePreviewOpen || embeddedBrowserDialogOpen || managementTab || messageGenerationDialog);
+  const embeddedBrowserCovered = Boolean(toolDialog || logDialogMessageId || filePreviewOpen || embeddedBrowserDialogOpen || managementTab || messageGenerationDialog || testCaseDialogOpen);
   const embeddedBrowserViewActive = embeddedBrowserActive && !embeddedBrowserCovered;
   const modelSelection = modelSelectionValueForConfig(modelConfig, { model: modelId, provider: modelProvider });
   const modelSelectionDiagnostic = modelSelectionDiagnosticLabel(modelConfig, { model: modelId, provider: modelProvider });
@@ -10227,17 +10291,7 @@ export function BrowserChatWorkspace({
           loading={Boolean(loadingSessionId)}
           loadingMoreSkills={loadingMoreSkills}
           managementActions={(
-            <Dock aria-label={t('快捷管理')} className="browser-chat-management-dock" role="group" iconSize={30} disableMagnification direction="bottom">
-              <DockIcon>
-                <IconAction label={t('技能')} onClick={() => setManagementTab('skills')}><Braces aria-hidden="true" /></IconAction>
-              </DockIcon>
-              <DockIcon>
-                <IconAction label={t('记忆')} onClick={() => setManagementTab('memory')}><Brain aria-hidden="true" /></IconAction>
-              </DockIcon>
-              <DockIcon>
-                <IconAction label={t('账号')} onClick={() => setManagementTab('accounts')}><UserRound aria-hidden="true" /></IconAction>
-              </DockIcon>
-            </Dock>
+            <BrowserChatManagementMenu onSelect={setManagementTab} onGenerateTestCases={() => setTestCaseDialogOpen(true)} />
           )}
           modelSelection={modelSelection}
           modelSelectionTitle={modelSelectionDiagnostic}
@@ -10387,6 +10441,7 @@ export function BrowserChatWorkspace({
         />
       ) : null}
 
+      {testCaseDialogOpen ? <BrowserChatTestCaseDialog key={sessionUiKey} onClose={() => setTestCaseDialogOpen(false)} onSend={sendMessage} /> : null}
       {messageGenerationDialog ? (
         <AppModal
           ariaLabelledBy="browser-chat-message-generation-title"
