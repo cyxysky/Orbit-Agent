@@ -140,6 +140,7 @@ export type StepToolCall = {
   contextBefore?: AiToolContextSnapshot;
   contextAfter?: AiToolContextSnapshot;
   screenshots?: Array<{
+    source?: 'automatic' | 'explicit';
     title: string;
     path: string;
     kind?: 'current' | 'history' | 'pinned' | 'after' | 'marker' | 'original' | 'other';

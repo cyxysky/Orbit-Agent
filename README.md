@@ -149,7 +149,7 @@ Minimal management API:
 - `PATCH /api/personal-memory/{id}`
 - `DELETE /api/personal-memory/{id}`
 
-Browser conversations use one `browser` tool: `action=state` reads live state, `action=code` executes Playwright, and `action=waitForHumanVerification` pauses for user-owned verification. AX/DOM reads, actionability checks, iframe handling, screenshots, durable conversation state, and incremental `domChanges` remain available inside the same runtime.
+Browser conversations use one `browser` tool: `action=state` reads live state, `action=code` executes Playwright, and `action=waitForHumanVerification` pauses for user-owned verification. AX/DOM reads, actionability checks, iframe handling, screenshots, durable conversation state, and automatic final viewport screenshots remain available inside the same runtime. Browser Chat attaches only the latest browser screenshot to each model request.
 
 ## Reuse an Existing Browser
 

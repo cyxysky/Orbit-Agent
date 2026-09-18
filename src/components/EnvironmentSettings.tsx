@@ -1933,6 +1933,7 @@ export function EnvironmentSettings({
             <label className="personal-memory-field wide">
               <span>{t('说明')}</span>
               <TextArea
+                className="resource-content-textarea"
                 fullWidth
                 placeholder={t('公司私域 Jira，地址是 ...')}
                 value={personalMemoryDraft.value}

@@ -6,6 +6,7 @@ const booleanOptions = [
 ] as const;
 
 export const browserCapabilitySettings = [
+  { key: 'BROWSER_CODE_AUTO_SCREENSHOT', label: '操作后自动截图', description: '每次浏览器代码执行后截取当前视口，供支持图片的模型观察。关闭后不自动截图或附加旧截图；代码主动截图不受影响。', section: 'browser', group: '浏览器观察', defaultValue: 'true', control: 'boolean', applyMode: 'runtime', options: booleanOptions },
   { key: 'BROWSER_PREVIEW_FPS', label: '实时预览帧率', description: '实时预览轮询截图并发送的目标帧率。', section: 'browser', group: '实时预览', defaultValue: '20', control: 'number', applyMode: 'runtime', min: 1, max: 60, step: 1 },
   { key: 'BROWSER_OUTPUT_PIXEL_RATIO', label: '截图输出像素倍率', description: '提高系统截图的输出像素密度，不改变网页 CSS 视口。', section: 'browser', group: '实时预览', defaultValue: '1.5', control: 'number', applyMode: 'runtime', min: 1, max: 2, step: 0.25 },
   { key: 'BROWSER_SCREENCAST_FORMAT', label: '实时预览图片格式', description: 'JPEG 体积较小；PNG 无损但编码和传输开销更高。', section: 'browser', group: '实时预览', defaultValue: 'jpeg', control: 'select', applyMode: 'runtime', options: [{ label: 'JPEG', value: 'jpeg' }, { label: 'PNG', value: 'png' }] },

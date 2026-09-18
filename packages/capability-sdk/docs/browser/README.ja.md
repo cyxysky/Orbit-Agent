@@ -6,7 +6,7 @@
 
 永続的な JavaScript 環境とページ観測を通じて Playwright ブラウザーを操作します。
 
-`BrowserSession.executeBrowserCode()` は `{ ok, summary, data, ... }` を返します。`data.result` はコードの出力、失敗時のみ `data.executionState` に実行状態を返します。`needChange: true` を指定した場合のみ、今回のセルの差分を読み取り、`data.domChanges` に返します。`needChange` の既定値は false で、過去のセルの差分は取得しません。これらのオブジェクトを直接読み取ってください。完全な内容は `data` にのみ保持されます。`createNodeBrowserCapability` の戻り値は、まず `@cjfclonedeep/capability-sdk/browser` の `browserOperationFromCapabilityResult` で Capability のラッパーを取り除きます。状態表示には `summary` を使います。
+`BrowserSession.executeBrowserCode()` は `{ ok, summary, data, ... }` を返します。`data.result` はコード出力、`data.executionState` は呼び出しの進捗です。各呼び出しの終了時に現在のビューポートを自動撮影し、失敗時も可能な限り撮影します。`data.observation` は状態、URL、時刻またはエラーを示し、`browserObservation.path` と `referenceImagePaths` は画像を示します。ホストは最新の自動画像だけを各リクエストに添付し、明示的に出力された画像は参照資料として別途添付できます。ページのズームは変更せず、画像のサイズ調整は撮影後に行います。DOM 差分は返しません。正確な属性や業務上の検証には対象を絞った Playwright 読み取りを使います。Capability の結果は `browserOperationFromCapabilityResult` で取得します。
 
 この README は完全な接続の入口です。任意の TypeScript Agent フレームワークでは手順 1–4、または後述の AI SDK/MCP を使います。例にあるファイルはすべて**利用側のプロジェクト**に作成し、このパッケージ内には作りません。
 

@@ -75,7 +75,7 @@ export function capabilityResultToMcpResult(result: CapabilityResult): CallToolR
   if (!result.ok) {
     return {
       isError: true,
-      content: [{ type: 'text', text: result.error.message }],
+      content: [{ type: 'text', text: result.error.message }, ...(result.content?.map(mcpContent) || [])],
       structuredContent: {
         ok: false,
         error: result.error,
@@ -92,7 +92,11 @@ export function capabilityResultToMcpResult(result: CapabilityResult): CallToolR
       ok: true,
       summary: result.summary,
       ...(result.data === undefined ? {} : { data: result.data }),
-      ...(result.content?.length ? { capabilityContent: result.content } : {}),
+      ...(result.content?.length ? { capabilityContent: result.content.map((item) => {
+        // Pixels belong only in MCP image blocks, never in structured/text context.
+        if (item.type !== 'image') return item;
+        return { type: item.type, artifactId: item.artifactId, mediaType: item.mediaType };
+      }) } : {}),
     },
   };
 }
@@ -208,7 +212,7 @@ export async function createCapabilityMcpServer(
               } });
             },
           }, (execution) => resolved.tool.execute(parsed, execution));
-          if (result.ok && result.content?.some((item) => item.type === 'image' && !item.data) && options.resolveImage) {
+          if (result.content?.some((item) => item.type === 'image' && !item.data) && options.resolveImage) {
             const content = await Promise.all(result.content.map(async (item): Promise<CapabilityContent> => {
               if (item.type !== 'image' || item.data) return item;
               const image = await options.resolveImage!(item);

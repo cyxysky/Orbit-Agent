@@ -1,3 +1,4 @@
+import sharp from 'sharp';
 import { readManagedRuntime } from '../../runtime.ts';
 import { acquireSharedBrowser, connectOrLaunchPersistentBrowserOverCdp, launchPersistentContextWithBrowserCodeConnection, connectExistingBrowserOverCdp, launchBrowserServerWithConnection, sleep, closeConnectedBrowserProcess, type BrowserOwnership } from './browser-shared-runtime.ts';
 import { BrowserDownloadManager, type BrowserDownloadReceiver, type BrowserDownloadResult } from './browser-downloads.ts';
@@ -22,7 +23,7 @@ import type { BrowserPageObservation } from './browser-page-observation.ts';
 import { applyEditableTextSelection, readEditableText, resolveEditableTextSelection, type BrowserTextSelectionSpec } from './editable-text-selection.ts';
 import { buildSnapshotViews, captureAxSnapshot, snapshotRoleIsActionable, type CapturedSnapshotFrame, type SnapshotNodeWithUid, type SnapshotRecord, type SnapshotView } from './ax-snapshot.ts';
 import { captureDomSnapshot } from './dom-snapshot.ts';
-import { BROWSER_CODE_KERNEL_RUNTIME_REVISION, browserCodePolicyViolation, browserCodeReportedFailure, BrowserCodeKernel, type BrowserCodeAttachmentBinding, type BrowserCodeActivity, type BrowserCodeConnection, type BrowserCodeCredentialBinding, type BrowserCodeRuntimeStateOperation, type BrowserCodeUidReference } from './browser-code-runner.ts';
+import { BROWSER_CODE_KERNEL_RUNTIME_REVISION, browserCodePolicyViolation, browserCodeReportedFailure, BrowserCodeKernel, type BrowserCodeAttachmentBinding, type BrowserCodeActivity, type BrowserCodeConnection, type BrowserCodeCredentialBinding, type BrowserCodeRuntimeStateOperation, type BrowserCodeUidReference, type BrowserCodeViewportEvidence } from './browser-code-runner.ts';
 import { resolveBrowserSessionSurface, type BrowserSessionSurface } from './browser-session-surface.ts';
 import { compactDiagnosticText, isAlreadyHandledJavaScriptDialogError, shouldIgnoreConsoleError, snapshotFrameUrl, stringifyDiagnosticValue, unknownErrorMessage } from './browser-session-diagnostics.ts';
 import { isBlankBrowserUrlLike, isBlankPage } from './browser-session-page-policy.ts';
@@ -155,6 +156,8 @@ export type BrowserActionResult = {
   referenceImagePath?: string;
   /** Images emitted by browserCode that should be attached to the next model request in order. */
   referenceImagePaths?: string[];
+  /** Final viewport observation, distinct from explicitly emitted image artifacts. */
+  browserObservation?: { status: 'available' | 'unavailable' | 'disabled'; path?: string; url?: string; capturedAt?: string; error?: string };
   /** Safe basenames for emitted screenshots. */
   screenshotFileNames?: string[];
   /** A compact continuation cursor for paged snapshot readers. */
@@ -1182,6 +1185,18 @@ export class BrowserSession {
   private interActionChangeJournalSequence = 0;
   private lastScrollableAreas: ScrollableArea[] = [];
   private lastScreenshotTiming?: ScreenshotTiming;
+  private latestBrowserObservation?: BrowserActionResult['browserObservation'];
+  private browserViewportEvidence?: BrowserCodeViewportEvidence;
+
+  getBrowserObservation() {
+    if (!this.automaticBrowserScreenshotEnabled()) return { status: 'disabled' as const };
+    return this.latestBrowserObservation;
+  }
+
+  private automaticBrowserScreenshotEnabled() {
+    return String(this.configuredValue('BROWSER_CODE_AUTO_SCREENSHOT') ?? 'true').trim().toLowerCase() !== 'false';
+  }
+
   private ownedPages = new Set<Page>();
   private browserOwnership: BrowserOwnership = 'launched';
   private releaseSharedBrowser?: (force?: boolean) => Promise<void>;
@@ -1244,6 +1259,10 @@ export class BrowserSession {
       ...this.capabilityConfiguration,
       ...configuration,
     });
+    if (!this.automaticBrowserScreenshotEnabled()) {
+      this.latestBrowserObservation = undefined;
+      this.browserViewportEvidence = undefined;
+    }
     return this;
   }
 
@@ -2633,20 +2652,18 @@ export class BrowserSession {
         // page. Change-driven screencast events starve the fixed-rate encoder.
         const result = await binding.client.send('Page.captureScreenshot', {
           captureBeyondViewport: false,
-          clip: {
-            x: source.pageX,
-            y: source.pageY,
-            width: cssViewport.width,
-            height: cssViewport.height,
-            scale,
-          },
           format,
           fromSurface: true,
           optimizeForSpeed: true,
           ...(format === 'jpeg' ? { quality } : {}),
         });
         if (!isCurrentPage() || !result.data) return;
-        pushOutputFrame(binding.page, result.data, cssViewport, outputViewport, {
+        // Resize pixels outside Chromium, just like automatic observations. CDP
+        // clip scaling can disturb the shared surface while another capture runs.
+        const pixels = sharp(Buffer.from(result.data, 'base64')).resize(outputViewport.width, outputViewport.height);
+        const resized = await (format === 'jpeg' ? pixels.jpeg({ quality }) : pixels.png()).toBuffer();
+        if (!isCurrentPage()) return;
+        pushOutputFrame(binding.page, resized.toString('base64'), cssViewport, outputViewport, {
           deviceHeight: outputViewport.height,
           deviceWidth: outputViewport.width,
         });
@@ -3838,18 +3855,6 @@ export class BrowserSession {
     timeoutMs: number;
   }) {
     const outputPixelRatio = input.outputPixelRatio ?? browserOutputPixelRatioFromEnv(this.runtimeEnvironment());
-    if (outputPixelRatio === 1) {
-      await this.activePage.screenshot({
-        animations: 'disabled',
-        caret: 'hide',
-        path: input.filePath,
-        fullPage: input.capture === 'fullPage',
-        scale: 'css',
-        timeout: input.timeoutMs,
-      });
-      return;
-    }
-
     const client = await this.activePage.context().newCDPSession(this.activePage);
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -3863,20 +3868,20 @@ export class BrowserSession {
           const y = 'pageY' in source ? source.pageY : source.y;
           const width = 'clientWidth' in source ? source.clientWidth : source.width;
           const height = 'clientHeight' in source ? source.clientHeight : source.height;
+          // Capture the existing compositor surface at native scale. Never resize the
+          // browser viewport or ask the compositor to scale it for an observation.
           const result = await client.send('Page.captureScreenshot', {
             captureBeyondViewport: input.capture === 'fullPage',
-            clip: {
-              x,
-              y,
-              width: Math.max(1, width),
-              height: Math.max(1, height),
-              scale: outputPixelRatio,
-            },
-            format: 'png',
-            fromSurface: true,
-            optimizeForSpeed: false,
+            ...(input.capture === 'fullPage' ? { clip: {
+              x, y, width: Math.max(1, width), height: Math.max(1, height), scale: 1,
+            } } : {}),
+            format: 'png', fromSurface: true, optimizeForSpeed: false,
           });
-          await writeFile(input.filePath, Buffer.from(result.data, 'base64'));
+          const png = await sharp(Buffer.from(result.data, 'base64'))
+            .resize({ width: Math.max(1, Math.round(width * outputPixelRatio)),
+              height: Math.max(1, Math.round(height * outputPixelRatio)), fit: 'fill' })
+            .png().toBuffer();
+          await writeFile(input.filePath, png);
         })(),
         new Promise<never>((_, reject) => {
           timeout = setTimeout(() => {
@@ -4242,9 +4247,72 @@ export class BrowserSession {
       .slice(0, 1_000);
   }
 
-  async executeBrowserCode(input: {
+  async executeBrowserCode(input: Parameters<BrowserSession['executeBrowserCodeCell']>[0]): Promise<BrowserActionResult> {
+    return this.withSessionOperation(async (signal) => {
+      this.latestBrowserObservation = { status: 'unavailable', error: 'Browser code is running; previous screenshot is no longer current.' };
+      let result: BrowserActionResult;
+      try {
+        result = await this.executeBrowserCodeCell({ ...input, abortSignal: signal });
+      } catch (error) {
+        if (signal.aborted) { this.browserViewportEvidence = undefined; throw error; }
+        result = { ok: false, failureCategory: 'browser-code-failed',
+          summary: 'Browser script failed; inspect the returned evidence before retrying.',
+          data: { error: error instanceof Error ? error.message : String(error) } };
+      }
+      // A failed cell can still have changed the page. Never reuse an older image.
+      this.lastScreenshotMetrics = undefined;
+      this.browserViewportEvidence = undefined;
+      if (!this.automaticBrowserScreenshotEnabled()) {
+        const observation = { status: 'disabled' as const };
+        this.latestBrowserObservation = observation;
+        const data = result.data && typeof result.data === 'object' ? result.data as Record<string, unknown> : {};
+        return { ...result, browserObservation: observation, data: { ...data, observation } };
+      }
+      let observation: NonNullable<BrowserActionResult['browserObservation']>;
+      const capture = new BrowserOperationDeadline(boundedPositiveIntegerEnv(
+        'SCREENSHOT_TIMEOUT_MS', DEFAULT_SCREENSHOT_TIMEOUT_MS, MIN_SCREENSHOT_TIMEOUT_MS,
+        MAX_SCREENSHOT_TIMEOUT_MS, this.runtimeEnvironment(),
+      ), signal);
+      try {
+        signal.throwIfAborted();
+        const page = this.activePage;
+        if (page.isClosed()) throw new Error('The final browser page is closed.');
+        const readGeometry = () => page.evaluate(() => {
+          const win = window as Window & { __aiCoordinateEvidenceDocumentId?: string };
+          win.__aiCoordinateEvidenceDocumentId ||= Date.now() + '-' + Math.random();
+          return { documentId: win.__aiCoordinateEvidenceDocumentId, url: location.href,
+            width: innerWidth, height: innerHeight, devicePixelRatio, scrollX, scrollY };
+        });
+        const before = await capture.step('viewport-before', readGeometry);
+        const dir = this.artifactDirectory(input.runId || 'browser-code');
+        await capture.step('screenshot-directory', () => mkdir(dir, { recursive: true }));
+        const imagePath = path.join(dir, `step-${input.stepIndex}-viewport-${randomUUID()}.png`);
+        await capture.step('viewport-screenshot', () => this.capturePngScreenshot({
+          capture: 'viewport', filePath: imagePath, outputPixelRatio: 1, timeoutMs: capture.timeoutMs,
+        }));
+        const after = await capture.step('viewport-after', readGeometry);
+        if (JSON.stringify(before) === JSON.stringify(after)) this.browserViewportEvidence = { ...after, capturedAt: Date.now() };
+        observation = { status: 'available', path: imagePath, url: page.url(), capturedAt: new Date().toISOString() };
+      } catch (error) {
+        if (signal.aborted) throw error;
+        observation = { status: 'unavailable', error: error instanceof Error ? error.message : String(error) };
+      } finally {
+        capture.dispose();
+      }
+      this.latestBrowserObservation = observation;
+      const { path: imagePath, ...metadata } = observation;
+      const data = result.data && typeof result.data === 'object' ? result.data as Record<string, unknown> : {};
+      return { ...result, browserObservation: observation,
+        data: { ...data, observation: { ...metadata, ...(imagePath ? { fileName: path.basename(imagePath) } : {}) } },
+        ...(imagePath ? { referenceImagePath: imagePath,
+          referenceImagePaths: [...(result.referenceImagePaths || []), imagePath] } : {}),
+      };
+    }, input.abortSignal);
+  }
+
+  private async executeBrowserCodeCell(input: {
     code: string;
-    needChange?: boolean;
+    imageInputAvailable?: boolean;
     runId: string;
     stepIndex: number;
     maxOutputChars?: number;
@@ -4330,6 +4398,7 @@ export class BrowserSession {
         executionId,
         maxOutputChars: input.maxOutputChars,
         uidReferences: this.browserCodeUidReferences(),
+        viewportEvidence: input.imageInputAvailable === false ? null : this.browserViewportEvidence || null,
         abortSignal: input.abortSignal,
       }));
       executionFinished = true;
@@ -4369,17 +4438,6 @@ export class BrowserSession {
       tabChanged: execution.activity?.tabChanged === true || finalPage !== page || pagesCreatedDuringExecution.size > 0,
       ...(execution.activity?.verification ? { verification: execution.activity.verification } : {}),
     };
-    let domChanges: BrowserActionResult['domChanges'];
-    if (input.needChange === true && !finalPage.isClosed()) {
-      try {
-        domChanges = (await step('result-dom-changes', () => this.readDomChanges(signal))).domChanges;
-      } catch {
-        domChanges = undefined;
-      } finally {
-        signal.throwIfAborted();
-        await step('result-dom-journal', () => this.resetInterActionChangeJournal(signal));
-      }
-    }
     const emittedImagePaths: string[] = [];
     const emittedImageErrors: string[] = [];
     if (execution.images?.length) {
@@ -4396,9 +4454,6 @@ export class BrowserSession {
         emittedImageErrors.push(error instanceof Error ? error.message : String(error));
       }
     }
-    const actualDomChanges = domChanges
-      ? { ...domChanges, observation: undefined }
-      : undefined;
     const reportedFailure = execution.ok
       ? browserCodeReportedFailure(execution.value)
       : undefined;
@@ -4408,7 +4463,7 @@ export class BrowserSession {
       result: execution.value ?? null,
       ...(effectiveError ? { error: effectiveError } : {}),
       ...(execution.aborted === true ? { aborted: true } : {}),
-      ...(!effectiveOk && execution.executionState ? { executionState: execution.executionState } : {}),
+      ...(execution.executionState ? { executionState: execution.executionState } : {}),
       ...(downloaded.length ? { downloads: downloaded } : {}),
       ...(execution.kernelReset ? {
         kernelReset: {
@@ -4418,7 +4473,6 @@ export class BrowserSession {
       } : {}),
       finalPage: { url: finalUrl, title: finalTitle },
       ...(inferredActivity.verification ? { verification: inferredActivity.verification } : {}),
-      ...(actualDomChanges ? { domChanges: actualDomChanges } : {}),
       ...(emittedImagePaths.length ? { images: emittedImagePaths.map((filePath) => ({ fileName: path.basename(filePath) })) } : {}),
       ...(emittedImageErrors.length ? { imageErrors: emittedImageErrors } : {}),
     };
@@ -4429,8 +4483,8 @@ export class BrowserSession {
           : `browser-${execution.executionState?.status || 'code-failed'}` } : {}),
       data: payload,
       summary: effectiveOk
-        ? `browserCode completed in ${Date.now() - operation.startedAt}ms.`
-        : effectiveError || 'browserCode execution failed.',
+        ? `Browser script returned in ${Date.now() - operation.startedAt}ms; business outcome requires verification from the returned evidence.`
+        : `Browser script ${reportedFailure ? 'returned a failure' : execution.executionState?.status || 'failed'}; ${execution.executionState?.completedActions.length || 0} action(s) completed. See data.error for details and inspect the current page before retrying.`,
       ...(emittedImagePaths.length ? { referenceImagePath: emittedImagePaths[0], referenceImagePaths: emittedImagePaths } : {}),
       verification: inferredActivity.verification,
     };
@@ -4446,7 +4500,7 @@ export class BrowserSession {
       return {
         ok: false,
         failureCategory: timedOut ? 'browser-timeout' : 'browser-aborted',
-        summary: message,
+        summary: `Browser script ${timedOut ? 'timed out' : 'was aborted'} during ${operation.phase}; inspect the current page before retrying.`,
         data: { error: message, operationPhase: operation.phase, elapsedMs: Date.now() - operation.startedAt,
           ...(operationKernel ? { kernelReset: { reason: timedOut ? 'timeout' : 'aborted',
             note: 'The browserCode kernel was stopped. Top-level JavaScript bindings from earlier cells are no longer available.' } } : {}),

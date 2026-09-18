@@ -84,7 +84,7 @@ export type BrowserCodeExecutionState = {
   status: 'completed' | 'failed' | 'timeout' | 'aborted' | 'crashed';
   phase: 'startup' | 'running' | 'finished';
   attemptedActions: string[];
-  /** Playwright calls whose observation completed; does not assert business success. */
+  /** Playwright calls that returned successfully; does not assert business success. */
   completedActions: string[];
   outcome: 'not-started' | 'returned' | 'unknown';
   requiresStateRefresh: boolean;
@@ -290,6 +290,11 @@ export type BrowserCodeAttachmentBinding = {
   ref: string;
 };
 
+export type BrowserCodeViewportEvidence = {
+  documentId: string; url: string; width: number; height: number;
+  devicePixelRatio: number; scrollX: number; scrollY: number; capturedAt: number;
+};
+
 export type BrowserCodeExecutionInput = {
   code: string;
   executionId: string;
@@ -299,6 +304,7 @@ export type BrowserCodeExecutionInput = {
   attachments?: BrowserCodeAttachmentBinding[];
   credentials?: BrowserCodeCredentialBinding[];
   uidReferences?: BrowserCodeUidReference[];
+  viewportEvidence?: BrowserCodeViewportEvidence | null;
   abortSignal?: AbortSignal;
 };
 
@@ -332,7 +338,7 @@ type PendingExecution = {
 const maxDiagnosticChars = 4_000;
 const defaultBrowserCodeKernelReadyTimeoutMs = 10_000;
 const defaultBrowserCodeExecutionTimeoutMs = 90_000;
-export const BROWSER_CODE_KERNEL_RUNTIME_REVISION = 40;
+export const BROWSER_CODE_KERNEL_RUNTIME_REVISION = 41;
 
 function boundedInteger(value: unknown, fallback: number, min: number, max: number) {
   const parsed = typeof value === 'number' ? value : Number(value);
@@ -1017,11 +1023,11 @@ function browserCodeKernelMain() {
     action: string,
   ) => {
     if (!activeExecution || !page) return;
+    send({ type: 'action-progress', requestId: activeExecution.requestId, action, completed: true });
     const before = activeExecution.observationsBeforeAction.get(page);
     const after = await readUnifiedPageObservation(page);
     lastActionObservationByPage.set(page, { action, before, after });
     activeExecution.observationsBeforeAction.set(page, after);
-    send({ type: 'action-progress', requestId: activeExecution.requestId, action, completed: true });
   };
 
   const locatorIntentTerms = (selector: string) => {
@@ -1932,6 +1938,7 @@ function browserCodeKernelMain() {
         Object.defineProperty(prototype, name, {
           configurable: true,
           value: async function observedLocatorAction(this: object, ...args: unknown[]) {
+            recordAction(`locator.${name}`);
             if (name === 'setInputFiles' && activeExecution) {
               throw new Error('Use attachmentVault.setInputFiles(locator, attachmentId); direct file paths and reconstructed payloads are unavailable to browserCode.');
             }
@@ -1942,10 +1949,7 @@ function browserCodeKernelMain() {
                 ? rawLocatorByExistingLocator.get(this) || this
                 : this;
               actionableLocator = await resolveActionableLocator(locatorToResolve, name);
-              prepareStateChangingAction(targetPage, `locator.${name}`);
               await moveVisibleAiPointer(targetPage, await locatorCenter(actionableLocator), 'click');
-            } else {
-              recordAction(`locator.${name}`);
             }
             const result = await Reflect.apply(original, actionableLocator, args);
             await completeStateChangingAction(targetPage, `locator.${name}`);
@@ -2884,6 +2888,7 @@ function browserCodeKernelMain() {
     attachments?: BrowserCodeAttachmentBinding[];
     credentials?: BrowserCodeCredentialBinding[];
     uidReferences?: BrowserCodeUidReference[];
+    viewportEvidence?: BrowserCodeViewportEvidence | null;
     executionId: string;
     targetIds?: string[];
     executionTargetId?: string;
@@ -2953,6 +2958,17 @@ function browserCodeKernelMain() {
     };
 
     try {
+      // Only the host can supply this evidence, after publishing its final viewport.
+      // Clear earlier screenshots so a different tab/failed capture cannot authorize clicks.
+      if (input.viewportEvidence !== undefined) coordinateClickEvidenceByDocument.clear();
+      if (input.viewportEvidence) {
+        const current = await captureCoordinateClickState(page);
+        const evidence = { ...input.viewportEvidence, page };
+        if (sameCoordinateClickState(evidence, current)
+          && Date.now() - evidence.capturedAt <= coordinateEvidenceMaxAgeMs) {
+          coordinateClickEvidenceByDocument.set(evidence.documentId, evidence);
+        }
+      }
       await bindExecutionUidReferences(page, input.uidReferences || []);
       await evaluateCell(String(input.code));
       await publishPendingCoordinateClickEvidence();
@@ -2993,6 +3009,8 @@ function browserCodeKernelMain() {
         requestId: input.requestId,
         ok: false,
         error: error instanceof Error ? error.message : String(error),
+        selectedTargetId: selectedRuntimePage && !selectedRuntimePage.isClosed()
+          ? await targetIdForPage(selectedRuntimePage).catch(() => undefined) : undefined,
         ownedTargetIds: cdpScope?.targetIds(),
         images: activeExecution.images,
         logs: activeExecution.logs,
@@ -3034,6 +3052,7 @@ function browserCodeKernelMain() {
           attachments?: BrowserCodeAttachmentBinding[];
           credentials?: BrowserCodeCredentialBinding[];
           uidReferences?: BrowserCodeUidReference[];
+          viewportEvidence?: BrowserCodeViewportEvidence | null;
           executionId: string;
           maxOutputChars?: number;
           requestId: string;
@@ -3304,6 +3323,7 @@ export class BrowserCodeKernel {
           ref: String(attachment.ref || ''),
         })),
         code: input.code,
+        viewportEvidence: input.viewportEvidence,
         credentials: (input.credentials || []).map((credential) => ({
           ref: String(credential.ref || ''),
           value: String(credential.value || ''),
@@ -3517,6 +3537,7 @@ export class BrowserCodeKernel {
       this.finishPending({
         ok: false,
         error: typeof record.error === 'string' ? record.error : 'browserCode execution failed.',
+        selectedTargetId: typeof record.selectedTargetId === 'string' ? record.selectedTargetId : undefined,
         ownedTargetIds: Array.isArray(record.ownedTargetIds) ? record.ownedTargetIds.filter((id): id is string => typeof id === 'string') : undefined,
         images,
         logs,

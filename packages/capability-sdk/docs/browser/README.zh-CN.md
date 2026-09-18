@@ -1,12 +1,14 @@
 # @cjfclonedeep/capability-sdk/browser
 
+`BROWSER_CODE_AUTO_SCREENSHOT` 控制代码操作后的自动视口截图，默认 `true`。关闭时不自动截图、不向模型附加旧自动图，观察状态返回 `disabled`；代码主动输出图片仍可使用。该配置由宿主与 MCP 共用，运行时生效。
+
 [English](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
 
 本指南描述 `@cjfclonedeep/capability-sdk@0.2.1` 的子入口，不再是独立 npm 包。工具包已包含这些示例所需的工具依赖。
 
 通过持久化 JavaScript 环境和页面观察控制 Playwright 浏览器。
 
-`BrowserSession.executeBrowserCode()` 返回 `{ ok, summary, data, ... }`：`data.result` 是代码输出，失败时才返回 `data.executionState` 执行状态。只有传入 `needChange: true` 才读取并返回 `data.domChanges`（本次调用的页面增量变化）；`needChange` 默认为 false，不补取之前调用的变化。直接读取这些对象；完整内容仅保留在 `data` 中。对于 `createNodeBrowserCapability` 返回的结果，先使用 `@cjfclonedeep/capability-sdk/browser` 导出的 `browserOperationFromCapabilityResult` 解开 Capability 外层结构。状态文案读取 `summary`。
+`BrowserSession.executeBrowserCode()` 返回 `{ ok, summary, data, ... }`。`data.result` 是代码输出，`data.executionState` 记录浏览器调用进度。每次代码调用结束后自动截取当前视口，脚本失败后也会尽可能截图。`data.observation` 记录截图状态、URL、时间或错误；`browserObservation.path` 和 `referenceImagePaths` 标识图片。宿主每次请求只附加最新的自动浏览器截图，代码主动输出的图片可单独作为参考证据。截图不改变页面缩放；像素尺寸调整在图片捕获后完成。不返回 DOM 差异；需要精确属性和业务验证时使用定向 Playwright 读取。通过 `browserOperationFromCapabilityResult` 解包 Capability 结果。
 
 本 README 是完整接入入口。任意 TypeScript Agent 框架可按步骤 1–4 接入，也可选择下方 AI SDK/MCP 路线。示例中的命名文件全部创建在**你的使用方项目**中，不是在本包目录中。
 

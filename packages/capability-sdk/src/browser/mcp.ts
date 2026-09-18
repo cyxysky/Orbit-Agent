@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import {
   createCapabilityMcpHandler,
@@ -28,7 +29,6 @@ const openParser = z.object({
 const codeParser = z.object({
   browserSessionId,
   code: z.string().min(1).max(40_000),
-  needChange: z.boolean().optional().describe('Defaults to false. Set true to read and return incremental domChanges from this cell.'),
   maxOutputChars: z.number().int().min(1_000).max(200_000).optional(),
 }).strict();
 const snapshotParser = z.object({
@@ -78,18 +78,22 @@ export type BrowserMcpSessionManagerOptions = {
   sessionOptions?: BrowserSessionOptions;
 };
 
-function browserResult(
+async function browserResult(
   id: string,
   result: BrowserActionResult,
-): CapabilityResult {
+): Promise<CapabilityResult> {
   const data = {
     browserSessionId: id,
     result: result.data ?? result.actual,
   };
+  const imagePath = result.browserObservation?.path;
+  const content = imagePath ? [{ type: 'image' as const, artifactId: imagePath, mediaType: 'image/png',
+    data: (await readFile(imagePath)).toString('base64') }] : undefined;
   return result.ok
-    ? { ok: true, summary: browserOperationSummary(result), data }
+    ? { ok: true, summary: browserOperationSummary(result), data, content }
     : {
         ok: false,
+        content,
         error: {
           code: result.failureCategory || 'browser-operation-failed',
           message: browserOperationSummary(result),
@@ -186,7 +190,6 @@ export class BrowserMcpSessionManager {
       managed.stepIndex += 1;
       return browserResult(inputValue.browserSessionId, await managed.session.executeBrowserCode({
         code: inputValue.code,
-        needChange: inputValue.needChange,
         maxOutputChars: inputValue.maxOutputChars,
         runId: managed.runId,
         stepIndex: managed.stepIndex,

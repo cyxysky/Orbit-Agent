@@ -80,9 +80,12 @@ export function browserChatArtifactPayloads(value: unknown): Record<string, unkn
 }
 
 /** Browser tool previews contain only images emitted by that invocation. */
-export function browserChatToolScreenshots(tool: Pick<StepToolCall, 'name' | 'screenshots'>) {
+export function browserChatToolScreenshots(tool: Pick<StepToolCall, 'name' | 'screenshots' | 'rawResult'>) {
+  const result = jsonRecordFromUnknown(tool.rawResult);
+  const observationPath = jsonRecordFromUnknown(result?.browserObservation)?.path;
   return (tool.screenshots || []).filter((image) => (
-    tool.name !== 'browser' || image.kind === 'current' || image.kind === 'history'
+    image.source !== 'automatic' && image.path !== observationPath
+    && (tool.name !== 'browser' || image.kind === 'current' || image.kind === 'history')
   ));
 }
 

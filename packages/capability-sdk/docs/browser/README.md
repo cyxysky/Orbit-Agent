@@ -1,5 +1,7 @@
 # @cjfclonedeep/capability-sdk/browser
 
+`BROWSER_CODE_AUTO_SCREENSHOT` controls the final viewport capture after code calls (default `true`). Set it to `false` to disable automatic capture and model attachment; explicitly emitted images still work. The returned observation has `status: "disabled"` and no previous automatic image is reused. This runtime setting is shared by hosts and MCP.
+
 The persistent browserCode Node kernel uses one memory policy for recycling and
 the child V8 limit. `maxHeapBytes` / `AI_BROWSER_CODE_KERNEL_MAX_HEAP_MB` sets the
 between-cell recycle threshold (default 256 MiB); the old-space limit is twice
@@ -19,7 +21,7 @@ This guide describes a subpath of `@cjfclonedeep/capability-sdk@0.2.1`, not a se
 
 Control a Playwright browser with a persistent JavaScript environment and page observations.
 
-`BrowserSession.executeBrowserCode()` returns `{ ok, summary, data, ... }`: `data.result` is the cell output, `data.executionState` describes failed or interrupted execution, and `data.domChanges` contains incremental page changes only when `needChange: true` is supplied. `needChange` defaults to false, skipping the delta read and output; it applies to the current cell, not previous cells. Read these objects directly; the complete payload appears only in `data`. For results returned by `createNodeBrowserCapability`, first unwrap the Capability envelope with `browserOperationFromCapabilityResult` from `@cjfclonedeep/capability-sdk/browser`. Use `summary` for status text.
+`BrowserSession.executeBrowserCode()` returns `{ ok, summary, data, ... }`. `data.result` is the code output and `data.executionState` records browser-call progress. Every code call automatically captures the final active viewport, including after a failed script when possible. `data.observation` reports capture status, URL, time or error; `browserObservation.path` and `referenceImagePaths` identify the image. Hosts should include only the latest automatic browser observation in each model request; explicitly emitted images can be attached separately as reference evidence. Capture does not change page zoom; output resizing happens after capture. No DOM delta is returned. Use explicit snapshots or targeted Playwright reads for exact attributes and business verification. Unwrap Capability results with `browserOperationFromCapabilityResult`.
 
 This README is a complete integration entrypoint. Follow steps 1–4 for any TypeScript Agent framework, or use the AI SDK/MCP routes below. All named source files are created in **your consuming project**, not inside this package.
 

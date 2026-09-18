@@ -1489,6 +1489,7 @@ const en: Record<string, string> = {
   '等待模型判断下一步操作': 'Waiting for the model to choose the next action',
   '展开': 'Expand',
   '收起': 'Collapse',
+  '显示更多': 'Show more',
   '执行中不能删除': 'Cannot delete while running',
   '选择全部历史对话': 'Select all history conversations',
   '选择 {name}': 'Select {name}',

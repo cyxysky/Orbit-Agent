@@ -224,6 +224,12 @@
   align-content: start;
 }
 
+.ui-modal textarea.resource-content-textarea {
+  /* Two default text rows, field padding/borders, plus 100px of editing space. */
+  height: calc(2lh + 18px + 100px);
+  min-height: calc(2lh + 18px + 100px);
+}
+
 .personal-memory-status-control {
   align-items: center;
   display: flex;

@@ -477,14 +477,14 @@ export function SkillsManager({
               </label>
               <label className="skills-manager-field wide">
                 <span>{t('详细内容')}</span>
-                <TextArea fullWidth maxLength={100_000} value={draft.details} onChange={(event) => update({ details: event.target.value })} placeholder={t('填写完整操作规则；示例、文档和附录可以放入下方参考资料')} />
+                <TextArea className="resource-content-textarea" fullWidth maxLength={100_000} value={draft.details} onChange={(event) => update({ details: event.target.value })} placeholder={t('填写完整操作规则；示例、文档和附录可以放入下方参考资料')} />
               </label>
               <div className="skills-manager-field wide">
                 <span>{t('参考资料')}</span>
                 <small>{t('按需读取。必须遵守的规则请保留在详细内容中。')}</small>
                 {draft.resources.map((resource, index) => <div key={index} className="skills-manager-field wide">
                   <AppInput aria-label={t('资料名称')} maxLength={120} value={resource.name} onChange={(event) => update({ resources: draft.resources.map((item, i) => i === index ? { ...item, name: event.target.value } : item) })} />
-                  <TextArea aria-label={t('资料内容')} fullWidth maxLength={100_000} value={resource.content} onChange={(event) => update({ resources: draft.resources.map((item, i) => i === index ? { ...item, content: event.target.value } : item) })} />
+                  <TextArea className="resource-content-textarea" aria-label={t('资料内容')} fullWidth maxLength={100_000} value={resource.content} onChange={(event) => update({ resources: draft.resources.map((item, i) => i === index ? { ...item, content: event.target.value } : item) })} />
                   <button type="button" className="ui-button ui-button--neutral" onClick={() => update({ resources: draft.resources.filter((_, i) => i !== index) })}>{t('移除资料')}</button>
                 </div>)}
                 <button type="button" className="ui-button ui-button--neutral" disabled={draft.resources.length >= 20} onClick={() => update({ resources: [...draft.resources, { name: '', content: '' }] })}><Plus size={15} />{t('添加参考资料')}</button>

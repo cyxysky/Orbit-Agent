@@ -553,8 +553,7 @@
 
 .browser-chat-message {
   box-sizing: border-box;
-  contain-intrinsic-size: auto 160px;
-  content-visibility: auto;
+  /* HistoryRow owns the single visibility boundary, including refresh/scroll restoration. */
   min-width: 0;
   max-width: 780px;
 }
@@ -569,6 +568,30 @@
   justify-self: end;
   max-width: min(700px, 88%);
 }
+
+.browser-chat-user-content {
+  max-height: 500px;
+  overflow: hidden;
+}
+
+.browser-chat-user-content.is-expanded {
+  max-height: none;
+  overflow: visible;
+}
+
+.browser-chat-user-content-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  padding: 6px 0 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.browser-chat-user-content-toggle:hover { color: var(--foreground); }
 
 .browser-chat-message > div:last-child {
   border-radius: var(--app-radius-md);
@@ -1083,7 +1106,6 @@
 @media (prefers-reduced-motion: reduce) {
   .browser-chat-more-popover:is([data-entering], [data-exiting]) { animation-duration: 1ms; }
 }
-.browser-chat-test-case-dialog { width: min(640px, calc(100vw - 32px)); max-width: min(640px, calc(100vw - 32px)); }
 .browser-chat-test-case-fields { display: grid; gap: 16px; }
 .browser-chat-test-case-fields > [role="alert"] { color: var(--danger); font-size: 13px; }
 

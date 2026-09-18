@@ -51,6 +51,7 @@ import {
 } from '@/lib/browser-chat-ui-message';
 import {
   browserChatArtifactsFromSteps,
+  browserChatToolScreenshots,
   mergeBrowserChatArtifactSummaries,
   type BrowserChatArtifactSummary,
 } from '@/lib/browser-chat-artifacts';
@@ -1705,6 +1706,9 @@ function compactRealtimeValue(value: unknown, depth = 0): unknown {
 function compactRealtimeTool<T extends StepToolCall | BrowserChatAiOutputTool>(tool: T): T {
   const realtimeTool = {
     ...tool,
+    // Filter while raw observation metadata is still present. Realtime strips
+    // rawResult below; the full history endpoint retains it.
+    screenshots: browserChatToolScreenshots(tool),
     ...(tool.input === undefined ? {} : { input: compactRealtimeValue(tool.input) }),
     ...(typeof tool.result === 'string' ? { result: compactRealtimeText(tool.result) } : {}),
   } as T;
@@ -5195,7 +5199,7 @@ function browserChatBranchContextOptions(session: BrowserChatSessionRecord, bran
     continuationSummary: context.continuationSummary,
     onContextCheckpoint: async ({ records, manifest }) => {
       if (manifest) manifest.sessionId = session.id;
-      context = { ...context, records: { ...context.records, ...records }, backgroundRef: manifest?.backgroundRef || context.backgroundRef, lastRequest: manifest || context.lastRequest };
+      context = { ...context, records: { ...context.records, ...records }, backgroundRef: manifest ? manifest.backgroundRef : context.backgroundRef, lastRequest: manifest || context.lastRequest };
       await save();
     },
     onActiveModelCheckpoint: async (messages) => {
@@ -5844,7 +5848,7 @@ async function runBrowserChatMessage(
         onContextCheckpoint: async ({ records, manifest }) => {
           assertTurnActive();
           if (manifest) manifest.sessionId = session.id;
-          session.modelContext = { ...session.modelContext, records: { ...session.modelContext.records, ...records }, backgroundRef: manifest?.backgroundRef || session.modelContext.backgroundRef, lastRequest: manifest || session.modelContext.lastRequest };
+          session.modelContext = { ...session.modelContext, records: { ...session.modelContext.records, ...records }, backgroundRef: manifest ? manifest.backgroundRef : session.modelContext.backgroundRef, lastRequest: manifest || session.modelContext.lastRequest };
           if (!(await persistBrowserChatCheckpoint(session.id))) throw new Error('Failed to persist context records before model request.');
           assertTurnActive();
         },
@@ -6120,16 +6124,23 @@ async function runBrowserChatMessage(
       if (result.status === 'blocked') {
         transitionBrowserChatSession(session, { type: 'turnBlocked', at: completedAt });
       } else {
-        transitionBrowserChatSession(session, { type: 'turnFinished', at: completedAt });
+        transitionBrowserChatSession(session, {
+          type: 'turnFinished',
+          at: completedAt,
+          error: result.status === 'failed' ? result.reply || '本轮执行失败。' : undefined,
+        });
       }
       replaceSessionLogs(session, [
         ...(session.logs || []),
         {
           id: id('log'),
           time: completedAt,
-          phase: result.status === 'blocked' ? 'chat:run:blocked' : 'chat:run:done',
+          phase: result.status === 'blocked' ? 'chat:run:blocked'
+            : result.status === 'failed' ? 'chat:run:failed' : 'chat:run:done',
           message: result.status === 'blocked'
             ? '已暂停自动操作，等待用户完成人工验证后继续。'
+            : result.status === 'failed'
+            ? result.reply || '本轮执行失败，执行记录已保存。'
             : shouldCloseCompletedBrowser
             ? '本轮对话操作已完成，最终结果已写入，浏览器已自动关闭。'
             : keepCompletedBrowser

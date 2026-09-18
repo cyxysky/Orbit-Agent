@@ -28,6 +28,7 @@ export type CapabilityResult<TData = unknown> =
   | {
       ok: false;
       summary?: string;
+      content?: CapabilityContent[];
       error: {
         code: string;
         message: string;

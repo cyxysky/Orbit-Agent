@@ -133,7 +133,6 @@ import { ModelBrandIcon } from '@/components/ModelBrandIcon';
 import { useEscapeDismiss } from '@/hooks/useEscapeDismiss';
 import { AppModal } from '@/components/ui/app-modal';
 import { AppInput } from '@/components/ui/app-input';
-import { BrowserChatTestCaseDialog } from '@/components/BrowserChatTestCaseDialog';
 import { AnimatedShinyText } from '@/components/ui/animated-shiny-text';
 import {
   browserChatDownloadPercent,
@@ -2640,6 +2639,20 @@ function BrowserChatInlineMessageContent({
   onPreviewImage: (attachment: BrowserChatAttachment) => void;
   skills: Array<{ description: string; id: string; title: string }>;
 }) {
+  const { t } = useI18n();
+  const contentId = useId();
+  const contentRef = useRef<HTMLParagraphElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+  useLayoutEffect(() => {
+    const element = contentRef.current;
+    if (!element) return;
+    const measure = () => setOverflows(element.scrollHeight > 500);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [content, attachments, skills]);
   const attachmentsById = useMemo(() => new Map((attachments || []).map((attachment) => [attachment.id, attachment])), [attachments]);
   const skillsById = useMemo(() => new Map(skills.map((skill) => [skill.id, skill])), [skills]);
   const usedAttachmentIds = new Set<string>();
@@ -2677,7 +2690,14 @@ function BrowserChatInlineMessageContent({
     if (!usedAttachmentIds.has(attachment.id)) nodes.push(' ', <BrowserChatReferenceChip attachment={attachment} className="inline" key={`ref-fallback-${attachment.id}`} onPreview={onPreviewImage} />);
   }
   if (!nodes.length) return null;
-  return <p className="browser-chat-message-inline-content">{nodes}</p>;
+  return <>
+    <p ref={contentRef} id={contentId} className={`browser-chat-message-inline-content browser-chat-user-content${expanded ? ' is-expanded' : ''}`}>{nodes}</p>
+    {overflows ? <button
+      type="button" className="browser-chat-user-content-toggle"
+      aria-expanded={expanded} aria-controls={contentId}
+      onClick={() => setExpanded(value => !value)}
+    >{expanded ? t('收起') : t('显示更多')}<ChevronDown size={14} style={{ transform: expanded ? 'rotate(180deg)' : undefined }} /></button> : null}
+  </>;
 }
 
 function pendingConfirmationForTool(input: {
@@ -3349,6 +3369,7 @@ const BrowserChatStepToolCards = memo(function BrowserChatStepToolCards({
   onResolveToolConfirmation,
   onlyPendingConfirmation = false,
   pendingToolConfirmation,
+  pendingManualVerificationToolKey,
   resolvingConfirmationAction,
   resolvingConfirmationId,
   resumingHumanVerification,
@@ -3364,6 +3385,7 @@ const BrowserChatStepToolCards = memo(function BrowserChatStepToolCards({
   onResolveToolConfirmation?: (confirmationId: string, action: BrowserChatToolConfirmationAction) => void | Promise<void>;
   onlyPendingConfirmation?: boolean;
   pendingToolConfirmation?: BrowserChatToolConfirmation;
+  pendingManualVerificationToolKey?: string;
   resolvingConfirmationAction?: BrowserChatToolConfirmationAction | null;
   resolvingConfirmationId?: string | null;
   resumingHumanVerification?: boolean;
@@ -3479,6 +3501,9 @@ const BrowserChatStepToolCards = memo(function BrowserChatStepToolCards({
                 <BrowserChatToolScreenshotButton tool={tool} />
               </div>
             )}
+            {pendingManualVerificationToolKey === `${step.index}:${toolIndex}` ? (
+              <BrowserChatManualVerificationCard onResume={!running ? onResumeHumanVerification : undefined} resuming={resumingHumanVerification} />
+            ) : null}
             <BrowserChatToolConfirmationActions
               pending={pendingConfirmation}
               resolvingConfirmationAction={resolvingConfirmationAction}
@@ -3499,6 +3524,7 @@ type BrowserChatAiCycleCommonProps = {
   onResumeHumanVerification?: () => void | Promise<void>;
   onSelectTool: (detail: BrowserChatToolDetail) => void;
   pendingToolConfirmation?: BrowserChatToolConfirmation;
+  pendingManualVerificationToolKey?: string;
   resolvingConfirmationAction?: BrowserChatToolConfirmationAction | null;
   resolvingConfirmationId?: string | null;
   resumingHumanVerification?: boolean;
@@ -3534,6 +3560,7 @@ const BrowserChatAiCycleLine = memo(function BrowserChatAiCycleLine({
   onResumeHumanVerification,
   onSelectTool,
   pendingToolConfirmation,
+  pendingManualVerificationToolKey,
   resolvingConfirmationAction,
   resolvingConfirmationId,
   resumingHumanVerification,
@@ -3655,6 +3682,9 @@ const BrowserChatAiCycleLine = memo(function BrowserChatAiCycleLine({
                   <BrowserChatToolScreenshotButton tool={executedTool} />
                 </div>
               )}
+              {pendingManualVerificationToolKey === `${toolDetail.stepIndex}:${toolDetail.toolIndex}` ? (
+                <BrowserChatManualVerificationCard onResume={!running ? onResumeHumanVerification : undefined} resuming={resumingHumanVerification} />
+              ) : null}
               <BrowserChatToolConfirmationActions
                 pending={pendingConfirmation}
                 resolvingConfirmationAction={resolvingConfirmationAction}
@@ -3677,6 +3707,7 @@ const BrowserChatExecutedCycleGroup = memo(function BrowserChatExecutedCycleGrou
   onResumeHumanVerification,
   onSelectTool,
   pendingToolConfirmation,
+  pendingManualVerificationToolKey,
   resolvingConfirmationAction,
   resolvingConfirmationId,
   resumingHumanVerification,
@@ -3704,6 +3735,7 @@ const BrowserChatExecutedCycleGroup = memo(function BrowserChatExecutedCycleGrou
             onResumeHumanVerification={onResumeHumanVerification}
             onSelectTool={onSelectTool}
             pendingToolConfirmation={pendingToolConfirmation}
+            pendingManualVerificationToolKey={pendingManualVerificationToolKey}
             resolvingConfirmationAction={resolvingConfirmationAction}
             resolvingConfirmationId={resolvingConfirmationId}
             resumingHumanVerification={resumingHumanVerification}
@@ -3729,6 +3761,7 @@ const BrowserChatExecutedCycleGroup = memo(function BrowserChatExecutedCycleGrou
               onResumeHumanVerification={onResumeHumanVerification}
               onSelectTool={onSelectTool}
               pendingToolConfirmation={pendingToolConfirmation}
+              pendingManualVerificationToolKey={pendingManualVerificationToolKey}
               resolvingConfirmationAction={resolvingConfirmationAction}
               resolvingConfirmationId={resolvingConfirmationId}
               resumingHumanVerification={resumingHumanVerification}
@@ -4500,6 +4533,12 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
     if (visibleToolIndexes.length) return [{ step, visibleToolIndexes }];
     return [];
   }), [aiCycleRepresentedToolKeys, timelineSteps]);
+  const manualVerificationPaused = Boolean(manualVerificationRequired)
+    && browserChatHasPendingManualVerification(steps.flatMap((step) => step.tools || []));
+  const pendingManualVerificationToolKey = manualVerificationPaused
+    ? steps.flatMap((step) => (step.tools || []).map((tool, toolIndex) => ({ tool, key: `${step.index}:${toolIndex}` })))
+      .findLast(({ tool }) => tool.name === 'browser')?.key
+    : undefined;
   const hasPendingConfirmation = Boolean(pendingToolConfirmation);
   const hasSubagentPendingConfirmation = Boolean(
     pendingToolConfirmation?.subagentId
@@ -4533,11 +4572,11 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
         toolInput: tool.input,
         toolOk: tool.ok,
       });
-      if ((running && step.status === 'running') || pendingConfirmation) currentToolIndexes.push(toolIndex);
+      if ((running && step.status === 'running') || pendingConfirmation || pendingManualVerificationToolKey === `${step.index}:${toolIndex}`) currentToolIndexes.push(toolIndex);
       else historicalToolIndexes.push(toolIndex);
     }
     return { currentToolIndexes, historicalToolIndexes, step };
-  }), [pendingToolConfirmation, running, showPendingTimelineFallback, unrepresentedTimelineEntries]);
+  }), [pendingManualVerificationToolKey, pendingToolConfirmation, running, showPendingTimelineFallback, unrepresentedTimelineEntries]);
   const currentTimelineEntries = useMemo(() => splitTimelineEntries.flatMap((entry): BrowserChatTimelineStepEntry[] => (
     entry.currentToolIndexes.length
       ? [{ step: entry.step, visibleToolIndexes: entry.currentToolIndexes }]
@@ -4594,8 +4633,6 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
     (cycle) => cycle.output.tools.some((_tool, index) => aiCycleToolDetails.has(aiCycleToolKey(cycle.id, index))),
   ), [aiCycleToolDetails, renderAiOutputCycles]);
   const shouldShowStepTimeline = currentTimelineEntries.length > 0 || waitingForTool;
-  const manualVerificationPaused = Boolean(manualVerificationRequired)
-    && browserChatHasPendingManualVerification(steps.flatMap((step) => step.tools || []));
   const hasFinalText = Boolean(finalText.trim());
   const hasStructuredResponse = Boolean(message.parts?.some((part) => (
     part.type === 'text' || part.type === 'data-response'
@@ -4608,7 +4645,7 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
   const runningActivityLabel = message.activity?.label?.trim()
     ? t(message.activity.label)
     : t('正在分析页面状态并准备下一步操作');
-  const processAutoOpen = running || hasPendingConfirmation;
+  const processAutoOpen = running || hasPendingConfirmation || Boolean(manualVerificationRequired);
   const processLabel = running || manualVerificationPaused || hasPendingConfirmation
     ? t('处理中')
     : message.status === 'failed' || message.status === 'interrupted'
@@ -4617,7 +4654,9 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
   const aiCycleCommonProps: BrowserChatAiCycleCommonProps = {
     logs: confirmationLogs,
     onLoadSubagentRecords: loadSubagentRecords,
+    onResolveToolConfirmation,
     onResumeHumanVerification,
+    pendingManualVerificationToolKey,
     onSelectTool: selectTool,
     pendingToolConfirmation,
     resolvingConfirmationAction,
@@ -4668,8 +4707,9 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
                     onLoadSubagentRecords={loadSubagentRecords}
                     onResumeHumanVerification={onResumeHumanVerification}
                     onSelectTool={selectTool}
-                    onlyPendingConfirmation={showPendingTimelineFallback}
+                    onResolveToolConfirmation={onResolveToolConfirmation}
                     pendingToolConfirmation={pendingToolConfirmation}
+                    pendingManualVerificationToolKey={pendingManualVerificationToolKey}
                     resolvingConfirmationAction={resolvingConfirmationAction}
                     resolvingConfirmationId={resolvingConfirmationId}
                     resumingHumanVerification={resumingHumanVerification}
@@ -4694,21 +4734,6 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
             />
           ) : null}
         </BrowserChatProcessDisclosure>
-      ) : null}
-      {pendingToolConfirmation ? (
-        <BrowserChatToolConfirmationActions
-          key={pendingToolConfirmation.id}
-          pending={pendingToolConfirmation}
-          resolvingConfirmationAction={resolvingConfirmationAction}
-          resolvingConfirmationId={resolvingConfirmationId}
-          onResolveToolConfirmation={onResolveToolConfirmation}
-        />
-      ) : null}
-      {manualVerificationPaused ? (
-        <BrowserChatManualVerificationCard
-          onResume={!running ? onResumeHumanVerification : undefined}
-          resuming={resumingHumanVerification}
-        />
       ) : null}
       {/* Keep the answer mounted as the turn finishes so images and charts retain their state. */}
       {hasFinalResponse && ((!running && message.status === 'passed') || !finalTextAnchoredToToolCycle) ? (
@@ -6601,9 +6626,8 @@ const BrowserChatComposer = memo(function BrowserChatComposer({
 
 type BrowserChatManagementTab = 'accounts' | 'memory' | 'skills';
 
-function BrowserChatManagementMenu({ onSelect, onGenerateTestCases }: {
+function BrowserChatManagementMenu({ onSelect }: {
   onSelect: (tab: BrowserChatManagementTab) => void;
-  onGenerateTestCases: () => void;
 }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
@@ -6621,10 +6645,6 @@ function BrowserChatManagementMenu({ onSelect, onGenerateTestCases }: {
           <Popover.Content className="browser-chat-more-popover" placement="top" offset={10} containerPadding={12}>
             <Popover.Arrow />
             <Popover.Dialog aria-label={t('更多操作')} className="browser-chat-more-menu">
-              <div className="browser-chat-more-group" role="group" aria-label={t('快捷操作')}>
-                <span className="browser-chat-more-group-title">{t('快捷操作')}</span>
-                <Button variant="ghost" onPress={() => { setOpen(false); onGenerateTestCases(); }}><ClipboardCheck size={17} aria-hidden="true" />{t('生成测试用例')}</Button>
-              </div>
               <div className="browser-chat-more-group" role="group" aria-label={t('会话工具')}>
                 <span className="browser-chat-more-group-title">{t('会话工具')}</span>
                 <Button variant="ghost" onPress={() => select('skills')}><Braces size={17} aria-hidden="true" />{t('技能管理')}</Button>
@@ -8256,7 +8276,6 @@ export function BrowserChatWorkspace({
   const [messageGenerationDialog, setMessageGenerationDialog] = useState<BrowserChatMessageGenerationDialog | null>(null);
   const [messageGenerationError, setMessageGenerationError] = useState('');
   const [managementTab, setManagementTab] = useState<BrowserChatManagementTab | null>(null);
-  const [testCaseDialogOpen, setTestCaseDialogOpen] = useState(false);
   const personalMemoryRefreshToken = session?.logs.reduce(
     (token, log) => log.phase === 'memory:extract:done' ? log.id : token,
     '',
@@ -8741,7 +8760,7 @@ export function BrowserChatWorkspace({
   const allSelectableRecentSessionsSelected = selectableRecentSessionIds.length > 0
     && selectableRecentSessionIds.every((id) => selectedSessionIdSet.has(id));
   const embeddedBrowserActive = embeddedBrowserEnabled;
-  const embeddedBrowserCovered = Boolean(toolDialog || logDialogMessageId || filePreviewOpen || embeddedBrowserDialogOpen || managementTab || messageGenerationDialog || testCaseDialogOpen);
+  const embeddedBrowserCovered = Boolean(toolDialog || logDialogMessageId || filePreviewOpen || embeddedBrowserDialogOpen || managementTab || messageGenerationDialog);
   const embeddedBrowserViewActive = embeddedBrowserActive && !embeddedBrowserCovered;
   const modelSelection = modelSelectionValueForConfig(modelConfig, { model: modelId, provider: modelProvider });
   const modelSelectionDiagnostic = modelSelectionDiagnosticLabel(modelConfig, { model: modelId, provider: modelProvider });
@@ -10291,7 +10310,7 @@ export function BrowserChatWorkspace({
           loading={Boolean(loadingSessionId)}
           loadingMoreSkills={loadingMoreSkills}
           managementActions={(
-            <BrowserChatManagementMenu onSelect={setManagementTab} onGenerateTestCases={() => setTestCaseDialogOpen(true)} />
+            <BrowserChatManagementMenu onSelect={setManagementTab} />
           )}
           modelSelection={modelSelection}
           modelSelectionTitle={modelSelectionDiagnostic}
@@ -10441,7 +10460,6 @@ export function BrowserChatWorkspace({
         />
       ) : null}
 
-      {testCaseDialogOpen ? <BrowserChatTestCaseDialog key={sessionUiKey} onClose={() => setTestCaseDialogOpen(false)} onSend={sendMessage} /> : null}
       {messageGenerationDialog ? (
         <AppModal
           ariaLabelledBy="browser-chat-message-generation-title"
