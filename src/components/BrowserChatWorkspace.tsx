@@ -1,4 +1,7 @@
 'use client';
+import { normalizeBrowserChatInteractionMode, type BrowserChatInteractionMode } from '@/lib/browser-chat-interaction-mode';
+import { BrowserChatRecoveryPanel } from './BrowserChatRecoveryPanel';
+import { BrowserChatPlanPanel } from './BrowserChatPlanPanel';
 
 import { browserChatSessionListTimestamp, compareBrowserChatSessionCreation, upsertBrowserChatSessionByCreation } from '@/lib/browser-chat-session-order';
 import { browserChatToolSource, type BrowserChatToolSource } from '@/lib/browser-chat-tool-source';
@@ -410,6 +413,7 @@ type BrowserChatSession = {
   browserGroupId: string;
   targetUrl: string;
   safetyMode: BrowserChatSafetyMode;
+  browserInteractionMode: BrowserChatInteractionMode;
   disabledTools?: string[];
   modelProvider: ModelProvider;
   model: string;
@@ -1962,6 +1966,7 @@ function normalizeSession(session: BrowserChatSession): BrowserChatSession {
       return { ...message, attachments, content, parts, role, stepIndexes };
     }),
     safetyMode: normalizeSafetyMode(session.safetyMode),
+    browserInteractionMode: normalizeBrowserChatInteractionMode(session.browserInteractionMode),
     modelProvider: modelSelection.provider,
     model: modelSelection.model,
     turnState: session.turnState
@@ -2824,6 +2829,11 @@ function BrowserChatToolScreenshotButton({ tool }: { tool: BrowserChatToolCall }
 }
 
 function BrowserChatToolContextTokenInfo({ tool }: { tool: BrowserChatToolCall }) {
+  const recovery = (tool.input && typeof tool.input === 'object' && 'recoveryReview' in tool.input && typeof tool.input.recoveryReview === 'string' ? tool.input.recoveryReview : '');
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const keepOpen = () => { clearTimeout(closeTimer.current); setTooltipOpen(true); };
+  const closeSoon = () => { clearTimeout(closeTimer.current); closeTimer.current = setTimeout(() => setTooltipOpen(false), 160); };
+  useEffect(() => () => clearTimeout(closeTimer.current), []);
   const { t } = useI18n();
   const tooltipId = useId();
   const anchorRef = useRef<HTMLSpanElement | null>(null);
@@ -2868,7 +2878,7 @@ function BrowserChatToolContextTokenInfo({ tool }: { tool: BrowserChatToolCall }
     const rect = anchor.getBoundingClientRect();
     const padding = 12;
     const gap = 10;
-    const tooltipWidth = Math.min(280, Math.max(1, window.innerWidth - padding * 2));
+    const tooltipWidth = Math.min(recovery ? 440 : 280, Math.max(1, window.innerWidth - padding * 2));
     const tooltipHeight = tooltipRef.current?.offsetHeight || 126;
     const centeredTop = Math.min(
       Math.max(padding, rect.top + rect.height / 2 - tooltipHeight / 2),
@@ -2894,7 +2904,7 @@ function BrowserChatToolContextTokenInfo({ tool }: { tool: BrowserChatToolCall }
     setTooltipPosition((current) => (
       current.left === left && current.top === top ? current : { left, top }
     ));
-  }, []);
+  }, [recovery]);
   useLayoutEffect(() => {
     if (!tooltipOpen) return;
     updateTooltipPosition();
@@ -2907,12 +2917,15 @@ function BrowserChatToolContextTokenInfo({ tool }: { tool: BrowserChatToolCall }
   }, [tooltipOpen, updateTooltipPosition]);
   const tooltip = (
     <span
-      className="browser-chat-tool-context-tooltip is-portaled"
+      className={`browser-chat-tool-context-tooltip is-portaled${recovery ? ' has-recovery' : ''}`}
+      onPointerEnter={keepOpen}
+      onPointerLeave={closeSoon}
       id={tooltipId}
       ref={tooltipRef}
       role="tooltip"
       style={{ left: tooltipPosition.left, top: tooltipPosition.top }}
     >
+      {recovery && <span className="browser-chat-recovery-review"><strong>恢复复盘</strong><BrowserChatMarkdown markdown={recovery} /></span>}
       <strong>{t('上下文 Token')}</strong>
       {deltaText ? <span>{deltaText}</span> : null}
       {beforeText ? <span>{beforeText}</span> : null}
@@ -2934,9 +2947,9 @@ function BrowserChatToolContextTokenInfo({ tool }: { tool: BrowserChatToolCall }
         aria-label={summary}
         className="browser-chat-tool-context-info"
         onBlur={() => setTooltipOpen(false)}
-        onFocus={() => setTooltipOpen(true)}
-        onPointerEnter={() => setTooltipOpen(true)}
-        onPointerLeave={() => setTooltipOpen(false)}
+        onFocus={keepOpen}
+        onPointerEnter={keepOpen}
+        onPointerLeave={closeSoon}
         ref={anchorRef}
         role="note"
         tabIndex={0}
@@ -4736,7 +4749,7 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
         </BrowserChatProcessDisclosure>
       ) : null}
       {/* Keep the answer mounted as the turn finishes so images and charts retain their state. */}
-      {hasFinalResponse && ((!running && message.status === 'passed') || !finalTextAnchoredToToolCycle) ? (
+      {hasFinalResponse && (!running || !finalTextAnchoredToToolCycle) ? (
         <div className={`browser-chat-answer${textStreaming ? ' is-streaming' : ''}`}>
           <BrowserChatOrderedResponse fallbackText={hideManualVerificationStatusText ? '' : displayFinalText} parts={displayResponseParts} />
         </div>
@@ -10147,6 +10160,11 @@ export function BrowserChatWorkspace({
         </form>
       </div>
       <div className="browser-chat-conversation-header-actions">
+        <BrowserChatRecoveryPanel key={`recovery-${session.id}`} sessionId={session.id} busy={currentBusy} />
+        <BrowserChatPlanPanel key={session.id} sessionId={session.id} busy={currentBusy}
+          onResume={() => { void loadSession(session.id); }}
+          onContinue={() => { void sendMessage('请读取 workflow 的当前状态，继续当前阶段全部可执行待办，不重复已完成操作，不跳过用户确认。'); }}
+          onStart={() => { void sendMessage('请使用 workflow 登记当前任务的完整阶段、全部用例和验收检查，阶段内连续执行，阶段结束后由我在执行计划面板确认。先读取完整需求，不要只登记一部分。'); }} />
         {webPreviewRuntime ? (
           <button
             aria-label={t('打开实时界面')}
@@ -10359,6 +10377,7 @@ export function BrowserChatWorkspace({
           embeddedBrowserActive && embeddedChatCollapsed ? 'embedded-chat-collapsed' : '',
         ].filter(Boolean).join(' ')}
       >
+        <div className="browser-chat-plan-layout"><div className="browser-chat-plan-conversation">
         {embeddedBrowserActive ? (
           <div
             className={embeddedChatCollapsed ? 'browser-chat-embedded-workspace chat-collapsed' : 'browser-chat-embedded-workspace'}
@@ -10416,6 +10435,9 @@ export function BrowserChatWorkspace({
             </aside>
           </div>
         ) : renderChatPane()}
+        </div>
+
+        </div>
       </main>
 
       {webPreviewRuntime && webPreviewOpen && session ? (

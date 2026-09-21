@@ -34,7 +34,7 @@ function ratio(value: unknown, fallback: number) {
   return Number.isFinite(number) && number >= 0.01 && number <= 0.99 ? number : fallback;
 }
 
-/** Context compression and the per-request output limit are independent settings. */
+/** Reserve completion and protocol safety space before allocating the input window. */
 export function runtimeContextProfile(input: RuntimeContextModel = {}) {
   const model = String(input.model || '').trim();
   const key = `${input.provider || ''}/${model}`;
@@ -42,20 +42,17 @@ export function runtimeContextProfile(input: RuntimeContextModel = {}) {
     ? positive(input.maxContextTokens, 0) || undefined
     : contextState.windows.get(key);
   const windowTokens = configuredWindow ?? positive(process.env.AI_CONTEXT_WINDOW_TOKENS, 256000);
-  const prefix = input.provider?.startsWith('openai-compatible')
-    ? input.provider.toUpperCase().replaceAll('-', '_') : input.provider?.toUpperCase().replaceAll('-', '_');
-  let requestedOutput = 0;
-  try {
-    const extra = JSON.parse(process.env[`${prefix}_EXTRA_REQUEST_PARAMETERS`] || '{}');
-    requestedOutput = positive(extra.max_completion_tokens ?? extra.max_tokens, 0);
-  } catch { /* Provider request validation owns malformed request parameters. */ }
-  const maxOutputTokens = requestedOutput || undefined;
-  const compressionTriggerRatio = ratio(process.env.AI_CONTEXT_COMPRESSION_TRIGGER_RATIO, 0.85);
-  const compressionTriggerTokens = Math.max(1, Math.floor(windowTokens * compressionTriggerRatio));
-  const compressionTargetRatio = ratio(process.env.AI_CONTEXT_COMPRESSION_TARGET_RATIO, 0.25);
+  // Internal accounting only. Provider request parameters are owned by model.ts.
+  const outputReserveTokens = positive(process.env.AI_CONTEXT_OUTPUT_RESERVE_TOKENS, 4096);
+  const safetyReserveTokens = positive(process.env.AI_CONTEXT_SAFETY_RESERVE_TOKENS, 4096);
+  const inputBudgetTokens = windowTokens - outputReserveTokens - safetyReserveTokens;
+  if (inputBudgetTokens <= 0) throw new Error('Context window must exceed output and safety reserves.');
+  const compressionTriggerRatio = ratio(process.env.AI_CONTEXT_COMPRESSION_TRIGGER_RATIO, 0.82);
+  const compressionTriggerTokens = Math.max(1, Math.floor(inputBudgetTokens * compressionTriggerRatio));
+  const compressionTargetRatio = ratio(process.env.AI_CONTEXT_COMPRESSION_TARGET_RATIO, 0.6);
   return {
-    key, windowTokens, maxOutputTokens,
-    compressionTriggerTokens, compressionTargetTokens: Math.max(1, Math.min(Math.floor(windowTokens * compressionTargetRatio), Math.floor(compressionTriggerTokens * 0.9))),
+    key, windowTokens, outputReserveTokens, inputBudgetTokens, safetyReserveTokens,
+    compressionTriggerTokens, compressionTargetTokens: Math.max(1, Math.min(Math.floor(inputBudgetTokens * compressionTargetRatio), Math.floor(compressionTriggerTokens * 0.9))),
     imageTokens: positive(process.env.AI_IMAGE_CONTEXT_ESTIMATE_TOKENS, 1200),
     protocol: 'preserve-provider-reasoning-and-signatures' as const,
     source: configuredWindow !== undefined ? 'model-capabilities' : 'default-context-window',

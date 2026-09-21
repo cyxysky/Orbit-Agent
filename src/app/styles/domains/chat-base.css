@@ -1294,19 +1294,15 @@
   padding: 0;
 }
 
-.browser-chat-web-preview-modal {
-  animation: none;
-  border: 0;
-  border-radius: 0;
-  box-shadow: none;
-  display: flex;
-  flex-direction: column;
-  height: 100dvh;
-  max-height: none;
-  max-width: none;
-  overflow: hidden;
-  width: 100vw;
-}
+.floating-window { position: fixed; z-index: 150; display: flex; flex-direction: column; box-sizing: border-box; overflow: hidden; border: 1px solid var(--border); border-radius: 16px; background: var(--panel); box-shadow: 0 24px 80px #0004, 0 2px 12px #0002; }
+.floating-window-titlebar { flex: 0 0 42px; display: flex; align-items: center; gap: 9px; padding: 0 14px; background: var(--panel); color: var(--foreground); cursor: grab; touch-action: none; user-select: none; border-bottom: 1px solid var(--border); }
+.floating-window-titlebar:active { cursor: grabbing; }
+.floating-window-titlebar strong { font-size: 13px; }
+.floating-window-titlebar small { margin-left: auto; font-size: 11px; color: var(--muted); }
+.floating-window-titlebar button { display: grid; place-items: center; border: 0; background: transparent; padding: 5px; cursor: pointer; }
+.floating-window-resize { position: absolute; right: 2px; bottom: 2px; z-index: 2; width: 20px; height: 20px; border: 0; border-radius: 3px; background: linear-gradient(135deg, transparent 40%, #89968e 42%, transparent 48%, transparent 59%, #89968e 61%, transparent 67%); cursor: nwse-resize; touch-action: none; }
+.browser-chat-web-preview-modal { min-width: 0; min-height: 0; }
+@media (max-width: 600px) { .floating-window-titlebar small { display: none; } }
 
 .browser-chat-web-preview-header,
 .browser-chat-web-preview-tabs {
@@ -2657,11 +2653,18 @@
 }
 
 .browser-chat-tool-context-tooltip {
-  background: var(--foreground);
-  border: 1px solid color-mix(in srgb, var(--background) 20%, transparent);
+  --foreground: #eef2ee;
+  --background: #29332c;
+  --panel: #333e36;
+  --panel-soft: #3b473e;
+  --muted: #b9c4bb;
+  --border: #526056;
+  --accent: #acd5b6;
+  background: var(--background);
+  border: 1px solid var(--border);
   border-radius: 10px;
   box-shadow: var(--shadow-tight);
-  color: var(--background);
+  color: var(--foreground);
   display: grid;
   font-size: 12px;
   gap: 3px;
@@ -2682,13 +2685,13 @@
 }
 
 .browser-chat-tool-context-tooltip small {
-  color: color-mix(in srgb, var(--background) 68%, transparent);
+  color: var(--muted);
   font-size: 11px;
   margin-top: 3px;
 }
 
 .browser-chat-tool-context-divider {
-  border-top: 1px solid color-mix(in srgb, var(--background) 22%, transparent);
+  border-top: 1px solid var(--border);
   height: 0;
   margin: 5px 0 2px;
 }

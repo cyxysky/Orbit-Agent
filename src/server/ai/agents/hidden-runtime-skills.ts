@@ -1,3 +1,4 @@
+import { browserInteractionSkill } from './runtime-browser-interaction';
 import type { BrowserActionResult } from '@cjfclonedeep/capability-sdk/browser/node';
 import type { CapabilitySkill } from '@cjfclonedeep/capability-sdk';
 import { browserCapabilityManifest } from '@cjfclonedeep/capability-sdk/browser';
@@ -20,7 +21,7 @@ function manifestRuntimeSkill(manifest: { id: string; skills?: readonly Capabili
   return skill;
 }
 
-const browserRuntimeSkill = manifestRuntimeSkill(browserCapabilityManifest);
+const browserRuntimeSkill = browserInteractionSkill;
 const capabilityRuntimeSkills = [
   browserCapabilityManifest,
   fileCapabilityManifest,
@@ -36,7 +37,7 @@ const capabilityRuntimeSkills = [
   computerCapabilityManifest,
 ].flatMap((manifest) => {
   manifestRuntimeSkill(manifest);
-  return manifest.skills!;
+  return manifest.id === browserCapabilityManifest.id ? [browserInteractionSkill, ...manifest.skills!.slice(1)] : manifest.skills!;
 });
 
 // These capability tools are always visible to the model. Skill enforcement is

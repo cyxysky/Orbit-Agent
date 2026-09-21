@@ -292,7 +292,7 @@ export type BrowserCodeAttachmentBinding = {
 
 export type BrowserCodeViewportEvidence = {
   documentId: string; url: string; width: number; height: number;
-  devicePixelRatio: number; scrollX: number; scrollY: number; capturedAt: number;
+  devicePixelRatio: number; scrollX: number; scrollY: number; capturedAt: number; domEpoch: number;
 };
 
 export type BrowserCodeExecutionInput = {
@@ -338,7 +338,7 @@ type PendingExecution = {
 const maxDiagnosticChars = 4_000;
 const defaultBrowserCodeKernelReadyTimeoutMs = 10_000;
 const defaultBrowserCodeExecutionTimeoutMs = 90_000;
-export const BROWSER_CODE_KERNEL_RUNTIME_REVISION = 41;
+export const BROWSER_CODE_KERNEL_RUNTIME_REVISION = 42;
 
 function boundedInteger(value: unknown, fallback: number, min: number, max: number) {
   const parsed = typeof value === 'number' ? value : Number(value);
@@ -472,6 +472,7 @@ function browserCodeKernelMain() {
   );
   const hostProcess = process;
   type CoordinateClickEvidence = {
+    domEpoch: number;
     capturedAt: number;
     devicePixelRatio: number;
     documentId: string;
@@ -1013,9 +1014,16 @@ function browserCodeKernelMain() {
   const prepareStateChangingAction = (
     page: import('playwright').Page | undefined,
     action: string,
+    report = true,
   ) => {
-    void page;
-    recordAction(action);
+    if (page) {
+      // Even a timed-out input can mutate a page. Retire coordinate evidence BEFORE dispatch.
+      for (const [id, evidence] of coordinateClickEvidenceByDocument) if (evidence.page === page) coordinateClickEvidenceByDocument.delete(id);
+      for (const [id, evidence] of coordinateRectEvidenceByDocument) if (evidence.some(item => item.page === page)) coordinateRectEvidenceByDocument.delete(id);
+      activeExecution?.pendingCoordinateClickEvidence.delete(page);
+      activeExecution?.pendingCoordinateRectEvidence.delete(page);
+    }
+    if (report) recordAction(action);
   };
 
   const completeStateChangingAction = async (
@@ -1205,6 +1213,16 @@ function browserCodeKernelMain() {
       );
     }
     const originalCandidate = locator as import('playwright').Locator;
+    if (String(Reflect.get(originalCandidate, '_selector') || '').includes(browserCodeUidAttribute)) {
+      const bindings = activeExecution?.uidBindings;
+      const states = await originalCandidate.evaluateAll(elements => elements.map(element => ({
+        tokens: (element.getAttribute('data-ai-browser-code-uid') || '').split(/\s+/),
+        epoch: Number((window as Window & { __aiDomMutationState?: { epoch?: number } }).__aiDomMutationState?.epoch || 0),
+      })));
+      if (!states.length || states.some(state => ![...(bindings?.values() || [])].some(binding => state.tokens.includes(binding.token) && binding.boundEpoch === state.epoch))) {
+        throw new Error('STALE_DOM_EVIDENCE: the UID observation changed. Read current DOM or resolve a semantic locator before acting.');
+      }
+    }
     const originalCount = await originalCandidate.count();
     const zeroMatchDiagnostics = originalCount === 0
       ? await zeroMatchCandidateDiagnostics(originalCandidate)
@@ -1525,6 +1543,7 @@ function browserCodeKernelMain() {
   ): Promise<CoordinateClickEvidence | undefined> => {
     if (page.isClosed()) return undefined;
     const state = await page.evaluate<{
+      domEpoch: number;
       devicePixelRatio: number;
       documentId: string;
       height: number;
@@ -1538,6 +1557,7 @@ function browserCodeKernelMain() {
         browserWindow.__aiCoordinateEvidenceDocumentId = Date.now() + '-' + Math.random();
       }
       return {
+        domEpoch: Number(browserWindow.__aiDomMutationState?.epoch || 0),
         devicePixelRatio: window.devicePixelRatio,
         documentId: browserWindow.__aiCoordinateEvidenceDocumentId || '',
         height: window.innerHeight,
@@ -1557,6 +1577,7 @@ function browserCodeKernelMain() {
     current
     && evidence.url === current.url
     && evidence.documentId === current.documentId
+    && evidence.domEpoch === current.domEpoch
     && evidence.width === current.width
     && evidence.height === current.height
     && evidence.devicePixelRatio === current.devicePixelRatio
@@ -1623,7 +1644,7 @@ function browserCodeKernelMain() {
     throw new Error(
       'Coordinate clicking requires either a fresh emitted viewport screenshot from a previous browserCode cell, '
       + 'or a point inside the current rect returned by boundingBox() for one exact visible actionable Locator. '
-      + 'Screenshot evidence remains reusable until the document, URL, viewport, zoom, scroll position, or five-minute validity window changes.',
+      + 'Screenshot evidence expires after a state-changing input, DOM revision, document, URL, viewport, zoom, scroll change, or five minutes. Reobserve before another coordinate action; semantic locators can be resolved live.',
     );
   };
 
@@ -1951,6 +1972,7 @@ function browserCodeKernelMain() {
               actionableLocator = await resolveActionableLocator(locatorToResolve, name);
               await moveVisibleAiPointer(targetPage, await locatorCenter(actionableLocator), 'click');
             }
+            if (targetPage) prepareStateChangingAction(targetPage, `locator.${name}`, false);
             const result = await Reflect.apply(original, actionableLocator, args);
             await completeStateChangingAction(targetPage, `locator.${name}`);
             return result;
@@ -2177,7 +2199,7 @@ function browserCodeKernelMain() {
           configurable: true,
           value: async (...args: unknown[]) => {
             if (options.componentOnly) {
-              recordAction(action);
+              prepareStateChangingAction(page, action);
               return Reflect.apply(original, device, args);
             }
             prepareStateChangingAction(page, action);

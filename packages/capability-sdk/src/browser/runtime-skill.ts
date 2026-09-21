@@ -35,6 +35,28 @@ Provider-neutral call notation: \`skill({ action: "read", skillId: "${browserCod
 
 If the runtime rejects a governed call, preserve its complete error and any \`requiredSkillId\`, refresh only the evidence that became stale, and continue the same page transaction.
 
+## Context and observation retention
+
+Use action=state with scope, frame, selector, query, and the returned cursor to inspect only the missing evidence. Reuse a useful result instead of repeatedly dumping the whole page. Snapshot UIDs are tied to their DOM revision; semantic locators resolve live.
+
+For code, observationMode controls historical screenshots: replace (default) for a new page, append for continuous inspection of the same page, keep-pair for a before/after comparison. The host limits history by the model budget and always prioritizes the current observation. Historical screenshots explain past states and never authorize coordinates. A failed operation preserves before/after comparison when images exist.
+
+If executionState.outcome is unknown, inspect current state or an operation receipt before retrying. completedActions lists browser calls that returned, not verified business results. Never replay an entire partly completed batch.
+
+## Observe controls and verify outcomes
+
+For an unfamiliar or changed control, inspect its current role, visible state and container before choosing an interaction. A label alone does not establish editability or control type. Re-observe targets whose structure changed; selectors from another page are hypotheses. Use a targeted read rather than dumping the whole document. If the next action requires interpreting new evidence, return it before continuing.
+
+Do not silently skip a requested action when its target is missing. Distinguish the attempted action, the returned evidence, and the verified outcome. Combine errors and observations to decide whether to retry, use an alternative, report a limitation or work on an independent item, following the user's task and constraints. Tool success alone is not proof of the requested outcome. Save useful task facts through the host's task-context facility when available; do not invent an unavailable tool.
+
+## Mandatory review after a browser failure
+
+Put this review in the next browser tool input \`recoveryReview\` (concise Markdown), not standalone assistant narrative. It appears in the recovery operation help card.
+
+Mandatory failure screenshot review applies only when BOTH BROWSER_CODE_AUTO_SCREENSHOT is enabled AND the selected model supports image input. Under those conditions, before retrying a failed interaction or performing dependent mutations, inspect the actual failure screenshot, not merely its path or the tool summary. Briefly state the visible page/overlay/validation state, the supported cause (label uncertainty), the changed recovery action and how its result will be verified. Combine pixels with the tool error and targeted live reads; do not assume every failure is an overlay. If no image was attached, attempt to capture and emit the current viewport. If capture remains unavailable, disclose the limitation and use targeted live state without claiming visual inspection. When either prerequisite is false, do not require a screenshot or automatically turn capture on; diagnose from errors and targeted live reads. Explicit UI visual acceptance requested by the user remains a separate task requirement.
+
+Use one bounded recovery, verify the obstructing state is resolved, then resume the batch. Do not blindly repeat a failed action or force-click an unrelated control. Record a short confirmed cause and prevention rule in current task notes so subsequent actions do not repeat it; speculative explanations are not lessons. This is required after the first failure, not only after repeated retries. A post-code screenshot arrives only after the entire cell finishes; when the next action depends on visually interpreting a new state, end the cell and review that image first.
+
 ## Efficient lookup and search
 
 - Combine navigation and content acquisition in one browser action=code: await page.goto(url), then read the loaded page and return its useful evidence. Returning only title/URL and making another tool call for the content is unnecessary unless an actual loading or interaction dependency prevents the read. A DOM snapshot taken after navigation can be returned in that same cell. Only later actions whose targets require the model to inspect new evidence need another model step.
@@ -404,9 +426,9 @@ await nodeRepl.emitImage(viewportImage);
 nodeRepl.write({ url: page.url(), viewport: page.viewportSize() });
 \`\`\`
 
-For a vision-capable model, a fresh viewport image visible to the model from the previous model step authorizes multiple coordinate/CUA clicks while the document, URL, viewport, zoom, scroll position, and five-minute validity remain unchanged. Screenshot-and-click in the same cell is forbidden. Full-page screenshots are read-only evidence and never authorize coordinates.
+For a vision-capable model, a fresh viewport image visible to the model from the previous model step authorizes a coordinate action only while the DOM revision, document, URL, viewport, zoom, scroll position, and five-minute validity remain unchanged. A state-changing input retires previous coordinate evidence, even if it throws. Reobserve or resolve a live semantic locator before the next action. Screenshot-and-click in the same cell is forbidden. Full-page screenshots are read-only evidence and never authorize coordinates.
 
-For a non-visual model, or whenever exact DOM geometry is more reliable than pixels, derive coordinates from one exact visible actionable Locator. \`boundingBox()\` records runtime rect evidence. Click only inside that returned rect; the rect may be computed and used in the same cell or written for model inspection and reused in a later cell while the page geometry remains unchanged.
+For a non-visual model, or whenever exact DOM geometry is more reliable than pixels, derive coordinates from one exact visible actionable Locator. \`boundingBox()\` records runtime rect evidence. Click only inside that returned rect; the rect may be computed and used in the same cell or written for model inspection and reused in a later cell while the DOM revision and page geometry remain unchanged and no state-changing input has intervened.
 
 \`\`\`js
 var menuTrigger = page.getByRole('button', { name: 'Open menu', exact: true });

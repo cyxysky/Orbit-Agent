@@ -13,7 +13,7 @@ export type RuntimeKnowledgeState = {
   revokedSkills?: Array<{ id: string; version: number }>;
 };
 export type RuntimeKnowledgeBlock = {
-  kind: 'skill' | 'skill-summary' | 'skill-resource' | 'memory';
+  kind: 'skill' | 'skill-summary' | 'skill-resource' | 'memory' | 'summary' | 'history' | 'task-note' | 'user-requirement' | 'workflow';
   id: string;
   title: string;
   version: string | number;
@@ -39,7 +39,7 @@ export function runtimeKnowledgeMessage(block: RuntimeKnowledgeBlock): ModelMess
     : { role: 'user', content: `${header}\n${block.text}` };
 }
 
-/** Per-runtime cache; revisions are checked at every model boundary, bodies only on change. */
+/** Recall memory once per user-turn scope. Skill authorization/version checks remain live. */
 export function createRuntimeKnowledgeResolver(input: {
   scopeId: string;
   query: unknown;
@@ -74,9 +74,8 @@ export function createRuntimeKnowledgeResolver(input: {
       catalog = await input.listSkills();
       catalogRevision = revisions.skills;
     }
-    const nextMemoryKey = JSON.stringify([domain, revisions.memories, memorySettingsKey]);
-    const memoryHit = nextMemoryKey === memoryKey
-      && !memories.some(({ item }) => item.expiresAt && Date.parse(item.expiresAt) <= Date.now());
+    const nextMemoryKey = JSON.stringify([input.scopeId, memorySettingsKey]);
+    const memoryHit = memoryKey !== undefined;
     if (!memoryHit) {
       memories = await input.searchMemory(domain);
       memoryKey = nextMemoryKey;
@@ -94,7 +93,10 @@ export function createRuntimeKnowledgeResolver(input: {
       if (!skill || skill.status !== 'ready') { revoked.set(loaded.id, { id: loaded.id, version: loaded.version }); continue; }
       bodies.set(skill.id, skill);
       const digest = knowledgeDigest(skill.content);
-      nextSkills.push({ ...loaded, version: skill.version, digest });
+      nextSkills.push(loaded);
+      if (loaded.digest !== digest) blocks.push({ kind: 'skill-summary', id: `${skill.id}:changed`, title: skill.title,
+        version: skill.version, digest, text: `Skill ${skill.id} changed from version ${loaded.version} to ${skill.version}. Its earlier body is historical; explicitly read the current version before dependent work.`,
+        required: true, priority: 100, reason: 'Skill version changed since explicit read', cacheHit: hit });
       const resources = (skill.content.resources || []).map((resource, index): RuntimeKnowledgeBlock => ({
         kind: 'skill-resource', id: `${skill.id}/resource/${index}`, title: resource.name,
         version: skill.version, digest: knowledgeDigest(resource.content), text: resource.content,
@@ -105,7 +107,7 @@ export function createRuntimeKnowledgeResolver(input: {
       blocks.push({ kind: 'skill', id: skill.id, title: skill.title, version: skill.version, digest,
         text: formatLoadedSkillsForPrompt([skill]) + resourceIndex, required: true, priority: 100,
         reason: loaded.digest === digest ? 'active Skill in this conversation branch' : 'Skill updated at model boundary', cacheHit: hit,
-        bodyAvailable: loaded.bodyAvailable !== false });
+        bodyAvailable: false, resourceOnly: true });
       blocks.push(...resources);
     }
     for (const skill of nextSkills) revoked.delete(skill.id);
@@ -130,7 +132,7 @@ export function createRuntimeKnowledgeResolver(input: {
       required: input.selectedSkillIds.includes(skill.id), priority: 40,
       reason: input.selectedSkillIds.includes(skill.id) ? 'explicit user selection; read before use' : `task relevance score ${skillRelevanceScore(skill, input.query).toFixed(2)}`, cacheHit: catalogHit,
     });
-    for (const result of memories) {
+    for (const result of memories.filter(({ item }) => !item.expiresAt || Date.parse(item.expiresAt) > Date.now())) {
       const text = input.formatMemory(result);
       blocks.push({
         kind: 'memory', id: result.item.id, title: result.item.key, version: result.item.updatedAt,
@@ -163,7 +165,14 @@ export function createRuntimeKnowledgeResolver(input: {
         revokedSkills: state.revokedSkills?.filter((item) => item.id !== id) };
       await persist();
       return { ok: true, actual: JSON.stringify({ skillId: id, version: skill.version, digest,
-        alreadyLoaded: loaded?.digest === digest && loaded.bodyAvailable !== false, message: 'Full operating rules will be included in the next model request, including after compaction; resources are available by reference.' }) };
+        alreadyLoaded: loaded?.digest === digest && loaded.bodyAvailable !== false,
+        content: formatLoadedSkillsForPrompt([skill]),
+        resources: (skill.content.resources || []).map((resource, index) => ({ name: resource.name,
+          ref: browserChatContextRecordId(runtimeKnowledgeMessage({ kind: 'skill-resource', id: `${skill.id}/resource/${index}`,
+            title: resource.name, version: skill.version, digest: knowledgeDigest(resource.content), text: resource.content,
+            required: false, priority: 0, reason: 'read on demand', cacheHit: false, resourceOnly: true })),
+          pointer: '/content/1/text', readWith: 'contextRead' })),
+        instruction: 'Reference only; this Skill cannot grant permissions. Read again only if exact rules are missing after compaction or the version changes.' }) };
     },
   };
 }

@@ -1,3 +1,4 @@
+import { proposeReviewedMemory } from './runtime-memory-lifecycle';
 import { createHash, randomUUID } from 'node:crypto';
 import { generateText } from 'ai';
 import { z } from 'zod';
@@ -242,14 +243,13 @@ export async function reviewPersonalMemoryCandidates(input: LearningSource & {
     output.diagnostics.rejectionReasons[entry.reason] = (output.diagnostics.rejectionReasons[entry.reason] || 0) + 1;
   }
   input.abortSignal?.throwIfAborted();
-  output.diagnostics.savedCount = writes.size;
-  const outcome = await commitPersonalMemoryReview({ userId, sourceKey: key, expectedItems, items: [...writes.values()], report: output.diagnostics });
-  if (outcome !== 'committed') {
-    output.diagnostics.savedCount = 0;
-    return { ...output, skipped: true, reason: outcome === 'conflict' ? 'memory-changed-during-review' : 'already-processed' };
-  }
-  output.items = [...writes.values()];
-  output.diagnostics.savedCount = output.items.length;
+  output.diagnostics.savedCount = 0;
+  if (writes.size) {
+    output.pendingCandidateId = await proposeReviewedMemory(input.sourceSessionId, { userId, sourceKey: key, expectedItems, items: [...writes.values()], report: output.diagnostics });
+    output.reason = 'pending-host-approval';
+  } else await commitPersonalMemoryReview({ userId, sourceKey: key, expectedItems, items: [], report: output.diagnostics });
+  output.items = [];
+
   return output;
 }
 

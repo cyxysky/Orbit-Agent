@@ -9,7 +9,7 @@ import { BrowserNetworkDiagnostics } from './browser-network-diagnostics.ts';
 import { mkdir, open, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import type { Browser, BrowserContext, BrowserContextOptions, BrowserServer, ConsoleMessage, Dialog, Download as PlaywrightDownload, ElementHandle, FileChooser, Frame, LaunchOptions, Locator, Page, Worker as PlaywrightWorker } from 'playwright';
 import { raceWithAbort, type CapabilityConfiguration } from '../../index.ts';
@@ -157,7 +157,7 @@ export type BrowserActionResult = {
   /** Images emitted by browserCode that should be attached to the next model request in order. */
   referenceImagePaths?: string[];
   /** Final viewport observation, distinct from explicitly emitted image artifacts. */
-  browserObservation?: { status: 'available' | 'unavailable' | 'disabled'; path?: string; url?: string; capturedAt?: string; error?: string };
+  browserObservation?: { width?: number; height?: number; surfaceId?: string; visualHash?: string; id?: string; domEpoch?: number; actionable?: boolean; retention?: 'replace' | 'append' | 'keep-pair'; status: 'available' | 'unavailable' | 'disabled'; path?: string; url?: string; capturedAt?: string; error?: string };
   /** Safe basenames for emitted screenshots. */
   screenshotFileNames?: string[];
   /** A compact continuation cursor for paged snapshot readers. */
@@ -1188,8 +1188,227 @@ export class BrowserSession {
   private latestBrowserObservation?: BrowserActionResult['browserObservation'];
   private browserViewportEvidence?: BrowserCodeViewportEvidence;
 
-  getBrowserObservation() {
+  private visualSurfaceIds = new WeakMap<Page, string>();
+
+  /** Pure pixel observation for the Agent route; no DOM/AX extraction. */
+  private async captureVisualFrame(runId: string, signal?: AbortSignal): Promise<NonNullable<BrowserActionResult['browserObservation']>> {
+    signal?.throwIfAborted();
+    const page = this.activePage;
+    if (page.isClosed()) throw new Error('Current browser surface is closed.');
+    const surfaceId = this.visualSurfaceIds.get(page) || randomUUID();
+    this.visualSurfaceIds.set(page, surfaceId);
+    const url = page.url();
+    const bytes = await raceWithAbort(page.screenshot({ type: 'png', scale: 'css', timeout: 15000 }), signal);
+    signal?.throwIfAborted();
+    if (page !== this.activePage || page.url() !== url) throw new Error('Browser surface changed during capture.');
+    if (bytes.length < 24 || bytes.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') throw new Error('Invalid PNG observation.');
+    const width = bytes.readUInt32BE(16), height = bytes.readUInt32BE(20);
+    if (!width || !height || width > 8192 || height > 8192) throw new Error('Invalid observation dimensions.');
+    const visualHash = createHash('sha256').update(bytes).digest('hex');
+    const previous = this.latestBrowserObservation;
+    if (previous?.status === 'available' && previous.visualHash === visualHash && previous.surfaceId === surfaceId && previous.url === url) {
+      return this.latestBrowserObservation = { ...previous, capturedAt: new Date().toISOString(), actionable: true };
+    }
+    const dir = this.artifactDirectory(runId);
+    await mkdir(dir, { recursive: true });
+    const id = randomUUID(), imagePath = path.join(dir, `observation-${id}.png`);
+    await writeFile(imagePath, bytes);
+    return this.latestBrowserObservation = { id, status: 'available', actionable: true, surfaceId, visualHash,
+      width, height, path: imagePath, url, capturedAt: new Date().toISOString(), retention: 'replace' };
+  }
+
+  async captureBrowserObservation(runId: string, abortSignal?: AbortSignal) {
+    return this.withSessionOperation(signal => this.captureVisualFrame(runId, signal), abortSignal);
+  }
+
+  /** Browser chrome operations, independent of DOM and screenshot targeting. */
+  async executeBrowserControl(input: {
+    action: 'navigate' | 'tabs'; url?: string; tabOperation?: 'list' | 'open' | 'select' | 'close';
+    tabId?: string; abortSignal?: AbortSignal;
+  }): Promise<BrowserActionResult> {
+    return this.withSessionOperation(async signal => {
+      const operation = input.action === 'navigate' ? 'navigate' : input.tabOperation;
+      if (!operation || !['navigate', 'list', 'open', 'select', 'close'].includes(operation)) return { ok: false, actual: 'Unknown browser control operation; nothing executed.' };
+      const url = input.url ?? (operation === 'open' ? 'about:blank' : undefined);
+      if (operation === 'navigate' || operation === 'open') {
+        try {
+          if (!url || (!['http:', 'https:'].includes(new URL(url).protocol) && url !== 'about:blank')) throw new Error('Invalid URL');
+        } catch { return { ok: false, actual: 'Use an absolute HTTP(S) URL or about:blank; nothing executed.' }; }
+      }
+      await this.refreshSessionGroupPages({ forceNativeRefresh: true });
+      const result = () => ({ operation, url: this.page && !this.page.isClosed() ? this.page.url() : '', tabs: this.getTabsSnapshot(), businessOutcome: 'unverified' });
+      if (operation === 'list') return { ok: true, actual: JSON.stringify(result()) };
+      let target: Page | undefined;
+      if (operation === 'select' || operation === 'close') {
+        target = this.sessionPages().find(page => this.livePreviewTabId(page) === input.tabId);
+        if (!target) return { ok: false, actual: 'Tab is not in this session. Use tabs list and select a current tabId; nothing executed.' };
+      }
+      signal.throwIfAborted();
+      this.latestBrowserObservation = { status: 'unavailable', actionable: false, error: 'Browser page/tab changed. Capture a fresh observation before page input.' };
+      this.browserViewportEvidence = undefined;
+      this.stateReader?.clear();
+      try {
+        if (operation === 'select') await this.activateSessionPage(target!);
+        else if (operation === 'close') {
+          let replacement = this.sessionPages().find(page => page !== target);
+          if (!replacement) {
+            replacement = await this.activePage.context().newPage();
+            this.claimPage(replacement, { makeActive: false });
+            await this.ensurePageGroup(replacement);
+          }
+          if (target === this.activePage) await this.activateSessionPage(replacement);
+          await target!.close();
+        } else {
+          if (operation === 'open') {
+            const page = await this.activePage.context().newPage();
+            this.claimPage(page, { makeActive: false });
+            await this.ensurePageGroup(page);
+            await this.activateSessionPage(page);
+          }
+          await raceWithAbort(this.activePage.goto(url!, { waitUntil: 'commit', timeout: 30_000 }), signal);
+          await this.ensurePageGroup(this.activePage);
+        }
+        signal.throwIfAborted();
+        this.notifyLivePreviewTabsChanged();
+        return { ok: true, actual: JSON.stringify({ ...result(), next: 'Read a fresh observation/state and verify the destination before dependent page actions.' }) };
+      } catch (error) {
+        return { ok: false, failureCategory: 'execution-uncertain',
+          actual: 'Browser control outcome is uncertain. Inspect current tabs and observation; do not repeat automatically.',
+          data: { ...result(), outcome: 'unknown', safeToRetry: false, error: String(error) }, browserObservation: this.latestBrowserObservation };
+      }
+    }, input.abortSignal);
+  }
+
+  async executeVisualBrowserAction(input: {
+    observationId: string; kind: 'click' | 'hover' | 'move' | 'drag' | 'scroll' | 'type' | 'key'; x?: number; y?: number;
+    endX?: number; endY?: number; button?: 'left' | 'right' | 'middle'; clickCount?: number; steps?: number;
+    modifiers?: Array<'Control' | 'Shift' | 'Alt' | 'Meta'>;
+    deltaX?: number; deltaY?: number; text?: string; key?: string;
+    observationMode?: 'replace' | 'append' | 'keep-pair'; runId: string; abortSignal?: AbortSignal;
+    onExecuting?: () => Promise<void>;
+  }): Promise<BrowserActionResult> {
+    return this.withSessionOperation(async signal => {
+      if (input.kind === 'key' && /^(?:(?:Control|ControlOrMeta|Meta)\+(?:Shift\+)?(?:l|t|w|n|Tab|PageUp|PageDown|[1-9])|Alt\+(?:d|ArrowLeft|ArrowRight)|F5|F6)$/i.test(input.key || '')) {
+        return { ok: false, actual: 'Page keyboard input cannot operate browser chrome; nothing executed. Use navigate for URLs and tabs for opening, listing, selecting or closing tabs.' };
+      }
+      const original = this.latestBrowserObservation;
+      if (!original || original.id !== input.observationId || !original.actionable
+        || Date.now() - Date.parse(original.capturedAt || '') > 60000) return { ok: false, actual: 'Stale observation; no action executed. Capture and decide again.' };
+      let fresh: NonNullable<BrowserActionResult['browserObservation']>;
+      try { fresh = await this.captureVisualFrame(input.runId, signal); }
+      catch (error) {
+        this.latestBrowserObservation = { status: 'unavailable', actionable: false, error: String(error) };
+        return { ok: false, actual: 'Could not capture the current page before input; no action executed. Observe again before deciding.',
+          data: { outcome: 'not-executed', error: String(error) }, browserObservation: this.latestBrowserObservation };
+      }
+      if (fresh.id !== input.observationId) return { ok: false, actual: 'Pixels, route or viewport changed; no action executed.', browserObservation: fresh };
+      const page = this.activePage;
+      if (['click', 'hover', 'move', 'drag', 'scroll'].includes(input.kind) && (!Number.isFinite(input.x) || !Number.isFinite(input.y)
+        || input.x! < 0 || input.y! < 0 || input.x! >= fresh.width! || input.y! >= fresh.height!)) return { ok: false, actual: 'Coordinates outside current CSS viewport; no action executed.' };
+      if (input.kind === 'drag' && (!Number.isFinite(input.endX) || !Number.isFinite(input.endY)
+        || input.endX! < 0 || input.endY! < 0 || input.endX! >= fresh.width! || input.endY! >= fresh.height!)) return { ok: false, actual: 'Drag endpoint outside current CSS viewport; no action executed.' };
+      if (input.kind === 'type' && typeof input.text !== 'string') return { ok: false, actual: 'type requires text.' };
+      if (input.kind === 'key' && !input.key) return { ok: false, actual: 'key requires a key.' };
+      await input.onExecuting?.();
+      signal.throwIfAborted();
+      this.latestBrowserObservation = { ...fresh, actionable: false };
+      this.browserViewportEvidence = undefined;
+      const button = input.button || 'left';
+      const heldModifiers: string[] = [];
+      const failedChordKeys: string[] = [];
+      const releaseErrors: string[] = [];
+      let mouseHeld = false;
+      let inputError: unknown;
+      let inputFailed = false;
+      try {
+        for (const modifier of new Set(input.modifiers || [])) {
+          signal.throwIfAborted();
+          heldModifiers.push(modifier);
+          await page.keyboard.down(modifier);
+        }
+        signal.throwIfAborted();
+        if (input.kind === 'click') {
+          mouseHeld = true;
+          await page.mouse.click(input.x!, input.y!, { button, clickCount: input.clickCount || 1 });
+          mouseHeld = false;
+        } else if (input.kind === 'hover' || input.kind === 'move') await page.mouse.move(input.x!, input.y!, { steps: input.steps || 1 });
+        else if (input.kind === 'drag') {
+          await page.mouse.move(input.x!, input.y!);
+          signal.throwIfAborted();
+          mouseHeld = true;
+          await page.mouse.down({ button });
+          signal.throwIfAborted();
+          await page.mouse.move(input.endX!, input.endY!, { steps: input.steps || 12 });
+          await page.mouse.up({ button });
+          mouseHeld = false;
+        }
+        else if (input.kind === 'scroll') {
+          await page.mouse.move(input.x!, input.y!);
+          await page.mouse.wheel(input.deltaX || 0, input.deltaY || 0);
+        } else if (input.kind === 'type') await page.keyboard.insertText(input.text!);
+        else {
+          try { await page.keyboard.press(input.key!); }
+          catch (error) {
+            failedChordKeys.push(...input.key!.split('+').filter(Boolean));
+            if (input.key!.endsWith('+')) failedChordKeys.push('+');
+            throw error;
+          }
+        }
+      } catch (error) {
+        inputFailed = true;
+        inputError = error;
+      } finally {
+        // Release on the original page even if the gesture navigates or fails.
+        // Cleanup must run without the aborted action signal.
+        if (mouseHeld) {
+          try { await page.mouse.up({ button }); } catch (error) { releaseErrors.push(String(error)); }
+        }
+        for (const key of [...failedChordKeys, ...heldModifiers].reverse()) {
+          try { await page.keyboard.up(key); } catch (error) { releaseErrors.push(String(error)); }
+        }
+      }
+      if (inputFailed || releaseErrors.length) {
+        this.latestBrowserObservation = { status: 'unavailable', actionable: false, error: String(inputError || releaseErrors.join('; ')) };
+        return { ok: false, actual: 'Browser gesture outcome is uncertain. Inspect current state and choose the next action using fresh evidence.',
+          failureCategory: 'execution-uncertain', data: { outcome: 'unknown', safeToRetry: false, error: String(inputError || 'Input release failed'), releaseErrors }, browserObservation: this.latestBrowserObservation };
+      }
+      // The input returned successfully. A navigation/capture race afterwards
+      // makes the observation unavailable, not the input outcome uncertain.
+      try {
+        const after = await this.captureVisualFrame(input.runId, signal);
+        after.retention = input.observationMode || (input.kind === 'scroll' ? 'append' : 'replace');
+        return { ok: true, actual: JSON.stringify({ outcome: 'executed', before: input.observationId, after: after.id,
+          visualChanged: fresh.id !== after.id, businessOutcome: 'unverified',
+          ...(fresh.id === after.id ? { next: 'No visible change at capture time. Verify focus/loading and the intended gesture before repeating.' } : {}) }),
+          browserObservation: after, referenceImagePath: after.path };
+      } catch (error) {
+        this.latestBrowserObservation = { status: 'unavailable', actionable: false, error: String(error) };
+        return { ok: true, actual: 'Page input executed, but its follow-up screenshot is unavailable. Observe the current page and verify the outcome before another action.',
+          data: { outcome: 'executed', businessOutcome: 'unverified', observationError: String(error) }, browserObservation: this.latestBrowserObservation };
+      }
+    }, input.abortSignal);
+  }
+
+  async getBrowserObservation(abortSignal?: AbortSignal) {
     if (!this.automaticBrowserScreenshotEnabled()) return { status: 'disabled' as const };
+    const evidence = this.browserViewportEvidence;
+    if (this.latestBrowserObservation?.status === 'available' && evidence) {
+      const page = this.page;
+      const deadline = new BrowserOperationDeadline(2000, abortSignal);
+      let current: Omit<BrowserCodeViewportEvidence, 'capturedAt'> | undefined;
+      try {
+        current = page && !page.isClosed() ? await deadline.step('observation-freshness', () => page.evaluate(() => {
+          const win = window as Window & { __aiCoordinateEvidenceDocumentId?: string; __aiDomMutationState?: { epoch?: number } };
+          return { documentId: win.__aiCoordinateEvidenceDocumentId || '', url: location.href,
+            domEpoch: Number(win.__aiDomMutationState?.epoch || 0), width: innerWidth, height: innerHeight, devicePixelRatio, scrollX, scrollY };
+        })) : undefined;
+      } catch { abortSignal?.throwIfAborted(); }
+      finally { deadline.dispose(); }
+      if (!current || Object.entries(current).some(([key, value]) => evidence[key as keyof BrowserCodeViewportEvidence] !== value) || Date.now() - evidence.capturedAt > 300_000) {
+        this.browserViewportEvidence = undefined;
+        this.latestBrowserObservation = { status: 'unavailable', error: 'The page changed since this observation. Read current DOM or emit a fresh viewport before dependent actions.' };
+      }
+    }
     return this.latestBrowserObservation;
   }
 
@@ -2493,7 +2712,8 @@ export class BrowserSession {
     video?: boolean;
   }): Promise<BrowserScreencastHandle> {
     this.ensureLivePreviewState();
-    await this.refreshSessionGroupPages({ forceNativeRefresh: true });
+    // Capture the selected page immediately. Visibility reconciliation runs in
+    // the background and must not hold up the stream on a suspended tab.
     const environment = this.runtimeEnvironment();
     const format = options.video
       ? resolveBrowserPreviewImageFormat(environment.BROWSER_PREVIEW_VIDEO_SOURCE_FORMAT || 'jpeg')
@@ -2524,11 +2744,18 @@ export class BrowserSession {
       onError: options.onError,
       onFrame: options.onFrame,
     });
-    const tabsListener = options.onTabsChanged;
-    if (tabsListener) {
-      this.livePreviewStateListeners.add(tabsListener);
-      tabsListener(this.getTabsSnapshot());
-    }
+    const tabsListener: BrowserLivePreviewStateListener = (tabs) => {
+      if (stopped) return;
+      options.onTabsChanged?.(tabs);
+      if (page && this.activePage !== page) {
+        // Cancel the old target's pending CDP request rather than waiting for
+        // that background page to paint again before binding the selected tab.
+        void detachCurrentPage();
+        options.onActivePageChanged?.();
+      }
+    };
+    this.livePreviewStateListeners.add(tabsListener);
+    tabsListener(this.getTabsSnapshot());
     const nativeListener = options.onNativeEvent;
     if (nativeListener) {
       this.livePreviewNativeListeners.add(nativeListener);
@@ -2599,8 +2826,12 @@ export class BrowserSession {
           return { client, page: nextActivePage };
         }
         await detachCurrentPage();
-        await nextActivePage.bringToFront().catch(() => undefined);
+        if (stopped) throw new Error('Preview capture stopped');
         const nextClient = await nextActivePage.context().newCDPSession(nextActivePage);
+        if (stopped) {
+          await nextClient.detach().catch(() => undefined);
+          throw new Error('Preview capture stopped');
+        }
         page = nextActivePage;
         client = nextClient;
         if (nativeListener) {
@@ -2615,10 +2846,15 @@ export class BrowserSession {
           };
           nextActivePage.on('filechooser', fileChooserListener);
         }
-        await Promise.all([
-          nextClient.send('Page.setWebLifecycleState', { state: 'active' }).catch(() => undefined),
-          nextClient.send('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => undefined),
-        ]);
+        const setupTimeout = setTimeout(() => {
+          if (client === nextClient) void detachCurrentPage();
+        }, 2_500);
+        try {
+          await Promise.all([
+            nextClient.send('Page.setWebLifecycleState', { state: 'active' }).catch(() => undefined),
+            nextClient.send('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => undefined),
+          ]);
+        } finally { clearTimeout(setupTimeout); }
         return { client: nextClient, page: nextActivePage };
       })();
       try {
@@ -2635,6 +2871,9 @@ export class BrowserSession {
       if (!isCurrentPage()) return;
       const startedAt = performance.now();
       activeCaptures = 1;
+      const captureTimeout = setTimeout(() => {
+        if (client === binding.client) void detachCurrentPage();
+      }, 2_500);
       try {
         const metrics = await binding.client.send('Page.getLayoutMetrics');
         if (!isCurrentPage()) return;
@@ -2668,6 +2907,7 @@ export class BrowserSession {
           deviceWidth: outputViewport.width,
         });
       } finally {
+        clearTimeout(captureTimeout);
         activeCaptures = 0;
         captureDurationMs = performance.now() - startedAt;
         totalCaptureDurationMs += captureDurationMs;
@@ -2702,13 +2942,12 @@ export class BrowserSession {
       stopPromise = (async () => {
         if (tabsListener) this.livePreviewStateListeners.delete(tabsListener);
         if (nativeListener) this.livePreviewNativeListeners.delete(nativeListener);
-        if (this.livePreviewNativeListeners.size === 0) {
-          await Promise.all([this.dismissPendingLiveDialogs(), this.clearPendingLiveFileInputs()]);
-        }
-        await pageRefreshPromise?.catch(() => undefined);
-        await pageBindingPromise?.catch(() => undefined);
-        // Detaching rejects any pending CDP capture before waiting for it.
+        // A visibility query can be suspended with its tab. It is advisory and
+        // must never delay cancellation of the old capture connection.
+        // Dialogs/file inputs belong to the browser session, not this transport;
+        // reconnecting the viewer must not dismiss the user's pending dialog.
         await detachCurrentPage();
+        await pageBindingPromise?.catch(() => undefined);
         await captureTask?.catch(() => undefined);
         await framePump.stop();
         page = undefined;
@@ -3082,6 +3321,8 @@ export class BrowserSession {
     await this.ensureBrowserPageRuntime(page);
     const clampRatio = (value: number) => Math.min(1, Math.max(0, Number(value)));
     const invalidateObservation = () => {
+      this.browserViewportEvidence = undefined;
+      this.latestBrowserObservation = { status: 'unavailable', error: 'Live browser input invalidated the previous observation.' };
       this.lastScreenshotMetrics = undefined;
       this.domObservationPagination = undefined;
       this.lastDomNodeReferences.clear();
@@ -4262,7 +4503,7 @@ export class BrowserSession {
       // A failed cell can still have changed the page. Never reuse an older image.
       this.lastScreenshotMetrics = undefined;
       this.browserViewportEvidence = undefined;
-      if (!this.automaticBrowserScreenshotEnabled()) {
+      if (input.imageInputAvailable === false || !this.automaticBrowserScreenshotEnabled()) {
         const observation = { status: 'disabled' as const };
         this.latestBrowserObservation = observation;
         const data = result.data && typeof result.data === 'object' ? result.data as Record<string, unknown> : {};
@@ -4278,9 +4519,9 @@ export class BrowserSession {
         const page = this.activePage;
         if (page.isClosed()) throw new Error('The final browser page is closed.');
         const readGeometry = () => page.evaluate(() => {
-          const win = window as Window & { __aiCoordinateEvidenceDocumentId?: string };
+          const win = window as Window & { __aiCoordinateEvidenceDocumentId?: string; __aiDomMutationState?: { epoch?: number } };
           win.__aiCoordinateEvidenceDocumentId ||= Date.now() + '-' + Math.random();
-          return { documentId: win.__aiCoordinateEvidenceDocumentId, url: location.href,
+          return { documentId: win.__aiCoordinateEvidenceDocumentId, url: location.href, domEpoch: Number(win.__aiDomMutationState?.epoch || 0),
             width: innerWidth, height: innerHeight, devicePixelRatio, scrollX, scrollY };
         });
         const before = await capture.step('viewport-before', readGeometry);
@@ -4292,7 +4533,8 @@ export class BrowserSession {
         }));
         const after = await capture.step('viewport-after', readGeometry);
         if (JSON.stringify(before) === JSON.stringify(after)) this.browserViewportEvidence = { ...after, capturedAt: Date.now() };
-        observation = { status: 'available', path: imagePath, url: page.url(), capturedAt: new Date().toISOString() };
+        observation = { status: 'available', id: randomUUID(), path: imagePath, url: page.url(), capturedAt: new Date().toISOString(),
+          actionable: Boolean(this.browserViewportEvidence), domEpoch: after.domEpoch, retention: input.observationMode || 'replace' };
       } catch (error) {
         if (signal.aborted) throw error;
         observation = { status: 'unavailable', error: error instanceof Error ? error.message : String(error) };
@@ -4312,6 +4554,7 @@ export class BrowserSession {
 
   private async executeBrowserCodeCell(input: {
     code: string;
+    observationMode?: 'replace' | 'append' | 'keep-pair';
     imageInputAvailable?: boolean;
     runId: string;
     stepIndex: number;
@@ -4582,6 +4825,7 @@ export class BrowserSession {
     this.activeScreencasts ||= new Set<BrowserScreencastHandle>();
     this.activeScreencasts.clear();
     await Promise.all(activeScreencasts.map((handle) => handle.stop().catch(() => undefined)));
+    await Promise.all([this.dismissPendingLiveDialogs(), this.clearPendingLiveFileInputs()]);
     await this.downloadManager?.dispose();
     this.downloadManager = undefined;
     this.stateReader?.clear();

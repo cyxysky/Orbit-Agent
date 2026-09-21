@@ -69,6 +69,9 @@ export type StepExecutionResult = {
 };
 
 export type VisualFrameRecord = {
+  surfaceId?: string;
+  observationId?: string;
+  url?: string;
   id: string;
   path: string;
   originalPath?: string;

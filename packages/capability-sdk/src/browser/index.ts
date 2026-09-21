@@ -19,6 +19,7 @@ export * from './settings.ts';
 export * from './session-group.ts';
 
 const reason = z.string().trim().min(1).max(300);
+const recoveryReview = z.string().min(1).max(6000).optional().describe('After a browser failure: concise Markdown with observed screenshot state, evidence-based cause (label uncertainty), changed recovery action, verification and prevention rule. Put review here, not in assistant narrative. Only claim images actually received.');
 const stateOptions = {
   scope: z.enum(['active', 'all']).optional(),
   frame: z.string().trim().min(1).max(200).optional(),
@@ -30,18 +31,22 @@ const stateOptions = {
 const readBrowserStateParser = z.object({
   action: z.literal('state'),
   reason,
+  recoveryReview,
   ...stateOptions,
   maxOutputChars: z.number().int().min(1_000).max(200_000).optional(),
 }).strict();
 const browserCodeParser = z.object({
   action: z.literal('code'),
   reason,
+  recoveryReview,
   code: z.string().min(1).max(40_000),
+  observationMode: z.enum(['replace', 'append', 'keep-pair']).optional(),
   maxOutputChars: z.number().int().min(1_000).optional(),
 }).strict();
 const waitForHumanVerificationParser = z.object({
   action: z.literal('waitForHumanVerification'),
   reason,
+  recoveryReview,
   maxMs: z.number().int().min(1_000).max(30 * 60_000).optional(),
 }).strict();
 // Keep the provider-facing JSON Schema flat. Several OpenAI-compatible models
@@ -54,6 +59,8 @@ const browserParser = z.object({
     'Required operation. Use code for Playwright interaction. Use state for an active-surface snapshot, or narrow it with scope/frame/selector/query and continue with the returned nextCursor.',
   ),
   reason,
+  observationMode: z.enum(['replace', 'append', 'keep-pair']).optional().describe('After code: replace old screenshots, append a continuous observation, or keep a before/after pair. Host bounds history and preserves the current observation.'),
+  recoveryReview,
   code: z.string().min(1).max(40_000).optional().describe(
     'Required only when action=code. JavaScript executed in the persistent Playwright runtime.',
   ),
@@ -70,7 +77,7 @@ export function normalizeBrowserToolInput(value: unknown) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
   const input = value as Record<string, unknown>;
   if (input.action === 'state') {
-    return { action: 'state', reason: input.reason,
+    return { action: 'state', reason: input.reason, ...(input.recoveryReview !== undefined ? { recoveryReview: input.recoveryReview } : {}),
       ...Object.fromEntries(['scope', 'frame', 'selector', 'query', 'cursor', 'maxOutputChars'].filter((key) => input[key] !== undefined).map((key) => [key, input[key]])),
     };
   }
@@ -78,7 +85,9 @@ export function normalizeBrowserToolInput(value: unknown) {
     return {
       action: 'code',
       reason: input.reason,
+      ...(input.recoveryReview !== undefined ? { recoveryReview: input.recoveryReview } : {}),
       code: input.code,
+      ...(input.observationMode !== undefined ? { observationMode: input.observationMode } : {}),
       ...(input.maxOutputChars !== undefined ? { maxOutputChars: input.maxOutputChars } : {}),
     };
   }
@@ -86,6 +95,7 @@ export function normalizeBrowserToolInput(value: unknown) {
     return {
       action: 'waitForHumanVerification',
       reason: input.reason,
+      ...(input.recoveryReview !== undefined ? { recoveryReview: input.recoveryReview } : {}),
       ...(input.maxMs !== undefined ? { maxMs: input.maxMs } : {}),
     };
   }
@@ -125,7 +135,7 @@ export type BrowserOperationResult = {
   failureCategory?: string;
   referenceImagePath?: string;
   referenceImagePaths?: string[];
-  browserObservation?: { status: 'available' | 'unavailable' | 'disabled'; path?: string; url?: string; capturedAt?: string; error?: string };
+  browserObservation?: { width?: number; height?: number; surfaceId?: string; visualHash?: string; id?: string; domEpoch?: number; actionable?: boolean; retention?: 'replace' | 'append' | 'keep-pair'; status: 'available' | 'unavailable' | 'disabled'; path?: string; url?: string; capturedAt?: string; error?: string };
   [key: string]: unknown;
 };
 

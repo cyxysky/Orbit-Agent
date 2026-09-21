@@ -88,6 +88,7 @@ export type PersonalMemorySearchResult = {
 };
 
 export type PersonalMemoryExtractionResult = {
+  pendingCandidateId?: string;
   items: PersonalMemoryItem[];
   rawText: string;
   skipped: boolean;

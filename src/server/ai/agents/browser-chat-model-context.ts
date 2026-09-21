@@ -139,7 +139,7 @@ export function normalizeBrowserChatModelContext(value: unknown): BrowserChatMod
     : (record.history || []).filter((id) => Boolean(records[id]));
   const active = record.activeMessages !== undefined
     ? register(withoutRuntimePromptCacheMetadata(normalizeBrowserChatModelMessages(record.activeMessages)))
-    : register(withoutRuntimePromptCacheMetadata(normalizeBrowserChatModelMessages((record.active || history).map((id) => records[id]).filter(Boolean))));
+    : register(withoutRuntimePromptCacheMetadata(normalizeBrowserChatModelMessages((record.active || []).map((id) => records[id]).filter(Boolean))));
   const compression = record.lastCompression;
   const continuationSummary = parseContextSummary(record.continuationSummary) ? record.continuationSummary! : '';
   return {

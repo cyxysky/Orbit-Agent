@@ -2,7 +2,7 @@
 
 import { type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Check, Download, Globe, Loader2, X } from 'lucide-react';
-import { AppModal } from '@/components/ui/app-modal';
+import { FloatingWindow } from '@/components/FloatingWindow';
 import { AppInput } from '@/components/ui/app-input';
 import { useI18n } from '@/i18n/I18nProvider';
 import { readApiJson } from '@/lib/api-client';
@@ -135,6 +135,9 @@ export function BrowserChatWebPreviewModal({
   const { t } = useI18n();
   const streamRef = useRef<WebSocket | null>(null);
   const reconnectEnabledRef = useRef(true);
+  const frameGenerationRef = useRef(0);
+  const lastDisplayedAtRef = useRef(Date.now());
+  const previewInputReadyRef = useRef(false);
   const previewImageRef = useRef<HTMLImageElement | null>(null);
   const previewVideoRef = useRef<HTMLVideoElement | null>(null);
   const previewStageRef = useRef<HTMLDivElement | null>(null);
@@ -275,6 +278,18 @@ export function BrowserChatWebPreviewModal({
   const pumpVideoChunks = useCallback(() => {
     const sourceBuffer = sourceBufferRef.current;
     if (!sourceBuffer || sourceBuffer.updating) return;
+    // Catch up before appending the backlog accumulated in a background tab.
+    const video = previewVideoRef.current;
+    if (video && sourceBuffer.buffered.length) {
+      const lastRange = sourceBuffer.buffered.length - 1;
+      const start = sourceBuffer.buffered.start(lastRange);
+      const end = sourceBuffer.buffered.end(lastRange);
+      if (video.currentTime < start || end - video.currentTime > 0.6) video.currentTime = Math.max(start, end - 0.12);
+      void video.play().catch(() => undefined);
+      if (end - sourceBuffer.buffered.start(0) > 8) {
+        try { sourceBuffer.remove(0, Math.max(0, end - 3)); return; } catch { /* Retry after the next append. */ }
+      }
+    }
     const next = videoChunkQueueRef.current.shift();
     if (next) {
       try {
@@ -286,16 +301,6 @@ export function BrowserChatWebPreviewModal({
       }
       return;
     }
-    const video = previewVideoRef.current;
-    if (!video || !sourceBuffer.buffered.length) return;
-    const lastRange = sourceBuffer.buffered.length - 1;
-    const start = sourceBuffer.buffered.start(0);
-    const end = sourceBuffer.buffered.end(lastRange);
-    if (end - video.currentTime > 0.6) video.currentTime = Math.max(start, end - 0.12);
-    if (end - start > 8) {
-      try { sourceBuffer.remove(0, Math.max(0, end - 3)); } catch { /* A later update trims again. */ }
-    }
-    void video.play().catch(() => undefined);
   }, []);
   pumpVideoChunksRef.current = pumpVideoChunks;
 
@@ -394,12 +399,43 @@ export function BrowserChatWebPreviewModal({
     return () => window.clearTimeout(timer);
   }, [previewDownload]);
 
+  const clearPreviewFrames = useCallback((preserveDisplayed = false) => {
+    previewInputReadyRef.current = false;
+    frameGenerationRef.current += 1;
+    // Keep a still of the last decoded video during reconnect/decoder changes.
+    const video = previewVideoRef.current;
+    if (preserveDisplayed && video && video.readyState >= 2 && video.videoWidth && video.videoHeight) {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const context = canvas.getContext('2d');
+        if (context) {
+          context.drawImage(video, 0, 0);
+          const imageUrl = canvas.toDataURL('image/jpeg', 0.9);
+          setFrame({ ...frameStateRef.current, imageUrl, contentType: 'image/jpeg', capturedAt: new Date().toISOString() });
+        }
+      } catch { /* Retain the last image frame when video capture is unavailable. */ }
+    }
+    for (const url of [preserveDisplayed ? undefined : frameObjectUrlRef.current, staleFrameObjectUrlRef.current, decodingFrameObjectUrlRef.current, pendingFrameRef.current?.imageUrl]) {
+      if (url?.startsWith('blob:')) URL.revokeObjectURL(url);
+    }
+    if (!preserveDisplayed) frameObjectUrlRef.current = '';
+    staleFrameObjectUrlRef.current = '';
+    decodingFrameObjectUrlRef.current = '';
+    pendingFrameRef.current = null;
+    frameDecodeActiveRef.current = false;
+    lastDisplayedAtRef.current = Date.now();
+    if (!preserveDisplayed) setFrame(null);
+  }, []);
+
   const commitPendingPreviewFrame = useCallback(async function commitPendingPreviewFrame() {
     if (framePipelineDisposedRef.current || frameDecodeActiveRef.current) return;
     const nextFrame = pendingFrameRef.current;
     if (!nextFrame) return;
     pendingFrameRef.current = null;
     frameDecodeActiveRef.current = true;
+    const generation = frameGenerationRef.current;
     decodingFrameObjectUrlRef.current = nextFrame.imageUrl;
     let committed = false;
     try {
@@ -407,7 +443,7 @@ export function BrowserChatWebPreviewModal({
       decodedImage.decoding = 'async';
       decodedImage.src = nextFrame.imageUrl;
       await decodedImage.decode();
-      if (framePipelineDisposedRef.current) return;
+      if (framePipelineDisposedRef.current || generation !== frameGenerationRef.current) return;
 
       if (staleFrameObjectUrlRef.current.startsWith('blob:')) {
         URL.revokeObjectURL(staleFrameObjectUrlRef.current);
@@ -417,6 +453,8 @@ export function BrowserChatWebPreviewModal({
       decodingFrameObjectUrlRef.current = '';
       committed = true;
       frameCountersRef.current.displayed += 1;
+      lastDisplayedAtRef.current = Date.now();
+      previewInputReadyRef.current = true;
       setFrame(nextFrame);
       setStatus('live');
       setStreamError('');
@@ -429,9 +467,9 @@ export function BrowserChatWebPreviewModal({
       if (decodingFrameObjectUrlRef.current === nextFrame.imageUrl) {
         decodingFrameObjectUrlRef.current = '';
       }
-      frameDecodeActiveRef.current = false;
-      if (!framePipelineDisposedRef.current && pendingFrameRef.current) {
-        void commitPendingPreviewFrame();
+      if (generation === frameGenerationRef.current) {
+        frameDecodeActiveRef.current = false;
+        if (!framePipelineDisposedRef.current && pendingFrameRef.current) void commitPendingPreviewFrame();
       }
     }
   }, []);
@@ -450,22 +488,55 @@ export function BrowserChatWebPreviewModal({
   useEffect(() => {
     let disposed = false;
     let reconnectTimer: number | undefined;
+    let connectionId = 0;
+    let requestController: AbortController | undefined;
+    let lastMessageAt = Date.now();
+    let lastMediaAt = 0;
+    let playbackResumedAt = 0;
     reconnectEnabledRef.current = true;
+    clearPreviewFrames();
+    const disconnect = () => {
+      previewInputReadyRef.current = false;
+      connectionId += 1;
+      requestController?.abort();
+      if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
+      reconnectTimer = undefined;
+      const stream = streamRef.current;
+      streamRef.current = null;
+      if (stream) {
+        stream.onopen = stream.onmessage = stream.onerror = stream.onclose = null;
+        stream.close();
+      }
+    };
+    const scheduleReconnect = (delay = 0) => {
+      disconnect();
+      if (disposed || !reconnectEnabledRef.current) return;
+      setStatus('reconnecting');
+      if (document.visibilityState === 'visible') reconnectTimer = window.setTimeout(() => void connect(), delay);
+    };
     const connect = async () => {
+      disconnect();
+      if (disposed || !reconnectEnabledRef.current) return;
+      const attempt = connectionId;
+      const isCurrent = () => !disposed && attempt === connectionId;
+      requestController = new AbortController();
+      lastMessageAt = lastDisplayedAtRef.current = Date.now();
+      lastMediaAt = 0;
+      clearPreviewFrames(true);
+      disposeVideoPipeline();
       try {
         const response = await fetch(
           `${withWebPilotBasePath('/api/browser-chat/preview-stream')}?sessionId=${encodeURIComponent(sessionId)}`,
-          { cache: 'no-store', method: 'POST' },
+          { cache: 'no-store', method: 'POST', signal: AbortSignal.any([requestController.signal, AbortSignal.timeout(10_000)]) },
         );
         const data = await response.json() as { error?: string; transport?: 'image' | 'video'; url?: string };
         if (!response.ok || !data.url) throw new Error(data.error || '实时界面连接失败');
-        if (disposed) return;
+        if (!isCurrent()) return;
         const videoSupported = typeof MediaSource !== 'undefined'
           && MediaSource.isTypeSupported(BROWSER_CHAT_PREVIEW_VIDEO_MIME_TYPE);
         const requestedTransport = data.transport === 'image' || forceImageTransportRef.current || !videoSupported
           ? 'image'
           : 'video';
-        disposeVideoPipeline();
         const url = new URL(data.url);
         url.searchParams.set('sessionId', sessionId);
         url.searchParams.set('transport', requestedTransport);
@@ -473,6 +544,8 @@ export function BrowserChatWebPreviewModal({
         stream.binaryType = 'arraybuffer';
         streamRef.current = stream;
         stream.onopen = () => {
+          if (!isCurrent()) return;
+          lastMessageAt = Date.now();
           const counters = frameCountersRef.current;
           counters.sampledAt = Date.now();
           counters.sampledDisplayed = counters.displayed;
@@ -483,8 +556,11 @@ export function BrowserChatWebPreviewModal({
           setStreamError('');
         };
         stream.onmessage = (event) => {
+          if (!isCurrent()) return;
+          lastMessageAt = Date.now();
           try {
             if (event.data instanceof ArrayBuffer) {
+              lastMediaAt = Date.now();
               const bytes = new Uint8Array(event.data);
               if (bytes.byteLength < 4) throw new Error('Invalid binary frame');
               const metadataLength = new DataView(event.data).getUint32(0, false);
@@ -576,6 +652,8 @@ export function BrowserChatWebPreviewModal({
               }
             } else if (message.type === 'activeTabChanged') {
               setNativeControl(null);
+              clearPreviewFrames(true);
+              disposeVideoPipeline();
               setStatus('reconnecting');
             } else if (message.type === 'nativeControlOpened' && message.control) {
               setNativeControl(message.control);
@@ -597,7 +675,7 @@ export function BrowserChatWebPreviewModal({
               setPreviewDownload(null);
               setInputError(message.download.error || '测试浏览器文件下载失败');
             } else if (message.type === 'ready') {
-              setStatus('live');
+              if (previewInputReadyRef.current) setStatus('live');
               setStreamError('');
             } else if (message.type === 'inputError') {
               setNativeControlBusy(false);
@@ -613,29 +691,49 @@ export function BrowserChatWebPreviewModal({
             setStreamError('实时画面数据无效');
           }
         };
-        stream.onerror = () => setStreamError((current) => current || '实时界面连接中断，正在重连');
-        stream.onclose = () => {
-          if (streamRef.current === stream) streamRef.current = null;
-          if (disposed || !reconnectEnabledRef.current) return;
-          setStatus('reconnecting');
-          reconnectTimer = window.setTimeout(() => void connect(), 600);
-        };
+        stream.onerror = () => { if (isCurrent()) setStreamError(current => current || '实时界面连接中断，正在重连'); };
+        stream.onclose = () => { if (isCurrent()) scheduleReconnect(600); };
       } catch (error) {
-        if (disposed) return;
-        setStatus('reconnecting');
+        if (!isCurrent()) return;
         setStreamError(error instanceof Error ? error.message : '实时界面连接失败');
-        reconnectTimer = window.setTimeout(() => void connect(), 600);
+        scheduleReconnect(600);
       }
     };
+    const checkPlayback = () => {
+      if (document.visibilityState !== 'visible' || !reconnectEnabledRef.current) return;
+      const now = Date.now();
+      pumpVideoChunksRef.current();
+      const displayIdleMs = now - Math.max(lastDisplayedAtRef.current, playbackResumedAt);
+      const displayStalled = lastMediaAt > lastDisplayedAtRef.current && displayIdleMs > 6_000;
+      const awaitingFirstFrame = !previewInputReadyRef.current && displayIdleMs > 15_000;
+      // A static page can have healthy heartbeats without producing new frames.
+      // Reconnect only for lost liveness or media that actually failed to display.
+      if (now - lastMessageAt > 8_000 || displayStalled || awaitingFirstFrame) scheduleReconnect();
+    };
+    const resume = () => {
+      if (document.visibilityState !== 'visible' || !reconnectEnabledRef.current) return;
+      // Give a suspended decoder time to catch up before judging its playback.
+      playbackResumedAt = Date.now();
+      const stream = streamRef.current;
+      if (!stream || stream.readyState === WebSocket.CLOSED) scheduleReconnect();
+      else checkPlayback();
+    };
+    document.addEventListener('visibilitychange', resume);
+    window.addEventListener('pageshow', resume);
+    window.addEventListener('online', resume);
+    window.addEventListener('focus', checkPlayback);
+    const watchdog = window.setInterval(checkPlayback, 2_000);
     void connect();
     return () => {
       disposed = true;
-      if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
-      const stream = streamRef.current;
-      streamRef.current = null;
-      stream?.close();
+      disconnect();
+      document.removeEventListener('visibilitychange', resume);
+      window.removeEventListener('pageshow', resume);
+      window.removeEventListener('online', resume);
+      window.removeEventListener('focus', checkPlayback);
+      window.clearInterval(watchdog);
     };
-  }, [beginVideoPipeline, deliverPreviewDownload, disposeVideoPipeline, enqueueVideoChunk, fallbackToImagePreview, queuePreviewFrame, sessionId, userId]);
+  }, [beginVideoPipeline, clearPreviewFrames, deliverPreviewDownload, disposeVideoPipeline, enqueueVideoChunk, fallbackToImagePreview, queuePreviewFrame, sessionId, userId]);
 
   useEffect(() => {
     // React Strict Mode mounts effects again after a simulated cleanup. Reset
@@ -643,6 +741,8 @@ export function BrowserChatWebPreviewModal({
     framePipelineDisposedRef.current = false;
     return () => {
       framePipelineDisposedRef.current = true;
+      frameGenerationRef.current += 1;
+      frameDecodeActiveRef.current = false;
       if (frameObjectUrlRef.current.startsWith('blob:')) URL.revokeObjectURL(frameObjectUrlRef.current);
       if (staleFrameObjectUrlRef.current.startsWith('blob:')) URL.revokeObjectURL(staleFrameObjectUrlRef.current);
       if (decodingFrameObjectUrlRef.current.startsWith('blob:')) URL.revokeObjectURL(decodingFrameObjectUrlRef.current);
@@ -673,6 +773,8 @@ export function BrowserChatWebPreviewModal({
     const frameCallback = () => {
       if (stopped) return;
       frameCountersRef.current.displayed += 1;
+      lastDisplayedAtRef.current = Date.now();
+      previewInputReadyRef.current = true;
       markLive();
       callbackId = video.requestVideoFrameCallback(frameCallback);
     };
@@ -688,7 +790,7 @@ export function BrowserChatWebPreviewModal({
 
   const postInput = useCallback((input: BrowserChatPreviewInput, reportError: boolean) => {
     const stream = streamRef.current;
-    if (!stream || stream.readyState !== WebSocket.OPEN) {
+    if (!stream || stream.readyState !== WebSocket.OPEN || (!previewInputReadyRef.current && input.kind !== 'tab')) {
       if (reportError) setInputError('实时界面正在重连，请稍后重试');
       return false;
     }
@@ -702,6 +804,7 @@ export function BrowserChatWebPreviewModal({
   }, [postInput]);
 
   const relativePoint = useCallback((clientX: number, clientY: number, element: HTMLElement, clamp = false) => {
+    if (!frame?.imageUrl && !videoDisplayReady) return undefined;
     if (!frame) return undefined;
     const mediaRect = previewVideoRef.current?.getBoundingClientRect()
       || previewImageRef.current?.getBoundingClientRect()
@@ -731,7 +834,7 @@ export function BrowserChatWebPreviewModal({
       xRatio: Math.min(1, Math.max(0, (clientX - rect.left) / rect.width)),
       yRatio: Math.min(1, Math.max(0, (clientY - rect.top) / rect.height)),
     };
-  }, [frame]);
+  }, [frame, videoDisplayReady]);
 
   const beginPreviewPointer = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0 && event.button !== 1) return;
@@ -875,14 +978,14 @@ export function BrowserChatWebPreviewModal({
   }, [sendInput]);
 
   const switchPreviewTab = useCallback((tabId: string) => {
+    if (frameStateRef.current.tabs.some(tab => tab.id === tabId && tab.active)) return;
     setNativeControl(null);
-    setFrame((current) => current ? {
-      ...current,
-      tabs: current.tabs.map((tab) => ({ ...tab, active: tab.id === tabId })),
-    } : current);
-    setStatus('reconnecting');
-    sendInput({ kind: 'tab', tabId });
-  }, [sendInput]);
+    if (sendInput({ kind: 'tab', tabId })) {
+      clearPreviewFrames(true);
+      disposeVideoPipeline();
+      setStatus('reconnecting');
+    }
+  }, [clearPreviewFrames, disposeVideoPipeline, sendInput]);
 
   const selectPreviewNativeOption = useCallback((value: string) => {
     if (!nativeControl || (nativeControl.kind !== 'select' && nativeControl.kind !== 'datalist')) return;
@@ -971,17 +1074,11 @@ export function BrowserChatWebPreviewModal({
         ? '浏览器未运行'
         : '正在连接';
   const statusLabel = t(statusLabelSource);
-  const previewMetricsLabel = previewMetrics ? `${previewMetrics.displayedFps.toFixed(1)} FPS` : '';
+  const previewMetricsLabel = status !== 'live' ? statusLabel : previewMetrics ? `${previewMetrics.displayedFps.toFixed(1)} FPS` : '';
   const hasPreviewVisual = videoDisplayReady || Boolean(frame?.imageUrl);
 
   return (
-    <AppModal
-      ariaLabel={t('实时界面')}
-      backdropClassName="browser-chat-web-preview-overlay"
-      dialogClassName="browser-chat-web-preview-modal"
-      onClose={onClose}
-      size="full"
-    >
+    <FloatingWindow title={t('实时界面')} className="browser-chat-web-preview-modal" onClose={onClose}>
         {frame?.tabs?.length ? (
           <div className="browser-chat-web-preview-tabs">
             {frame.tabs.map((tab) => (
@@ -1007,9 +1104,7 @@ export function BrowserChatWebPreviewModal({
               </span>
           </div>
           {previewMetricsLabel ? <span className="browser-chat-web-preview-metrics">{previewMetricsLabel}</span> : null}
-          <button aria-label={t('关闭实时界面')} className="browser-chat-web-preview-close" onClick={onClose} title={t('关闭')} type="button">
-            <X size={18} />
-          </button>
+
         </header>
 
         <div className="browser-chat-web-preview-body">
@@ -1196,7 +1291,7 @@ export function BrowserChatWebPreviewModal({
           ) : null}
         </div>
 
-    </AppModal>
+    </FloatingWindow>
   );
 }
 

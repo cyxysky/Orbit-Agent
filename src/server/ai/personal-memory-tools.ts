@@ -41,7 +41,7 @@ export function createPersonalMemoryTools(context: PersonalMemoryToolContext): T
   }).strict();
 
   return { memory: tool({
-    description: 'Search or maintain durable memory. Save only a scoped, useful user rule with exact evidence from the CURRENT user message, applicability and utility. Corrections update existing IDs; disable only on an explicit forget request. All writes are independently reviewed for source support, reuse value, duplicates and conflicts. Do not infer habits from repeated instructions. Operational lessons are extracted from verified tool results after the turn; do not fabricate tool verification here.',
+    description: 'Search approved memory or propose a sourced change for host approval. Proposed writes are not active memories. Save only a scoped, useful user rule with exact evidence from the CURRENT user message, applicability and utility. Corrections update existing IDs; disable only on an explicit forget request. All writes are independently reviewed for source support, reuse value, duplicates and conflicts. Do not infer habits from repeated instructions. Operational lessons require an explicitly queued extraction job with verified tool results; do not fabricate tool verification here.',
     inputSchema,
     execute: async (input) => {
       if (input.action === 'search') {
@@ -84,7 +84,7 @@ export function createPersonalMemoryTools(context: PersonalMemoryToolContext): T
         requestedAction: action, targetId: action !== 'save' ? input.id : undefined,
         receiptSuffix: JSON.stringify({ action, id: input.id, candidate }), abortSignal: context.abortSignal,
       });
-      return { changed: reviewed.items.length > 0, skipped: reviewed.skipped, reason: reviewed.reason,
+      return { pendingCandidateId: reviewed.pendingCandidateId, changed: reviewed.items.length > 0, skipped: reviewed.skipped, reason: reviewed.reason,
         items: reviewed.items.map(toolMemoryItem), review: reviewed.diagnostics };
     },
   }) };

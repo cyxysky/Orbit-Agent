@@ -3,6 +3,8 @@ import { normalizeDisabledBrowserChatTools } from '@/lib/browser-chat-tools';
 
 // Internal instructions shared with the runtime tool definitions.
 export const runtimeBuiltinToolPrompts = {
+  taskContext: 'Read, write and remove sourced task notes within the current session, independently of plans.',
+  workflow: 'Register complete execution plans, record per-item checks and evidence, and submit stages for user review. Only the user can approve stages.',
   finalResponse: 'Finish the request with ordered registered response blocks. Every block has type and params, validated by the selected type schema. Copy content[].block from successful capability results. Use core.markdown with params.text for prose and core.ui with params.tree for declarative layouts. The client preserves array order.',
   skill: `Read a Skill by exact id. Hidden runtime Skills for this mode are ${hiddenRuntimeSkillIds().join(', ')}. A successful read can be reused while its exact current content remains in the active tool history; reread only when missing, compacted away, or changed.`,
 };

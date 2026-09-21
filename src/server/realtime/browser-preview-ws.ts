@@ -57,6 +57,7 @@ type BrowserPreviewStream = {
   sequence: number;
   sessionId: string;
   starting?: Promise<void>;
+  restarting?: Promise<void>;
   stop?: () => Promise<void>;
   transport: BrowserPreviewTransport;
   videoEncoder?: BrowserPreviewVideoEncoder;
@@ -76,7 +77,7 @@ type BrowserPreviewWebSocketState = {
   streams: Map<string, BrowserPreviewStream>;
 };
 
-const BROWSER_PREVIEW_IMPLEMENTATION_VERSION = 27;
+const BROWSER_PREVIEW_IMPLEMENTATION_VERSION = 28;
 
 declare global {
   var __browserChatPreviewWebSocketState: BrowserPreviewWebSocketState | undefined;
@@ -109,13 +110,13 @@ function sendToClient(client: BrowserPreviewClient, payload: unknown) {
 }
 
 async function removeClient(client: BrowserPreviewClient) {
-  state().clients.delete(client);
+  if (!state().clients.delete(client)) return;
   client.pendingFrame = undefined;
   client.pendingMove = undefined;
   const stream = state().streams.get(client.streamKey);
   stream?.clients.delete(client);
-  if (stream && stream.clients.size === 0) await stopStream(stream);
   client.socket.destroy();
+  if (stream && stream.clients.size === 0) await stopStream(stream);
 }
 
 function flushPendingFrame(client: BrowserPreviewClient) {
@@ -533,11 +534,8 @@ function handleClientMessage(client: BrowserPreviewClient, text: string) {
           error: result?.actual || 'Browser chat session not found',
         });
       } else if (input.kind === 'tab') {
-        const stream = state().streams.get(client.streamKey);
-        if (stream) {
-          broadcastText(stream, { type: 'activeTabChanged', sessionId: client.sessionId });
-          await restartStream(stream);
-        }
+        // The active-page listener handles tab changes from every source.
+        // Restarting here too races that listener and resets the decoder twice.
       } else if (result.liveControl || result.liveSelect) {
         sendToClient(client, { type: 'nativeControlOpened', requestId, control: result.liveControl || result.liveSelect });
       } else if (input.kind === 'select' || input.kind === 'controlValue' || input.kind === 'files') {
@@ -588,7 +586,7 @@ async function attachStream(stream: BrowserPreviewStream) {
           type: 'error',
           error: error instanceof Error ? error.message : 'Browser screencast failed',
         }),
-        onFrame: (frame) => handlePreviewFrame(stream, frame),
+        onFrame: (frame) => { if (generation === stream.generation) handlePreviewFrame(stream, frame); },
         onNativeEvent: (event) => {
           if (event.kind === 'dialogOpened') {
             broadcastText(stream, { type: 'nativeDialogOpened', dialog: event.dialog });
@@ -604,7 +602,7 @@ async function attachStream(stream: BrowserPreviewStream) {
             broadcastText(stream, { type: 'nativeControlOpened', control: event.control });
           }
         },
-        onTabsChanged: (tabs) => broadcastTabsChanged(stream, tabs),
+        onTabsChanged: (tabs) => { if (generation === stream.generation) broadcastTabsChanged(stream, tabs); },
         video: stream.transport === 'video',
       });
       if (!handle) {
@@ -639,28 +637,33 @@ async function attachStream(stream: BrowserPreviewStream) {
   return stream.starting;
 }
 
-async function restartStream(stream: BrowserPreviewStream) {
-  stream.generation += 1;
-  if (stream.reattachTimer) clearTimeout(stream.reattachTimer);
-  stream.reattachTimer = undefined;
-  await stream.starting?.catch(() => undefined);
-  const stop = stream.stop;
-  stream.stop = undefined;
-  stopStreamMetrics(stream);
-  await stop?.().catch(() => undefined);
-  if (stream.clients.size > 0) await attachStream(stream);
+function restartStream(stream: BrowserPreviewStream) {
+  // Tab selection and visibility notifications can request the same restart.
+  // Serialize teardown/attach so one restart cannot stop the other's encoder.
+  if (stream.restarting) return stream.restarting;
+  stream.restarting = (async () => {
+    stream.generation += 1;
+    if (stream.reattachTimer) clearTimeout(stream.reattachTimer);
+    stream.reattachTimer = undefined;
+    await stream.starting?.catch(() => undefined);
+    const stop = stream.stop;
+    stream.stop = undefined;
+    stopStreamMetrics(stream);
+    await stop?.().catch(() => undefined);
+    stream.lastFrame = undefined;
+    stream.lastTabs = undefined;
+    stream.lastTabsKey = undefined;
+    stream.lastUrl = undefined;
+    stream.lastViewport = undefined;
+    stream.lastViewportKey = undefined;
+    if (stream.clients.size > 0) await attachStream(stream);
+  })().finally(() => { stream.restarting = undefined; });
+  return stream.restarting;
 }
 
 async function stopStream(stream: BrowserPreviewStream) {
-  stream.generation += 1;
-  if (stream.reattachTimer) clearTimeout(stream.reattachTimer);
-  stream.reattachTimer = undefined;
-  await stream.starting?.catch(() => undefined);
-  const stop = stream.stop;
-  stream.stop = undefined;
-  stopStreamMetrics(stream);
-  await stop?.().catch(() => undefined);
-  if (state().streams.get(stream.key) === stream) state().streams.delete(stream.key);
+  await restartStream(stream);
+  if (stream.clients.size === 0 && state().streams.get(stream.key) === stream) state().streams.delete(stream.key);
 }
 
 function subscribeClient(client: BrowserPreviewClient) {
@@ -682,6 +685,9 @@ function subscribeClient(client: BrowserPreviewClient) {
     state().streams.set(client.streamKey, stream);
   }
   stream.clients.add(client);
+  // A client may reconnect before the last subscriber's teardown completes.
+  // restartStream will include it in the fresh stream; never replay stale data.
+  if (stream.restarting) return;
   if (stream.stop) {
     sendToClient(client, { type: 'ready', sessionId: client.sessionId });
     sendLatestFrameState(client, stream);

@@ -38,7 +38,7 @@ export function createNodeBrowserOperations(
     ? options.credentials()
     : options.credentials;
   const execute = async (
-    input: { code: string; maxOutputChars?: number },
+    input: Pick<BrowserCodeInput, 'code' | 'maxOutputChars' | 'observationMode'>,
     context: CapabilityExecutionContext,
   ) => {
     const violation = options.validateCode?.(input.code);
@@ -53,6 +53,7 @@ export function createNodeBrowserOperations(
       ensureStarted,
       imageInputAvailable: options.imageInputAvailable,
       code: input.code,
+      observationMode: input.observationMode,
       maxOutputChars: input.maxOutputChars,
       attachments: options.attachments,
       credentials: credentials(),

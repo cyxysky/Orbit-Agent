@@ -1,31 +1,15 @@
-import { normalizeBrowserToolInput } from '@cjfclonedeep/capability-sdk/browser';
 import { normalizeFileToolInput } from '@cjfclonedeep/capability-sdk/file';
 import {
   jsonRecordFromUnknown,
   unwrapToolTransport,
 } from '@cjfclonedeep/capability-sdk';
 
-function browserCodeFromGeneratedMarkup(value: unknown) {
-  if (typeof value !== 'string') return value;
-  let code = value.trim();
-  code = code
-    .replace(/^```(?:javascript|js)?[ \t]*\r?\n/i, '')
-    .replace(/\r?\n```[ \t]*$/i, '')
-    .replace(/^<code(?:\s[^>]*)?>\s*/i, '')
-    .replace(/\s*<\/code>$/i, '')
-    .trim();
-  return code;
-}
-
 /** Scalar transport normalization only; never reshape a document or program. */
 export function coerceBrowserChatToolInput(toolName: string, value: unknown) {
   if (toolName === 'browser') {
     const source = jsonRecordFromUnknown(unwrapToolTransport(value));
-    if (!source) return value;
-    return normalizeBrowserToolInput({
-      ...source,
-      ...('code' in source ? { code: browserCodeFromGeneratedMarkup(source.code) } : {}),
-    });
+    // Mode validation belongs to the owning runtime, after transport decoding.
+    return source || value;
   }
   return toolName === 'file' ? normalizeFileToolInput(value) : value;
 }

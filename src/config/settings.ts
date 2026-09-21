@@ -1,5 +1,6 @@
 import type { ModelProvider, ModelProviderSettings } from '@/server/ai/schemas/runtime.schema';
 import { normalizedModelCapabilities } from '@/lib/model-capabilities';
+import { browserChatInteractionModeOptions } from '@/lib/browser-chat-interaction-mode';
 import { browserCapabilitySettings } from '@cjfclonedeep/capability-sdk/browser/settings';
 import { chartCapabilitySettings } from '@cjfclonedeep/capability-sdk/chart/settings';
 import { mapsCapabilitySettings } from '@cjfclonedeep/capability-sdk/maps/settings';
@@ -304,6 +305,7 @@ const boolOptions = [
 ];
 
 const applicationRuntimeEnvDefinitions: RuntimeEnvDefinition[] = [
+  { key: 'BROWSER_CHAT_INTERACTION_MODE', label: 'Browser Chat 操作模式', description: '纯 DOM 使用页面结构与定位器，不向模型发送浏览器截图；纯视觉使用截图与鼠标键盘，需要支持图片的模型；混合模式同时提供两种能力。保存后从下一轮执行生效。', tab: 'browser', group: '浏览器观察', defaultValue: 'hybrid', control: 'select', applyMode: 'runtime', options: browserChatInteractionModeOptions },
 
   { key: 'SQLITE_AUTO_COMPACT_ENABLED', label: 'SQLite 自动压缩', description: '维护任务发现大量空闲页时执行 WAL checkpoint 和 VACUUM，减少数据库及备份体积。', tab: 'runtime', defaultValue: 'true', control: 'boolean', options: boolOptions },
   { key: 'SQLITE_COMPACTION_FREE_RATIO', label: 'SQLite 压缩空闲比例', description: '空闲页达到该比例且超过最小页数时执行压缩；默认 0.3。', tab: 'runtime', defaultValue: '0.3', control: 'number', min: 0.1, max: 0.9, step: 0.05 },

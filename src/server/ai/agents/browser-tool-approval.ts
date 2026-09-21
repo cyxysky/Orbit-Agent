@@ -21,6 +21,8 @@ export function browserToolApprovalRequest(input: {
     : {};
   const reason = compact(record.reason, 300) || undefined;
 
+  if (input.toolName === 'browser' && record.action === 'act') return { reason, prompt: reason || 'Confirm this visual browser action.' };
+
   if (input.toolName === 'browser' && record.action === 'code') {
     const code = typeof record.code === 'string' ? record.code : '';
     const risk = analyzeBrowserCodeRisk(code);

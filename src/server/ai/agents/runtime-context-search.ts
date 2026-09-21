@@ -1,4 +1,5 @@
 import type { ModelMessage } from 'ai';
+import { isRuntimePromptCacheMetadataMessage } from './runtime-prompt-cache';
 
 function object(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
@@ -41,6 +42,7 @@ function sections(value: unknown, pointer = ''): Section[] {
 
 function searchable(message: ModelMessage) {
   if (message.role === 'system') return false;
+  if (isRuntimePromptCacheMetadataMessage(message)) return false;
   if (message.role === 'user' && typeof message.content === 'string'
     && /^\[(?:Conversation background|WebPilot (?:task state|material reference|knowledge context|continuation)|Binary visual input omitted|Document visual QA|Attachment visual content|Explicit visual evidence|Browser observation)/.test(message.content)) return false;
   if (message.role === 'tool') return message.content.some((part) => {
@@ -121,7 +123,7 @@ class ContextSearchIndex {
     }
   }
 
-  search(query: string, offset: number, limit: number) {
+  search(query: string, offset: number, limit: number, excludeRefs: ReadonlySet<string> = new Set()) {
     const terms = [...new Set(tokens(query))].slice(0, 64);
     const scores = new Map<Chunk, { score: number; matched: number }>();
     const averageLength = this.totalLength / Math.max(1, this.totalChunks);
@@ -130,6 +132,7 @@ class ContextSearchIndex {
       if (!posting) continue;
       const idf = Math.log(1 + (this.totalChunks - posting.size + 0.5) / (posting.size + 0.5));
       for (const [chunk, count] of posting) {
+        if (excludeRefs.has(chunk.ref)) continue;
         const previous = scores.get(chunk) || { score: 0, matched: 0 };
         previous.score += idf * count * 2.2 / (count + 1.2 * (0.25 + 0.75 * chunk.length / averageLength));
         previous.matched++;
@@ -140,11 +143,16 @@ class ContextSearchIndex {
     // Multiple overlapping chunks can describe the same hit. Keep distinct regions.
     const unique: Array<[Chunk, { score: number; matched: number }]> = [];
     const regions = new Map<string, number[]>();
+    const sourceCounts = new Map<string, number>();
+    const excerpts = new Set<string>();
     for (const entry of ranked) {
       const chunk = entry[0];
       const key = `${chunk.ref}:${chunk.pointer}`;
       const starts = regions.get(key) || [];
-      if (starts.some((start) => Math.abs(start - chunk.start) < 900)) continue;
+      if (starts.some((start) => Math.abs(start - chunk.start) < 900)
+        || (sourceCounts.get(chunk.ref) || 0) >= 2 || excerpts.has(chunk.text)) continue;
+      sourceCounts.set(chunk.ref, (sourceCounts.get(chunk.ref) || 0) + 1);
+      excerpts.add(chunk.text);
       starts.push(chunk.start); regions.set(key, starts); unique.push(entry);
     }
     const records = [];
@@ -167,9 +175,9 @@ class ContextSearchIndex {
 }
 
 const indexes = new WeakMap<Record<string, ModelMessage>, ContextSearchIndex>();
-export function searchRuntimeContextRecords(records: Record<string, ModelMessage>, query: string, offset: number, limit: number) {
+export function searchRuntimeContextRecords(records: Record<string, ModelMessage>, query: string, offset: number, limit: number, excludeRefs?: ReadonlySet<string>) {
   let index = indexes.get(records);
   if (!index) { index = new ContextSearchIndex(); indexes.set(records, index); }
   index.sync(records);
-  return index.search(query, offset, limit);
+  return index.search(query, offset, limit, excludeRefs);
 }

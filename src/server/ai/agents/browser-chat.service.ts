@@ -1,3 +1,5 @@
+import { normalizeBrowserChatInteractionMode, type BrowserChatInteractionMode } from '@/lib/browser-chat-interaction-mode';
+import { enqueueMemoryJob, runMemoryJobs } from '../runtime-memory-lifecycle';
 import { browserChatHasPendingManualVerification } from '@/lib/browser-chat-tools';
 import { compareBrowserChatSessionCreation } from '@/lib/browser-chat-session-order';
 import { markdownBlock } from '@cjfclonedeep/capability-sdk/responses';
@@ -114,7 +116,6 @@ import { retrievalQueryTexts } from '@/lib/fuzzy-retrieval';
 import { isBrowserChatDomObservationText, normalizeBrowserChatFinalReplyText } from '@/server/ai/agents/browser-chat-reply-text';
 import { officeDraftCatalogForPrompt } from '@cjfclonedeep/capability-sdk/file/node/workspace';
 import {
-  extractPersonalMemoryFromTurn,
   formatPersonalMemoryForRuntime,
   markPersonalMemoryItemsUsed,
   normalizePersonalMemoryDomain,
@@ -234,6 +235,7 @@ export type BrowserChatQueuedTurn = {
   id: string;
   userMessageId: string;
   safetyMode: BrowserChatSafetyMode;
+  browserInteractionMode: BrowserChatInteractionMode;
   disabledTools?: string[];
   modelProvider: ModelProvider;
   model: string;
@@ -262,6 +264,7 @@ export type BrowserChatSessionSnapshot = {
   targetUrl: string;
   noVncUrl?: string;
   safetyMode: BrowserChatSafetyMode;
+  browserInteractionMode: BrowserChatInteractionMode;
   disabledTools?: string[];
   modelProvider: ModelProvider;
   model: string;
@@ -372,12 +375,6 @@ type BrowserChatActiveSubagentRuntime = {
   abortFromParent: () => void;
 };
 
-type BrowserChatMemoryExtractionJob = {
-  key: string;
-  run: () => Promise<void>;
-  userId: string;
-};
-
 type BrowserChatRuntimeState = {
   sessions: Map<string, BrowserChatSessionRecord>;
   activeTurns: Map<string, BrowserChatActiveTurn>;
@@ -398,10 +395,6 @@ type BrowserChatRuntimeState = {
   selectedSessionIds: Map<string, string>;
   persistenceCursors: Map<string, BrowserChatPersistenceCursor>;
   dirtyRecords: Map<string, BrowserChatDirtyRecords>;
-  memoryExtractionActive: number;
-  memoryExtractionActiveUsers: Set<string>;
-  memoryExtractionKeys: Set<string>;
-  memoryExtractionQueue: BrowserChatMemoryExtractionJob[];
   browserIdleEpochs: Map<string, number>;
   browserIdleTimers: Map<string, ReturnType<typeof setTimeout>>;
   browserPreviewCounts: Map<string, number>;
@@ -440,10 +433,6 @@ const browserChatRuntimeState: BrowserChatRuntimeState = ((globalThis as typeof 
   selectedSessionIds: new Map<string, string>(),
   persistenceCursors: new Map<string, BrowserChatPersistenceCursor>(),
   dirtyRecords: new Map<string, BrowserChatDirtyRecords>(),
-  memoryExtractionActive: 0,
-  memoryExtractionActiveUsers: new Set<string>(),
-  memoryExtractionKeys: new Set<string>(),
-  memoryExtractionQueue: [] as BrowserChatMemoryExtractionJob[],
   browserIdleEpochs: new Map<string, number>(),
   browserIdleTimers: new Map<string, ReturnType<typeof setTimeout>>(),
   browserPreviewCounts: new Map<string, number>(),
@@ -464,10 +453,6 @@ browserChatRuntimeState.sessionEvictionTimers ??= new Map();
 browserChatRuntimeState.selectedSessionIds ??= new Map();
 browserChatRuntimeState.persistenceCursors ??= new Map();
 browserChatRuntimeState.dirtyRecords ??= new Map();
-browserChatRuntimeState.memoryExtractionActive ??= 0;
-browserChatRuntimeState.memoryExtractionActiveUsers ??= new Set();
-browserChatRuntimeState.memoryExtractionKeys ??= new Set();
-browserChatRuntimeState.memoryExtractionQueue ??= [];
 browserChatRuntimeState.browserIdleEpochs ??= new Map();
 browserChatRuntimeState.browserIdleTimers ??= new Map();
 browserChatRuntimeState.browserPreviewCounts ??= new Map();
@@ -910,48 +895,11 @@ function browserChatMemoryUrl(browser: BrowserSession | undefined, session: Pick
   return currentUrl || session.targetUrl || '';
 }
 
-function personalMemoryExtractionConcurrency() {
-  const value = Number(process.env.AI_PERSONAL_MEMORY_EXTRACTION_CONCURRENCY || 2);
-  return Number.isFinite(value) ? Math.max(1, Math.min(8, Math.floor(value))) : 2;
-}
-
-function personalMemoryExtractionQueueLimit() {
-  const value = Number(process.env.AI_PERSONAL_MEMORY_EXTRACTION_QUEUE_LIMIT || 24);
-  return Number.isFinite(value) ? Math.max(8, Math.min(200, Math.floor(value))) : 24;
-}
-
-function drainPersonalMemoryExtractionQueue() {
-  const runtime = browserChatRuntimeState;
-  while (runtime.memoryExtractionActive < personalMemoryExtractionConcurrency()) {
-    const index = runtime.memoryExtractionQueue.findIndex((job) => !runtime.memoryExtractionActiveUsers.has(job.userId));
-    if (index < 0) return;
-    const [job] = runtime.memoryExtractionQueue.splice(index, 1);
-    runtime.memoryExtractionActive += 1;
-    runtime.memoryExtractionActiveUsers.add(job.userId);
-    void job.run().catch(() => undefined).finally(() => {
-      runtime.memoryExtractionActive = Math.max(0, runtime.memoryExtractionActive - 1);
-      runtime.memoryExtractionActiveUsers.delete(job.userId);
-      runtime.memoryExtractionKeys.delete(job.key);
-      drainPersonalMemoryExtractionQueue();
-    });
-  }
-}
-
-function schedulePersonalMemoryExtraction(job: BrowserChatMemoryExtractionJob) {
-  const runtime = browserChatRuntimeState;
-  if (runtime.memoryExtractionKeys.has(job.key)) return 'duplicate' as const;
-  if (runtime.memoryExtractionQueue.length >= personalMemoryExtractionQueueLimit()) return 'full' as const;
-  runtime.memoryExtractionKeys.add(job.key);
-  runtime.memoryExtractionQueue.push(job);
-  drainPersonalMemoryExtractionQueue();
-  return 'scheduled' as const;
-}
-
-function queuePersonalMemoryExtraction(input: {
+async function queuePersonalMemoryExtraction(input: {
   session: BrowserChatSessionRecord;
   browser: BrowserSession;
   text: string;
-  result: InteractiveBrowserTurnResult;
+  result: Pick<InteractiveBrowserTurnResult, 'reply' | 'newSteps'>;
   userMessageId: string;
   assistantMessageId: string;
 }) {
@@ -973,89 +921,9 @@ function queuePersonalMemoryExtraction(input: {
   const userMessage = input.text;
   const assistantReply = compactText(input.result.reply, 16_000);
   const extractionSteps = input.result.newSteps.slice(-32).map(compactStepForRealtime);
-  const startedAt = Date.now();
-  const queueResult = schedulePersonalMemoryExtraction({
-    key: `${sessionId}:${userMessageId}:${assistantMessageId}`,
-    userId: normalizeUserId(sessionUserId),
-    run: async () => {
-      try {
-        const memoryResult = await extractPersonalMemoryFromTurn({
-          userId: sessionUserId,
-          currentUrl,
-          targetUrl,
-          userMessage,
-          userMessageId,
-          assistantReply,
-          conversation,
-          steps: extractionSteps,
-          sourceSessionId: sessionId,
-          sourceMessageIds: [userMessageId, assistantMessageId],
-        });
-        const current = sessions.get(sessionId);
-        if (!current) return;
-        const details = {
-          currentDomain: normalizePersonalMemoryDomain(currentUrl || targetUrl),
-          ...memoryResult.diagnostics,
-        };
-        if (memoryResult.skipped) {
-          appendLog(current, 'memory:extract:skipped', `个性化短记忆提炼已跳过：${memoryResult.reason || 'unknown reason'}。`, {
-            elapsedMs: elapsedMs(startedAt),
-            messageId: null,
-            details,
-          });
-          return;
-        }
-        if (!memoryResult.items.length) {
-          appendLog(
-            current,
-            'memory:extract:empty',
-            `模型返回 ${memoryResult.diagnostics.candidateCount} 条记忆候选，规则保留 ${memoryResult.diagnostics.acceptedCount} 条，本轮未写入记忆。`,
-            {
-              elapsedMs: elapsedMs(startedAt),
-              messageId: null,
-              details,
-            },
-          );
-          return;
-        }
-        appendLog(current, 'memory:extract:done', `模型返回 ${memoryResult.diagnostics.candidateCount} 条记忆候选，过滤 ${memoryResult.diagnostics.rejectedCount} 条，已保存 ${memoryResult.items.length} 条。`, {
-          elapsedMs: elapsedMs(startedAt),
-          messageId: null,
-          details: {
-            ...details,
-            items: memoryResult.items.map((item) => ({
-              id: item.id,
-              scope: item.scope,
-              domain: item.domain,
-              type: item.type,
-              key: item.key,
-              value: item.value,
-              confidence: item.confidence,
-            })),
-          },
-        });
-      } catch (error) {
-        const current = sessions.get(sessionId);
-        if (!current) return;
-        appendLog(current, 'memory:extract:error', `个性化短记忆提炼失败：${error instanceof Error ? error.message : 'unknown error'}`, {
-          elapsedMs: elapsedMs(startedAt),
-          messageId: null,
-          details: errorLogDetails(error),
-        });
-      }
-    },
-  });
-  if (queueResult === 'full') {
-    appendLog(input.session, 'memory:extract:queued-limit', '个性化短记忆提取队列已满，本轮跳过提取。', {
-      messageId: null,
-      deferPersist: true,
-    });
-  } else if (queueResult === 'duplicate') {
-    appendLog(input.session, 'memory:extract:duplicate', '本轮个性化短记忆提取任务已经存在，已跳过重复任务。', {
-      messageId: null,
-      deferPersist: true,
-    });
-  }
+  return enqueueMemoryJob({ userId: normalizeUserId(sessionUserId), currentUrl, targetUrl, userMessage,
+    userMessageId, assistantReply, conversation, steps: extractionSteps, sourceSessionId: sessionId,
+    sourceMessageIds: [userMessageId, assistantMessageId] });
 }
 
 function normalizeSafetyMode(value: unknown): BrowserChatSafetyMode {
@@ -1432,23 +1300,13 @@ async function browserChatCredentialContext(
   return { credentials, bindings };
 }
 
-function browserChatCredentialPrompt(credentials: BrowserChatCredentialDescriptor[]) {
+function browserChatCredentialPrompt(credentials: BrowserChatCredentialDescriptor[], mode: BrowserChatInteractionMode) {
   if (!credentials.length) return '';
-  return [
-    '[后台已匹配的安全账号引用]',
-    ...credentials.map((item) => [
-      `<account id="${item.accountId}">`,
-      `  Name: ${item.label}`,
-      `  Default site: ${item.defaultDomain}`,
-      `  Login URL: ${item.loginUrl}`,
-      '  Scope: 任意 HTTP(S) 页面',
-      `  Username: ${item.username}`,
-      `  用户名：await credentialVault.fill(page.getByLabel('用户名'), "${item.usernameRef}")`,
-      `  密码：await credentialVault.fill(page.getByLabel('密码'), "${item.passwordRef}")`,
-      '</account>',
-    ].join('\n')),
-    'credentialVault.fill 只会把对应值写入当前浏览器会话中的真实 Playwright Locator；保存的默认站点仅用于识别账号和提供登录地址，不限制账号在哪个 HTTP(S) 站点使用。它不会返回账号或密码明文。不得读取已填充输入框的 inputValue/value，不得在 nodeRepl.write、console、工具参数或最终回复中输出凭据或引用。验证码、OTP、扫码或二次认证必须调用 browser action=waitForHumanVerification。',
-  ].join('\n');
+  return '[Available account metadata]\n' + JSON.stringify(credentials.map(item => ({ label: item.label, defaultDomain: item.defaultDomain, loginUrl: item.loginUrl,
+    ...(mode !== 'visual' ? { usernameRef: item.usernameRef, passwordRef: item.passwordRef } : {}),
+  }))) + '\nAccount metadata does not authorize role substitution. Never expose or reconstruct credentials. '
+    + (mode === 'visual' ? 'The visual route has no locator credential API. If login requires secret entry, use browser action=waitForHumanVerification.'
+      : 'Use only credentialVault.fill(locator, ref) for registered credentials on their allowed origin. Do not read filled values. Use waitForHumanVerification when user interaction is required.');
 }
 
 async function createBrowserChatRuntimeOperationalContext(input: {
@@ -1498,7 +1356,7 @@ async function createBrowserChatRuntimeOperationalContext(input: {
     const officeDraftCatalog = await officeDraftCatalogForPrompt(input.session.id);
     return {
       operationalContext: [conversationFileRegistry(input.session, input.historicalMessages), officeDraftCatalog,
-        browserChatCredentialPrompt(credentials.credentials)].filter(Boolean).join('\n\n'),
+        browserChatCredentialPrompt(credentials.credentials, input.session.browserInteractionMode)].filter(Boolean).join('\n\n'),
       knowledge,
       credentialBindings: credentials.bindings,
       onKnowledgeSelected: async (entries: NonNullable<import('./runtime-context-assembler').RuntimeContextManifest['knowledge']>) => {
@@ -1959,6 +1817,7 @@ function sessionSnapshotHeader(
     targetUrl: session.targetUrl,
     noVncUrl: browserChatNoVncUrl(session),
     safetyMode: normalizeSafetyMode(session.safetyMode),
+    browserInteractionMode: normalizeBrowserChatInteractionMode(session.browserInteractionMode),
     disabledTools: normalizeDisabledCapabilityTools(session.disabledTools),
     modelProvider: normalizeModelProvider(session.modelProvider),
     model: session.model,
@@ -2432,6 +2291,7 @@ function recordFromSnapshot(
     tabs: session.tabs || [],
     targetUrl: exportableTargetUrl(session.targetUrl),
     safetyMode: normalizeSafetyMode(session.safetyMode),
+    browserInteractionMode: normalizeBrowserChatInteractionMode(session.browserInteractionMode),
     disabledTools: normalizeDisabledCapabilityTools(session.disabledTools),
     modelProvider: modelSettings.provider,
     model: modelSettings.model,
@@ -3355,6 +3215,7 @@ export async function createBrowserChatSession(input: {
     browserGroupId: '',
     targetUrl: exportableTargetUrl(input.targetUrl || ''),
     safetyMode: normalizeSafetyMode(input.safetyMode),
+    browserInteractionMode: normalizeBrowserChatInteractionMode(process.env.BROWSER_CHAT_INTERACTION_MODE),
     disabledTools: normalizeDisabledCapabilityTools(input.disabledTools),
     modelProvider: modelSettings.provider,
     model: modelSettings.model,
@@ -3961,6 +3822,7 @@ async function startNextQueuedBrowserChatTurn(session: BrowserChatSessionRecord,
   cancelOrphanToolConfirmationsForSession(session.id);
   transitionBrowserChatSession(session, { type: 'confirmationCleared' });
   session.safetyMode = normalizeSafetyMode(queued.safetyMode);
+  session.browserInteractionMode = normalizeBrowserChatInteractionMode(process.env.BROWSER_CHAT_INTERACTION_MODE);
   session.disabledTools = normalizeDisabledCapabilityTools(queued.disabledTools);
   const modelSettings = await browserChatModelSettings(queued.modelProvider, queued.model);
   session.modelProvider = modelSettings.provider;
@@ -4075,6 +3937,7 @@ export async function sendBrowserChatMessage(
   const requestedSafetyMode = normalizeSafetyMode(safetyMode ?? session.safetyMode);
   const requestedDisabledTools = normalizeDisabledCapabilityTools(disabledTools ?? session.disabledTools);
   const requestedModelSettings = await browserChatModelSettings(modelProvider ?? session.modelProvider, model ?? session.model);
+  const requestedBrowserInteractionMode = normalizeBrowserChatInteractionMode(process.env.BROWSER_CHAT_INTERACTION_MODE);
   if (attachments.some(isBrowserChatImageAttachment) && !requestedModelSettings.supportsImageInput) {
     throw new ApiRequestError(
       `模型 ${requestedModelSettings.model} 未配置图片输入能力，请在“模型配置”中启用后再上传图片。`,
@@ -4110,6 +3973,7 @@ export async function sendBrowserChatMessage(
       id: id('queued_turn'),
       userMessageId: userMessage.id,
       safetyMode: requestedSafetyMode,
+      browserInteractionMode: requestedBrowserInteractionMode,
       disabledTools: requestedDisabledTools,
       modelProvider: requestedModelSettings.provider,
       model: requestedModelSettings.model,
@@ -4132,6 +3996,7 @@ export async function sendBrowserChatMessage(
   cancelOrphanToolConfirmationsForSession(session.id);
   transitionBrowserChatSession(session, { type: 'confirmationCleared' });
   session.safetyMode = requestedSafetyMode;
+  session.browserInteractionMode = requestedBrowserInteractionMode;
   session.disabledTools = requestedDisabledTools;
   const modelSettings = requestedModelSettings;
   session.modelProvider = modelSettings.provider;
@@ -5194,8 +5059,8 @@ function browserChatBranchContextOptions(session: BrowserChatSessionRecord, bran
     if (!(await persistBrowserChatCheckpoint(session.id))) throw new Error('Failed to persist subagent context checkpoint.');
   };
   const options: Pick<Parameters<typeof executeInteractiveBrowserTurn>[0],
-    'conversation' | 'contextRecords' | 'continuationSummary' | 'onContextCheckpoint' | 'onActiveModelCheckpoint' | 'onModelMessages' | 'onContextCompression'> = {
-    conversation: browserChatActiveMessages(context), contextRecords: context.records,
+    'conversation' | 'contextRecords' | 'contextScope' | 'continuationSummary' | 'onContextCheckpoint' | 'onActiveModelCheckpoint' | 'onModelMessages' | 'onContextCompression'> = {
+    conversation: browserChatActiveMessages(context), contextRecords: context.records, contextScope: branchId,
     continuationSummary: context.continuationSummary,
     onContextCheckpoint: async ({ records, manifest }) => {
       if (manifest) manifest.sessionId = session.id;
@@ -5374,7 +5239,7 @@ async function executeBrowserChatSubagentBatch(input: {
           '你拥有完整浏览器工具集。完成当前分支后立即返回；不要读取或等待其他子 Agent，也不要因为其他分支失败而停止。',
           browserChatSubagentAuthPrompt(childBrowser.authMode),
           '你运行在独立的子 Agent 页面中。遇到必须由用户处理的验证码、扫码、OTP 或设备确认时，不要继续尝试绕过；请明确报告阻塞证据并把该步骤交回主 Agent。',
-          '浏览器检查与操作统一使用 browser：action=state 读取状态，action=code 在隔离程序中直接调用真实 Playwright page/context，action=waitForHumanVerification 等待人工验证。需要跨内核或跨轮次保留的非敏感 JSON 数据使用 agent.state。',
+          '浏览器检查与操作统一使用 browser，并遵循本轮配置的操作模式及工具 schema。DOM 和混合模式可用 state/code 读取页面结构并调用 Playwright；纯视觉模式使用 observe/act/images。需要人工验证时使用 waitForHumanVerification。',
           '只有已经发现明确的懒加载、虚拟列表或无限滚动证据，且目标内容尚未加载时才滚动；不要把滚动当作默认页面读取方式。',
           '单个工具失败只属于过程诊断。如果已经通过其他页面证据完成任务，最终整体状态必须是 passed。不要单独创建失败记录、验证记录或透明披露章节；只有尚未解决且实质影响目标结果的失败，才在受影响的结论旁简短说明。',
           summaryGuidanceChars
@@ -5386,6 +5251,7 @@ async function executeBrowserChatSubagentBatch(input: {
         ...browserChatBranchContextOptions(session, task.id, ownsTask),
         completedSteps: [],
         safetyMode: session.safetyMode,
+        browserInteractionMode: session.browserInteractionMode,
         disabledTools: session.disabledTools,
         useToolLoopAgent: true,
         credentialBindings: initialRuntimeContext.credentialBindings,
@@ -5628,6 +5494,7 @@ async function resumeBlockedBrowserChatSubagent(input: {
       ...browserChatBranchContextOptions(session, binding.id, ownsTurn),
       completedSteps: binding.steps,
       safetyMode: session.safetyMode,
+        browserInteractionMode: session.browserInteractionMode,
       disabledTools: session.disabledTools,
       useToolLoopAgent: true,
       credentialBindings: initialRuntimeContext.credentialBindings,
@@ -5855,6 +5722,7 @@ async function runBrowserChatMessage(
         continuationSummary: session.modelContext.continuationSummary,
         completedSteps: session.steps,
         safetyMode: session.safetyMode,
+        browserInteractionMode: session.browserInteractionMode,
         disabledTools: session.disabledTools,
         memoryTools: createPersonalMemoryTools({
           userId: session.userId,
@@ -6090,7 +5958,7 @@ async function runBrowserChatMessage(
       refreshBrowserChatTerminalContextUsage(session);
       session.consoleErrors = result.consoleErrors;
       session.networkErrors = result.networkErrors;
-      queuePersonalMemoryExtraction({ session, browser, text, result, userMessageId, assistantMessageId });
+      if (process.env.AI_PERSONAL_MEMORY_AUTO_EXTRACT === 'true') await queuePersonalMemoryExtraction({ session, browser, text, result, userMessageId, assistantMessageId });
       const finishedAt = now();
       updateAssistantMessage(session, assistantMessageId, (message) => {
         const updated: BrowserChatMessage = {
@@ -6227,4 +6095,20 @@ async function runBrowserChatMessage(
       startNextQueuedBrowserChatTurn(session);
     }
   });
+}
+
+/** Explicit host action; extraction never runs from the context assembler. */
+export async function requestBrowserChatMemoryExtraction(sessionId: string, userId: string) {
+  await getBrowserChatSession(sessionId, userId);
+  const session = sessions.get(sessionId);
+  if (!session || normalizeUserId(session.userId) !== normalizeUserId(userId)) throw new Error('Session not found.');
+  if (session.busy) throw new Error('Wait for the current turn to finish.');
+  const user = session.messages.findLast(message => message.role === 'user');
+  const assistant = session.messages.findLast(message => message.role === 'assistant');
+  if (!user || !assistant) throw new Error('No completed turn to extract.');
+  await enqueueMemoryJob({ userId: normalizeUserId(userId), currentUrl: session.targetUrl, targetUrl: session.targetUrl,
+    userMessage: user.content, userMessageId: user.id, assistantReply: assistant.content,
+    steps: session.steps.filter(step => assistant.stepIndexes?.includes(step.index)),
+    sourceSessionId: sessionId, sourceMessageIds: [user.id, assistant.id] });
+  return runMemoryJobs(sessionId, normalizeUserId(userId));
 }

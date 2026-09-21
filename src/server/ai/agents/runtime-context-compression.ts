@@ -45,10 +45,18 @@ export function completeRuntimeModelToolChain(messages: ModelMessage[]) {
       if ([...callIds].every((toolCallId) => resultIds.has(toolCallId))) {
         complete.push({ ...message, content: assistantContent } as ModelMessage, ...toolMessages);
       } else if (Array.isArray(assistantContent)) {
-        const nonToolContent = assistantContent.filter((part) => (
-          part.type !== 'tool-call' && part.type !== 'tool-result'
-        ));
-        if (nonToolContent.length) complete.push({ ...message, content: nonToolContent } as ModelMessage);
+        // Repair only the request view. Preserve completed siblings and explicitly
+        // represent uncertain outcomes instead of silently dropping an attempted action.
+        const missing = assistantContent.flatMap(part => part.type === 'tool-call' && !resultIds.has(part.toolCallId) ? [{
+          type: 'tool-result' as const, toolCallId: part.toolCallId, toolName: part.toolName,
+          output: { type: 'error-json' as const, value: {
+            code: 'interrupted-tool-outcome', hostGenerated: true, outcome: 'unknown',
+            safeToRetry: false, requiresStateRefresh: true,
+            message: 'No durable result exists for this call. It may have executed. Inspect current state or query the operation receipt before deciding whether to retry; do not replay the whole batch.',
+          } },
+        }] : []);
+        complete.push({ ...message, content: assistantContent } as ModelMessage, ...toolMessages,
+          { role: 'tool', content: missing });
       }
       index = nextIndex - 1;
       continue;

@@ -286,6 +286,7 @@ export async function commitPersonalMemoryReview<T extends PersonalMemoryRecordF
   expectedItems: T[];
   items: T[];
   report: unknown;
+  afterCommit?: (executor: import('@/server/db/database').DatabaseExecutor) => Promise<void>;
 }) {
   return runDatabaseTransaction(async (manager) => {
     // Serialize reviewed writes for one user across processes on PostgreSQL.
@@ -311,6 +312,7 @@ export async function commitPersonalMemoryReview<T extends PersonalMemoryRecordF
     }
     await executeDatabase('INSERT INTO personal_memory_receipt (user_id, source_key, report_json, created_at) VALUES (?, ?, ?, ?)',
       [input.userId, input.sourceKey, JSON.stringify(input.report), now()], manager);
+    await input.afterCommit?.(manager);
     return 'committed' as const;
   });
 }

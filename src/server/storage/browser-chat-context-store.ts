@@ -3,8 +3,8 @@ import type { DatabaseWriteStatement } from './database-write-queue';
 
 type ContextSnapshot = { modelContext?: {
   version?: number; records?: Record<string, unknown>; history?: string[]; active?: string[]; externalRecords?: boolean;
-  recordIds?: string[];
-  lastRequest?: { id: string }; branches?: Record<string, { lastRequest?: { id: string } }>;
+  recordIds?: string[]; continuationSummary?: string;
+  lastRequest?: { id: string }; branches?: Record<string, { lastRequest?: { id: string }; active?: string[]; continuationSummary?: string }>;
 } };
 
 // Populate only after a successful commit/read. A failed queued transaction must
@@ -30,9 +30,16 @@ export function splitBrowserChatContextSnapshot<T>(sessionId: string, snapshot: 
   if (context?.version !== 2 || !context.records) return { snapshot, statements: [] as DatabaseWriteStatement[] };
   const { records, ...index } = context;
   const known = committedRecords.get(cacheKey(sessionId));
+  const compactions: DatabaseWriteStatement[] = Object.entries({ main: context, ...context.branches }).flatMap(([scopeId, view]) => {
+    let state: { version?: number; epoch?: number };
+    try { state = JSON.parse(view.continuationSummary || '{}'); } catch { return []; }
+    if (state.version !== 3 || !state.epoch) return [];
+    return [{ sql: 'INSERT INTO agent_runtime_compaction (session_id, scope_id, epoch, snapshot_json) VALUES (?, ?, ?, ?) ON CONFLICT(session_id, scope_id, epoch) DO NOTHING',
+      params: [sessionId, scopeId, state.epoch, JSON.stringify({ active: view.active, continuationSummary: view.continuationSummary })] }];
+  });
   return {
     snapshot: { ...snapshot, modelContext: { ...index, recordIds: Object.keys(records), externalRecords: true } },
-    statements: [...Object.entries(records).filter(([id]) => !known?.has(id)).map(([id, value]) => ({
+    statements: [...compactions, ...Object.entries(records).filter(([id]) => !known?.has(id)).map(([id, value]) => ({
       sql: `INSERT INTO browser_chat_context_record (session_id, id, record_json) VALUES (?, ?, ?)
         ON CONFLICT(session_id, id) DO NOTHING`,
       params: [sessionId, id, JSON.stringify(value)],
@@ -56,6 +63,7 @@ export async function hydrateBrowserChatContextSnapshot<T>(sessionId: string, sn
   const missing = [...(context.recordIds || []), ...(context.history || []), ...(context.active || [])].find((id) => !Object.hasOwn(records, id));
   if (missing) throw new Error(`Missing durable browser-chat context record: ${missing}`);
   const { externalRecords: _external, recordIds: _recordIds, ...index } = context;
+  void _external; void _recordIds;
   const restored = { ...snapshot, modelContext: { ...index, records } };
   markBrowserChatContextWritten(sessionId, restored);
   return restored;

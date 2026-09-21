@@ -13,8 +13,7 @@ function restoreCollapsedMarkdownBlocks(value: string) {
     .replace(/^.*\|[ \t]+\|[ \t]*:?-{3,}.*$/gm, (line) => line.replace(/\|[ \t]+\|/g, '|\n|'))
     .replace(/(^|\n)([^\n|]*\S)[ \t]+(?=\|[^\n]+\|\n\|[ \t]*:?-{3,})/g, '$1$2\n\n')
     .replace(/(^|\n)(\*\*[^*\n]{1,120}\*\*)[ \t]*(?=\|[^\n]+\|\n\|[ \t]*:?-{3,})/g, '$1$2\n\n')
-    .replace(/(^|\n)(#{1,6}[ \t]+[^|\n]+?)(\|[^\n]+\|)\n(?=\|[ \t]*:?-{3,})/g, '$1$2\n\n$3\n')
-    .replace(/\|[ \t]+(?=\*\*[^*\n]{1,80}\*\*[ \t]*[:：])/g, '|\n\n');
+    .replace(/(^|\n)(#{1,6}[ \t]+[^|\n]+?)(\|[^\n]+\|)\n(?=\|[ \t]*:?-{3,})/g, '$1$2\n\n$3\n');
 }
 
 function pipeRowCells(value: string) {

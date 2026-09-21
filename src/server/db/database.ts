@@ -1,5 +1,9 @@
+import { HybridRuntime1790000200000 } from './migrations/1790000200000-hybrid-runtime';
 import { CommunicationConversations1788832800000 } from './migrations/1788832800000-communication-conversations';
 import 'reflect-metadata';
+import { TaskContext1790000000000 } from './migrations/1790000000000-task-context';
+import { ContextRuntime1790000100000 } from './migrations/1790000100000-context-runtime';
+import { WorkflowPlan1789869600000 } from './migrations/1789869600000-workflow-plan';
 
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
@@ -76,7 +80,7 @@ function dataSourceOptions(): DataSourceOptions {
     synchronize: false,
     migrationsRun: true,
     migrationsTableName: 'typeorm_migration',
-    migrations: [InitialBackendSchema1788307200000, BrowserChatContextRecords1788566400000, RuntimeReadIndexes1788652800000, CommunicationConversations1788832800000, PersonalMemoryReceipts1789084800000],
+    migrations: [InitialBackendSchema1788307200000, BrowserChatContextRecords1788566400000, RuntimeReadIndexes1788652800000, CommunicationConversations1788832800000, PersonalMemoryReceipts1789084800000, WorkflowPlan1789869600000, TaskContext1790000000000, ContextRuntime1790000100000, HybridRuntime1790000200000],
     logging: booleanEnv('DATABASE_LOGGING'),
   };
   if (driver === 'postgres') {
@@ -100,7 +104,7 @@ function dataSourceOptions(): DataSourceOptions {
     prepareDatabase(database) {
       database.pragma('foreign_keys = ON');
       database.pragma('journal_mode = WAL');
-      database.pragma('synchronous = NORMAL');
+      database.pragma('synchronous = FULL');
       database.pragma('wal_autocheckpoint = 1000');
     },
   };
