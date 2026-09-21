@@ -1325,11 +1325,17 @@ export class BrowserSession {
       }
       const original = this.latestBrowserObservation;
       const originalContext = this.latestVisualFrameContext;
-      if (!original || original.id !== input.observationId || !original.actionable
-        || !originalContext || originalContext.observationId !== original.id
-        || !Number.isFinite(Date.parse(original.capturedAt || ''))
-        || Date.now() - Date.parse(original.capturedAt || '') > 60000) return { ok: false, failureCategory: 'state-conflict',
-          actual: 'Stale observation; no action executed. Capture and decide again.', data: { outcome: 'not-executed' } };
+      const observationAgeMs = Date.now() - Date.parse(original?.capturedAt || '');
+      const staleReason = !original ? 'missing-observation'
+        : original.id !== input.observationId ? 'observation-id-mismatch'
+        : !original.actionable ? 'observation-not-actionable'
+        : !originalContext || originalContext.observationId !== original.id ? 'missing-viewport-evidence'
+        : !Number.isFinite(observationAgeMs) ? 'invalid-capture-time'
+        : observationAgeMs > 60000 ? 'observation-expired' : undefined;
+      if (staleReason || !original || !originalContext) return { ok: false, failureCategory: 'state-conflict',
+        actual: `Stale observation (${staleReason}${staleReason === 'observation-expired' ? `: ${Math.round(observationAgeMs / 1000)}s old, limit 60s` : ''}); no action executed. Capture and decide again.`,
+        data: { outcome: 'not-executed', reason: staleReason, requestedObservationId: input.observationId,
+          currentObservationId: original?.id, observationAgeMs: Number.isFinite(observationAgeMs) ? observationAgeMs : undefined, maxAgeMs: 60000 } };
       let fresh: NonNullable<BrowserActionResult['browserObservation']>;
       try { fresh = await this.captureVisualFrame(input.runId, signal); }
       catch (error) {

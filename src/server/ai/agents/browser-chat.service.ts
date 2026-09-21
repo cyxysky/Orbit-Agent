@@ -6099,16 +6099,20 @@ async function runBrowserChatMessage(
 
 /** Explicit host action; extraction never runs from the context assembler. */
 export async function requestBrowserChatMemoryExtraction(sessionId: string, userId: string) {
-  await getBrowserChatSession(sessionId, userId);
-  const session = sessions.get(sessionId);
-  if (!session || normalizeUserId(session.userId) !== normalizeUserId(userId)) throw new Error('Session not found.');
-  if (session.busy) throw new Error('Wait for the current turn to finish.');
-  const user = session.messages.findLast(message => message.role === 'user');
-  const assistant = session.messages.findLast(message => message.role === 'assistant');
-  if (!user || !assistant) throw new Error('No completed turn to extract.');
+  // Completed conversations may have been compacted or evicted from the runtime.
+  // Read durable evidence without hydrating a browser or resuming queued turns.
+  const runtimeSession = sessions.get(sessionId);
+  const session = runtimeSession ? await durableBrowserChatSnapshot(runtimeSession) : await readSessionSnapshot(sessionId);
+  if (!session || !sessionBelongsToUser(session, userId)) throw new ApiRequestError('会话不存在。', { status: 404, code: 'not_found' });
+  if (session.busy) throw new ApiRequestError('请等待当前操作停止后提炼记忆。', { status: 409, code: 'busy' });
+  const userIndex = session.messages.findLastIndex(message => message.role === 'user' && message.status !== 'queued');
+  const user = session.messages[userIndex];
+  const assistant = session.messages.slice(userIndex + 1).findLast(message => message.role === 'assistant'
+    && message.status !== 'running' && message.status !== 'queued');
+  if (!user || !assistant) throw new ApiRequestError('本轮尚无已结束的回复，请在对话结束后提炼记忆。', { status: 409, code: 'no_completed_turn' });
   await enqueueMemoryJob({ userId: normalizeUserId(userId), currentUrl: session.targetUrl, targetUrl: session.targetUrl,
     userMessage: user.content, userMessageId: user.id, assistantReply: assistant.content,
-    steps: session.steps.filter(step => assistant.stepIndexes?.includes(step.index)),
+    steps: session.steps.filter(step => step.messageId === assistant.id || assistant.stepIndexes?.includes(step.index)),
     sourceSessionId: sessionId, sourceMessageIds: [user.id, assistant.id] });
   return runMemoryJobs(sessionId, normalizeUserId(userId));
 }

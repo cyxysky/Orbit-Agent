@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useId, useState } from 'react';
 import { Button } from '@heroui/react/button';
 import { Popover } from '@heroui/react/popover';
-import { ArrowRight, Check, ChevronDown, Circle, CircleAlert, ListChecks, Loader2, Plus, RefreshCw } from 'lucide-react';
+import { ArrowRight, Check, ChevronDown, Circle, CircleAlert, CircleMinus, CirclePause, ListChecks, Loader2, Plus, RefreshCw } from 'lucide-react';
 import type { WorkflowItem, WorkflowPlan, WorkflowStage, WorkflowStatus } from '@/lib/workflow-plan';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 
@@ -19,15 +19,12 @@ function itemStatus(item: WorkflowItem, currentItemId?: string): WorkflowStatus 
 
 function StageProgress({ stage, index, current, currentItemId }: { stage: WorkflowStage; index: number; current: boolean; currentItemId?: string }) {
   const [expanded, setExpanded] = useState(current);
-  const [showCompleted, setShowCompleted] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const contentId = useId();
   const completed = stage.items.filter(isDone);
-  const pending = stage.items.filter(item => !isDone(item));
-  const visibleItems = showCompleted ? completed : pending;
   useEffect(() => { setExpanded(current); setShowAll(false); }, [current]);
   return <section className={`browser-chat-plan-stage${current ? ' is-current' : ''}`}>
-    <button type="button" className="ui-button browser-chat-plan-stage-toggle" onClick={() => setExpanded(value => !value)} aria-expanded={expanded} aria-controls={contentId}>
+    <button type="button" className="browser-chat-plan-stage-toggle" onClick={() => setExpanded(value => !value)} aria-expanded={expanded} aria-controls={contentId}>
       <span className="browser-chat-plan-stage-number">{completed.length === stage.items.length ? <Check size={13} /> : index + 1}</span>
       <span className="browser-chat-plan-stage-title" title={stage.title}>{stage.title}</span>
       <span className="browser-chat-plan-stage-count">{completed.length}/{stage.items.length}</span>
@@ -35,22 +32,18 @@ function StageProgress({ stage, index, current, currentItemId }: { stage: Workfl
     </button>
     <div className={`browser-chat-plan-stage-reveal${expanded ? ' is-open' : ''}`} id={contentId} inert={!expanded} aria-hidden={!expanded}>
       <div>
-        <div className="browser-chat-plan-filters" role="group" aria-label={`${stage.title}事项状态`}>
-          <button type="button" className="ui-button" aria-pressed={!showCompleted} onClick={() => { setShowCompleted(false); setShowAll(false); }}>待完成 <span>{pending.length}</span></button>
-          <button type="button" className="ui-button" aria-pressed={showCompleted} onClick={() => { setShowCompleted(true); setShowAll(false); }}>已完成 <span>{completed.length}</span></button>
-        </div>
         <ul className="browser-chat-plan-items">
-          {(showAll ? visibleItems : visibleItems.slice(0, 6)).map(item => {
+          {(showAll ? stage.items : stage.items.slice(0, 6)).map(item => {
             const status = itemStatus(item, currentItemId);
+            const StatusIcon = { pending: Circle, running: Loader2, passed: Check, failed: CircleAlert, blocked: CirclePause, not_applicable: CircleMinus }[status];
             return <li key={item.id} className={`is-${status}`}>
-              {status === 'passed' || status === 'not_applicable' ? <Check size={14} /> : status === 'blocked' || status === 'failed' ? <CircleAlert size={14} /> : <Circle size={12} />}
+              <StatusIcon size={14} role="img" aria-label={labels[status]} className={status === 'running' ? 'animate-spin' : undefined}><title>{labels[status]}</title></StatusIcon>
               <span title={`${item.id} · ${item.title}`}>{item.title}</span>
-              <small>{labels[status]}</small>
             </li>;
           })}
         </ul>
-        {!visibleItems.length && <p className="browser-chat-plan-list-empty">{showCompleted ? '还没有完成的事项' : '本阶段事项已完成'}</p>}
-        {visibleItems.length > 6 && <button type="button" className="ui-button browser-chat-plan-show-more" onClick={() => setShowAll(value => !value)}>{showAll ? '收起列表' : `查看其余 ${visibleItems.length - 6} 项`}</button>}
+        {!stage.items.length && <p className="browser-chat-plan-list-empty">本阶段暂无事项</p>}
+        {stage.items.length > 6 && <button type="button" className="ui-button browser-chat-plan-show-more" onClick={() => setShowAll(value => !value)}>{showAll ? '收起列表' : `查看其余 ${stage.items.length - 6} 项`}</button>}
       </div>
     </div>
   </section>;
@@ -129,7 +122,7 @@ export function BrowserChatPlanPanel({ sessionId, busy, onResume, onStart, onCon
         </div> : <>
           <p className="browser-chat-plan-review-hint">{submission.gaps.length ? `仍有 ${submission.gaps.length} 项检查未完成或不适用。` : '本阶段已提交，结果说明见对话。'}</p>
           <button type="button" className="ui-button ui-button--primary browser-chat-plan-primary" disabled={busy || sending} onClick={() => void review(submission.gaps.length ? 'accept_with_gaps' : 'approve')}><span>{sending ? '正在提交…' : submission.gaps.length ? '接受缺口并继续' : plan.stageIndex + 1 === plan.stages.length ? '确认完成' : '确认并继续'}</span><ArrowRight size={15} /></button>
-          <div className="browser-chat-plan-review-actions"><button type="button" className="ui-button browser-chat-plan-text-button" disabled={busy || sending} onClick={() => setEditingReview(true)}>有问题，退回修正</button><button type="button" className="ui-button browser-chat-plan-text-button" disabled={busy || sending} onClick={() => void review('cancel')}>停止计划</button></div>
+          <div className="browser-chat-plan-review-actions"><button type="button" className="ui-button browser-chat-plan-text-button" disabled={busy || sending} onClick={() => setEditingReview(true)}>有问题，退回修正</button><button type="button" className="ui-button browser-chat-plan-text-button is-danger" disabled={busy || sending} onClick={() => void review('cancel')}>停止计划</button></div>
         </>}
       </footer> : plan?.status === 'active' ? (!busy && <footer className="browser-chat-plan-footer"><button type="button" className="ui-button ui-button--primary browser-chat-plan-primary" disabled={sending} onClick={onContinue}><span>继续当前阶段</span><ArrowRight size={14} /></button></footer>) : !loading && !error && <footer className="browser-chat-plan-footer"><button type="button" className="ui-button ui-button--primary browser-chat-plan-primary" disabled={busy || sending} onClick={onStart}><Plus size={15} /><span>{plan ? '创建新计划' : '生成执行计划'}</span><ArrowRight size={15} /></button></footer>}
       </Popover.Dialog>

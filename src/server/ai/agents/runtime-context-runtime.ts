@@ -24,6 +24,7 @@ export async function prepareRuntimeContext(input: RuntimeContextInput & {
   let compressedMessages = 0;
   const segmentRecords: ModelMessage[] = [];
   let compactionFailure: string | undefined;
+  let attemptedCompaction = false;
   const keepRecent = Math.max(4, Number(process.env.AI_CONTEXT_KEEP_RECENT_BLOCKS) || 4);
   const maxOutputTokens = Math.min(3000, Math.max(256, Math.floor(input.inputBudgetTokens * 0.06)));
   const maximumInputTokens = Math.min(18000, input.inputBudgetTokens - maxOutputTokens);
@@ -45,6 +46,7 @@ export async function prepareRuntimeContext(input: RuntimeContextInput & {
       source.push(...block); cost += next;
     }
     if (source.length < 2) break;
+    attemptedCompaction = true;
     await input.onProgress?.({ stage: 'start', completedMessages: compressedMessages, totalMessages: source.length, beforeTokens, afterTokens: packet.manifest.estimatedTokensAfter }, packet.messages);
     let candidate: Awaited<ReturnType<typeof summarizeContextBatch>>;
     try {
@@ -65,10 +67,17 @@ export async function prepareRuntimeContext(input: RuntimeContextInput & {
       activeMessages: replacement, continuationSummary: JSON.stringify(nextState), removedIndexes: [],
       compressedMessages: compressedMessages + source.length, segmentRecords: [candidate.message] });
     active = replacement; state = nextState; compressedMessages += source.length; segmentRecords.push(candidate.message);
-    if (input.refreshObservations) observations = await input.refreshObservations();
     packet = build();
     await input.onProgress?.({ stage: 'batch', completedMessages: compressedMessages, totalMessages: compressedMessages, beforeTokens, afterTokens: packet.manifest.estimatedTokensAfter }, packet.messages);
     if (packet.manifest.estimatedTokensAfter <= input.compressionTargetTokens) break;
+  }
+  // Summary generation (including a failed, best-effort attempt) can outlive a
+  // screenshot's action window. Refresh after ALL batches, before model dispatch;
+  // refreshing only successful batches leaves the fallback path using stale IDs.
+  if (attemptedCompaction && input.refreshObservations) {
+    input.abortSignal?.throwIfAborted();
+    observations = await input.refreshObservations();
+    packet = build();
   }
   if (packet.manifest.estimatedTokensAfter > input.inputBudgetTokens) throw new ContextSummaryError('Context budget exceeded. Current request, required constraints and latest image were preserved; no model request was sent.');
   packet.manifest.id = `ctxreq_${randomUUID()}`;

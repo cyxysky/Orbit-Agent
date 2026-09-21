@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Button } from '@heroui/react/button';
 import { Popover } from '@heroui/react/popover';
-import { Brain, CircleAlert, Loader2, Sparkles, X } from 'lucide-react';
+import { ArrowRight, Brain, CircleAlert, Loader2, Sparkles, X } from 'lucide-react';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 
 type MemoryProposal = { id: string; items: Array<{ key: string; value: string; status: string; evidence?: string[]; applicability?: { when: string }; expiresAt?: string }> };
@@ -20,10 +20,10 @@ export function BrowserChatRecoveryPanel({ sessionId, busy }: { sessionId: strin
       setLoading(true);
       setError('');
       void fetch(url, { signal: controller.signal, cache: 'no-store' }).then(async response => {
-      if (!response.ok) throw new Error('无法读取记忆候选');
       const data = await response.json();
+      if (!response.ok) throw new Error(data.error?.message || data.error || '无法读取记忆候选');
       if (!controller.signal.aborted) setCandidates(data.candidates || []);
-      }).catch(error => { if (!controller.signal.aborted) setError(String(error)); })
+      }).catch(error => { if (!controller.signal.aborted) setError(error instanceof Error ? error.message : String(error)); })
         .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     }
     return () => controller.abort();
@@ -33,11 +33,12 @@ export function BrowserChatRecoveryPanel({ sessionId, busy }: { sessionId: strin
     try {
       const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(proposal ? { action: 'memory-review', id: proposal.id, approved } : { action: 'memory-extract' }) });
       const result = await response.json();
-      if (!response.ok) throw new Error(result.error?.message || '记忆操作失败');
+      if (!response.ok) throw new Error(result.error?.message || result.error || '记忆操作失败');
       const latest = await fetch(url, { cache: 'no-store' });
-      if (!latest.ok) throw new Error('无法刷新记忆候选');
-      setCandidates((await latest.json()).candidates || []);
-    } catch (error) { setError(String(error)); } finally { setSaving(false); }
+      const data = await latest.json();
+      if (!latest.ok) throw new Error(data.error?.message || data.error || '无法刷新记忆候选');
+      setCandidates(data.candidates || []);
+    } catch (error) { setError(error instanceof Error ? error.message : String(error)); } finally { setSaving(false); }
   }
   const disabled = busy || saving || loading;
   const pendingCount = candidates.length;
@@ -59,9 +60,6 @@ export function BrowserChatRecoveryPanel({ sessionId, busy }: { sessionId: strin
           {busy && <p className="browser-chat-recovery-hint" role="status">任务执行中，结束后可提炼记忆或处理待审核内容。</p>}
           {!busy && loading && <p className="browser-chat-recovery-hint" role="status"><Loader2 size={14} className="animate-spin" />正在读取…</p>}
           <p className="browser-chat-recovery-hint">从本轮对话提炼可复用的信息，经你批准后用于后续对话。</p>
-          <button type="button" className="ui-button browser-chat-recovery-extract" disabled={disabled} onClick={() => void memoryAction()}>
-            {saving ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}提炼本轮记忆
-          </button>
           {!loading && !candidates.length && !error && <p className="browser-chat-recovery-empty">暂无待审核的记忆</p>}
           {candidates.length > 0 && <h3 className="browser-chat-recovery-section-title">待审核 · {candidates.length}</h3>}
           {candidates.map(proposal => <section className="browser-chat-recovery-section" key={proposal.id}>
@@ -78,6 +76,11 @@ export function BrowserChatRecoveryPanel({ sessionId, busy }: { sessionId: strin
           </section>)}
           {error && <p className="browser-chat-recovery-error" role="alert">{error}</p>}
         </div>
+        <footer className="browser-chat-plan-footer browser-chat-recovery-footer">
+          <button type="button" className="ui-button ui-button--primary browser-chat-plan-primary browser-chat-recovery-extract" disabled={disabled} onClick={() => void memoryAction()}>
+            {saving ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}<span>{saving ? '正在处理…' : '提炼本轮记忆'}</span><ArrowRight size={15} />
+          </button>
+        </footer>
       </Popover.Dialog>
     </Popover.Content>
   </Popover>;
