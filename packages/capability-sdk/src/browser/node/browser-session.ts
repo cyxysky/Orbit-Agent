@@ -1189,6 +1189,8 @@ export class BrowserSession {
   private browserViewportEvidence?: BrowserCodeViewportEvidence;
 
   private visualSurfaceIds = new WeakMap<Page, string>();
+  private latestVisualFrameContext?: { observationId: string; key: string; clickMarker?: string };
+  private lastVisualClick?: { surfaceId: string; x: number; y: number };
 
   /** Pure pixel observation for the Agent route; no DOM/AX extraction. */
   private async captureVisualFrame(runId: string, signal?: AbortSignal): Promise<NonNullable<BrowserActionResult['browserObservation']>> {
@@ -1198,21 +1200,51 @@ export class BrowserSession {
     const surfaceId = this.visualSurfaceIds.get(page) || randomUUID();
     this.visualSurfaceIds.set(page, surfaceId);
     const url = page.url();
-    const bytes = await raceWithAbort(page.screenshot({ type: 'png', scale: 'css', timeout: 15000 }), signal);
+    const client = await page.context().newCDPSession(page);
+    // Browser viewport metadata does not extract DOM/AX or execute page script.
+    // Keep scroll, zoom and same-URL navigation guards independent of video pixels.
+    const readContext = async () => {
+      const { cssVisualViewport, cssLayoutViewport } = await raceWithAbort(client.send('Page.getLayoutMetrics'), signal);
+      return JSON.stringify({ surfaceId, url: page.url(), navigation: this.navigationSequenceByPage.get(page) || 0,
+        viewport: cssVisualViewport, layoutWidth: cssLayoutViewport.clientWidth, layoutHeight: cssLayoutViewport.clientHeight });
+    };
+    let bytes: Buffer;
+    let contextKey: string;
+    try {
+      contextKey = await readContext();
+      bytes = await raceWithAbort(page.screenshot({ type: 'png', scale: 'css', timeout: 15000 }), signal);
+      if (contextKey !== await readContext()) throw new Error('Browser viewport or document changed during capture.');
+    } finally {
+      await client.detach().catch(() => undefined);
+    }
     signal?.throwIfAborted();
     if (page !== this.activePage || page.url() !== url) throw new Error('Browser surface changed during capture.');
     if (bytes.length < 24 || bytes.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') throw new Error('Invalid PNG observation.');
     const width = bytes.readUInt32BE(16), height = bytes.readUInt32BE(20);
     if (!width || !height || width > 8192 || height > 8192) throw new Error('Invalid observation dimensions.');
+    // Hash the page pixels before adding the host's click annotation.
     const visualHash = createHash('sha256').update(bytes).digest('hex');
+    const click = this.lastVisualClick?.surfaceId === surfaceId && this.lastVisualClick.x < width && this.lastVisualClick.y < height
+      ? this.lastVisualClick : undefined;
+    const clickMarker = click ? `${click.x},${click.y}` : undefined;
     const previous = this.latestBrowserObservation;
-    if (previous?.status === 'available' && previous.visualHash === visualHash && previous.surfaceId === surfaceId && previous.url === url) {
+    if (previous?.status === 'available' && previous.visualHash === visualHash && previous.surfaceId === surfaceId && previous.url === url
+      && this.latestVisualFrameContext && this.latestVisualFrameContext.observationId === previous.id && this.latestVisualFrameContext.key === contextKey
+      && this.latestVisualFrameContext.clickMarker === clickMarker) {
       return this.latestBrowserObservation = { ...previous, capturedAt: new Date().toISOString(), actionable: true };
     }
     const dir = this.artifactDirectory(runId);
     await mkdir(dir, { recursive: true });
     const id = randomUUID(), imagePath = path.join(dir, `observation-${id}.png`);
+    if (click) {
+      // Screenshots use CSS pixels, so a 1.5px radius gives a 3px diameter
+      // centered on the actual click, including on high-DPI displays.
+      const overlay = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><circle cx="${click.x}" cy="${click.y}" r="1.5" fill="#ff0000"/></svg>`);
+      bytes = await sharp(bytes).composite([{ input: overlay }]).png().toBuffer();
+      signal?.throwIfAborted();
+    }
     await writeFile(imagePath, bytes);
+    this.latestVisualFrameContext = { observationId: id, key: contextKey, clickMarker };
     return this.latestBrowserObservation = { id, status: 'available', actionable: true, surfaceId, visualHash,
       width, height, path: imagePath, url, capturedAt: new Date().toISOString(), retention: 'replace' };
   }
@@ -1292,16 +1324,26 @@ export class BrowserSession {
         return { ok: false, actual: 'Page keyboard input cannot operate browser chrome; nothing executed. Use navigate for URLs and tabs for opening, listing, selecting or closing tabs.' };
       }
       const original = this.latestBrowserObservation;
+      const originalContext = this.latestVisualFrameContext;
       if (!original || original.id !== input.observationId || !original.actionable
-        || Date.now() - Date.parse(original.capturedAt || '') > 60000) return { ok: false, actual: 'Stale observation; no action executed. Capture and decide again.' };
+        || !originalContext || originalContext.observationId !== original.id
+        || !Number.isFinite(Date.parse(original.capturedAt || ''))
+        || Date.now() - Date.parse(original.capturedAt || '') > 60000) return { ok: false, failureCategory: 'state-conflict',
+          actual: 'Stale observation; no action executed. Capture and decide again.', data: { outcome: 'not-executed' } };
       let fresh: NonNullable<BrowserActionResult['browserObservation']>;
       try { fresh = await this.captureVisualFrame(input.runId, signal); }
       catch (error) {
         this.latestBrowserObservation = { status: 'unavailable', actionable: false, error: String(error) };
-        return { ok: false, actual: 'Could not capture the current page before input; no action executed. Observe again before deciding.',
+        return { ok: false, failureCategory: 'state-conflict', actual: 'Could not capture the current page before input; no action executed. Observe again before deciding.',
           data: { outcome: 'not-executed', error: String(error) }, browserObservation: this.latestBrowserObservation };
       }
-      if (fresh.id !== input.observationId) return { ok: false, actual: 'Pixels, route or viewport changed; no action executed.', browserObservation: fresh };
+      // The image ID identifies exact pixels, not whether coordinates are still
+      // usable. Live video, chat, animations and caret blinking change it constantly.
+      if (original.surfaceId !== fresh.surfaceId || original.url !== fresh.url
+        || original.width !== fresh.width || original.height !== fresh.height
+        || originalContext.key !== this.latestVisualFrameContext?.key) return { ok: false, failureCategory: 'state-conflict',
+          actual: 'Browser surface, document, route, scroll position or viewport changed; no action executed. Inspect the fresh observation and decide again.',
+          data: { outcome: 'not-executed' }, browserObservation: fresh };
       const page = this.activePage;
       if (['click', 'hover', 'move', 'drag', 'scroll'].includes(input.kind) && (!Number.isFinite(input.x) || !Number.isFinite(input.y)
         || input.x! < 0 || input.y! < 0 || input.x! >= fresh.width! || input.y! >= fresh.height!)) return { ok: false, actual: 'Coordinates outside current CSS viewport; no action executed.' };
@@ -1331,6 +1373,7 @@ export class BrowserSession {
           mouseHeld = true;
           await page.mouse.click(input.x!, input.y!, { button, clickCount: input.clickCount || 1 });
           mouseHeld = false;
+          this.lastVisualClick = { surfaceId: fresh.surfaceId!, x: input.x!, y: input.y! };
         } else if (input.kind === 'hover' || input.kind === 'move') await page.mouse.move(input.x!, input.y!, { steps: input.steps || 1 });
         else if (input.kind === 'drag') {
           await page.mouse.move(input.x!, input.y!);
@@ -1377,9 +1420,10 @@ export class BrowserSession {
       try {
         const after = await this.captureVisualFrame(input.runId, signal);
         after.retention = input.observationMode || (input.kind === 'scroll' ? 'append' : 'replace');
+        const visualChanged = fresh.visualHash !== after.visualHash || fresh.url !== after.url || fresh.surfaceId !== after.surfaceId;
         return { ok: true, actual: JSON.stringify({ outcome: 'executed', before: input.observationId, after: after.id,
-          visualChanged: fresh.id !== after.id, businessOutcome: 'unverified',
-          ...(fresh.id === after.id ? { next: 'No visible change at capture time. Verify focus/loading and the intended gesture before repeating.' } : {}) }),
+          visualChanged, businessOutcome: 'unverified',
+          ...(!visualChanged ? { next: 'No visible change at capture time. Verify focus/loading and the intended gesture before repeating.' } : {}) }),
           browserObservation: after, referenceImagePath: after.path };
       } catch (error) {
         this.latestBrowserObservation = { status: 'unavailable', actionable: false, error: String(error) };
