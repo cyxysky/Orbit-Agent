@@ -10,7 +10,7 @@ import { browserChatCapabilityResult } from '@/lib/browser-chat-capability-resul
 import { coreResponses, markdownBlock } from '@cjfclonedeep/capability-sdk/responses';
 import { ResponseSession, type StructuredResponse } from '@cjfclonedeep/capability-sdk';
 import { randomUUID } from 'node:crypto';
-import { boundToolResult, createRuntimeContextReadTool, contextReadToolName, runtimeContextMessageRef, type RuntimeContextManifest } from './runtime-context-assembler';
+import { boundToolResult, createRuntimeContextReadTool, contextReadToolName, contextReadInputSchema, readRuntimeContextMaterial, runtimeContextMessageRef, type RuntimeContextManifest } from './runtime-context-assembler';
 import { runtimeKnowledgeMessage, type RuntimeKnowledgeBlock } from './runtime-knowledge-context';
 import { generateText, hasToolCall, parsePartialJson, streamText, ToolLoopAgent, tool, type ModelMessage, type StopCondition, type ToolCallRepairFunction, type ToolSet } from 'ai';
 import { z } from 'zod';
@@ -48,11 +48,10 @@ import {
   activeBrowserRuntimeSkillId,
   hiddenRuntimeSkillContent,
   requireHiddenRuntimeSkillRead,
-  hiddenRuntimeSkillIdsReadFromTraces,
   hiddenRuntimeSkillIdsInModelContext,
   runtimeToolTypesWithLoadedSkills,
 } from './hidden-runtime-skills';
-import { parseContextSummary } from './runtime-semantic-summary';
+import { ContextSummaryError, parseContextSummary, type ContextSummaryGenerator } from './runtime-semantic-summary';
 import { subagentRuntimeSkillId } from './subagent-runtime-skill';
 import { chartRuntimeSkillId } from '@cjfclonedeep/capability-sdk/chart/runtime-skill';
 import {
@@ -119,6 +118,7 @@ import {
 import {
   appendTerminalBrowserChatTurn,
   serializableBrowserChatModelMessages,
+  latestBrowserChatUserMessageIndex,
   type BrowserChatModelContextCompression,
 } from './browser-chat-model-context';
 import {
@@ -1760,17 +1760,10 @@ function sanitizeModelMessagesForLog(system: string | undefined, messages: unkno
   return sanitizeModelLogValue(orderedMessages, imagePaths, { imageIndex: 0 });
 }
 
-function sanitizeModelInputForStats(system: string | undefined, messages: unknown, imagePaths: string[]) {
-  return sanitizeModelLogValue({
-    system: system || '',
-    messages: Array.isArray(messages) ? messages : [],
-  }, imagePaths, { imageIndex: 0 });
-}
-
 function modelMessagesTextAndImageStats(messages: unknown, tools?: RuntimeToolDefinitions) {
   const contextEstimate = estimateRuntimeMessageContext(messages);
   const estimatedTextTokens = contextEstimate.textTokens;
-  const estimatedImageTokens = contextEstimate.imageCount * imageTokenEstimatePerImage();
+  const estimatedImageTokens = contextEstimate.imageTokens;
   const toolSchema = toolSchemaEstimateInput(tools);
   const serializedToolSchema = JSON.stringify(toolSchema) || '';
   const estimatedToolSchemaTokens = estimateRuntimeTextTokens(serializedToolSchema);
@@ -1786,8 +1779,16 @@ function modelMessagesTextAndImageStats(messages: unknown, tools?: RuntimeToolDe
     estimatedImageTokens,
     estimatedToolSchemaTokens,
     estimatedTotalTokens: estimatedTextTokens + estimatedImageTokens + estimatedToolSchemaTokens,
-    method: 'rough estimate from sanitized modelMessages plus current browser tool schemas: max(value-text tokens, serialized JSON tokens) + imageCount * AI_IMAGE_CONTEXT_ESTIMATE_TOKENS + serialized current tool definitions',
+    method: 'heuristic from projected request messages and tool schemas; typed media bodies excluded, image cost estimated separately',
   };
+}
+
+function runtimeModelToolReceipt(message: ModelMessage) {
+  // Exact paging and full current Skill rules must survive the model projection.
+  // This also covers prerequisite replies that carry the Skill body themselves.
+  if (message.role === 'tool' && (message.content.some(part => part.type === 'tool-result'
+    && [contextReadToolName, 'skill'].includes(part.toolName)) || hiddenRuntimeSkillIdsInModelContext([message]).size)) return message;
+  return boundToolResult(message, 1200);
 }
 
 function fullLogDetails(value: unknown) {
@@ -2041,10 +2042,12 @@ async function executeRuntimeStep(input: {
   let lastRetryState: RuntimeRetryState | undefined;
   let consecutiveRequestFailures = 0;
   let retryCompressionThreshold: number | undefined;
+  let rejectedContextTokens: number | undefined;
   let durableSummary = parseContextSummary(input.continuationSummary) ? input.continuationSummary! : '';
   const durableTraces: ToolTrace[] = [];
   let durableTurnMessages: ModelMessage[] = [];
   const imagePathByData = new WeakMap<object, string>();
+  const failedCompactions = new Map<string, ContextSummaryError>();
 
   function rememberRetryState(state: RuntimeRetryState) {
     lastRetryState = cloneRuntimeRetryState(state);
@@ -2075,7 +2078,7 @@ async function executeRuntimeStep(input: {
     const traces: ToolTrace[] = [...durableTraces];
     const codexMode = isCodexProvider();
     const retryAgentStepOffset = retryState?.agentStepOffset || 0;
-    const externalTools: ToolSet = codexMode ? {} : { ...input.memoryTools, [contextReadToolName]: createRuntimeContextReadTool(() => contextRecords) };
+    const externalTools: ToolSet = { ...(!codexMode ? input.memoryTools : {}), [contextReadToolName]: createRuntimeContextReadTool(() => contextRecords) };
     const externalToolNames = new Set(Object.keys(externalTools));
     const availableRuntimeToolNames = [...runtimeToolNames(), ...externalToolNames].filter((name) => (
       name !== 'subagent' || Boolean(input.runSubagents || input.readSubagent)
@@ -2180,17 +2183,17 @@ async function executeRuntimeStep(input: {
     ).trim();
     if (latestInstruction && input.appendInstruction) initialMessages.push({ role: 'user', content: latestInstruction });
     if (initialImages.length) {
-      const latestUserIndex = initialMessages.map((message) => message.role).lastIndexOf('user');
+      const latestUserIndex = latestBrowserChatUserMessageIndex(initialMessages);
       const fallbackText = latestInstruction || 'User uploaded reference image(s).';
       if (latestUserIndex >= 0) {
         const latestUser = initialMessages[latestUserIndex];
-        const text = typeof latestUser.content === 'string' && latestUser.content.trim()
-          ? latestUser.content
-          : fallbackText;
+        const content = typeof latestUser.content === 'string'
+          ? [{ type: 'text' as const, text: latestUser.content || fallbackText }]
+          : latestUser.content.filter(part => part.type === 'text');
         initialMessages[latestUserIndex] = {
           role: 'user' as const,
           content: [
-            { type: 'text' as const, text },
+            ...(content.length ? content : [{ type: 'text' as const, text: fallbackText }]),
             ...initialImages.map((image) => ({ type: 'file' as const, data: image.data, mediaType: image.mediaType })),
           ],
         };
@@ -2219,7 +2222,7 @@ async function executeRuntimeStep(input: {
         return content.length ? [{ ...message, content } as ModelMessage] : [];
       });
       await checkpointContext(recovery);
-      initialMessages.push(...recovery.map(message => message.role === 'tool' && message.content.some(part => part.type === 'tool-result' && [contextReadToolName, 'skill'].includes(part.toolName)) ? message : boundToolResult(message, 1200)));
+      initialMessages.push(...recovery.map(runtimeModelToolReceipt));
       await input.onActiveModelCheckpoint?.(initialMessages);
       await journal.clear(); recoveredMessages = [];
     }
@@ -2253,8 +2256,7 @@ async function executeRuntimeStep(input: {
     let continuationSummaryText = durableContinuationSummary;
     let committedWindow = [...initialMessages];
     let consumedResponseCount = 0;
-    const currentUserSourceIndex = initialMessages.findLastIndex((message) => message.role === 'user'
-      && !/^\[(?:Approved historical memory|Historical handoff|Historical context segment|Document visual QA|Attachment visual content|Explicit visual evidence)/.test(textFromUnknown(message.content)));
+    const currentUserSourceIndex = latestBrowserChatUserMessageIndex(initialMessages);
 
     function runtimeOperationalContextText(requiredSubagentDirective: string) {
       const sections = [
@@ -2271,21 +2273,28 @@ async function executeRuntimeStep(input: {
       ].join('\n\n');
     }
 
-    const generateContextSummary = async (content: string, maxOutputTokens: number) => {
+    const generateContextSummary: ContextSummaryGenerator = async (content, summaryAttempt) => {
       ensureActive();
-      const timeoutMs = Math.min(runtimeRequestTimeoutMs, 60_000);
+      const timeoutMs = runtimeRequestTimeoutMs;
       const watchdog = createAiRequestWatchdog(abortSignal, timeoutMs);
       try {
+        await onAttemptDebug?.({ phase: 'conversation:context:request', stepIndex, message: '正在请求上下文摘要模型',
+          details: fullLogDetails({ summaryAttempt, aiInput: {
+            model: getModelSettings().model, messages: [{ role: 'user', content }], temperature: 0.1, reasoning: 'low',
+          } }) });
         const result = await watchdog.run(generateText({ model: getModel(), messages: [{ role: 'user', content }],
-          temperature: 0.1, reasoning: 'low', maxOutputTokens, maxRetries: 0,
+          temperature: 0.1, reasoning: 'low', maxRetries: 0,
           abortSignal: watchdog.abortSignal, timeout: timeoutMs, telemetry: aiTelemetry('browser-chat-context-summary') }));
         ensureActive();
-        await onAttemptDebug?.({ phase: 'conversation:context:request', stepIndex, message: '上下文摘要模型输入',
-          details: fullLogDetails({ aiInput: modelRequestBody(result.request?.body,
-            { model: getModelSettings().model, messages: [{ role: 'user', content }], temperature: 0.1, reasoning: 'low', maxOutputTokens }) }) });
-        await onAttemptDebug?.({ phase: 'conversation:context:response', stepIndex, message: '上下文摘要模型输出',
-          details: fullLogDetails({ aiOutput: result.text || '', finishReason: result.finishReason, usage: result.usage }) });
-        return result.text || '';
+        await onAttemptDebug?.({ phase: 'conversation:context:response', stepIndex, message: '上下文摘要模型已返回，尚未验证或保存',
+          details: fullLogDetails({ summaryAttempt, aiOutput: result.text || '', finishReason: result.finishReason,
+            usage: result.usage, validated: false, committed: false }) });
+        return { text: result.text || '', finishReason: result.finishReason, usage: result.usage };
+      } catch (error) {
+        if (isBrowserChatAbortError(error, abortSignal)) throw error;
+        await onAttemptDebug?.({ phase: 'conversation:context:error', stepIndex, message: '上下文摘要模型请求失败',
+          details: { summaryAttempt, error: infrastructureError(error), terminal: false } });
+        throw error;
       } finally { watchdog.dispose(); }
     };
 
@@ -2294,12 +2303,9 @@ async function executeRuntimeStep(input: {
       ensureActive();
       await onAttemptDebug?.({ phase: 'ai:runtime:prepare', stepIndex, message: '正在检查上下文与压缩阈值' });
       // Visibility is a property of the request, not a lifetime read receipt.
-      if (codexMode) {
-        for (const id of hiddenRuntimeSkillIdsReadFromTraces(traces)) loadedHiddenRuntimeSkillIds.add(id);
-      } else {
-        loadedHiddenRuntimeSkillIds.clear();
-        for (const id of hiddenRuntimeSkillIdsInModelContext(withoutRuntimePromptCacheMetadata(previousMessages || initialMessages))) loadedHiddenRuntimeSkillIds.add(id);
-      }
+      loadedHiddenRuntimeSkillIds.clear();
+      const newResponses = previousMessages?.slice(initialMessages.length + consumedResponseCount) || [];
+      for (const id of hiddenRuntimeSkillIdsInModelContext([...committedWindow, ...newResponses])) loadedHiddenRuntimeSkillIds.add(id);
       if (input.getRuntimeOperationalContext) {
         try {
           const runtimeContext = await input.getRuntimeOperationalContext();
@@ -2402,8 +2408,13 @@ async function executeRuntimeStep(input: {
         })
         : undefined;
 
-      const sourceMessages = completeRuntimeModelToolChain(previousMessages?.length
-        ? previousMessages.filter((message) => {
+      // Response offsets refer to the SDK's raw array. Filtering or protocol repair
+      // before slicing can change its length and skip a newly returned message.
+      const source = previousMessages?.length ? previousMessages : initialMessages;
+      const responseCount = Math.max(0, source.length - initialMessages.length);
+      const candidates = completeRuntimeModelToolChain([
+        ...committedWindow, ...source.slice(initialMessages.length + consumedResponseCount),
+      ].filter((message) => {
           if (message.role !== 'user' || !Array.isArray(message.content)) return true;
             const text = message.content.flatMap((part) => (
               part.type === 'text' && typeof part.text === 'string' ? [part.text] : []
@@ -2412,18 +2423,12 @@ async function executeRuntimeStep(input: {
               || text.startsWith('[Attachment visual content]')
               || text.startsWith('[Explicit visual evidence]');
             return !transientVisual || message === retryVisualMessage;
-          })
-        : [...initialMessages]);
+          }));
       if (previousMessages?.length) {
         messageImagePaths = retryVisualMessage
           ? [...(retryState?.imagePaths || [])]
           : [...initialUserReferenceImagePaths];
       }
-      // Input is initialMessages + the SDK's explicit responseMessages, not the SDK's
-      // already projected messages. No marker search, overlap matching or source-count inference.
-      const source = [...sourceMessages];
-      const responseCount = Math.max(0, source.length - initialMessages.length);
-      const candidates = [...committedWindow, ...source.slice(initialMessages.length + consumedResponseCount)];
       const recalledMemories = activeKnowledge.filter(block => block.kind === 'memory');
       if (!boundaryMemoryCommitted && recalledMemories.length) {
         const recall: ModelMessage = { role: 'user', content: '[Approved historical memory]\n' + JSON.stringify({ turnId: input.turnId || '', historical: true, verifiedCurrent: false, memories: recalledMemories.map(block => ({ id: block.id, digest: block.digest, text: block.text })) }) };
@@ -2436,7 +2441,10 @@ async function executeRuntimeStep(input: {
       await checkpointContext([...source, ...appendedMessages]);
       requestSystemPrompt = baseSystemPrompt;
       const savedPinnedRef = parseContextSummary(continuationSummaryText)?.pinnedUserRef;
-      const currentRequest = !input.appendInstruction && savedPinnedRef ? contextRecords[savedPinnedRef] : initialMessages[currentUserSourceIndex];
+      // A prior handoff can belong to an earlier user turn. Prefer the latest
+      // exact user message retained in the active window over its old pin.
+      const currentRequest = initialMessages[currentUserSourceIndex]
+        ?? (savedPinnedRef ? contextRecords[savedPinnedRef] : undefined);
       currentRequestRef = currentRequest ? runtimeContextMessageRef(currentRequest) : '';
       if (currentRequestRef) await observeTaskRequest(input.runId, currentRequestRef, input.contextScope);
       const taskNotes = await taskContextPreview(input.runId, Math.min(6000, Math.max(1000, Math.floor(windowTokens * 0.06))), JSON.stringify(currentRequest?.content || ''), input.contextScope);
@@ -2460,7 +2468,7 @@ async function executeRuntimeStep(input: {
         !codexMode && availableStepNames.length !== Object.keys(nativeToolsRef.current || {}).length
           ? `Tools executable in this step: ${[...availableStepNames].sort().join(', ')}. Other visible tool schemas are reference only; finish the prerequisite before calling them.` : '',
       ].filter(Boolean).join('\n\n');
-      const beforeStats = modelMessagesTextAndImageStats(sanitizeModelInputForStats(requestSystemPrompt, candidates, messageImagePaths), stepTools);
+      const beforeStats = modelMessagesTextAndImageStats({ system: requestSystemPrompt, messages: candidates }, stepTools);
       let compressionBeforeStats = beforeStats;
       await onAttemptDebug?.({ phase: 'ai:runtime:prepare', stepIndex, message: '正在检查上下文与压缩阈值',
         details: { rawContextStats: { ...beforeStats, windowTokens } } });
@@ -2475,11 +2483,17 @@ async function executeRuntimeStep(input: {
           browserImagesAllowed: browserMode !== 'dom' && imageInputAvailable,
           knowledge: [...activeKnowledge.filter(block => block.kind !== 'memory'), ...taskKnowledge], contextWindowTokens: windowTokens,
           compressionTriggerTokens: thresholdTokens, compressionTargetTokens: targetTokens,
-          generateSummary: generateContextSummary, abortSignal,
+          generateSummary: generateContextSummary, abortSignal, failedCompactions,
+          onSummaryRetry: async (retry) => {
+            ensureActive(); requestWatchdog.touch();
+            await onAttemptDebug?.({ phase: 'ai:context-compression:retry', stepIndex,
+              message: `上下文摘要重试 ${retry.attempt}/${retry.attemptLimit}：${retry.kind === 'validation' ? '根据校验错误修正摘要' : '等待临时请求故障恢复'}`,
+              details: retry });
+          },
           onCheckpoint: async (checkpoint) => {
             ensureActive();
             await checkpointContext(checkpoint.segmentRecords);
-            const stats = modelMessagesTextAndImageStats(sanitizeModelInputForStats(requestSystemPrompt, checkpoint.messages, messageImagePaths), stepTools);
+            const stats = modelMessagesTextAndImageStats({ system: requestSystemPrompt, messages: checkpoint.messages }, stepTools);
             const compression = { compressedAt: new Date().toISOString(), continuationSummary: checkpoint.continuationSummary,
               estimatedTokensBefore: compressionBeforeStats.estimatedTotalTokens, estimatedTokensAfter: stats.estimatedTotalTokens,
               retainedMessageCount: checkpoint.activeMessages.length, summarizedMessageCount: checkpoint.compressedMessages,
@@ -2497,19 +2511,45 @@ async function executeRuntimeStep(input: {
             ensureActive(); requestWatchdog.touch();
             // Completion is published only after the durable checkpoint below succeeds.
             if (progress.stage === 'complete') return;
-            const compressionStats = modelMessagesTextAndImageStats(sanitizeModelInputForStats(requestSystemPrompt, compressionMessages, messageImagePaths), stepTools);
-            if (progress.stage === 'start') compressionBeforeStats = compressionStats;
+            const compressionStats = modelMessagesTextAndImageStats({ system: requestSystemPrompt, messages: compressionMessages }, stepTools);
+            if (progress.stage === 'start' && progress.completedMessages === 0) compressionBeforeStats = compressionStats;
             await onAttemptDebug?.({ phase: progress.stage === 'start' ? 'ai:context-compression:start' : 'ai:context-compression:progress', stepIndex,
               message: progress.stage === 'start' ? '正在压缩较早的对话记录' : `正在压缩上下文：已处理 ${progress.completedMessages}/${progress.totalMessages} 条记录`,
               details: { ...progress, beforeTokens: compressionBeforeStats.estimatedTotalTokens, afterTokens: compressionStats.estimatedTotalTokens,
                 modelContextStats: { ...compressionStats, windowTokens } } });
           },
         });
+        if (rejectedContextTokens !== undefined && assembled.manifest.estimatedTokensAfter >= rejectedContextTokens) {
+          throw new ContextSummaryError('Unable to reduce the previously rejected model input. Required context and recent interactions were preserved.', {
+            details: { code: 'context-retry-no-progress', rejectedTokens: rejectedContextTokens, estimatedTokens: assembled.manifest.estimatedTokensAfter,
+              stopReason: assembled.manifest.compactionStopReason },
+          });
+        }
       } catch (error) {
         if (isBrowserChatAbortError(error, abortSignal)) throw error;
         await onAttemptDebug?.({ phase: 'ai:context-compression:error', stepIndex,
-          message: '上下文压缩失败，原始记录已保留，本轮不会使用未验证的摘要。', details: { error: infrastructureError(error) } });
+          message: '上下文压缩未完成，已保留最近成功保存的上下文，本次模型请求停止。',
+          details: { error: infrastructureError(error), failure: error instanceof ContextSummaryError ? error.details : undefined,
+            terminal: true, fallback: false } });
         throw error;
+      }
+      if (assembled.manifest.compactionFailure) {
+        const reusedFailure = assembled.manifest.compactionFailureDetails?.reusedFailure === true;
+        await onAttemptDebug?.({ phase: reusedFailure ? 'ai:context-compression:skipped' : 'ai:context-compression:error', stepIndex,
+          message: reusedFailure
+            ? '同一历史批次此前摘要失败，本次未重复请求；保留当前上下文继续执行。'
+            : assembled.compressedMessages
+            ? '上下文压缩部分完成，后续批次失败；保留已保存摘要和其余原文继续执行。'
+            : '上下文压缩失败，原上下文仍在输入容量内，保留原文继续执行。',
+          details: { error: assembled.manifest.compactionFailure, failure: assembled.manifest.compactionFailureDetails,
+            terminal: false, fallback: true, summarizedMessageCount: assembled.compressedMessages,
+            inputBudgetTokens: contextProfile.inputBudgetTokens, estimatedTokens: assembled.manifest.estimatedTokensAfter } });
+      }
+      if (assembled.manifest.compactionStopReason && !assembled.compressedMessages) {
+        await onAttemptDebug?.({ phase: 'ai:context-compression:limited', stepIndex,
+          message: '暂无可继续压缩的完整历史，保留当前上下文继续执行。',
+          details: { stopReason: assembled.manifest.compactionStopReason, targetTokens, targetReached: false,
+            estimatedTokens: assembled.manifest.estimatedTokensAfter, inputBudgetTokens: contextProfile.inputBudgetTokens } });
       }
       const messagesToSend = assembled.messages;
       const requestMessages = messagesToSend;
@@ -2520,11 +2560,9 @@ async function executeRuntimeStep(input: {
           return path ? [path] : [];
         }) : []);
       const modelMessagesForLog = sanitizeModelMessagesForLog(requestSystemPrompt, requestMessages, attachedImagePaths);
-      const finalStats = modelMessagesTextAndImageStats(sanitizeModelInputForStats(requestSystemPrompt, requestMessages, attachedImagePaths), stepTools);
-      if (!codexMode) {
-        loadedHiddenRuntimeSkillIds.clear();
-        for (const id of hiddenRuntimeSkillIdsInModelContext(messagesToSend)) loadedHiddenRuntimeSkillIds.add(id);
-      }
+      const finalStats = modelMessagesTextAndImageStats({ system: requestSystemPrompt, messages: requestMessages }, stepTools);
+      loadedHiddenRuntimeSkillIds.clear();
+      for (const id of hiddenRuntimeSkillIdsInModelContext(messagesToSend)) loadedHiddenRuntimeSkillIds.add(id);
       await onKnowledgeSelected?.(assembled.manifest.knowledge);
       const systemRecord: ModelMessage = { role: 'system', content: requestSystemPrompt || '' };
       const schemaRecord: ModelMessage = { role: 'system', content: JSON.stringify(toolSchemaEstimateInput(stepTools)) };
@@ -2547,15 +2585,22 @@ async function executeRuntimeStep(input: {
         consumedResponseCount = responseCount;
         contextSegmentationTurns += 1;
         const compressionToolCallId = 'context-compression:' + input.runId + ':' + stepIndex + ':' + contextSegmentationTurns;
+        const partiallyCompleted = Boolean(assembled.manifest.compactionFailure);
+        const stoppedBeforeTarget = Boolean(assembled.manifest.compactionStopReason);
         await publishToolTrace({ id: compressionToolCallId,
           name: 'contextCompression', input: { summarizedMessageCount: assembled.compressedMessages },
-          result: { ok: true, actual: 'Earlier dialogue summarized; original records remain available through contextRead.' },
+          result: { ok: !partiallyCompleted, actual: partiallyCompleted
+            ? 'Some history was summarized and saved, but a later batch failed. Continuing with saved summaries and remaining original messages.'
+            : 'Earlier dialogue summarized and saved; original records remain available through contextRead.' },
           startedAt, completedAt: Date.now(), elapsedMs: Date.now() - startedAt, actionElapsedMs: Date.now() - startedAt,
           contextBefore: toolContextFromStats(compressionBeforeStats), contextAfter: toolContextFromStats(finalStats) });
-        await onAttemptDebug?.({ phase: 'ai:context-compression:complete', stepIndex, message: '上下文压缩完成',
+        await onAttemptDebug?.({ phase: partiallyCompleted ? 'ai:context-compression:partial'
+          : stoppedBeforeTarget ? 'ai:context-compression:limited' : 'ai:context-compression:complete', stepIndex,
+          message: partiallyCompleted ? '上下文压缩部分完成' : stoppedBeforeTarget ? '已保存压缩结果，尚未达到目标值' : '上下文压缩完成',
           details: { toolCallId: compressionToolCallId,
             estimatedTokensBefore: compressionBeforeStats.estimatedTotalTokens, estimatedTokensAfter: finalStats.estimatedTotalTokens,
-            summarizedMessageCount: assembled.compressedMessages, modelContextStats: { ...finalStats, windowTokens } } });
+            summarizedMessageCount: assembled.compressedMessages, targetTokens, targetReached: finalStats.estimatedTotalTokens <= targetTokens,
+            committed: true, stopReason: assembled.manifest.compactionStopReason, modelContextStats: { ...finalStats, windowTokens } } });
       }
       committedWindow = [...assembled.activeMessages];
       consumedResponseCount = responseCount;
@@ -2620,6 +2665,7 @@ async function executeRuntimeStep(input: {
       await journal.plan([codexDecision], [{ toolCallId: codexCallId, toolName: object.type, input: object.params }]);
       await journal.begin();
       const execution = await executeCodexRuntimeObject({
+        toolCallId: codexCallId,
         browserInteractionMode: browserMode,
         taskEvidence: { records: contextRecords, currentRequestRef, scopeId: input.contextScope },
         session,
@@ -2658,11 +2704,13 @@ async function executeRuntimeStep(input: {
         },
         onReferenceImage: queueReferenceImage,
       });
-      const codexReceipt: ModelMessage = { role: 'tool', content: [{ type: 'tool-result', toolCallId: codexCallId, toolName: object.type, output: { type: 'json', value: jsonSafe(execution) } }] };
+      const codexReceipt: ModelMessage = { role: 'tool', content: [{ type: 'tool-result', toolCallId: codexCallId, toolName: object.type,
+        output: { type: 'json', value: jsonSafe('result' in execution ? execution.result : execution) } }] };
       const uncertain = traces.some(trace => trace.result?.failureCategory === 'execution-uncertain');
       await checkpointContext([codexDecision, codexReceipt]);
       await journal.result(codexReceipt, uncertain, visualContext.persisted());
-      await input.onActiveModelCheckpoint?.([...lastPreparedMessages, codexDecision, codexReceipt]);
+      const activeReceipt = runtimeModelToolReceipt(codexReceipt);
+      await input.onActiveModelCheckpoint?.([...lastPreparedMessages, codexDecision, activeReceipt]);
       await journal.clear();
       ensureActive();
       await onAttemptDebug?.({
@@ -2691,7 +2739,7 @@ async function executeRuntimeStep(input: {
         text: execution.text,
         traces,
         aiRequest,
-        modelMessages: [...lastPreparedMessages, codexDecision, codexReceipt],
+        modelMessages: [...lastPreparedMessages, codexDecision, activeReceipt],
         turnMessages: [...attemptTranscriptBase, codexDecision, codexReceipt],
         contextCompression: latestContextCompression,
         visualContext: visualContext.snapshot(),
@@ -2801,8 +2849,8 @@ async function executeRuntimeStep(input: {
           const uncertain = (result as BrowserActionResult | undefined)?.failureCategory === 'execution-uncertain';
           await journal.result(message, uncertain, visualContext.persisted());
           // Exact paging receipts must never be secondarily shortened, or nextOffset would skip unread text.
-          const part = (boundToolResult(message, 1200) as Extract<ModelMessage, { role: 'tool' }>).content[0];
-          return ![contextReadToolName, 'skill'].includes(name) && part.type === 'tool-result' && 'value' in part.output ? part.output.value : result;
+          const part = (runtimeModelToolReceipt(message) as Extract<ModelMessage, { role: 'tool' }>).content[0];
+          return part.type === 'tool-result' && 'value' in part.output ? part.output.value : result;
         } catch (error) {
           if (journal.state.pending?.phase === 'executing') await journal.result(receipt({ error: String(error), outcome: 'unknown', safeToRetry: false }, true), true);
           throw error;
@@ -2901,6 +2949,8 @@ async function executeRuntimeStep(input: {
           attemptNumber = 1;
           lastError = undefined;
           retryDelayMs = 0;
+          retryCompressionThreshold = undefined;
+          rejectedContextTokens = undefined;
           Object.assign(executionIdentity, nextRequestExecutionIdentity());
         }
         decisionReady = Promise.withResolvers<void>();
@@ -2909,7 +2959,12 @@ async function executeRuntimeStep(input: {
         durableTurnMessages = [...attemptTranscriptBase, ...rawResponseMessages];
         await input.onTurnModelCheckpoint?.(durableTurnMessages);
         lastPreparedResponsePrefixLength = responseMessages.length;
-        const prepared = await prepareStep(stepNumber, [...initialMessages, ...responseMessages]);
+        // Summary requests have their own watchdog. Their time must not consume
+        // the main provider request's inactivity timeout before dispatch.
+        requestWatchdog.pause();
+        let prepared: Awaited<ReturnType<typeof prepareStep>>;
+        try { prepared = await prepareStep(stepNumber, [...initialMessages, ...responseMessages]); }
+        finally { requestWatchdog.resume(); }
         ensureActive();
         await reportRequestAttempt(executionIdentity);
         stepModelMessagesForLog.set(stepNumber, prepared.modelMessagesForLog);
@@ -3379,7 +3434,12 @@ async function executeRuntimeStep(input: {
       consecutiveRequestFailures += 1;
       lastRetryDecision = classifyRuntimeRetry(error, abortSignal);
       if (lastRetryDecision.recovery === 'compact-context') {
-        retryCompressionThreshold = Math.max(1, Math.floor((retryCompressionThreshold || runtimeContextProfile(getModelSettings()).compressionTriggerTokens) * 0.75));
+        const requestTokens = Number((lastAiRequest?.options?.modelContextStats as { estimatedTotalTokens?: number } | undefined)?.estimatedTotalTokens);
+        rejectedContextTokens = Number.isFinite(requestTokens) && requestTokens > 0 ? requestTokens : undefined;
+        retryCompressionThreshold = Math.max(1, Math.floor(Math.min(
+          retryCompressionThreshold ?? runtimeContextProfile(getModelSettings()).compressionTriggerTokens,
+          rejectedContextTokens ?? Infinity,
+        ) * 0.75));
       }
       const missingToolCallId = runtimeMissingToolCallId(error);
       if (missingToolCallId && lastRetryState?.messages.length) {
@@ -3706,13 +3766,8 @@ export async function executeInteractiveBrowserTurn(input: {
       ensureActive();
       activeModelMessages = actionResult.modelMessages;
       turnModelMessages.push(...actionResult.turnMessages);
-      const operationalTraces = actionResult.traces.filter((trace) => trace.name !== 'contextCompression');
-      if (isCodexProvider()) {
-        for (const id of hiddenRuntimeSkillIdsReadFromTraces(operationalTraces)) loadedHiddenRuntimeSkillIds.add(id);
-      } else {
-        loadedHiddenRuntimeSkillIds.clear();
-        for (const skillId of hiddenRuntimeSkillIdsInModelContext(activeModelMessages)) loadedHiddenRuntimeSkillIds.add(skillId);
-      }
+      loadedHiddenRuntimeSkillIds.clear();
+      for (const skillId of hiddenRuntimeSkillIdsInModelContext(activeModelMessages)) loadedHiddenRuntimeSkillIds.add(skillId);
       await input.onModelMessages?.({
         activeMessages: [...activeModelMessages],
         turnMessages: [...turnModelMessages],
@@ -4132,6 +4187,7 @@ export async function executeRecordedBrowserOperation(
 }
 
 async function executeCodexRuntimeObject(input: {
+  toolCallId: string;
   browserInteractionMode?: BrowserChatInteractionMode;
   taskEvidence?: TaskContextEvidence;
   session: BrowserSession;
@@ -4165,14 +4221,13 @@ async function executeCodexRuntimeObject(input: {
   const { session, runId, stepIndex, type, message, params, allowedTypes, traces, aiRequest, visualContext, abortSignal, shouldContinue, requestToolConfirmation, runSubagents, readSubagent, requiredSubagentUuid, readFile, readFileVisuals, readSkill, attachmentBindings, credentialBindings, ensureBrowserStarted, onVisualContextChange, onToolTrace, onReferenceImage } = input;
   const recordContextDispatch = async (result: BrowserActionResult) => {
     const completedAt = Date.now();
-    const trace: ToolTrace = { id: `codex-${type}-${randomUUID()}`, name: type, input: params, result,
+    const trace: ToolTrace = { id: input.toolCallId, name: type, input: params, result,
       startedAt: completedAt, completedAt, elapsedMs: 0, actionElapsedMs: 0 };
     upsertToolTrace(traces, trace);
     await onToolTrace?.(trace, visualContext ? { visualContext: visualContext.snapshot() } : undefined);
-    return { text: result.actual || '', executed: true };
+    return { text: result.actual || '', executed: true, result };
   };
   const loadedHiddenRuntimeSkillIds = input.loadedHiddenRuntimeSkillIds || new Set<string>();
-  if (!input.loadedHiddenRuntimeSkillIds) for (const skillId of hiddenRuntimeSkillIdsReadFromTraces(traces)) loadedHiddenRuntimeSkillIds.add(skillId);
   throwIfStopped(abortSignal, shouldContinue);
   if (!allowedTypes.includes(type)) {
     return {
@@ -4182,6 +4237,12 @@ async function executeCodexRuntimeObject(input: {
   }
 
   if (type === 'taskContext') return recordContextDispatch(await executeTaskContext(runId, params, input.taskEvidence));
+  if (type === contextReadToolName) {
+    const parsed = contextReadInputSchema.safeParse(params);
+    if (!parsed.success) return recordContextDispatch({ ok: false, actual: parsed.error.message });
+    const result = readRuntimeContextMaterial(input.taskEvidence?.records || {}, parsed.data);
+    return recordContextDispatch({ ok: !('ok' in result) || result.ok !== false, actual: JSON.stringify(result) });
+  }
   if (type === 'workflow') {
     const result = await executeWorkflow(runId, params);
     return recordContextDispatch(result);
@@ -4212,7 +4273,7 @@ async function executeCodexRuntimeObject(input: {
     }
     const completedAt = Date.now();
     const trace: ToolTrace = {
-      id: `codex-finalResponse-${randomUUID()}`,
+      id: input.toolCallId,
       name: 'finalResponse',
       input: parsed.data,
       result: {
@@ -4308,6 +4369,7 @@ async function executeCodexRuntimeObject(input: {
   const result = await executeTracedBrowserAction({
     traces,
     name: type,
+    toolCallId: input.toolCallId,
     toolInput: normalizedParams,
     aiRequest,
     runId,
@@ -4363,5 +4425,5 @@ async function executeCodexRuntimeObject(input: {
     });
   }
   const fileResult = result.ok ? formatFileArtifactResult(type, result.actual) : undefined;
-  return { text: fileResult || toolConsistentAssistantText(message, type), executed: true };
+  return { text: fileResult || toolConsistentAssistantText(message, type), executed: true, result };
 }

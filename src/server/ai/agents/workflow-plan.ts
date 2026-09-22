@@ -11,21 +11,27 @@ export const workflowInputSchema = z.object({
   action: z.enum(['register', 'read', 'appendItems', 'beginItem', 'recordCheck', 'submitStage']),
   expectedRevision: z.number().int().nonnegative().optional().describe('REQUIRED for every action except read. Copy revision from the latest successful workflow result; register starts at 0.'),
   reason: z.string().max(300).optional(),
-  query: z.string().max(300).optional().describe('For read: filter persisted evidence by tool ID, operation reason or result text.'),
+  query: z.string().max(300).optional().describe('For read: search persisted evidence by tool ID or whitespace-separated keywords in the operation reason and actual result.'),
+  offset: z.number().int().nonnegative().optional().describe('For read: evidence page offset; use nextOffset from the previous result.'),
+  limit: z.number().int().min(1).max(50).optional().describe('For read: evidence page size, default 20.'),
   title: z.string().min(1).max(300).optional(),
   stages: z.array(z.object({ id, title: z.string().min(1).max(300), confirmationRequired: z.boolean(), items: z.array(itemSchema).min(1).max(1000) })).min(1).max(20).optional(),
   itemId: id.optional(), checkId: id.optional(),
   stageId: id.optional(), items: z.array(itemSchema).min(1).max(1000).optional(),
   status: z.enum(['pending', 'running', 'passed', 'failed', 'blocked', 'not_applicable']).optional(),
   result: z.string().max(8000).optional(),
-  evidence: z.array(z.object({ toolCallId: id, description: z.string().min(1).max(2000) })).max(50).optional(),
+  evidence: z.array(z.object({ toolCallId: id.describe('A real tool call ID returned by read, or an exact ctx_ reference to a single persisted tool result in this session.'), description: z.string().min(1).max(2000) })).max(50).optional()
+    .describe('Required when the registered check has evidenceRequired=true and status is passed or failed. Describe what each referenced result actually demonstrates; result prose alone is not evidence.'),
   summary: z.string().max(16000).optional(),
 }).strict().superRefine((input, ctx) => {
   const required: Record<string, string[]> = { read: [], register: ['expectedRevision', 'title', 'stages'], appendItems: ['expectedRevision', 'stageId', 'items'], beginItem: ['expectedRevision', 'itemId'], recordCheck: ['expectedRevision', 'itemId', 'checkId', 'status', 'result'], submitStage: ['expectedRevision', 'summary'] };
   for (const key of required[input.action]) if (input[key as keyof typeof input] === undefined) ctx.addIssue({ code: 'custom', path: [key], message: `${input.action} requires ${key}. Use read to obtain current revision, item/check IDs and real evidence IDs.` });
 });
 
-export const workflowPrompt = `Maintain an optional plan for the user's task. Stages, items, checks, dependencies, evidence requirements and review boundaries come from that task; do not invent a standard business process. read returns current state and available evidence IDs. register defines the plan; appendItems adds scope; beginItem changes the current focus without completing other items; recordCheck records an item's actual outcome. Independent items can be in progress together. Use dependsOn only for actual prerequisites. status describes the registered check, not success of a tool invocation. Include evidence only for claims it supports. For mutations, copy expectedRevision from the latest result. submitStage saves a reviewable snapshot: with confirmationRequired it awaits user review, otherwise it advances only when all checks are terminal. An incomplete snapshot remains active without claiming completion. Only the user can approve a submitted review. A reply (including finalResponse) does not complete, cancel, or advance the plan. Report progress and remaining work accurately, and follow the user's requested stopping and confirmation boundaries. Use taskContext for durable task notes independently of this plan.`;
+const workflowBasePrompt = `Maintain an optional plan for the user's task. Stages, items, checks, dependencies, evidence requirements and review boundaries come from that task; do not invent a standard business process. read returns current state and available evidence IDs. register defines the plan; appendItems adds scope; beginItem changes the current focus without completing other items; recordCheck records an item's actual outcome. Independent items can be in progress together. Use dependsOn only for actual prerequisites. status describes the registered check, not success of a tool invocation. Include evidence only for claims it supports. For mutations, copy expectedRevision from the latest result. submitStage saves a reviewable snapshot: with confirmationRequired it awaits user review, otherwise it advances only when all checks are terminal. An incomplete snapshot remains active without claiming completion. Only the user can approve a submitted review. A reply (including finalResponse) does not complete, cancel, or advance the plan. Report progress and remaining work accurately, and follow the user's requested stopping and confirmation boundaries. Use taskContext for durable task notes independently of this plan.`;
+const workflowEvidencePrompt = 'For recordCheck with evidenceRequired=true and status passed/failed, include evidence:[{toolCallId,description}]. toolCallId accepts a real operational call ID or a ctx_ reference to exactly one persisted tool result in this session. Use read with several keywords to find evidence; paginate with nextOffset. The host verifies the reference, not the business claim: compare the evidence with the registered check yourself. A successful tool call does not prove a passed check, and result prose does not replace evidence.';
+
+export const workflowPrompt = `${workflowBasePrompt} ${workflowEvidencePrompt}`;
 
 export async function readWorkflow(sessionId: string, executor?: DatabaseExecutor): Promise<WorkflowPlan | undefined> {
   const row = await queryDatabaseOne<{ record_json: string }>('SELECT record_json FROM workflow_plan WHERE session_id = ?', [sessionId], executor);
@@ -57,10 +63,60 @@ export function workflowContinuationState(plan: WorkflowPlan) {
     stages: plan.stages.map(s => ({ id: s.id, title: s.title, itemCount: s.items.length })),
     nextAction: plan.status === 'awaiting_review' ? 'Stage snapshot awaits user review; a reply does not change this state.' : 'Use current revision for changes. In-progress independent items may be revisited. A reply does not change plan status.' };
 }
-async function availableEvidence(sessionId: string, query = '') {
-  const rows = await queryDatabase<{record_json: string}>('SELECT record_json FROM browser_chat_step WHERE session_id = ? ORDER BY step_index ASC', [sessionId]);
-  const traces = rows.flatMap(row => JSON.parse(row.record_json).tools || []) as Array<{id: string; name: string; reason?: string; result?: unknown}>;
-  return traces.filter(t => !['workflow', 'finalResponse'].includes(t.name) && (!query || JSON.stringify(t).toLowerCase().includes(query.toLowerCase()))).slice(-20).map(t => ({toolCallId: t.id, name: t.name, description: t.reason, result: String(typeof t.result === 'string' ? t.result : JSON.stringify(t.result)).slice(0, 600)}));
+type EvidenceTrace = { id: string; name: string; reason?: string; ok?: boolean; result?: unknown; rawResult?: unknown; screenshots?: Array<{ url?: string; title?: string }> };
+class WorkflowEvidenceError extends Error {
+  constructor(readonly code: 'required-evidence' | 'invalid-evidence', message: string) { super(message); }
+}
+async function evidenceTraces(sessionId: string, executor?: DatabaseExecutor) {
+  const rows = await queryDatabase<{ record_json: string }>('SELECT record_json FROM browser_chat_step WHERE session_id = ? ORDER BY step_index ASC', [sessionId], executor);
+  const traces = rows.flatMap(row => JSON.parse(row.record_json).tools || []) as EvidenceTrace[];
+  return [...new Map(traces.filter(t => t.id && !['workflow', 'finalResponse'].includes(t.name)
+    && (t.ok !== undefined || t.rawResult !== undefined)).map(t => [t.id, t])).values()];
+}
+function evidenceText(trace: EvidenceTrace) {
+  const raw = trace.rawResult && typeof trace.rawResult === 'object' ? trace.rawResult as Record<string, unknown> : undefined;
+  const value = raw?.data ?? raw?.actual ?? trace.result ?? trace.rawResult;
+  return typeof value === 'string' ? value : JSON.stringify(value) || '';
+}
+async function availableEvidence(sessionId: string, query = '', offset = 0, limit = 20) {
+  const traces = await evidenceTraces(sessionId);
+  const terms = [...new Set(query.toLowerCase().trim().split(/\s+/u).filter(Boolean))];
+  const ranked = traces.map((trace, index) => {
+    const text = evidenceText(trace);
+    const searchText = `${trace.id} ${trace.name} ${trace.reason || ''} ${text}`.toLowerCase();
+    const score = terms.reduce((sum, term) => sum + (searchText.includes(term) ? 1 : 0), 0);
+    return { trace, text, score, index };
+  }).sort((a, b) => b.score - a.score || b.index - a.index);
+  const matched = terms.length ? ranked.filter(entry => entry.score > 0) : ranked;
+  const candidates = matched.length ? matched : ranked;
+  const page = candidates.slice(offset, offset + limit);
+  return { availableEvidence: page.map(({ trace, text }) => {
+    const hit = terms.map(term => text.toLowerCase().indexOf(term)).filter(index => index >= 0).sort((a, b) => a - b)[0] ?? 0;
+    const start = Math.max(0, hit - 150);
+    return { toolCallId: trace.id, name: trace.name, description: trace.reason, toolSucceeded: trace.ok,
+      result: text.slice(start, start + 1200), previewOffset: start, totalCharacters: text.length };
+  }), evidencePage: { total: candidates.length, matchedCount: matched.length, offset,
+    nextOffset: offset + page.length < candidates.length ? offset + page.length : null,
+    usedRecentFallback: Boolean(terms.length && !matched.length) } };
+}
+
+async function resolveEvidence(sessionId: string, entries: WorkflowCheck['evidence'], executor: DatabaseExecutor) {
+  const tools = await evidenceTraces(sessionId, executor);
+  const resolved: WorkflowCheck['evidence'] = [];
+  for (const entry of entries) {
+    let trace = tools.find(tool => tool.id === entry.toolCallId);
+    if (!trace) {
+      const row = await queryDatabaseOne<{ record_json: string }>('SELECT record_json FROM browser_chat_context_record WHERE session_id = ? AND id = ?', [sessionId, entry.toolCallId], executor);
+      const record = row && JSON.parse(row.record_json);
+      const results = record?.role === 'tool' && Array.isArray(record.content)
+        ? record.content.filter((part: { type?: string }) => part.type === 'tool-result') : [];
+      if (results.length === 1) trace = tools.find(tool => tool.id === results[0].toolCallId && tool.name === results[0].toolName);
+    }
+    if (!trace) throw new WorkflowEvidenceError('invalid-evidence', `Evidence ${entry.toolCallId} must resolve to exactly one persisted operational tool result in this session. Use read for valid IDs.`);
+    resolved.push({ toolCallId: trace.id, description: entry.description, sourceSummary: evidenceText(trace).slice(0, 2000),
+      screenshots: (trace.screenshots || []).flatMap(s => s.url?.startsWith('/') ? [{ url: s.url, title: s.title || '截图证据' }] : []) });
+  }
+  return resolved;
 }
 
 export async function executeWorkflow(sessionId: string, raw: unknown) {
@@ -68,7 +124,7 @@ export async function executeWorkflow(sessionId: string, raw: unknown) {
     const input = workflowInputSchema.parse(raw);
     if (input.action === 'read') {
       const plan = await readWorkflow(sessionId);
-      return { ok: true, actual: JSON.stringify({ ...(plan ? workflowContinuationState(plan) : { registered: false, revision: 0 }), item: input.itemId ? plan && allItems(plan).find(i => i.id === input.itemId) : undefined, stage: input.stageId ? plan?.stages.find(s => s.id === input.stageId) : undefined, availableEvidence: await availableEvidence(sessionId, input.query) }) };
+      return { ok: true, actual: JSON.stringify({ ...(plan ? workflowContinuationState(plan) : { registered: false, revision: 0 }), item: input.itemId ? plan && allItems(plan).find(i => i.id === input.itemId) : undefined, stage: input.stageId ? plan?.stages.find(s => s.id === input.stageId) : undefined, ...await availableEvidence(sessionId, input.query, input.offset, input.limit) }) };
     }
     const plan = await runDatabaseTransaction(async manager => {
       let plan = await readWorkflow(sessionId, manager);
@@ -124,18 +180,10 @@ export async function executeWorkflow(sessionId: string, raw: unknown) {
             if (!check || !input.status) throw new Error('checkId and status required');
             if (['passed', 'failed'].includes(input.status) && !ready(plan, item)) throw new Error('Declared prerequisites are not satisfied.');
             if (!input.result?.trim()) throw new Error('Actual result or concrete blocker required.');
-            const evidence: WorkflowCheck['evidence'] = input.evidence || [];
-            if (check.evidenceRequired && ['passed', 'failed'].includes(input.status) && !evidence.length) throw new Error('Required tool evidence missing.');
-            if (evidence.length) {
-              const rows = await queryDatabase<{ record_json: string }>('SELECT record_json FROM browser_chat_step WHERE session_id = ?', [sessionId], manager);
-              const tools = rows.flatMap(row => (JSON.parse(row.record_json).tools || [])) as Array<{ id: string; name: string; result?: string; screenshots?: Array<{ url?: string; title?: string }> }>;
-              for (const entry of evidence) {
-                const trace = tools.find(t => t.id === entry.toolCallId && t.name !== 'workflow' && t.name !== 'finalResponse');
-                if (!trace) throw new Error('Evidence must reference a persisted operational tool call in this session.');
-                entry.sourceSummary = typeof trace.result === 'string' ? trace.result.slice(0, 2000) : '';
-                entry.screenshots = (trace.screenshots || []).flatMap(s => s.url && s.url.startsWith('/') ? [{ url: s.url, title: s.title || '截图证据' }] : []);
-              }
+            if (check.evidenceRequired && ['passed', 'failed'].includes(input.status) && !input.evidence?.length) {
+              throw new WorkflowEvidenceError('required-evidence', `Check ${item.id}/${check.id} requires evidence:[{toolCallId,description}] for status ${input.status}. The result text does not replace tool evidence.`);
             }
+            const evidence = input.evidence?.length ? await resolveEvidence(sessionId, input.evidence, manager) : [];
             check.status = input.status; check.result = input.result; check.evidence = evidence;
             if (plan.currentItemId === item.id && !unfinished(item)) plan.currentItemId = undefined;
           }
@@ -148,7 +196,14 @@ export async function executeWorkflow(sessionId: string, raw: unknown) {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const current = await readWorkflow(sessionId).catch(() => undefined);
-    return { ok: false, actual: JSON.stringify({ error: message, ...(current ? workflowContinuationState(current) : { revision: 0 }), recovery: 'Call read (optionally query) for real evidence IDs. Correct the listed parameters; do not repeat the rejected input.' }) };
+    const evidenceFailure = error instanceof WorkflowEvidenceError;
+    const failureCategory = evidenceFailure || error instanceof z.ZodError ? 'invalid-input'
+      : /revision|plan changed/i.test(message) ? 'state-conflict' : 'reported-failure';
+    return { ok: false, failureCategory, actual: JSON.stringify({ error: message, failureCategory,
+      ...(evidenceFailure ? { code: error.code, field: 'evidence', ...await availableEvidence(sessionId).catch(() => ({ availableEvidence: [] })) } : {}),
+      ...(current ? workflowContinuationState(current) : { revision: 0 }),
+      recovery: evidenceFailure ? 'Provide evidence:[{toolCallId,description}] using a returned ID or an exact ctx_ reference to one operational result. For more specific evidence call read with keywords and nextOffset; do not omit evidence to bypass the requirement.'
+        : 'Read the current plan and correct the listed parameters; do not repeat the rejected input.' }) };
   }
 }
 

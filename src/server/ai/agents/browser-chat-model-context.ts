@@ -3,7 +3,7 @@ import { modelMessageSchema, type ModelMessage } from 'ai';
 import type { RuntimeContextManifest } from './runtime-context-assembler';
 import type { RuntimeKnowledgeState } from './runtime-knowledge-context';
 import { stripBrowserChatContextMarkers } from '../../../lib/browser-chat-visible-text';
-import { withoutRuntimePromptCacheMetadata } from './runtime-prompt-cache';
+import { withoutRuntimePromptCacheMetadata, isRuntimePromptCacheMetadataMessage } from './runtime-prompt-cache';
 import { parseContextSummary } from './runtime-semantic-summary';
 import { completeRuntimeModelToolChain } from './runtime-context-compression';
 
@@ -66,11 +66,18 @@ export function browserChatContextRecordId(message: ModelMessage) {
 }
 
 export function browserChatTranscript(context: BrowserChatModelContext) {
-  return context.history.map((id) => context.records[id]).filter(Boolean);
+  return contextMessages(context.records, context.history);
 }
 
 export function browserChatActiveMessages(context: BrowserChatModelContext) {
-  return completeRuntimeModelToolChain(context.active.map((id) => context.records[id]).filter(Boolean));
+  return completeRuntimeModelToolChain(contextMessages(context.records, context.active));
+}
+
+function contextMessages(records: Record<string, ModelMessage>, refs: string[]) {
+  return refs.map(ref => {
+    if (!Object.hasOwn(records, ref)) throw new Error(`Missing browser-chat context record: ${ref}`);
+    return records[ref];
+  });
 }
 
 export function archiveBrowserChatContextMessages(context: BrowserChatModelContext, messages: ModelMessage[]) {
@@ -89,6 +96,11 @@ function modelMessageText(message: ModelMessage) {
     const text = 'text' in part && typeof part.text === 'string' ? part.text.trim() : '';
     return text ? [text] : [];
   }).join('\n').trim();
+}
+
+export function latestBrowserChatUserMessageIndex(messages: ModelMessage[]) {
+  return messages.findLastIndex(message => message.role === 'user' && !isRuntimePromptCacheMetadataMessage(message)
+    && !/^\[(?:Approved historical memory|Historical handoff|Historical context segment|Document visual QA|Attachment visual content|Explicit visual evidence|Browser observation)/.test(modelMessageText(message)));
 }
 
 function currentTurnContains(messages: ModelMessage[], role: 'user' | 'assistant', text: string) {
@@ -112,9 +124,9 @@ export function appendTerminalBrowserChatTurn(messages: ModelMessage[], userCont
 
 export function normalizeBrowserChatModelMessages(value: unknown): ModelMessage[] {
   if (!Array.isArray(value)) return [];
-  return value.flatMap((message) => {
+  return value.flatMap((message, index) => {
     const parsed = modelMessageSchema.safeParse(message);
-    if (!parsed.success) return [];
+    if (!parsed.success) throw new Error(`Invalid model context message at index ${index}: ${parsed.error.issues[0]?.message || 'invalid protocol'}`);
     const normalized = withoutPersistentBinaryParts(parsed.data);
     if (normalized.role === 'assistant' && typeof normalized.content === 'string') {
       const content = stripBrowserChatContextMarkers(normalized.content).trim();
@@ -134,12 +146,13 @@ export function normalizeBrowserChatModelContext(value: unknown): BrowserChatMod
     records[id] = message;
     return id;
   });
+  if (record.transcript === undefined) contextMessages(records, record.history || []);
   const history = record.transcript !== undefined
     ? register(withoutRuntimePromptCacheMetadata(normalizeBrowserChatModelMessages(record.transcript)))
-    : (record.history || []).filter((id) => Boolean(records[id]));
+    : record.history || [];
   const active = record.activeMessages !== undefined
     ? register(withoutRuntimePromptCacheMetadata(normalizeBrowserChatModelMessages(record.activeMessages)))
-    : register(withoutRuntimePromptCacheMetadata(normalizeBrowserChatModelMessages((record.active || []).map((id) => records[id]).filter(Boolean))));
+    : register(withoutRuntimePromptCacheMetadata(normalizeBrowserChatModelMessages(contextMessages(records, record.active || []))));
   const compression = record.lastCompression;
   const continuationSummary = parseContextSummary(record.continuationSummary) ? record.continuationSummary! : '';
   return {

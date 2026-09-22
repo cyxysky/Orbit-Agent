@@ -13,7 +13,7 @@ import type {
   WindowWithAiDomRuntime,
 } from './browser-session.ts';
 
-export const AI_DOM_RUNTIME_VERSION = 29;
+export const AI_DOM_RUNTIME_VERSION = 30;
 
 export function installAccessibilitySnapshotExportControl() {
   if (window.top !== window) return;
@@ -92,7 +92,7 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
     Object.defineProperty(win, '__name', {
       configurable: true,
       enumerable: false,
-      value(target: Function, value: string) {
+      value<T extends object>(target: T, value: string) {
         try { Object.defineProperty(target, 'name', { configurable: true, value }); } catch {}
         return target;
       },
@@ -2306,6 +2306,8 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
       const likelyOverlay = modal
         || popover
         || (controlled && !edgeChrome)
+        || (['menu', 'listbox', 'tree'].includes(role)
+          && ['absolute', 'fixed'].includes(style.position) && topAtCenterInside && !edgeChrome)
         || (zIndexOutlier && topAtCenterInside && !edgeChrome);
       const id = `surface-${visibleDomState().instanceId}-${visibleDomRef(element)}`;
       const surface: BrowserActiveSurface = {
@@ -2391,9 +2393,7 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
       return 1 + depthOf(parent, seen);
     };
     for (const entry of scored) entry.surface.depth = depthOf(entry);
-    const leafEntries = scored.filter((entry) => !scored.some((candidate) => candidate.surface.parentId === entry.surface.id));
-    const likelyOverlayLeafEntries = leafEntries.filter((entry) => entry.surface.likelyOverlay);
-    const strongOverlayLeafEntries = likelyOverlayLeafEntries.filter((entry) => (
+    const strongOverlayEntries = scored.filter((entry) => entry.surface.likelyOverlay && (
       entry.surface.modal
       || entry.surface.kind !== 'overlay'
       || entry.surface.signals.includes('popover')
@@ -2403,7 +2403,18 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
       || newlyVisibleSurfaceElements.has(entry.element)
       || recognizedDynamicOverlayElements.has(entry.element)
     ));
-    const scopeEntries = strongOverlayLeafEntries;
+    // Inline widgets are also surface records, but must not hide their modal
+    // ancestor from the active stack. Choose leaves among actual overlays only.
+    const scopeEntries = strongOverlayEntries.filter((entry) => !strongOverlayEntries.some((candidate) => {
+      const seen = new Set<string>();
+      let parentId = candidate.surface.parentId;
+      while (parentId && !seen.has(parentId)) {
+        if (parentId === entry.surface.id) return true;
+        seen.add(parentId);
+        parentId = scored.find(parent => parent.surface.id === parentId)?.surface.parentId;
+      }
+      return false;
+    }));
     const activeCandidates = scopeEntries;
     const activeEntry = [...activeCandidates].sort((left, right) => (
       Number(right.surface.likelyOverlay) - Number(left.surface.likelyOverlay)

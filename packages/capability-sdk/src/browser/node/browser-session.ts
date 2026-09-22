@@ -1394,7 +1394,9 @@ export class BrowserSession {
         else if (input.kind === 'scroll') {
           await page.mouse.move(input.x!, input.y!);
           await page.mouse.wheel(input.deltaX || 0, input.deltaY || 0);
-        } else if (input.kind === 'type') await page.keyboard.insertText(input.text!);
+        } else if (input.kind === 'type') await page.keyboard.type(input.text!, {
+          delay: boundedNonNegativeIntegerEnv('BROWSER_KEYBOARD_TYPE_DELAY_MS', 50, 200, this.runtimeEnvironment()),
+        });
         else {
           try { await page.keyboard.press(input.key!); }
           catch (error) {
@@ -2238,11 +2240,22 @@ export class BrowserSession {
     this.notifyLivePreviewTabsChanged();
   }
 
-  private handleLivePreviewVisibility(page: Page, visible: boolean) {
+  private async handleLivePreviewVisibility(page: Page, visible: boolean) {
     if (!visible || page.isClosed() || !this.ownedPages.has(page)) return;
     if ((this.livePreviewBackgroundPageUntil.get(page) || 0) > Date.now()) return;
     if (Date.now() - this.livePreviewExplicitPageSelectionAt < 1_000) return;
-    if (this.page !== page) {
+    const selected = this.page;
+    const sequence = this.livePreviewExplicitPageSelectionSequence;
+    // Initial reports and delayed visibility events can arrive after a tab switch.
+    // Confirm the current state of both pages before changing the selected target.
+    const [visibleNow, selectedVisible] = await Promise.all([
+      page.evaluate(() => document.visibilityState === 'visible').catch(() => false),
+      selected && !selected.isClosed()
+        ? selected.evaluate(() => document.visibilityState === 'visible').catch(() => false)
+        : Promise.resolve(false),
+    ]);
+    if (this.page !== selected || this.livePreviewExplicitPageSelectionSequence !== sequence) return;
+    if (visibleNow && !selectedVisible && !page.isClosed() && this.ownedPages.has(page) && this.page !== page) {
       this.page = page;
       this.notifyLivePreviewTabsChanged();
     }
@@ -2626,6 +2639,8 @@ export class BrowserSession {
 
   private async refreshSessionGroupPages(options: { forceNativeRefresh?: boolean } = {}) {
     this.ensureLivePreviewState();
+    const selected = this.page;
+    const sequence = this.livePreviewExplicitPageSelectionSequence;
     const context = this.context;
     if (!context) return this.sessionPages();
 
@@ -2652,7 +2667,8 @@ export class BrowserSession {
       page,
       visible: await page.evaluate(() => document.visibilityState === 'visible').catch(() => false),
     })));
-    const currentPageVisible = visibility.some((item) => item.page === this.page && item.visible);
+    if (this.page !== selected || this.livePreviewExplicitPageSelectionSequence !== sequence) return pages;
+    const currentPageVisible = visibility.some((item) => item.page === selected && item.visible);
     const visiblePage = visibility.find((item) => (
       item.visible && (this.livePreviewBackgroundPageUntil.get(item.page) || 0) <= now
     ))?.page;
@@ -2674,19 +2690,24 @@ export class BrowserSession {
 
   private async activateSessionPage(page: Page) {
     this.ensureLivePreviewState();
+    const sequence = ++this.livePreviewExplicitPageSelectionSequence;
+    this.livePreviewExplicitPageSelectionAt = Date.now();
+    this.page = page;
     this.livePreviewBackgroundPageUntil.delete(page);
     const context = this.context;
     if (context && this.nativeTabGrouperEnabled) {
       const nativeGroup = await this.findNativeTabGroupTabs(context);
+      if (sequence !== this.livePreviewExplicitPageSelectionSequence || page.isClosed()) return;
       const nativeTabId = this.nativeTabIdByPage.get(page);
       if (nativeGroup?.found && nativeTabId) {
         await this.activateNativeTabGroupTab(context, nativeGroup.tabs, nativeTabId);
       }
     }
+    if (sequence !== this.livePreviewExplicitPageSelectionSequence || page.isClosed()) return;
     await page.bringToFront();
+    if (sequence !== this.livePreviewExplicitPageSelectionSequence || page.isClosed()) return;
     this.page = page;
     this.livePreviewExplicitPageSelectionAt = Date.now();
-    this.livePreviewExplicitPageSelectionSequence += 1;
     this.notifyLivePreviewTabsChanged();
   }
 
@@ -4675,6 +4696,7 @@ export class BrowserSession {
     this.browserCodeKernelRevision = BROWSER_CODE_KERNEL_RUNTIME_REVISION;
     const executionContext = this.context;
     const pagesBeforeExecution = new Set(executionContext?.pages() || []);
+    const selectionSequenceBeforeExecution = this.livePreviewExplicitPageSelectionSequence;
     const pagesCreatedDuringExecution = new Set<Page>();
     const downloads = this.browserDownloads();
     const downloadStart = downloads?.begin(input.runId, input.abortSignal) ?? 0;
@@ -4717,7 +4739,16 @@ export class BrowserSession {
         }
       }
     }
-    const finalPage = selectedPage || (!page.isClosed() ? page : this.sessionPages().find((candidate) => !candidate.isClosed())) || page;
+    const explicitKernelSelection = execution.activity?.actions.includes('tab.use') === true;
+    const newerSelection = selectionSequenceBeforeExecution !== this.livePreviewExplicitPageSelectionSequence;
+    // A read or a popup-opening click still returns the kernel's original binding.
+    // Do not let that stale binding undo a popup selection or a user's tab switch.
+    const finalPage = (explicitKernelSelection && !newerSelection ? selectedPage : this.page)
+      || selectedPage || (!page.isClosed() ? page : this.sessionPages().find((candidate) => !candidate.isClosed())) || page;
+    if (explicitKernelSelection && !newerSelection && !finalPage.isClosed()) {
+      this.livePreviewExplicitPageSelectionSequence += 1;
+      this.livePreviewExplicitPageSelectionAt = Date.now();
+    }
     if (!finalPage.isClosed() && this.page !== finalPage) {
       this.page = finalPage;
       this.notifyLivePreviewTabsChanged();
@@ -4755,6 +4786,7 @@ export class BrowserSession {
     const payload = {
       result: execution.value ?? null,
       ...(effectiveError ? { error: effectiveError } : {}),
+      ...(execution.diagnostics ? { diagnostics: execution.diagnostics } : {}),
       ...(execution.aborted === true ? { aborted: true } : {}),
       ...(execution.executionState ? { executionState: execution.executionState } : {}),
       ...(downloaded.length ? { downloads: downloaded } : {}),
@@ -4777,7 +4809,7 @@ export class BrowserSession {
       data: payload,
       summary: effectiveOk
         ? `Browser script returned in ${Date.now() - operation.startedAt}ms; business outcome requires verification from the returned evidence.`
-        : `Browser script ${reportedFailure ? 'returned a failure' : execution.executionState?.status || 'failed'}; ${execution.executionState?.completedActions.length || 0} action(s) completed. See data.error for details and inspect the current page before retrying.`,
+        : `Browser script ${reportedFailure ? 'returned a failure' : execution.executionState?.status || 'failed'}; ${execution.executionState?.completedActions.length || 0} action(s) completed. Review data.error, data.diagnostics when available, and the current observation before choosing a changed recovery action.`,
       ...(emittedImagePaths.length ? { referenceImagePath: emittedImagePaths[0], referenceImagePaths: emittedImagePaths } : {}),
       verification: inferredActivity.verification,
     };
@@ -4946,75 +4978,6 @@ export class BrowserSession {
         this.ownedPages.clear();
       }
     }
-  }
-
-  private async insertFocusedTextFast(text: string, timings?: Record<string, number>): Promise<boolean> {
-    if (!text) return true;
-    // Do the value update inside the document first.  Unlike
-    // locator.pressSequentially(), this has no per-character actionability
-    // wait, so a focused search box cannot spend the full default timeout
-    // while an application rerenders around it.  Returning false is reserved
-    // for controls that are not native text inputs/contenteditables; callers
-    // can then use Playwright's keyboard path as the general fallback.
-    return Boolean(await timedBrowserStep(timings, 'domTextMs', () => this.insertTextIntoFocusedElement(text)));
-  }
-
-  private async insertTextIntoFocusedElement(text: string) {
-    return Boolean(await this.activePage.evaluate((value) => {
-      const active = document.activeElement;
-      if (!active) return false;
-      const input = active as HTMLInputElement;
-      const isTextControl = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement;
-      if (isTextControl) {
-        // Preserve the observable keyboard lifecycle expected by pages that
-        // listen for it, but dispatch it inside one page evaluation rather
-        // than waiting for Playwright to type every character.
-        for (const key of Array.from(value)) {
-          active.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key }));
-          active.dispatchEvent(new KeyboardEvent('keypress', { bubbles: true, cancelable: true, key }));
-        }
-        const currentValue = String(input.value || '');
-        const start = typeof input.selectionStart === 'number' ? input.selectionStart : currentValue.length;
-        const end = typeof input.selectionEnd === 'number' ? input.selectionEnd : start;
-        const nextValue = `${currentValue.slice(0, start)}${value}${currentValue.slice(end)}`;
-        const prototype = active instanceof HTMLTextAreaElement
-          ? HTMLTextAreaElement.prototype
-          : HTMLInputElement.prototype;
-        const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
-        if (setter) setter.call(input, nextValue);
-        else input.value = nextValue;
-        const cursor = start + value.length;
-        try {
-          input.setSelectionRange?.(cursor, cursor);
-        } catch {
-          // Some input types do not support selection ranges; the value update still succeeded.
-        }
-        active.dispatchEvent(new InputEvent('input', {
-          bubbles: true,
-          cancelable: true,
-          data: value,
-          inputType: 'insertText',
-        }));
-        active.dispatchEvent(new Event('change', { bubbles: true }));
-        for (const key of Array.from(value)) {
-          active.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, cancelable: true, key }));
-        }
-        return true;
-      }
-      const editable = active.closest('[contenteditable=""], [contenteditable="true"]') as HTMLElement | null;
-      if (editable) {
-        editable.focus();
-        document.execCommand('insertText', false, value);
-        editable.dispatchEvent(new InputEvent('input', {
-          bubbles: true,
-          cancelable: true,
-          data: value,
-          inputType: 'insertText',
-        }));
-        return true;
-      }
-      return false;
-    }, text).catch(() => false));
   }
 
   private async waitForStableViewport(ms: number) {
@@ -7584,13 +7547,10 @@ export class BrowserSession {
           await page.keyboard.press('Backspace');
         }
       }
-      const delay = boundedNonNegativeIntegerEnv('BROWSER_KEYBOARD_TYPE_DELAY_MS', 0, 200, this.runtimeEnvironment());
-      const fastInserted = input.allowedOrigins?.length ? false : await this.insertFocusedTextFast(text);
-      if (!fastInserted) {
-        if (targetHandle) await targetHandle.type(text, { delay });
-        else if (targetLocator) await targetLocator.pressSequentially(text, { delay });
-        else await page.keyboard.type(text, { delay });
-      }
+      const delay = boundedNonNegativeIntegerEnv('BROWSER_KEYBOARD_TYPE_DELAY_MS', 50, 200, this.runtimeEnvironment());
+      if (targetHandle) await targetHandle.type(text, { delay });
+      else if (targetLocator) await targetLocator.pressSequentially(text, { delay });
+      else await page.keyboard.type(text, { delay });
       if (input.followByEnter) {
         if (targetHandle) await targetHandle.press('Enter');
         else if (targetLocator) await targetLocator.press('Enter');

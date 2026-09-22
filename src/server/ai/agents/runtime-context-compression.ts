@@ -18,12 +18,15 @@ export function completeRuntimeModelToolChain(messages: ModelMessage[]) {
     const message = messages[index];
     const callIds = modelMessageToolCallIds(message);
     if (callIds.size) {
+      const calls = Array.isArray(message.content) ? message.content.filter(part => part.type === 'tool-call') : [];
+      if (calls.length !== callIds.size) throw new Error('Duplicate tool call IDs in a model decision.');
+      const callNames = new Map(calls.map(part => [part.toolCallId, part.toolName]));
       const toolMessages: ModelMessage[] = [];
       const resultIds = new Set<string>();
       const assistantContent = Array.isArray(message.content)
         ? message.content.filter((part) => {
             if (part.type !== 'tool-result' || typeof part.toolCallId !== 'string') return true;
-            if (!callIds.has(part.toolCallId)) return false;
+            if (callNames.get(part.toolCallId) !== part.toolName || resultIds.has(part.toolCallId)) return false;
             resultIds.add(part.toolCallId);
             return true;
           })
@@ -34,7 +37,7 @@ export function completeRuntimeModelToolChain(messages: ModelMessage[]) {
         const content = Array.isArray(toolMessage.content)
           ? toolMessage.content.filter((part) => {
               if (part.type !== 'tool-result' || typeof part.toolCallId !== 'string') return false;
-              if (!callIds.has(part.toolCallId)) return false;
+              if (callNames.get(part.toolCallId) !== part.toolName || resultIds.has(part.toolCallId)) return false;
               resultIds.add(part.toolCallId);
               return true;
             })

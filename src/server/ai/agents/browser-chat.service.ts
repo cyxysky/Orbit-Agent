@@ -1,6 +1,7 @@
 import { normalizeBrowserChatInteractionMode, type BrowserChatInteractionMode } from '@/lib/browser-chat-interaction-mode';
 import { enqueueMemoryJob, runMemoryJobs } from '../runtime-memory-lifecycle';
 import { browserChatHasPendingManualVerification } from '@/lib/browser-chat-tools';
+import { browserChatToolSource } from '@/lib/browser-chat-tool-source';
 import { compareBrowserChatSessionCreation } from '@/lib/browser-chat-session-order';
 import { markdownBlock } from '@cjfclonedeep/capability-sdk/responses';
 import { createHash, randomUUID } from 'node:crypto';
@@ -1564,6 +1565,7 @@ function compactRealtimeValue(value: unknown, depth = 0): unknown {
 function compactRealtimeTool<T extends StepToolCall | BrowserChatAiOutputTool>(tool: T): T {
   const realtimeTool = {
     ...tool,
+    contentSource: browserChatToolSource(tool, []),
     // Filter while raw observation metadata is still present. Realtime strips
     // rawResult below; the full history endpoint retains it.
     screenshots: browserChatToolScreenshots(tool),
@@ -2679,6 +2681,7 @@ function mergePersistedTools(existing: StepExecutionResult['tools'], incoming: S
       reason: preferred.reason ?? fallback.reason,
       result: preferred.result ?? fallback.result,
       rawResult: preferred.rawResult ?? fallback.rawResult,
+      contentSource: preferred.contentSource ?? fallback.contentSource,
       ok: preferred.ok ?? fallback.ok,
       error: preferred.error ?? fallback.error,
       contextBefore: preferred.contextBefore ?? fallback.contextBefore,
@@ -4327,7 +4330,9 @@ function runningActivityFromLog(phase: string, message: string) {
   if (phase === 'ai:runtime:attempt') return message;
   if (phase === 'ai:runtime:prepare') return '正在检查上下文与压缩阈值';
   if (phase === 'ai:context-compression:start') return '正在压缩上下文';
-  if (phase === 'ai:context-compression:progress' || phase === 'ai:context-compression:error') return message;
+  if (phase === 'ai:context-compression:progress' || phase === 'ai:context-compression:error'
+    || phase === 'ai:context-compression:retry' || phase === 'ai:context-compression:partial'
+    || phase === 'ai:context-compression:limited' || phase === 'ai:context-compression:skipped') return message;
   if (phase === 'ai:context-compression:complete' || phase === 'ai:context-segmented') return '上下文压缩完成，正在准备模型输入';
   if (phase === 'ai:runtime:request' || phase === 'ai:runtime:dispatch') return message.startsWith('等待 AI 首包') ? message : '等待 AI 首包';
   if (phase === 'ai:runtime:response-headers' || phase === 'ai:runtime:receiving') return message;
@@ -5804,12 +5809,13 @@ async function runBrowserChatMessage(
           persistAndNotify(session.id, { defer: true, mergePersisted: false });
         },
         onActiveModelCheckpoint: async (activeMessages) => {
-          if (!isActiveBrowserChatTurn(session, assistantMessageId, abortController)) return;
+          assertTurnActive();
           session.modelContext = normalizeBrowserChatModelContext({
             ...session.modelContext,
             activeMessages: serializableBrowserChatModelMessages(activeMessages),
           });
           if (!(await persistBrowserChatCheckpoint(session.id))) throw new Error('Failed to persist active context checkpoint.');
+          assertTurnActive();
         },
         onModelMessages: ({ activeMessages, turnMessages }) => {
           if (!isActiveBrowserChatTurn(session, assistantMessageId, abortController)) return;
@@ -5893,6 +5899,8 @@ async function runBrowserChatMessage(
             || event.phase === 'ai:runtime:dispatch'
             || event.phase === 'ai:context-compression:start'
             || event.phase === 'ai:context-compression:progress'
+            || event.phase === 'ai:context-compression:partial'
+            || event.phase === 'ai:context-compression:limited'
             || event.phase === 'ai:context-compression:complete') {
             const usage = browserChatContextUsageFromDebugDetails(event.details, {
               provider: session.modelProvider,

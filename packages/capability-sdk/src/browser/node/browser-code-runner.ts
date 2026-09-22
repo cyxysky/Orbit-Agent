@@ -66,6 +66,7 @@ export type BrowserCodeRunResult = {
   ok: boolean;
   value?: unknown;
   error?: string;
+  diagnostics?: unknown;
   elapsedMs: number;
   logs: BrowserCodeExecutionLog[];
   images?: BrowserCodeImage[];
@@ -338,7 +339,7 @@ type PendingExecution = {
 const maxDiagnosticChars = 4_000;
 const defaultBrowserCodeKernelReadyTimeoutMs = 10_000;
 const defaultBrowserCodeExecutionTimeoutMs = 90_000;
-export const BROWSER_CODE_KERNEL_RUNTIME_REVISION = 42;
+export const BROWSER_CODE_KERNEL_RUNTIME_REVISION = 44;
 
 function boundedInteger(value: unknown, fallback: number, min: number, max: number) {
   const parsed = typeof value === 'number' ? value : Number(value);
@@ -485,6 +486,7 @@ function browserCodeKernelMain() {
   };
   type CoordinateRectEvidence = CoordinateClickEvidence & {
     rect: { height: number; width: number; x: number; y: number };
+    locator: import('playwright').Locator;
   };
   type KernelUidBinding = BrowserCodeUidReference & {
     frame: import('playwright').Frame;
@@ -1011,11 +1013,14 @@ function browserCodeKernelMain() {
     return observation;
   };
 
-  const prepareStateChangingAction = (
+  const prepareStateChangingAction = async (
     page: import('playwright').Page | undefined,
     action: string,
     report = true,
   ) => {
+    if (page && activeExecution && !activeExecution.observationsBeforeAction.has(page)) {
+      await markPageObserved(page);
+    }
     if (page) {
       // Even a timed-out input can mutate a page. Retire coordinate evidence BEFORE dispatch.
       for (const [id, evidence] of coordinateClickEvidenceByDocument) if (evidence.page === page) coordinateClickEvidenceByDocument.delete(id);
@@ -1485,6 +1490,7 @@ function browserCodeKernelMain() {
         } catch (error) {
           await restoreScrollState();
           const detail = (error instanceof Error ? error.message : String(error))
+            .replace(/\u001b\[[0-9;]*m/g, '')
             .replace(/\s+/g, ' ')
             .slice(0, 600);
           trialResults.push({
@@ -1633,7 +1639,14 @@ function browserCodeKernelMain() {
       Date.now() - evidence.capturedAt <= coordinateEvidenceMaxAgeMs
       && sameCoordinateClickState(evidence, current)
     ));
-    if (validRects.some((evidence) => coordinatePointInsideRect(x, y, evidence.rect))) {
+    for (const evidence of validRects.filter(item => coordinatePointInsideRect(x, y, item.rect))) {
+      // Measuring a covered element is allowed. Using its rect as click evidence
+      // must still validate that exact live target at the moment of dispatch.
+      await resolveActionableLocator(evidence.locator, 'click');
+      const afterTrial = await captureCoordinateClickState(page);
+      if (!sameCoordinateClickState(evidence, afterTrial)) {
+        throw new Error('Coordinate evidence changed during actionability checking. Read a fresh boundingBox before clicking.');
+      }
       return;
     }
     if (publishedRects.length) {
@@ -1738,7 +1751,7 @@ function browserCodeKernelMain() {
       }
       const trustedLocator = Reflect.apply(nativeFrameLocator, targetFrame, [selector]);
       const actionableLocator = await resolveActionableLocator(trustedLocator, 'fill');
-      prepareStateChangingAction(targetPage, 'credential.fill');
+      await prepareStateChangingAction(targetPage, 'credential.fill');
       await moveVisibleAiPointer(targetPage, await locatorCenter(actionableLocator), 'click');
       await Reflect.apply(nativeLocatorFill, actionableLocator, [credential.value]);
       await completeStateChangingAction(targetPage, 'credential.fill');
@@ -1782,7 +1795,7 @@ function browserCodeKernelMain() {
       }
       const trustedLocator = Reflect.apply(nativeFrameLocator, targetFrame, [selector]);
       const fileInput = await resolveActionableLocator(trustedLocator, 'setInputFiles');
-      prepareStateChangingAction(targetPage, 'attachment.setInputFiles');
+      await prepareStateChangingAction(targetPage, 'attachment.setInputFiles');
       await Reflect.apply(nativeSetInputFiles, fileInput, [attachment.path]);
       await completeStateChangingAction(targetPage, 'attachment.setInputFiles');
       const selectedFiles = await fileInput.evaluate((element) => Array.from(
@@ -1826,10 +1839,9 @@ function browserCodeKernelMain() {
           configurable: true,
           value: async function trackedLocatorBoundingBox(this: object, ...args: unknown[]) {
             const targetPage = locatorPage(this);
-            const targetLocator = targetPage && activeExecution
-              ? await resolveActionableLocator(this, 'click')
-              : this;
-            const rect = await Reflect.apply(locatorBoundingBox, targetLocator, args) as {
+            // A geometry read must not run click trials, scroll the page, or fail
+            // because a different surface covers the element being inspected.
+            const rect = await Reflect.apply(locatorBoundingBox, this, args) as {
               height: number;
               width: number;
               x: number;
@@ -1847,6 +1859,7 @@ function browserCodeKernelMain() {
               if (state) {
                 const evidence: CoordinateRectEvidence = {
                   ...state,
+                  locator: this as import('playwright').Locator,
                   capturedAt: Date.now(),
                   rect: { height: rect.height, width: rect.width, x: rect.x, y: rect.y },
                 };
@@ -1909,7 +1922,7 @@ function browserCodeKernelMain() {
                   ? normalizedArgs[0]
                   : await resolveActionableLocator(normalizedArgs[0], name);
               }
-              if (changesState) prepareStateChangingAction(targetPage, `locator.${name}`);
+              if (changesState) await prepareStateChangingAction(targetPage, `locator.${name}`);
               await moveVisibleAiPointer(targetPage, await locatorCenter(actionableLocator), kind);
               if (name === 'dragTo' && executionArgs[0] && typeof executionArgs[0] === 'object') {
                 await moveVisibleAiPointer(targetPage, await locatorCenter(executionArgs[0]), 'move');
@@ -1972,7 +1985,7 @@ function browserCodeKernelMain() {
               actionableLocator = await resolveActionableLocator(locatorToResolve, name);
               await moveVisibleAiPointer(targetPage, await locatorCenter(actionableLocator), 'click');
             }
-            if (targetPage) prepareStateChangingAction(targetPage, `locator.${name}`, false);
+            if (targetPage) await prepareStateChangingAction(targetPage, `locator.${name}`, false);
             const result = await Reflect.apply(original, actionableLocator, args);
             await completeStateChangingAction(targetPage, `locator.${name}`);
             return result;
@@ -2036,7 +2049,7 @@ function browserCodeKernelMain() {
                     : await resolveActionableLocator(locatorToResolve, name === 'dragAndDrop' ? 'dragTo' : name),
                 );
               }
-              if (changesState) prepareStateChangingAction(page, `page.${name}`);
+              if (changesState) await prepareStateChangingAction(page, `page.${name}`);
               const orderedTargets = targetIndices
                 .map((targetIndex) => targetLocators.get(targetIndex))
                 .filter((locator): locator is import('playwright').Locator => Boolean(locator));
@@ -2119,7 +2132,7 @@ function browserCodeKernelMain() {
               actionableLocator = await resolveActionableLocator(locatorToResolve, name);
               await moveVisibleAiPointer(page, await locatorCenter(actionableLocator), 'click');
             }
-            prepareStateChangingAction(page, `page.${name}`);
+            await prepareStateChangingAction(page, `page.${name}`);
             let result: unknown;
             if (activeExecution && actionableLocator) {
               const nativeLocatorAction = nativeLocatorActions.get(name);
@@ -2153,7 +2166,7 @@ function browserCodeKernelMain() {
         Object.defineProperty(mouse, 'move', {
           configurable: true,
           value: async (x: number, y: number, options?: unknown) => {
-            prepareStateChangingAction(page, 'mouse.move');
+            await prepareStateChangingAction(page, 'mouse.move');
             await moveVisibleAiPointer(page, { x, y }, 'move');
             const result = await Reflect.apply(nativeMove, page.mouse, [x, y, options]);
             await completeStateChangingAction(page, 'mouse.move');
@@ -2173,7 +2186,7 @@ function browserCodeKernelMain() {
           value: async (x: number, y: number, options?: { button?: string; clickCount?: number }) => {
             await requireCoordinateClickEvidence(page, x, y);
             await markPageObserved(page);
-            prepareStateChangingAction(page, 'mouse.click');
+            await prepareStateChangingAction(page, 'mouse.click');
             const kind = options?.button === 'right' ? 'right' : (options?.clickCount || 1) > 1 ? 'double' : 'click';
             await moveVisibleAiPointer(page, { x, y }, kind);
             const result = await Reflect.apply(nativeClick, page.mouse, [x, y, options]);
@@ -2199,10 +2212,10 @@ function browserCodeKernelMain() {
           configurable: true,
           value: async (...args: unknown[]) => {
             if (options.componentOnly) {
-              prepareStateChangingAction(page, action);
+              await prepareStateChangingAction(page, action);
               return Reflect.apply(original, device, args);
             }
-            prepareStateChangingAction(page, action);
+            await prepareStateChangingAction(page, action);
             const result = await Reflect.apply(original, device, args);
             await completeStateChangingAction(page, action);
             return result;
@@ -2249,8 +2262,13 @@ function browserCodeKernelMain() {
     replServer.context.page = page;
     replServer.context.context = page.context();
     replServer.context.tab = tabForPage(page);
-    recordAction('tab.use');
     return page;
+  };
+
+  const activatePage = async (page: import('playwright').Page) => {
+    recordAction('tab.use');
+    await page.bringToFront();
+    return selectPage(page);
   };
 
   const pageFromTab = (value: unknown) => {
@@ -2281,6 +2299,7 @@ function browserCodeKernelMain() {
     includes?: string;
     url?: string | RegExp;
     activeSurface?: 'opened' | 'closed' | 'changed' | 'present' | 'absent';
+    surfaceId?: string;
   };
 
   const verifyPageState = async (
@@ -2306,18 +2325,29 @@ function browserCodeKernelMain() {
       if (
         ['opened', 'closed', 'changed'].includes(input.activeSurface)
         && !lastAction?.before
+        && !(input.activeSurface === 'closed' && input.surfaceId)
       ) {
         throw new Error(
           `page.verifyState() activeSurface="${input.activeSurface}" requires a preceding browser action observation. `
           + 'Use activeSurface="present"/"absent" for a standalone current-state check.',
         );
       }
-      const beforeId = lastAction?.before?.activeSurface?.id || '';
-      const currentId = current.activeSurface?.id || '';
+      const surfaceId = input.surfaceId?.trim();
+      if (input.surfaceId !== undefined && !surfaceId) throw new Error('page.verifyState() surfaceId must not be empty.');
+      const beforeSurface = surfaceId
+        ? lastAction?.before?.surfaces.find(surface => surface.id === surfaceId)
+        : lastAction?.before?.activeSurface;
+      const currentSurface = surfaceId
+        ? current.surfaces.find(surface => surface.id === surfaceId)
+        : current.activeSurface;
+      const beforeId = beforeSurface?.id || '';
+      const currentId = currentSurface?.id || '';
+      const beforeIds = new Set(lastAction?.before?.surfaces.map(surface => surface.id) || []);
+      const currentIds = new Set(current.surfaces.map(surface => surface.id));
       const ok = input.activeSurface === 'opened'
-        ? !beforeId && Boolean(currentId)
+        ? Boolean(currentId) && !beforeIds.has(currentId)
         : input.activeSurface === 'closed'
-          ? Boolean(beforeId) && !currentId
+          ? surfaceId ? !currentId : Boolean(beforeId) && !currentIds.has(beforeId)
           : input.activeSurface === 'changed'
             ? beforeId !== currentId
             : input.activeSurface === 'present'
@@ -2326,7 +2356,7 @@ function browserCodeKernelMain() {
       checks.push({
         name: `activeSurface:${input.activeSurface}`,
         ok,
-        actual: current.activeSurface || null,
+        actual: currentSurface || null,
       });
     }
     const locatorInput = input?.locator;
@@ -2613,7 +2643,7 @@ function browserCodeKernelMain() {
       move: async (input: { steps?: number; x: number; y: number }) => {
         await page.mouse.move(input.x, input.y, { steps: input.steps });
       },
-      type: async (input: { text: string }) => page.keyboard.type(input.text),
+      type: async (input: { text: string; delay?: number }) => page.keyboard.type(input.text, { delay: input.delay ?? 50 }),
       wheel: async (input: { deltaX?: number; deltaY?: number }) => page.mouse.wheel(input.deltaX || 0, input.deltaY || 0),
     });
     const wrapper = Object.freeze({
@@ -2631,7 +2661,7 @@ function browserCodeKernelMain() {
       screenshot: (options: Parameters<import('playwright').Page['screenshot']>[0] = {}) => page.screenshot(options),
       title: () => page.title(),
       url: () => page.url(),
-      use: () => selectPage(page),
+      use: () => activatePage(page),
     });
     tabPages.set(wrapper, page);
     tabWrappers.set(page, wrapper);
@@ -2711,7 +2741,7 @@ function browserCodeKernelMain() {
         if (!targetContext) throw new Error('No browser context is available.');
         const newPage = await createSessionPage(targetContext);
         agentCreatedPages.add(newPage);
-        selectPage(newPage);
+        await activatePage(newPage);
         if (requestedUrl) await newPage.goto(requestedUrl);
         return tabForPage(newPage);
       },
@@ -2724,7 +2754,7 @@ function browserCodeKernelMain() {
             throw new Error('The requested browser tab does not belong to the current conversation tab group.');
           }
         }
-        selectPage(selectedPage);
+        await activatePage(selectedPage);
         return tabForPage(selectedPage);
       },
     }),
@@ -2742,7 +2772,7 @@ function browserCodeKernelMain() {
             throw new Error('The requested browser tab does not belong to the current conversation tab group.');
           }
         }
-        selectPage(claimedPage);
+        await activatePage(claimedPage);
         return tabForPage(claimedPage);
       },
       openTabs: async () => (await currentSessionTabEntries()).map((entry) => entry.info),
@@ -3026,11 +3056,46 @@ function browserCodeKernelMain() {
       });
     } catch (error: unknown) {
       await publishPendingCoordinateClickEvidence();
+      const diagnosticPage = selectedRuntimePage && !selectedRuntimePage.isClosed() ? selectedRuntimePage : page;
+      const diagnosticRead = await settleKernelTask((async () => {
+        const observation = await readUnifiedPageObservation(diagnosticPage);
+        const fields = await Promise.all(diagnosticPage.frames().slice(0, 24).map(async frame => {
+          const read = await settleKernelTask(frame.evaluate(() => {
+            const focused = document.activeElement;
+            const controls = Array.from(document.querySelectorAll('input, textarea, [contenteditable=""], [contenteditable="true"], [role="combobox"]'));
+            if (focused && !controls.includes(focused)) controls.unshift(focused);
+            return controls.flatMap(element => {
+              const rect = element.getBoundingClientRect();
+              const style = getComputedStyle(element);
+              if (!rect.width || !rect.height || style.visibility !== 'visible' || style.display === 'none') return [];
+              if (rect.bottom <= 0 || rect.right <= 0 || rect.top >= innerHeight || rect.left >= innerWidth) return [];
+              const input = element as HTMLInputElement;
+              const hit = document.elementFromPoint(Math.max(0, Math.min(innerWidth - 1, rect.x + rect.width / 2)), Math.max(0, Math.min(innerHeight - 1, rect.y + rect.height / 2)));
+              const topmost = hit === element || Boolean(hit && element.contains(hit));
+              return [{ descriptor: element.tagName.toLowerCase() + (element.id ? '#' + element.id : ''),
+                ...(element.id ? { selector: '#' + CSS.escape(element.id) } : {}),
+                role: element.getAttribute('role'), type: element.getAttribute('type'),
+                name: element.getAttribute('name'), placeholder: element.getAttribute('placeholder'),
+                label: element.getAttribute('aria-label') || input.labels?.[0]?.textContent?.trim().slice(0, 120),
+                focused: element === focused, editable: ((element as HTMLElement).isContentEditable || element.matches('input:read-write, textarea:read-write'))
+                  && !input.readOnly && !input.disabled && element.getAttribute('aria-disabled') !== 'true',
+                readOnly: Boolean(input.readOnly), disabled: Boolean(input.disabled), topmost,
+                rect: { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) },
+              }];
+            }).sort((a, b) => Number(b.focused) - Number(a.focused) || Number(b.topmost) - Number(a.topmost)).slice(0, 12);
+          }), 500, 'editable control diagnosis');
+          return read.ok ? read.value.map(control => ({ ...control, frameUrl: compactObservationUrl(frame.url()) })) : [];
+        }));
+        return { activeSurface: observation.activeSurface, focusedElement: observation.focusedElement,
+          controls: fields.flat().sort((a, b) => Number(b.focused) - Number(a.focused) || Number(b.topmost) - Number(a.topmost)).slice(0, 16),
+          note: 'Live read-only diagnosis. Rectangles and visibility do not prove clickability. Resolve the observed editable control; dismiss the observed blocker before retrying a covered target. No input values are included.' };
+      })(), 2000, 'interaction diagnosis');
       send({
         type: 'result',
         requestId: input.requestId,
         ok: false,
         error: error instanceof Error ? error.message : String(error),
+        diagnostics: diagnosticRead.ok ? diagnosticRead.value : { unavailable: diagnosticRead.error },
         selectedTargetId: selectedRuntimePage && !selectedRuntimePage.isClosed()
           ? await targetIdForPage(selectedRuntimePage).catch(() => undefined) : undefined,
         ownedTargetIds: cdpScope?.targetIds(),
@@ -3559,6 +3624,7 @@ export class BrowserCodeKernel {
       this.finishPending({
         ok: false,
         error: typeof record.error === 'string' ? record.error : 'browserCode execution failed.',
+        diagnostics: record.diagnostics,
         selectedTargetId: typeof record.selectedTargetId === 'string' ? record.selectedTargetId : undefined,
         ownedTargetIds: Array.isArray(record.ownedTargetIds) ? record.ownedTargetIds.filter((id): id is string => typeof id === 'string') : undefined,
         images,

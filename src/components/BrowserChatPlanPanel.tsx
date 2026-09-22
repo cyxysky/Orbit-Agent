@@ -19,10 +19,9 @@ function itemStatus(item: WorkflowItem, currentItemId?: string): WorkflowStatus 
 
 function StageProgress({ stage, index, current, currentItemId }: { stage: WorkflowStage; index: number; current: boolean; currentItemId?: string }) {
   const [expanded, setExpanded] = useState(current);
-  const [showAll, setShowAll] = useState(false);
   const contentId = useId();
   const completed = stage.items.filter(isDone);
-  useEffect(() => { setExpanded(current); setShowAll(false); }, [current]);
+  useEffect(() => { setExpanded(current); }, [current]);
   return <section className={`browser-chat-plan-stage${current ? ' is-current' : ''}`}>
     <button type="button" className="browser-chat-plan-stage-toggle" onClick={() => setExpanded(value => !value)} aria-expanded={expanded} aria-controls={contentId}>
       <span className="browser-chat-plan-stage-number">{completed.length === stage.items.length ? <Check size={13} /> : index + 1}</span>
@@ -33,7 +32,7 @@ function StageProgress({ stage, index, current, currentItemId }: { stage: Workfl
     <div className={`browser-chat-plan-stage-reveal${expanded ? ' is-open' : ''}`} id={contentId} inert={!expanded} aria-hidden={!expanded}>
       <div>
         <ul className="browser-chat-plan-items">
-          {(showAll ? stage.items : stage.items.slice(0, 6)).map(item => {
+          {stage.items.map(item => {
             const status = itemStatus(item, currentItemId);
             const StatusIcon = { pending: Circle, running: Loader2, passed: Check, failed: CircleAlert, blocked: CirclePause, not_applicable: CircleMinus }[status];
             return <li key={item.id} className={`is-${status}`}>
@@ -43,7 +42,6 @@ function StageProgress({ stage, index, current, currentItemId }: { stage: Workfl
           })}
         </ul>
         {!stage.items.length && <p className="browser-chat-plan-list-empty">本阶段暂无事项</p>}
-        {stage.items.length > 6 && <button type="button" className="ui-button browser-chat-plan-show-more" onClick={() => setShowAll(value => !value)}>{showAll ? '收起列表' : `查看其余 ${stage.items.length - 6} 项`}</button>}
       </div>
     </div>
   </section>;

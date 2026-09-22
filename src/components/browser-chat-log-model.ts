@@ -73,6 +73,8 @@ export function isBrowserChatAiFailureLog(log: BrowserChatLogRecordLike) {
     || phaseMatches(log, 'ai:runtime:retry-exhausted')
     || phaseMatches(log, 'ai:runtime:retry-skipped')
     || phaseMatches(log, 'ai:runtime:recoverable-error')
+    || phaseMatches(log, 'ai:context-compression:error')
+    || phaseMatches(log, 'conversation:context:error')
     || phaseMatches(log, 'chat:runtime:request-aborted')
     || phaseMatches(log, 'target:plan:validation:retry')
     || phaseMatches(log, 'target:plan:validation:error')
@@ -80,9 +82,12 @@ export function isBrowserChatAiFailureLog(log: BrowserChatLogRecordLike) {
 }
 
 export function isBrowserChatAiTerminalFailureLog(log: BrowserChatLogRecordLike) {
-  if (!phaseMatches(log, 'ai:runtime:attempt-succeeded')) return false;
   const details = parsedLogDetails(log.details);
   const payload = asRecord(details?.event) || asRecord(details?.value) || details;
+  if (phaseMatches(log, 'ai:context-compression:error') || phaseMatches(log, 'conversation:context:error')) {
+    return payload?.terminal === true;
+  }
+  if (!phaseMatches(log, 'ai:runtime:attempt-succeeded')) return false;
   return payload?.responseStatus === 'failed'
     || payload?.responseStatus === 'blocked'
     || ['length', 'content-filter', 'error'].includes(String(payload?.finishReason || ''));
@@ -115,6 +120,10 @@ export function isBrowserChatAiLog(log: BrowserChatLogRecordLike) {
 export function isBrowserChatContextCompressionLog(log: BrowserChatLogRecordLike) {
   return phaseMatches(log, 'ai:context-compression:start')
     || phaseMatches(log, 'ai:context-compression:progress')
+    || phaseMatches(log, 'ai:context-compression:retry')
+    || phaseMatches(log, 'ai:context-compression:partial')
+    || phaseMatches(log, 'ai:context-compression:limited')
+    || phaseMatches(log, 'ai:context-compression:skipped')
     || phaseMatches(log, 'ai:context-compression:error')
     || phaseMatches(log, 'ai:context-compression:complete')
     || phaseMatches(log, 'ai:context-segmented')

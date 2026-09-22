@@ -5091,7 +5091,6 @@ html body .browser-chat-chat-pane .browser-chat-compose.browser-chat-compose--re
 .browser-chat-plan-items > :is(.is-running, .is-passed) > svg { color: var(--plan-accent); }
 .browser-chat-plan-items > :is(.is-failed, .is-blocked) > svg { color: #b17936; }
 .browser-chat-plan-list-empty { color: var(--muted); margin: 10px 4px 14px; font-size: 11px; }
-.browser-chat-plan-card .browser-chat-plan-show-more { padding: 5px 0 10px 29px; margin: 0; border: 0; color: var(--plan-accent); font-size: 11px; }
 .browser-chat-plan-loading { display: flex; align-items: center; gap: 8px; padding: 12px 0; color: var(--muted); }
 .browser-chat-plan-empty { padding: 4px 0; }
 .browser-chat-plan-empty > strong { font-size: 14px; }

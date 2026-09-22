@@ -215,7 +215,7 @@ Each \`RuntimeTab\` exposes:
 - \`await tab.close(): Promise<void>\`
 - \`tab.cua.click({ x, y, button?, clickCount? })\`
 - \`tab.cua.move({ x, y, steps? })\`
-- \`tab.cua.keypress({ keys })\`, \`tab.cua.type({ text })\`, and \`tab.cua.wheel({ deltaX?, deltaY? })\`
+- \`tab.cua.keypress({ keys })\`, \`tab.cua.type({ text, delay? })\` (native character input, default 50 ms between characters), and \`tab.cua.wheel({ deltaX?, deltaY? })\`
 
 Tab examples:
 
@@ -301,7 +301,7 @@ Useful Page waits include \`waitForURL(urlOrRegExp, options?)\`, \`waitForLoadSt
 
 - \`await page.expectNavigation(action, options?): Promise<ActionResult>\` starts the navigation wait before invoking \`action\`. Options are \`{ url?: string | RegExp, timeoutMs?: number, waitUntil?: "load" | "domcontentloaded" | "networkidle" | "commit" }\`.
 - \`await page.verifyState(input): Promise<{ ok: true, description, checks, observation }>\` is an optional assertion helper. \`input.description\` is required. Supply at least one of \`url\`, \`activeSurface\`, or \`locator\` evidence.
-- \`activeSurface\` accepts \`"opened" | "closed" | "changed" | "present" | "absent"\`. Transition checks require a preceding action in the same cell.
+- \`activeSurface\` accepts \`"opened" | "closed" | "changed" | "present" | "absent"\`. Supply \`surfaceId\` from an observed popup to check that exact surface, including inside a parent dialog. Without an id, closed means the previously active surface disappeared; a remaining parent dialog does not mean failure. Opened/changed require a preceding action in the same cell; closed with an explicit observed id can verify its absence across cells.
 - Locator verification accepts \`state: "visible" | "hidden" | "attached" | "detached" | "editable" | "enabled" | "checked" | "filled" | "value" | "text" | "attribute"\`, plus \`equals\`, \`includes\`, and \`attribute\` where applicable.
 
 Navigation example:
@@ -329,23 +329,33 @@ nodeRepl.write({
 });
 \`\`\`
 
+For controls that react to individual input events, focus the observed editable field and use \`await page.keyboard.type('高豹', { delay: 80 })\` or \`await field.pressSequentially('高豹', { delay: 80 })\`. These use native per-character input. \`fill\`/\`insertText\` are bulk value entry, not equivalent typing. Non-US characters may emit input without keydown/keyup; typing is not an IME composition simulation. Verify the actual suggestions, validation or saved model value; a visible input value alone does not prove the application committed it. If the observed control commits on blur, blur it through a normal focus change and verify. Do not inject synthetic events, change framework state, or blindly add Enter (which may submit).
+
+Before direct keyboard typing, establish which exact element currently has focus and that it is editable and not readonly. A caret-looking decoration or a successful keyboard call does not prove text reached a search field. After a no-op, read the real input attributes/value and relevant options instead of repeating the same text with a different delay. A picker search input may live in its trigger, outside the popup panel; do not invent an input inside the popup, a placeholder, or an expected input count. Never infer that search is unsupported merely because a guessed locator or unfocused typing failed.
+
 ## Popups, dropdowns, date/time pickers, and nested surfaces
 
 Treat every newly opened menu, listbox, dialog, popover, calendar, or time panel as a bounded interaction transaction:
 
 1. Click only an observed trigger.
-2. Read \`page.activeSurface()\` and a snapshot/targeted state after it opens.
+2. Read \`page.activeSurface()\` and a targeted snapshot together after it opens. Remember the newly opened surface id, its frame/selector and the trigger. Distinguish it from an existing parent dialog.
 3. Scope choices to the observed surface or stable field container.
 4. Select the observed option/date/time.
 5. Do not assume selection auto-closes the popup. If it remains open, use its observed Apply/Done/OK/Close control, the observed trigger, or Escape as supported by current evidence.
-6. Verify the field value and that the expected surface closed before targeting outside it.
+6. Verify the field value and that this exact surface closed before targeting outside it. A remaining parent dialog is expected. Combine known selection, a supported close action and verification in one cell; these are not separate tool calls. Do not click the trigger again after the popup has closed, as that reopens it.
+
+Prefer an already observed explicit close/confirm control, or the original trigger when evidence shows it toggles this popup. Escape is a possible dismissal attempt, not a universal guarantee. Record a no-op dismissal and do not repeat it unchanged. After two distinct attempts with no change, return one consolidated targeted diagnosis (surface id/stack, trigger, visible controls and blocker), then choose a new evidence-supported action. Never remove overlay DOM, change styles, or bypass the application's close handlers. Remember a verified dismissal method for the same control during this task, and re-check the live popup before reusing it.
 
 Custom dropdown that stays open:
 
 \`\`\`js
 var cabinTrigger = page.getByRole('button', { name: 'Cabin class', exact: true });
+var cabinBefore = await page.activeSurface();
 await cabinTrigger.click();
-nodeRepl.write({ surface: await page.activeSurface(), snapshot: await page.domSnapshot() });
+var cabinOpen = await page.activeSurface();
+var cabinPopup = cabinOpen.activeSurface;
+if (!cabinPopup || cabinBefore.surfaces.some(s => s.id === cabinPopup.id)) throw new Error('No distinct new popup identified; inspect the field region before choosing.');
+nodeRepl.write({ surface: cabinOpen, snapshot: await page.domSnapshot() });
 \`\`\`
 
 After that read exposes the exact option and Done labels, use the later action cell:
@@ -354,11 +364,13 @@ After that read exposes the exact option and Done labels, use the later action c
 var businessOption = page.getByRole('option', { name: 'Business', exact: true });
 await businessOption.click();
 var afterChoice = await page.activeSurface();
-if (afterChoice.activeSurface) {
+if (afterChoice.surfaces.some(s => s.id === cabinPopup.id)) {
   var doneButton = page.getByRole('button', { name: 'Done', exact: true });
   if (await doneButton.count() !== 1) throw new Error('Dropdown remained open and the previously observed Done control is no longer unique.');
   await doneButton.click();
 }
+if (cabinPopup.selector) await page.locator(cabinPopup.selector).waitFor({ state: 'hidden' });
+await page.verifyState({ description: 'Cabin popup closed', surfaceId: cabinPopup.id, activeSurface: 'absent' });
 nodeRepl.write({ value: await cabinTrigger.innerText(), surface: await page.activeSurface() });
 \`\`\`
 
@@ -367,7 +379,9 @@ Date/time picker with an explicit confirmation starts with a read cell:
 \`\`\`js
 var departureField = page.getByLabel('Departure date and time');
 await departureField.click();
-nodeRepl.write({ surface: await page.activeSurface(), snapshot: await page.domSnapshot() });
+var departureOpen = await page.activeSurface();
+var departurePopup = departureOpen.activeSurface;
+nodeRepl.write({ surface: departureOpen, snapshot: await page.domSnapshot() });
 \`\`\`
 
 After the preceding read exposes the exact calendar/time labels, use a later action cell:
@@ -379,14 +393,16 @@ var timeOption = page.getByRole('option', { name: '10:30 AM', exact: true });
 await timeOption.click();
 var applyDateTime = page.getByRole('button', { name: 'Apply', exact: true });
 await applyDateTime.click();
+if (!departurePopup) throw new Error('No observed date/time popup was recorded.');
+if (departurePopup.selector) await page.locator(departurePopup.selector).waitFor({ state: 'hidden' });
+await page.verifyState({ description: 'Date/time popup closed', surfaceId: departurePopup.id, activeSurface: 'absent' });
 var remainingSurface = await page.activeSurface();
-if (remainingSurface.activeSurface) throw new Error('Date/time popup remained open after Apply.');
 nodeRepl.write({ value: await departureField.inputValue(), surface: remainingSurface });
 \`\`\`
 
 These labels are illustrative. Never copy an example label into a real call unless it appears verbatim in the latest evidence.
 
-Surface metadata is evidence, not permission. If an action fails with \`coveredBySurfaceId\` or \`activeSurfaceId\`, run one separate read-only cell returning \`await page.activeSurface()\` plus a targeted snapshot/read. Inspect that exact id, its label/descriptor/selector/stack, then wait for a loading surface to disappear or close the observed surface. Do not scroll, force, or repeat blindly.
+Surface metadata is evidence, not permission. If an action fails with \`coveredBySurfaceId\` or \`activeSurfaceId\`, use the current returned evidence; when insufficient, obtain \`await page.activeSurface()\` plus one targeted snapshot/read together. Inspect that exact id, its label/descriptor/selector/stack, then wait for a loading surface to disappear or close the observed surface. Combine the grounded recovery and its verification in one later cell. Do not repeatedly request the same snapshot, scroll, force, or repeat an unchanged failed action.
 
 ## Precise text editing
 
@@ -428,7 +444,7 @@ nodeRepl.write({ url: page.url(), viewport: page.viewportSize() });
 
 For a vision-capable model, a fresh viewport image visible to the model from the previous model step authorizes a coordinate action only while the DOM revision, document, URL, viewport, zoom, scroll position, and five-minute validity remain unchanged. A state-changing input retires previous coordinate evidence, even if it throws. Reobserve or resolve a live semantic locator before the next action. Screenshot-and-click in the same cell is forbidden. Full-page screenshots are read-only evidence and never authorize coordinates.
 
-For a non-visual model, or whenever exact DOM geometry is more reliable than pixels, derive coordinates from one exact visible actionable Locator. \`boundingBox()\` records runtime rect evidence. Click only inside that returned rect; the rect may be computed and used in the same cell or written for model inspection and reused in a later cell while the DOM revision and page geometry remain unchanged and no state-changing input has intervened.
+For a non-visual model, or whenever exact DOM geometry is more reliable than pixels, derive coordinates from one exact visible Locator. \`boundingBox()\` is a read-only measurement: it does not scroll or require clickability, so covered elements can be inspected. A rect is not proof that the point can receive input. The runtime validates the corresponding live target when using rect-based coordinate evidence. Click only inside that returned rect; the rect may be computed and used in the same cell or written for model inspection and reused in a later cell while the DOM revision and page geometry remain unchanged and no state-changing input has intervened.
 
 \`\`\`js
 var menuTrigger = page.getByRole('button', { name: 'Open menu', exact: true });
@@ -490,6 +506,8 @@ Use \`force: true\` only when fresh evidence proves one exact rendered target an
 For UI debugging, responsive layout review or browser/Electron acceptance tasks, read skill action=read with skillId=system-browser-interactive-qa. It covers persistent-session iteration and functional/visual evidence through this host's APIs. Routine browsing and single business operations do not require it.
 
 ## Completion contract
+
+Failed cells return bounded \`data.diagnostics\` with the active surface and actual rendered controls: focus, readonly/editability, names/placeholders, geometry and center hit-test status. Input values are omitted. Use this evidence before another read; if the receipt was truncated, use its contextRead reference to retrieve the diagnostics instead of repeating the failed action. A diagnostic center hit test is not a click authorization. Prefer the observed form/popup and exact field attributes. Broad whole-page div/span/li scans filtered by guessed coordinates can include obscured background rows and truncate away the real controls. Do not call that output a filtered option list. If a Cancel button is physically covered by an open list, verify dismissal of that list first; force-clicking Cancel can hit an option instead. Keep the app's own dismissal handlers and verify each changed state.
 
 Playwright delivery alone is not business success. Check the requested URL, value, row/table state, toast, dialog, confirmation identifier, or other direct fact after an interaction, preferably in the same cell; also inspect \`page.activeSurface()\` for interactive workflows. For read-only research, relevant content returned by the navigation-and-read cell is sufficient evidence; no separate verification cell is required. Report an unresolved failure or residual popup when it materially limits the outcome. Never describe a page as ready for a consequential final click if the latest verified state is on another page or no longer contains that control.
 `;

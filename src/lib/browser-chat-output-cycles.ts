@@ -262,7 +262,9 @@ export function browserChatAiOutputCycleFromDebugEvent(input: {
   const details = asRecord(input.details);
   const detailsValue = asRecord(details?.value) || details;
   const event = asRecord(detailsValue?.event) || detailsValue;
-  if (input.phase === 'ai:context-compression:complete') {
+  if (input.phase === 'ai:context-compression:complete' || input.phase === 'ai:context-compression:partial'
+    || (input.phase === 'ai:context-compression:limited' && event?.committed === true)) {
+    const completed = input.phase !== 'ai:context-compression:partial';
     const execution = asRecord(event?.execution);
     const toolCallId = stringFromUnknown(event?.toolCallId) || stringFromUnknown(execution?.toolCallId) || input.id;
     const estimatedTokensBefore = Number(event?.estimatedTokensBefore);
@@ -283,8 +285,12 @@ export function browserChatAiOutputCycleFromDebugEvent(input: {
             estimatedTokensAfter: after,
           },
           name: 'contextCompression',
-          ok: true,
-          result: before !== undefined && after !== undefined
+          ok: completed,
+          result: !completed
+            ? 'Context compression partially completed. Saved summaries and remaining original messages were retained.'
+            : input.phase === 'ai:context-compression:limited'
+              ? 'Context reduction saved; stopped before the target to preserve remaining interactions.'
+            : before !== undefined && after !== undefined
             ? `Context compressed from ${before} to ${after} estimated tokens.`
             : 'Context compression completed.',
         }],

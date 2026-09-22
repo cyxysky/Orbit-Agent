@@ -34,6 +34,7 @@ export function mergeBrowserChatToolDetail(detail: BrowserChatToolDetail, live: 
       aiRequestElapsedMs: detail.tool.aiRequestElapsedMs === undefined ? live.tool.aiRequestElapsedMs : Math.max(detail.tool.aiRequestElapsedMs, live.tool.aiRequestElapsedMs ?? 0),
       ok: live.tool.ok ?? detail.tool.ok,
       rawResult: detail.tool.rawResult ?? live.tool.rawResult,
+      contentSource: detail.tool.contentSource ?? live.tool.contentSource,
       result: detail.tool.result ?? live.tool.result,
       error: detail.tool.error ?? live.tool.error,
       contextAfter: live.tool.contextAfter?.requestId ? live.tool.contextAfter
@@ -136,6 +137,7 @@ export function buildAiCycleToolDetailMap(cycles: BrowserChatAiOutputCycle[], st
           ok: aiTool.ok,
           result: aiTool.result,
           rawResult: aiTool.rawResult,
+          contentSource: aiTool.contentSource,
           ...(aiTool.ok ? {} : { error: aiTool.error || aiTool.result }),
         };
         const stepIndex = typeof cycle.stepIndex === 'number' ? cycle.stepIndex : -1;

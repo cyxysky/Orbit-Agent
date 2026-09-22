@@ -111,22 +111,22 @@ function isTerminalFailureLog(log: BrowserChatLogDialogRecord) {
     || phaseMatches(log, 'ai:runtime:retry-exhausted')
     || phaseMatches(log, 'ai:runtime:error')
     || phaseMatches(log, 'chat:runtime:request-aborted')
-    || phaseMatches(log, 'conversation:context:error')
     || phaseMatches(log, 'target:plan:validation:error')
     || phaseMatches(log, 'target:plan:error');
 }
 
 function browserChatLogStatus(logs: BrowserChatLogDialogRecord[]): BrowserChatLogStatus {
-  if (logs.some(isTerminalFailureLog)) return 'failed';
-  if (logs.some((log) => (
-    phaseMatches(log, 'ai:runtime:attempt-succeeded')
-    || phaseMatches(log, 'ai:runtime:response')
-    || phaseMatches(log, 'ai:runtime:object')
-    || phaseMatches(log, 'chat:ai-response-finished')
-    || phaseMatches(log, 'chat:no-tool-response')
-    || phaseMatches(log, 'chat:run:done')
-  ))) return 'completed';
-  return 'running';
+  let status: BrowserChatLogStatus = 'running';
+  for (const log of logs) {
+    if (isTerminalFailureLog(log)) status = 'failed';
+    else if (isAiAttemptStartLog(log) || phaseMatches(log, 'ai:runtime:prepare')
+      || phaseMatches(log, 'ai:context-compression:start') || phaseMatches(log, 'chat:run:start')) status = 'running';
+    else if (phaseMatches(log, 'ai:runtime:attempt-succeeded')
+      || phaseMatches(log, 'ai:runtime:response') || phaseMatches(log, 'ai:runtime:object')
+      || phaseMatches(log, 'chat:ai-response-finished') || phaseMatches(log, 'chat:no-tool-response')
+      || phaseMatches(log, 'chat:run:done')) status = 'completed';
+  }
+  return status;
 }
 
 function browserChatLogStatusLabel(status: BrowserChatLogStatus) {
@@ -295,12 +295,16 @@ function contextCompressionLabel(log: BrowserChatLogDialogRecord) {
   if (!isBrowserChatContextCompressionLog(log)) return '';
   if (log.phase.endsWith('ai:context-compression:start')) return '上下文开始压缩';
   if (log.phase.endsWith('ai:context-compression:progress')) return '上下文压缩进度';
+  if (log.phase.endsWith('ai:context-compression:retry')) return '上下文摘要重试';
+  if (log.phase.endsWith('ai:context-compression:partial')) return '上下文压缩部分完成';
+  if (log.phase.endsWith('ai:context-compression:limited')) return '上下文压缩已停止（未达目标）';
+  if (log.phase.endsWith('ai:context-compression:skipped')) return '上下文压缩已跳过（此前批次失败）';
   if (log.phase.endsWith('ai:context-compression:error')) return '上下文压缩失败';
   if (log.phase.endsWith('ai:context-compression:complete')) return '上下文压缩完成';
   if (log.phase.endsWith('ai:context-segmented')) return 'Agent Loop 上下文压缩';
-  if (log.phase.endsWith('conversation:context:request')) return '历史对话上下文开始压缩';
-  if (log.phase.endsWith('conversation:context:response')) return '历史对话上下文压缩完成';
-  if (log.phase.endsWith('conversation:context:error')) return '历史对话上下文压缩失败';
+  if (log.phase.endsWith('conversation:context:request')) return '上下文摘要模型请求';
+  if (log.phase.endsWith('conversation:context:response')) return '上下文摘要模型已返回';
+  if (log.phase.endsWith('conversation:context:error')) return '上下文摘要模型请求失败';
   return '';
 }
 
@@ -359,36 +363,21 @@ function BrowserChatLogDetails({ expanded, log, nextAiInputTokens }: { expanded:
   const isAiResponseLog = log.phase.endsWith('ai:runtime:response') || log.phase.endsWith('ai:runtime:object');
   const isAiFailureLog = isBrowserChatAiFailureLog(log);
   const isToolLifecycleLog = isBrowserChatToolLifecycleLog(log);
-  const isConversationSummaryRequest = log.phase === 'conversation:context:request';
-  const isConversationSummaryResponse = log.phase === 'conversation:context:response';
+  const isConversationSummaryRequest = phaseMatches(log, 'conversation:context:request');
+  const isConversationSummaryResponse = phaseMatches(log, 'conversation:context:response');
   if (!parsed) return (
     <div className="browser-chat-log-details">
       <BrowserChatPayloadDetails className="browser-chat-log-detail-block" defaultOpen payload={log.details} title={t('日志详情')} />
     </div>
   );
   const payloadDetails = aiLogPayloadDetails(parsed) || parsed;
-  const requestPayload = isAiRequestLog
+  const requestPayload = isAiRequestLog || isConversationSummaryRequest
     ? aiLogRequestPayload(payloadDetails)
-    : isConversationSummaryRequest
-      ? formatToolPayload({
-          provider: parsed.provider,
-          model: parsed.model,
-          estimatedTokens: parsed.estimatedTokens,
-          thresholdTokens: parsed.thresholdTokens,
-          prompt: parsed.prompt,
-        })
-      : '';
+    : '';
   const responsePayload = isAiResponseLog
     ? aiLogResponsePayload(payloadDetails)
     : isConversationSummaryResponse
-      ? formatToolPayload({
-          provider: parsed.provider,
-          model: parsed.model,
-          estimatedTokensBefore: parsed.estimatedTokensBefore,
-          estimatedTokensAfter: parsed.estimatedTokensAfter,
-          thresholdTokens: parsed.thresholdTokens,
-          context: parsed.context,
-        })
+      ? formatToolPayload(payloadDetails)
       : '';
   const timingPayload = isAiResponseLog ? aiLogTimingPayload(payloadDetails, t) : '';
   const errorPayload = isAiFailureLog ? formatToolPayload(parsed) : '';

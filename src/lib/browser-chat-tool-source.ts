@@ -1,5 +1,5 @@
 export type BrowserChatToolSource = { toolName: string; action?: string };
-type Tool = { id?: string; name: string; input?: unknown; result?: unknown; rawResult?: unknown };
+type Tool = { id?: string; name: string; input?: unknown; result?: unknown; rawResult?: unknown; contentSource?: BrowserChatToolSource };
 function record(value: unknown): Record<string, unknown> | undefined {
   if (typeof value === 'string') {
     try { return record(JSON.parse(value)); } catch { return undefined; }
@@ -14,6 +14,7 @@ function payload(tool: Tool) {
 /** Resolve presentation from the content's producer, independently of its transport. */
 export function browserChatToolSource(tool: Tool, tools: readonly Tool[]): BrowserChatToolSource | undefined {
   if (tool.name !== 'contextRead') return undefined;
+  if (tool.contentSource) return tool.contentSource;
   const result = payload(tool);
   const source = record(result?.source);
   const origin = typeof source?.toolName === 'string' ? {
@@ -26,6 +27,12 @@ export function browserChatToolSource(tool: Tool, tools: readonly Tool[]): Brows
   if (origin?.action) return origin;
   const ref = record(tool.input)?.ref;
   if (typeof ref !== 'string') return origin;
+  for (const page of tools) {
+    if (page === tool || page.name !== 'contextRead' || record(page.input)?.ref !== ref) continue;
+    const pageSource = page.contentSource || record(payload(page)?.source);
+    if (typeof pageSource?.toolName === 'string') return { toolName: pageSource.toolName,
+      action: typeof pageSource.action === 'string' ? pageSource.action : undefined };
+  }
   // An exact first-page prefix also identifies the producer in loaded history;
   // pagination must retain that identity even when later pages lack a heading.
   const first = tools.map(payload).find((item) => item?.ref === ref && item.offset === 0 && typeof item.content === 'string');

@@ -34,7 +34,7 @@ function ratio(value: unknown, fallback: number) {
   return Number.isFinite(number) && number >= 0.01 && number <= 0.99 ? number : fallback;
 }
 
-/** Reserve completion and protocol safety space before allocating the input window. */
+/** Reserve protocol safety space before allocating the input window. */
 export function runtimeContextProfile(input: RuntimeContextModel = {}) {
   const model = String(input.model || '').trim();
   const key = `${input.provider || ''}/${model}`;
@@ -42,16 +42,14 @@ export function runtimeContextProfile(input: RuntimeContextModel = {}) {
     ? positive(input.maxContextTokens, 0) || undefined
     : contextState.windows.get(key);
   const windowTokens = configuredWindow ?? positive(process.env.AI_CONTEXT_WINDOW_TOKENS, 256000);
-  // Internal accounting only. Provider request parameters are owned by model.ts.
-  const outputReserveTokens = positive(process.env.AI_CONTEXT_OUTPUT_RESERVE_TOKENS, 4096);
   const safetyReserveTokens = positive(process.env.AI_CONTEXT_SAFETY_RESERVE_TOKENS, 4096);
-  const inputBudgetTokens = windowTokens - outputReserveTokens - safetyReserveTokens;
-  if (inputBudgetTokens <= 0) throw new Error('Context window must exceed output and safety reserves.');
-  const compressionTriggerRatio = ratio(process.env.AI_CONTEXT_COMPRESSION_TRIGGER_RATIO, 0.82);
+  const inputBudgetTokens = windowTokens - safetyReserveTokens;
+  if (inputBudgetTokens <= 0) throw new Error('Context window must exceed the protocol safety reserve.');
+  const compressionTriggerRatio = ratio(process.env.AI_CONTEXT_COMPRESSION_TRIGGER_RATIO, 0.85);
   const compressionTriggerTokens = Math.max(1, Math.floor(inputBudgetTokens * compressionTriggerRatio));
-  const compressionTargetRatio = ratio(process.env.AI_CONTEXT_COMPRESSION_TARGET_RATIO, 0.6);
+  const compressionTargetRatio = ratio(process.env.AI_CONTEXT_COMPRESSION_TARGET_RATIO, 0.25);
   return {
-    key, windowTokens, outputReserveTokens, inputBudgetTokens, safetyReserveTokens,
+    key, windowTokens, inputBudgetTokens, safetyReserveTokens,
     compressionTriggerTokens, compressionTargetTokens: Math.max(1, Math.min(Math.floor(inputBudgetTokens * compressionTargetRatio), Math.floor(compressionTriggerTokens * 0.9))),
     imageTokens: positive(process.env.AI_IMAGE_CONTEXT_ESTIMATE_TOKENS, 1200),
     protocol: 'preserve-provider-reasoning-and-signatures' as const,
@@ -90,8 +88,7 @@ export type RuntimeMessageContextEstimate = {
 };
 
 function runtimeImageContextEstimateTokens() {
-  const configured = Number(process.env.AI_IMAGE_CONTEXT_ESTIMATE_TOKENS || 1200);
-  return Number.isFinite(configured) ? Math.max(0, Math.floor(configured)) : 1200;
+  return positive(process.env.AI_IMAGE_CONTEXT_ESTIMATE_TOKENS, 1200);
 }
 
 export function estimateRuntimeMessageContext(messages: unknown): RuntimeMessageContextEstimate {
@@ -99,7 +96,7 @@ export function estimateRuntimeMessageContext(messages: unknown): RuntimeMessage
   const ancestors = new WeakSet<object>();
   let imageCount = 0;
 
-  const walk = (value: unknown): unknown => {
+  const walk = (value: unknown, kind: 'value' | 'part' | 'output' | 'output-part' = 'value'): unknown => {
     if (typeof value === 'string') {
       text.push(value);
       return value;
@@ -110,17 +107,21 @@ export function estimateRuntimeMessageContext(messages: unknown): RuntimeMessage
     if (ancestors.has(value)) return '[Circular]';
     ancestors.add(value);
     try {
-      if (Array.isArray(value)) return value.map(walk);
+      if (Array.isArray(value)) return value.map(child => walk(child, kind));
       const record = value as Record<string, unknown>;
       const mediaType = typeof record.mediaType === 'string' ? record.mediaType : '';
-      const isImage = record.type === 'image' || mediaType.startsWith('image/');
-      const isFile = record.type === 'file';
+      const mediaPart = kind === 'part' || kind === 'output-part';
+      const isImage = mediaPart && (record.type === 'image' || String(record.type).startsWith('image-') || mediaType.startsWith('image/'));
+      const isFile = mediaPart && (record.type === 'file' || String(record.type).startsWith('file-'));
       if (isImage) imageCount += 1;
       const output: Record<string, unknown> = {};
       for (const [key, child] of Object.entries(record)) {
         // Only media parts own binary data. Tool payloads named data are text.
-        if ((isImage || isFile) && (key === 'data' || key === 'image')) continue;
-        output[key] = walk(child);
+        if ((isImage || isFile) && (key === 'data' || key === 'image' || key === 'url')) continue;
+        const childKind = key === 'content' && ['user', 'assistant', 'tool'].includes(String(record.role)) ? 'part'
+          : kind === 'part' && record.type === 'tool-result' && key === 'output' ? 'output'
+          : kind === 'output' && record.type === 'content' && key === 'value' ? 'output-part' : 'value';
+        output[key] = walk(child, childKind);
       }
       return output;
     } finally {

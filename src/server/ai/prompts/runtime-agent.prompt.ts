@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { browserInteractionSchema } from '../agents/runtime-browser-interaction';
 import type { BrowserChatInteractionMode } from '@/lib/browser-chat-interaction-mode';
+import { contextReadDescription, contextReadInputSchema } from '../agents/runtime-context-assembler';
 export function currentRuntimeTimePromptLine(now = new Date()) {
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   const localTime = new Intl.DateTimeFormat('zh-CN', {
@@ -34,6 +35,7 @@ export function buildCodexObjectPrompt(
     '- message is optional short Chinese progress text for the user. Put explanation there, not inside tool params.',
     '- All user-facing strings such as message/reason/action/expected/actual must be Chinese.',
     `- type must be one of: ${allowedTypes.join(', ')}.`,
+    allowedTypes.includes('contextRead') ? `- contextRead: ${contextReadDescription}\nParams schema: ${JSON.stringify(z.toJSONSchema(contextReadInputSchema))}` : '',
     '- params should include only keys required by that tool plus a concise reason.',
     answerAllowed ? '- In browser chat strict safety mode, important actions must still return the intended tool object; the host applies confirmation policy before execution. Do not add undeclared confirmation fields or ask the user to type confirmation text.' : '',
     '- Do not include separate state summaries, old tool params, or tool input JSON.',

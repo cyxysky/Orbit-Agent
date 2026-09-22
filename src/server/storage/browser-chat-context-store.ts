@@ -1,10 +1,14 @@
 import { databaseDriver, sqliteDatabasePath, queryDatabase } from '@/server/db/database';
 import type { DatabaseWriteStatement } from './database-write-queue';
 
-type ContextSnapshot = { modelContext?: {
+type ContextView = {
+  recordIds?: string[]; history?: string[]; active?: string[]; backgroundRef?: string; continuationSummary?: string;
+  lastRequest?: { id: string; systemRef?: string; toolSchemaRef?: string; backgroundRef?: string; messageRefs?: string[] };
+};
+type ContextSnapshot = { modelContext?: ContextView & {
   version?: number; records?: Record<string, unknown>; history?: string[]; active?: string[]; externalRecords?: boolean;
   recordIds?: string[]; continuationSummary?: string;
-  lastRequest?: { id: string }; branches?: Record<string, { lastRequest?: { id: string }; active?: string[]; continuationSummary?: string }>;
+  branches?: Record<string, ContextView>;
 } };
 
 // Populate only after a successful commit/read. A failed queued transaction must
@@ -60,7 +64,15 @@ export async function hydrateBrowserChatContextSnapshot<T>(sessionId: string, sn
   );
   const recordIds = context.recordIds ? new Set(context.recordIds) : undefined;
   const records = Object.fromEntries(rows.filter((row) => !recordIds || recordIds.has(row.id)).map((row) => [row.id, JSON.parse(row.record_json)]));
-  const missing = [...(context.recordIds || []), ...(context.history || []), ...(context.active || [])].find((id) => !Object.hasOwn(records, id));
+  const referenced = Object.values({ main: context, ...context.branches }).flatMap(view => {
+    const manifest = view.lastRequest;
+    let state: { handoffRef?: string; pinnedUserRef?: string } = {};
+    if (view.continuationSummary) state = JSON.parse(view.continuationSummary);
+    return [...(view.recordIds || []), ...(view.history || []), ...(view.active || []), ...(manifest?.messageRefs || []),
+      view.backgroundRef, manifest?.systemRef, manifest?.toolSchemaRef, manifest?.backgroundRef, state.handoffRef, state.pinnedUserRef]
+      .filter((ref): ref is string => Boolean(ref));
+  });
+  const missing = referenced.find((id) => !Object.hasOwn(records, id));
   if (missing) throw new Error(`Missing durable browser-chat context record: ${missing}`);
   const { externalRecords: _external, recordIds: _recordIds, ...index } = context;
   void _external; void _recordIds;

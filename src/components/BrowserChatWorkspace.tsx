@@ -1092,7 +1092,7 @@ function browserChatToolMeta(name: string, input: unknown, t: (value: string, pa
     const after = typeof record.estimatedTokensAfter === 'number' ? Math.round(record.estimatedTokensAfter) : undefined;
     return before !== undefined && after !== undefined
       ? `${before.toLocaleString('zh-CN')} → ${after.toLocaleString('zh-CN')} Token`
-      : t('历史对话上下文压缩完成');
+      : t('压缩上下文');
   }
   if (name === 'file') {
     return toolInputValue(record, [

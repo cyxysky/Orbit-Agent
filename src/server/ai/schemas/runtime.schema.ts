@@ -129,6 +129,7 @@ export type StepToolCall = {
   transient?: boolean;
   result?: string;
   rawResult?: unknown;
+  contentSource?: { toolName: string; action?: string };
   /** Complete elapsed time from tool dispatch through result post-processing. */
   elapsedMs?: number;
   /** Provider API response time for the model request that emitted this tool call. */
@@ -161,6 +162,7 @@ export type BrowserChatAiOutputTool = {
   ok?: boolean;
   result?: string;
   rawResult?: unknown;
+  contentSource?: { toolName: string; action?: string };
   progress?: {
     phase: string;
     message: string;
