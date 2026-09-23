@@ -56,10 +56,6 @@ export type BrowserCodeActivity = {
   actions: string[];
   navigationChanged: boolean;
   tabChanged: boolean;
-  verification?: {
-    status: 'passed' | 'failed' | 'required';
-    detail: string;
-  };
   surfaceTransitions?: Array<{
     action: string;
     beforeId?: string;
@@ -370,7 +366,7 @@ type PendingExecution = {
 const maxDiagnosticChars = 4_000;
 const defaultBrowserCodeKernelReadyTimeoutMs = 10_000;
 const defaultBrowserCodeExecutionTimeoutMs = 90_000;
-export const BROWSER_CODE_KERNEL_RUNTIME_REVISION = 46;
+export const BROWSER_CODE_KERNEL_RUNTIME_REVISION = 48;
 
 function boundedInteger(value: unknown, fallback: number, min: number, max: number) {
   const parsed = typeof value === 'number' ? value : Number(value);
@@ -526,11 +522,6 @@ function browserCodeKernelMain() {
     boundEpoch: number;
   };
   type KernelPageObservation = BrowserCodePageObservation;
-  type ActionObservation = {
-    action: string;
-    before?: KernelPageObservation;
-    after?: KernelPageObservation;
-  };
   const compactObservationUrl = (value: string) => (
     value.length <= 2048
       ? value
@@ -557,14 +548,12 @@ function browserCodeKernelMain() {
     uidBindingErrors: Map<string, string>;
     uidReferences: Map<string, BrowserCodeUidReference>;
     requestId: string;
-    verification?: BrowserCodeActivity['verification'];
     surfaceTransitions: NonNullable<BrowserCodeActivity['surfaceTransitions']>;
   } | undefined;
   const screenshotProvenance = new WeakMap<object, CoordinateClickEvidence & { fullPage: boolean }>();
   const screenshotProvenanceByDigest = new Map<string, CoordinateClickEvidence & { fullPage: boolean }>();
   const coordinateClickEvidenceByDocument = new Map<string, CoordinateClickEvidence>();
   const coordinateRectEvidenceByDocument = new Map<string, CoordinateRectEvidence[]>();
-  const lastActionObservationByPage = new WeakMap<import('playwright').Page, ActionObservation>();
   const pendingRuntimeStateOperations = new Map<string, {
     reject: (error: Error) => void;
     resolve: (value: unknown) => void;
@@ -577,8 +566,6 @@ function browserCodeKernelMain() {
   const recordAction = (action: string) => {
     if (activeExecution) {
       activeExecution.actions.push(action);
-      // An assertion before this action cannot verify its outcome.
-      activeExecution.verification = undefined;
     }
     if (activeExecution) send({ type: 'action-progress', requestId: activeExecution.requestId, action, completed: false });
   };
@@ -1075,7 +1062,6 @@ function browserCodeKernelMain() {
     send({ type: 'action-progress', requestId: activeExecution.requestId, action, completed: true });
     const before = activeExecution.observationsBeforeAction.get(page);
     const after = await readUnifiedPageObservation(page);
-    lastActionObservationByPage.set(page, { action, before, after });
     activeExecution.observationsBeforeAction.set(page, after);
     if (before) {
       const beforeIds = new Set(before.surfaces.map((surface) => surface.id));
@@ -2382,209 +2368,6 @@ function browserCodeKernelMain() {
     return undefined;
   };
 
-  type BrowserCodeVerifyStateInput = {
-    description: string;
-    locator?: import('playwright').Locator | string;
-    state?: 'visible' | 'hidden' | 'attached' | 'detached' | 'editable' | 'enabled' | 'checked' | 'filled' | 'value' | 'text' | 'attribute';
-    attribute?: string;
-    equals?: string;
-    includes?: string;
-    url?: string | RegExp;
-    activeSurface?: 'opened' | 'closed' | 'changed' | 'present' | 'absent';
-    surfaceId?: string;
-  };
-
-  const verifyPageState = async (
-    page: import('playwright').Page,
-    input: BrowserCodeVerifyStateInput,
-  ) => {
-    if (!activeExecution) throw new Error('page.verifyState() is only available while browserCode is executing.');
-    const lastAction = lastActionObservationByPage.get(page);
-    const description = String(input?.description || '').trim();
-    if (!description) throw new Error('page.verifyState() requires a concise expected business-state description.');
-    const checks: Array<{ name: string; ok: boolean; actual: unknown }> = [];
-    let current = await readUnifiedPageObservation(page);
-    if (input.activeSurface === 'closed' || input.activeSurface === 'absent') {
-      const surfaceId = input.surfaceId?.trim() || (input.activeSurface === 'closed' ? lastAction?.before?.activeSurface?.id : undefined);
-      const deadline = Date.now() + 900;
-      while (Date.now() < deadline && (surfaceId
-        ? current.surfaces.some((surface) => surface.id === surfaceId)
-        : Boolean(current.activeSurface))) {
-        await new Promise((resolve) => setTimeout(resolve, 60));
-        current = await readUnifiedPageObservation(page);
-      }
-    }
-    if (input.url !== undefined) {
-      const expected = input.url;
-      const currentUrl = page.url();
-      const regexLike = expected && typeof expected === 'object' && typeof Reflect.get(expected, 'test') === 'function';
-      const ok = regexLike
-        ? Boolean(Reflect.apply(Reflect.get(expected, 'test') as (...args: unknown[]) => unknown, expected, [currentUrl]))
-        : currentUrl === String(expected);
-      checks.push({ name: 'url', ok, actual: compactObservationUrl(currentUrl) });
-    }
-    if (input.activeSurface) {
-      if (
-        ['opened', 'closed', 'changed'].includes(input.activeSurface)
-        && !lastAction?.before
-        && !(input.activeSurface === 'closed' && input.surfaceId)
-      ) {
-        throw new Error(
-          `page.verifyState() activeSurface="${input.activeSurface}" requires a preceding browser action observation. `
-          + 'Use activeSurface="present"/"absent" for a standalone current-state check.',
-        );
-      }
-      const surfaceId = input.surfaceId?.trim();
-      if (input.surfaceId !== undefined && !surfaceId) throw new Error('page.verifyState() surfaceId must not be empty.');
-      const beforeSurface = surfaceId
-        ? lastAction?.before?.surfaces.find(surface => surface.id === surfaceId)
-        : lastAction?.before?.activeSurface;
-      const currentSurface = surfaceId
-        ? current.surfaces.find(surface => surface.id === surfaceId)
-        : current.activeSurface;
-      const beforeId = beforeSurface?.id || '';
-      const currentId = currentSurface?.id || '';
-      const beforeIds = new Set(lastAction?.before?.surfaces.map(surface => surface.id) || []);
-      const currentIds = new Set(current.surfaces.map(surface => surface.id));
-      const replacementPopup = Boolean(input.activeSurface === 'closed'
-        && current.activeSurface?.likelyOverlay && !current.activeSurface.modal
-        && current.activeSurface.id !== beforeId
-        && !lastAction?.before?.surfaceStack.some((surface) => surface.id === current.activeSurface?.id));
-      const ok = input.activeSurface === 'opened'
-        ? Boolean(currentId) && !beforeIds.has(currentId)
-        : input.activeSurface === 'closed'
-          ? (surfaceId ? !currentId : Boolean(beforeId) && !currentIds.has(beforeId)) && !replacementPopup
-          : input.activeSurface === 'changed'
-            ? beforeId !== currentId
-            : input.activeSurface === 'present'
-              ? Boolean(currentId)
-              : !currentId;
-      checks.push({
-        name: `activeSurface:${input.activeSurface}`,
-        ok,
-        actual: currentSurface || current.activeSurface || null,
-      });
-    }
-    const locatorInput = input?.locator;
-    let locator: import('playwright').Locator | undefined;
-    if (typeof locatorInput === 'string') {
-      locator = page.locator(locatorInput);
-    } else if (locatorInput !== undefined) {
-      if (
-        !locatorInput
-        || typeof locatorInput !== 'object'
-        || typeof Reflect.get(locatorInput, 'count') !== 'function'
-        || typeof Reflect.get(locatorInput, 'evaluate') !== 'function'
-      ) {
-        throw new Error(
-          'page.verifyState() locator must be a Playwright Locator from the active page or a selector string.',
-        );
-      }
-      locator = locatorInput;
-    }
-    if (locator) {
-      const count = await locator.count();
-      const state = input.state || (input.equals !== undefined || input.includes !== undefined ? 'text' : undefined);
-      if (!state) throw new Error('page.verifyState() locator verification requires state, equals, or includes.');
-      if (state === 'detached') {
-        checks.push({ name: 'locator:detached', ok: count === 0, actual: { count } });
-      } else if (state === 'hidden') {
-        const hidden = count === 0 || count === 1 && !await locator.isVisible().catch(() => false);
-        checks.push({ name: 'locator:hidden', ok: hidden, actual: { count } });
-      } else {
-        if (count !== 1) {
-          checks.push({ name: `locator:${state}`, ok: false, actual: { count } });
-        } else {
-          let actual: unknown;
-          let ok = false;
-          if (state === 'visible') {
-            actual = await locator.isVisible().catch(() => false);
-            ok = actual === true;
-          } else if (state === 'attached') {
-            actual = { count };
-            ok = true;
-          } else if (state === 'editable') {
-            actual = await locator.isEditable().catch(() => false);
-            ok = actual === true;
-          } else if (state === 'enabled') {
-            actual = await locator.isEnabled().catch(() => false);
-            ok = actual === true;
-          } else if (state === 'checked') {
-            actual = await locator.isChecked().catch(() => false);
-            ok = actual === true;
-          } else {
-            actual = state === 'filled'
-              ? await locator.evaluate((element) => {
-                if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement) {
-                  return element.value.length;
-                }
-                return ((element as HTMLElement).innerText || element.textContent || '').length;
-              }).catch(() => 0)
-              : state === 'text'
-              ? await locator.innerText().catch(() => '')
-              : state === 'attribute'
-                ? input.attribute
-                  ? await locator.getAttribute(input.attribute).catch(() => null)
-                  : null
-                : await locator.evaluate((element) => {
-                if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement) {
-                  return element.value;
-                }
-                return (element as HTMLElement).innerText || element.textContent || '';
-              }).catch(() => '');
-            const text = String(actual ?? '');
-            if (state === 'attribute' && !input.attribute) {
-              ok = false;
-            } else if (state === 'filled') ok = Number(actual) > 0;
-            else if (input.equals !== undefined) ok = text === String(input.equals);
-            else if (input.includes !== undefined) ok = text.includes(String(input.includes));
-            else ok = true;
-          }
-          checks.push({ name: `locator:${state}`, ok, actual });
-        }
-      }
-    }
-    const isTransientPicker = (surface: KernelPageObservation['activeSurface']) => Boolean(surface
-      && surface.likelyOverlay && (!surface.modal || surface.depth > 0));
-    const priorPopup = lastAction?.before?.activeSurface;
-    const currentPopup = current.activeSurface;
-    const popupStillOpen = isTransientPicker(priorPopup)
-      && current.surfaces.some((surface) => surface.id === priorPopup?.id);
-    const popupJustOpened = Boolean(currentPopup?.likelyOverlay)
-      && !lastAction?.before?.surfaces.some((surface) => surface.id === currentPopup?.id);
-    if ((popupStillOpen || popupJustOpened) && !input.activeSurface) {
-      checks.push({ name: 'activeSurface:explicit-check-required', ok: false,
-        actual: { id: popupStillOpen ? priorPopup?.id : currentPopup?.id,
-          state: popupStillOpen ? 'still-open' : 'opened' } });
-    }
-    const relevantPopupId = popupStillOpen ? priorPopup?.id : popupJustOpened ? currentPopup?.id : undefined;
-    if (relevantPopupId && input.surfaceId && input.surfaceId !== relevantPopupId) {
-      checks.push({ name: 'activeSurface:exact-id-required', ok: false,
-        actual: { expectedSurfaceId: relevantPopupId, checkedSurfaceId: input.surfaceId } });
-    }
-    if (!checks.length) {
-      throw new Error('page.verifyState() requires url, activeSurface, or locator state evidence.');
-    }
-    const passed = checks.every((check) => check.ok);
-    const detail = `${description}: ${checks.map((check) => `${check.name}=${check.ok}`).join(', ')}`;
-    activeExecution.verification = {
-      status: passed ? 'passed' : 'failed',
-      detail,
-    };
-    if (!passed) {
-      throw new Error(
-        `BUSINESS_STATE_VERIFICATION_FAILED: ${detail}. `
-        + 'Do not repeat the operation. Re-observe the latest page state and decide the next single step.',
-      );
-    }
-    return {
-      ok: true,
-      description,
-      checks,
-      observation: current,
-    };
-  };
-
   const setTextSelection = async (
     page: import('playwright').Page,
     locatorInput: import('playwright').Locator,
@@ -2628,7 +2411,6 @@ function browserCodeKernelMain() {
       domSnapshot?: (options?: { scope?: 'active' | 'all' }) => Promise<string>;
       activeSurface?: () => Promise<Pick<KernelPageObservation, 'activeSurface' | 'surfaces' | 'surfaceStack' | 'topSurfaceIds'>>;
       setTextSelection?: (locator: import('playwright').Locator, input: BrowserTextSelectionSpec) => Promise<unknown>;
-      verifyState?: (input: BrowserCodeVerifyStateInput) => Promise<unknown>;
       expectNavigation?: <T>(action: () => Promise<T>, options?: { timeoutMs?: number; url?: string | RegExp; waitUntil?: NonNullable<Parameters<import('playwright').Page['waitForURL']>[1]>['waitUntil'] }) => Promise<T>;
     };
     if (typeof extendedPage.getByUid !== 'function') {
@@ -2734,14 +2516,6 @@ function browserCodeKernelMain() {
         writable: false,
       });
     }
-    if (typeof extendedPage.verifyState !== 'function') {
-      Object.defineProperty(extendedPage, 'verifyState', {
-        configurable: false,
-        enumerable: false,
-        value: (input: BrowserCodeVerifyStateInput) => verifyPageState(page, input),
-        writable: false,
-      });
-    }
     if (typeof extendedPage.expectNavigation !== 'function') {
       Object.defineProperty(extendedPage, 'expectNavigation', {
         configurable: false,
@@ -2825,11 +2599,11 @@ function browserCodeKernelMain() {
     capabilities: Object.freeze({ cua: true, images: true, playwright: true, tabLifecycle: true }),
     documentation: async () => [
       'browserCode exposes one controlled browser runtime in ordinary JavaScript.',
-      'Use browser.tabs.list()/new()/use()/finalize(), browser.user.openTabs()/claimTab(), tab.playwright, tab.cua, page.getByUid(), page.domSnapshot(), page.activeSurface(), page.setTextSelection(), page.verifyState(), page.expectNavigation(), attachmentVault.setInputFiles(), and nodeRepl.emitImage().',
+      'Use browser.tabs.list()/new()/use()/finalize(), browser.user.openTabs()/claimTab(), tab.playwright, tab.cua, page.getByUid(), page.domSnapshot(), page.activeSurface(), page.setTextSelection(), page.expectNavigation(), attachmentVault.setInputFiles(), and nodeRepl.emitImage().',
       'page.domSnapshot() returns page-state plus a read-only Playwright AX tree scoped to the active surface by default; pass { scope: "all" } only for background context. browser.user.openTabs() reports only tabs owned by the current conversation group, with active-tab and tab-group metadata.',
       'Page and Locator factory methods expose only currently rendered matches: CSS-hidden descendants and zero-rectangle nodes are excluded before count() and positional selection. aria-hidden changes accessibility exposure but does not by itself make a geometrically rendered target invisible or unactionable. Element actions then validate target computed style and hit testing, run an action-specific Playwright trial for every remaining pointer candidate, and execute only the unique candidate that passes all stages; CSS-hidden file inputs used by setInputFiles are recovered only at that action boundary.',
       'Coordinate clicks require either reusable fresh viewport-screenshot evidence from a previous cell or a point inside a rect returned by boundingBox() for one exact visible actionable Locator. Rect-derived clicks work without image input.',
-      'After any browser action, call page.verifyState() with a concrete URL, locator value/state, or exact surface transition. An action without a passing postcondition returns browser-verification-required even when the Playwright call completed.',
+      'page.verifyState() is not available. After browser actions, inspect the returned result and the host-supplied post-action state and screenshot. Use ordinary Playwright waits or targeted reads in the cell when the next action depends on a specific condition; a completed input alone does not prove a business outcome.',
       'Every session Page exposes setTextSelection(locator, spec). Call it on the Page that owns the locator, including for frame locators, then use that same Page keyboard.insertText()/press() in the same cell. Use browser.tabs.use(tab) or tab.use() when the global page binding should switch tabs.',
       'page.getByUid(uid) synchronously returns a normal Playwright Locator for an exact dom-* UID exposed by the latest DOM evidence. A stale, unexposed, navigated, or detached UID fails with STALE_DOM_EVIDENCE and must be replaced from fresh evidence.',
       `Playwright action timeout: ${browserCodeActionTimeoutMs}ms; navigation timeout: ${browserCodeNavigationTimeoutMs}ms.`,
@@ -3157,17 +2931,10 @@ function browserCodeKernelMain() {
       const finalPageCount = browserContext.pages().filter((candidatePage) => !candidatePage.isClosed()).length;
       const navigationChanged = Boolean(finalPage && finalPage.url() !== initialUrl);
       const tabChanged = finalPage !== initialPage || finalPageCount !== initialPageCount;
-      if (activeExecution.actions.length && !activeExecution.verification) {
-        activeExecution.verification = {
-          status: 'required',
-          detail: 'Browser actions completed without a passing page.verifyState() after the last action. Inspect the current state and verify the intended outcome before continuing; do not replay the action.',
-        };
-      }
       const activity: BrowserCodeActivity = {
         actions: [...activeExecution.actions],
         navigationChanged,
         tabChanged,
-        ...(activeExecution.verification ? { verification: activeExecution.verification } : {}),
         ...(activeExecution.surfaceTransitions.length ? { surfaceTransitions: [...activeExecution.surfaceTransitions] } : {}),
       };
       const selectedTargetId = finalPage ? await targetIdForPage(finalPage) : undefined;
@@ -3239,7 +3006,7 @@ function browserCodeKernelMain() {
             kind: surface.kind, label: surface.label })),
           controls: fields.flat().sort((a, b) => Number(b.inActiveSurface) - Number(a.inActiveSurface)
             || Number(b.focused) - Number(a.focused) || Number(b.topmost) - Number(a.topmost)).slice(0, 24),
-          note: 'Live read-only diagnosis; no input values. A backdrop blocking Cancel/Close belongs to a foreground surface: dismiss that surface (Escape when supported), observe again, then click the intended control. Overlay DOM order is not a reliable target; avoid .last() on generic overlay roots. Force and coordinate clicks do not bypass a covering layer.' };
+          note: 'Live read-only diagnosis; no input values. A popup blocking Cancel/Close must be dismissed first through the browser dismissSurface action or an observed close control. Observe again before clicking the intended control. Overlay DOM order is not a reliable target; avoid .last() on generic overlay roots. A forced click on a covered control does not close the popup.' };
       })(), 2000, 'interaction diagnosis');
       send({
         type: 'result',
@@ -3256,7 +3023,6 @@ function browserCodeKernelMain() {
           actions: [...activeExecution.actions],
           navigationChanged: false,
           tabChanged: false,
-          ...(activeExecution.verification ? { verification: activeExecution.verification } : {}),
           ...(activeExecution.surfaceTransitions.length ? { surfaceTransitions: [...activeExecution.surfaceTransitions] } : {}),
         },
         memoryUsage: hostProcess.memoryUsage(),

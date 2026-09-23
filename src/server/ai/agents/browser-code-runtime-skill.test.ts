@@ -30,7 +30,6 @@ test('hidden browser code-action runtime Skill documents the complete required o
   assert.match(browserCodeRuntimeSkillContent, /failureCategory\?/);
   assert.match(browserCodeRuntimeSkillContent, /Promise<RuntimeTab>/);
   assert.match(browserCodeRuntimeSkillContent, /page\.expectNavigation\(action, options\?\)/);
-  assert.match(browserCodeRuntimeSkillContent, /page\.verifyState\(input\)/);
   assert.match(browserCodeRuntimeSkillContent, /setTextSelection\(locator, spec\)/);
   assert.match(browserCodeRuntimeSkillContent, /Custom dropdown that stays open/);
   assert.match(browserCodeRuntimeSkillContent, /Date\/time picker with an explicit confirmation/);

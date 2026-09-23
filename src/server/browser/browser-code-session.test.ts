@@ -48,12 +48,7 @@ test('BrowserSession executes browserCode against the controlled Playwright page
     code: `
       var name = page.locator('[aria-label="Name"]').filter({ visible: true });
       await name.fill('Alice');
-      await page.verifyState({
-        description: 'Name value was entered',
-        locator: name,
-        state: 'value',
-        equals: 'Alice',
-      });
+      if (await name.inputValue() !== 'Alice') throw new Error('Name value was not entered.');
       var nameBox = await name.boundingBox();
       var locatorCursor = await page.locator('#__ai_mouse_cursor__').evaluate((element) => ({
         x: Number(element.dataset.x),
@@ -98,12 +93,7 @@ test('BrowserSession executes browserCode against the controlled Playwright page
       await page.domSnapshot();
       var role = page.getByLabel('Role').filter({ visible: true });
       await role.selectOption('admin');
-      await page.verifyState({
-        description: 'Admin role was selected',
-        locator: role,
-        state: 'value',
-        equals: 'admin',
-      });
+      if (await role.inputValue() !== 'admin') throw new Error('Admin role was not selected.');
     `,
     runId: 'browser-code-session-test',
     stepIndex: 3,
@@ -132,12 +122,7 @@ test('BrowserSession executes browserCode against the controlled Playwright page
   const action = await session.executeBrowserCode({
     code: `
       await page.mouse.click(buttonBox.x + buttonBox.width / 2, buttonBox.y + buttonBox.height / 2);
-      await page.verifyState({
-        description: 'Apply action completed',
-        locator: page.locator('#status'),
-        state: 'text',
-        equals: 'Applied',
-      });
+      if (await page.locator('#status').innerText() !== 'Applied') throw new Error('Apply action did not complete.');
       const state = await page.evaluate(() => ({
         name: document.querySelector('[aria-label="Name"]').value,
         role: document.querySelector('[aria-label="Role"]').value,

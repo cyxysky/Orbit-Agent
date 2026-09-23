@@ -3897,89 +3897,57 @@ export class BrowserSession {
   }
 
   async dismissBrowserSurface(input: {
-    surfaceId: string;
-    method: 'escape' | 'backdrop';
     abortSignal?: AbortSignal;
   }): Promise<BrowserActionResult> {
     return this.withSessionOperation(async (signal) => {
-      const before = await this.readPageObservation();
-      const surface = before.activeSurface;
-      if (!surface || surface.id !== input.surfaceId) return {
-        ok: false,
-        failureCategory: 'state-conflict',
-        summary: 'The requested surface is no longer the active surface; no input was sent.',
-        data: { requestedSurfaceId: input.surfaceId, observation: before, outcome: 'not-executed' },
-      };
+      const before = await this.readPageObservation().catch(() => undefined);
       const page = this.activePage;
-      let point: { x: number; y: number; hit: string } | undefined;
-      if (input.method === 'backdrop') {
-        const frame = surface.framePath
-          ? page.frames().find((candidate) => this.getFramePath(candidate) === surface.framePath)
-          : page.mainFrame();
-        if (!frame) return { ok: false, failureCategory: 'state-conflict',
-          summary: 'The surface frame disappeared; no input was sent.', data: { observation: before, outcome: 'not-executed' } };
-        const localPoint = await frame.evaluate((rect) => {
-          const candidates = [
-            [8, 8], [innerWidth - 8, 8], [8, innerHeight - 8], [innerWidth - 8, innerHeight - 8],
-            [Math.max(8, rect.left - 8), Math.max(8, Math.min(innerHeight - 8, rect.top + 8))],
-            [Math.min(innerWidth - 8, rect.right + 8), Math.max(8, Math.min(innerHeight - 8, rect.top + 8))],
-          ];
-          for (const [x, y] of candidates) {
-            if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) continue;
-            if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) continue;
-            const hit = document.elementFromPoint(x, y);
-            const backdrop = hit?.closest('[class*="backdrop" i], [class*="mask" i], [data-backdrop], [data-overlay-backdrop]');
-            if (!backdrop || hit !== backdrop || getComputedStyle(backdrop).pointerEvents === 'none') continue;
-            return { x, y, hit: backdrop.tagName.toLowerCase() + (typeof backdrop.className === 'string' ? `.${backdrop.className.trim().replace(/\s+/g, '.')}` : '') };
-          }
-          return null;
-        }, surface.rect).catch(() => null);
-        if (!localPoint) return { ok: false, failureCategory: 'surface-backdrop-unavailable',
-          summary: 'No unobstructed backdrop point outside the active surface was found; no input was sent.',
-          data: { observation: before, outcome: 'not-executed' } };
-        const frameBox = frame === page.mainFrame() ? undefined : await frame.frameElement().then((element) => element.boundingBox());
-        if (frame !== page.mainFrame() && !frameBox) return { ok: false, failureCategory: 'state-conflict',
-          summary: 'The surface frame is not visible; no input was sent.', data: { observation: before, outcome: 'not-executed' } };
-        point = { x: localPoint.x + (frameBox?.x || 0), y: localPoint.y + (frameBox?.y || 0), hit: localPoint.hit };
-      }
+      const surfaceId = before?.activeSurface?.id;
+      const point = { x: 0, y: 0 };
       this.stateReader?.clear();
       this.browserViewportEvidence = undefined;
       this.latestBrowserObservation = { status: 'unavailable', error: 'A surface dismissal was attempted; earlier screenshots are stale.' };
       try {
-        if (input.method === 'escape') await raceWithAbort(page.keyboard.press('Escape'), signal);
-        else await raceWithAbort(page.mouse.click(point!.x, point!.y), signal);
+        await raceWithAbort(page.mouse.click(point.x, point.y), signal);
       } catch (error) {
         const after = await this.readPageObservation().catch(() => undefined);
         return { ok: false, failureCategory: 'surface-dismissal-uncertain',
           summary: 'The dismissal input failed or timed out; inspect current state before another action.',
-          data: { error: unknownErrorMessage(error), method: input.method, before, after, point, outcome: 'unknown' } };
+          data: { error: unknownErrorMessage(error), method: 'corner-click', before, after, point, outcome: 'unknown' } };
       }
-      let after = await this.readPageObservation();
+      let after = await this.readPageObservation().catch(() => undefined);
+      if (!after) return { ok: true,
+        summary: 'The corner click was sent, but the resulting surface state could not be read.',
+        data: { method: 'corner-click', before, point, outcome: 'observation-unavailable' } };
       const deadline = Date.now() + 900;
-      while (Date.now() < deadline && after.surfaces.some((candidate) => candidate.id === input.surfaceId)) {
+      while (surfaceId && Date.now() < deadline && after.surfaces.some((candidate) => candidate.id === surfaceId)) {
         await raceWithAbort(new Promise<void>((resolve) => setTimeout(resolve, 60)), signal);
-        after = await this.readPageObservation();
+        const refreshed = await this.readPageObservation().catch(() => undefined);
+        if (!refreshed) break;
+        after = refreshed;
       }
-      const closed = !after.surfaces.some((candidate) => candidate.id === input.surfaceId);
-      const replacementPopup = closed && Boolean(after.activeSurface?.likelyOverlay
-        && !after.activeSurface.modal && after.activeSurface.id !== input.surfaceId
+      const closed = Boolean(surfaceId) && !after.surfaces.some((candidate) => candidate.id === surfaceId);
+      const replacementPopup = Boolean(before && after.activeSurface?.likelyOverlay
+        && !after.activeSurface.modal && after.activeSurface.id !== surfaceId
         && !before.surfaceStack.some((candidate) => candidate.id === after.activeSurface?.id));
-      const lostParentSurfaceIds = before.surfaceStack
-        .filter((candidate) => candidate.id !== input.surfaceId && !after.surfaces.some((next) => next.id === candidate.id))
+      const navigated = Boolean(before && after.url !== before.url);
+      const lostParentSurfaceIds = (before?.surfaceStack || [])
+        .filter((candidate) => candidate.id !== surfaceId && !after.surfaces.some((next) => next.id === candidate.id))
         .map((candidate) => candidate.id);
-      const verified = closed && !replacementPopup && lostParentSurfaceIds.length === 0;
+      const verified = closed && !replacementPopup && !navigated && lostParentSurfaceIds.length === 0;
+      const unconfirmed = !surfaceId && !replacementPopup && !navigated;
       return {
-        ok: verified,
-        ...(!verified ? { failureCategory: replacementPopup ? 'surface-replaced'
-          : closed ? 'surface-dismissal-side-effect' : 'surface-not-dismissed' } : {}),
+        ok: true,
         summary: verified ? 'The observed surface closed and its parent surfaces remain open.'
-          : replacementPopup ? 'The original surface disappeared, but another popup remains active; inspect before continuing.'
-            : closed ? 'The surface closed, but a parent surface also disappeared; inspect before continuing.'
-            : 'The dismissal action completed, but the observed surface remains open.',
-        verification: { status: verified ? 'passed' : 'failed',
-          detail: `surface ${input.surfaceId} ${closed ? 'closed' : 'remains open'}; replacement popup: ${replacementPopup}; lost parent surfaces: ${lostParentSurfaceIds.join(', ') || 'none'}` },
-        data: { method: input.method, before, after, lostParentSurfaceIds,
-          ...(point ? { point } : {}), outcome: verified ? 'verified-closed' : replacementPopup ? 'popup-replaced' : closed ? 'side-effect' : 'verified-open' },
+          : navigated ? 'The corner click changed the page URL; inspect before continuing.'
+            : replacementPopup ? 'Another popup is active after the corner click; inspect before continuing.'
+              : closed ? 'The surface closed, but a parent surface also disappeared; inspect before continuing.'
+                : unconfirmed ? `The corner click was sent. ${before ? 'No active surface was detected' : 'The initial surface state was unavailable'}, so closure is unconfirmed.`
+                  : 'The corner click completed, but the observed surface remains open.',
+        data: { method: 'corner-click', before, after, lostParentSurfaceIds, point,
+          closureConfirmed: verified, observedSurfaceId: surfaceId, urlChanged: navigated,
+          outcome: verified ? 'verified-closed' : navigated ? 'navigation-side-effect' : replacementPopup ? 'popup-replaced'
+            : closed ? 'side-effect' : unconfirmed ? 'unconfirmed' : 'verified-open' },
       };
     }, input.abortSignal);
   }
@@ -4867,7 +4835,6 @@ export class BrowserSession {
       actions: execution.activity?.actions || [],
       navigationChanged: execution.activity?.navigationChanged === true || finalUrl !== initialUrl,
       tabChanged: execution.activity?.tabChanged === true || finalPage !== page || pagesCreatedDuringExecution.size > 0,
-      ...(execution.activity?.verification ? { verification: execution.activity.verification } : {}),
       ...(execution.activity?.surfaceTransitions ? { surfaceTransitions: execution.activity.surfaceTransitions } : {}),
     };
     const emittedImagePaths: string[] = [];
@@ -4896,7 +4863,6 @@ export class BrowserSession {
     const reportedFailure = execution.ok
       ? resultFailure
         || (noDeclaredActionExecuted ? 'The code declared a browser action, but no browser action was attempted. A conditional target guard may have skipped it. Read the current target and page state before choosing a changed action.' : undefined)
-        || (inferredActivity.verification?.status === 'required' ? inferredActivity.verification.detail : undefined)
       : undefined;
     const effectiveOk = execution.ok && !reportedFailure;
     const effectiveError = execution.error || reportedFailure;
@@ -4917,7 +4883,6 @@ export class BrowserSession {
       } : {}),
       ...(returnedPage?.url === finalUrl && returnedPage.title === finalTitle
         ? {} : { finalPage: { url: finalUrl, title: finalTitle } }),
-      ...(inferredActivity.verification ? { verification: inferredActivity.verification } : {}),
       ...(inferredActivity.surfaceTransitions?.length ? { surfaceTransitions: inferredActivity.surfaceTransitions } : {}),
       ...(emittedImagePaths.length ? { images: emittedImagePaths.map((filePath) => ({ fileName: path.basename(filePath) })) } : {}),
       ...(emittedImageErrors.length ? { imageErrors: emittedImageErrors } : {}),
@@ -4926,7 +4891,6 @@ export class BrowserSession {
       ok: effectiveOk,
       ...(!effectiveOk ? { failureCategory: resultFailure ? 'browser-result-failed'
         : noDeclaredActionExecuted ? 'browser-no-action'
-        : inferredActivity.verification?.status === 'required' ? 'browser-verification-required'
         : reportedFailure ? 'browser-result-failed'
         : execution.kernelReset?.reason === 'out-of-memory' ? 'browser-kernel-out-of-memory'
           : `browser-${execution.executionState?.status || 'code-failed'}` } : {}),
@@ -4935,7 +4899,6 @@ export class BrowserSession {
         ? `Browser script returned in ${Date.now() - operation.startedAt}ms; business outcome requires verification from the returned evidence.`
         : `Browser script ${reportedFailure ? 'returned a failure' : execution.executionState?.status || 'failed'}; ${execution.executionState?.completedActions.length || 0} action(s) completed. Review data.error, data.diagnostics when available, and the current observation before choosing a changed recovery action.`,
       ...(emittedImagePaths.length ? { referenceImagePath: emittedImagePaths[0], referenceImagePaths: emittedImagePaths } : {}),
-      verification: inferredActivity.verification,
     };
     signal.throwIfAborted();
     return result;

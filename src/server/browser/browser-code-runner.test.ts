@@ -325,17 +325,10 @@ test('browserCode bounds a missing locator and preserves the kernel after the fa
 test('browserCode actions do not require a same-cell domSnapshot gate', async () => {
   const hovered = await run(`
     await saveButton.hover();
-    await page.verifyState({
-      description: 'Save button received hover',
-      locator: saveButton,
-      state: 'attribute',
-      attribute: 'data-hovered',
-      equals: 'true',
-    });
+    if (await saveButton.getAttribute('data-hovered') !== 'true') throw new Error('Save button did not receive hover.');
   `);
   assert.equal(hovered.ok, true, hovered.error);
   assert.ok(hovered.activity?.actions.includes('locator.hover'));
-  assert.equal(hovered.activity?.verification?.status, 'passed');
 });
 
 test('browserCode auto-filters hidden candidates and permits explicit positional disambiguation', async () => {
@@ -719,13 +712,7 @@ test('browserCode permits multiple bounded state-changing operations per cell', 
     const result = await run(`
       await page.domSnapshot();
       await page.locator('#single-step-first').click();
-      await page.verifyState({
-        description: 'First step completed',
-        locator: page.locator('body'),
-        state: 'attribute',
-        attribute: 'data-first-step',
-        equals: 'done',
-      });
+      if (await page.locator('body').getAttribute('data-first-step') !== 'done') throw new Error('First step did not complete.');
       await page.locator('#single-step-second').hover();
       await page.locator('#single-step-second').click();
     `);
@@ -748,7 +735,7 @@ test('browserCode permits multiple bounded state-changing operations per cell', 
   }
 });
 
-test('browserCode leaves post-action verification to the model without blocking later cells', async () => {
+test('browserCode preserves action results across cells without a verifier API', async () => {
   await page.evaluate(() => {
     const button = document.createElement('button');
     button.id = 'pending-verification';
@@ -766,7 +753,6 @@ test('browserCode leaves post-action verification to the model without blocking 
       await page.locator('#pending-verification').click();
     `);
     assert.equal(unverified.ok, true, unverified.error);
-    assert.equal(unverified.activity?.verification, undefined);
     assert.equal(await page.locator('body').getAttribute('data-optional-verification'), '1');
 
     const nextCell = await run(`
@@ -775,27 +761,6 @@ test('browserCode leaves post-action verification to the model without blocking 
     `);
     assert.equal(nextCell.ok, true, nextCell.error);
     assert.equal(await page.locator('body').getAttribute('data-optional-verification'), '2');
-
-    const invalidLocator = await run(`
-      await page.verifyState({
-        description: 'Invalid locator is rejected clearly',
-        locator: {},
-        state: 'visible',
-      });
-    `);
-    assert.equal(invalidLocator.ok, false);
-    assert.match(invalidLocator.error || '', /Locator from the active page or a selector string/);
-    assert.doesNotMatch(invalidLocator.error || '', /count is not a function/);
-
-    const verified = await run(`
-      await page.verifyState({
-        description: 'Optional verification accepts a selector string',
-        locator: '#pending-verification',
-        state: 'visible',
-      });
-    `);
-    assert.equal(verified.ok, true, verified.error);
-    assert.equal(verified.activity?.verification?.status, 'passed');
   } finally {
     await page.locator('#pending-verification').evaluate((element) => element.remove());
     await page.locator('body').evaluate((body) => {
@@ -1087,11 +1052,7 @@ test('browserCode exposes browser and tab lifecycle as JavaScript APIs', async (
     var runtimeBrowser = await agent.browsers.getDefault();
     var runtimeTab = await runtimeBrowser.tabs.new();
     await runtimeTab.playwright.setContent('<title>Runtime tab</title><button onclick="location.hash=&quot;runtime-ready&quot;">Continue</button>');
-    await page.verifyState({
-      description: 'Runtime tab content is ready',
-      locator: page.getByRole('button', { name: 'Continue' }),
-      state: 'visible',
-    });
+    await page.getByRole('button', { name: 'Continue' }).waitFor({ state: 'visible' });
     nodeRepl.write({ created: true });
   `);
   assert.equal(created.ok, true, created.error);
@@ -1103,10 +1064,7 @@ test('browserCode exposes browser and tab lifecycle as JavaScript APIs', async (
       () => runtimeTab.playwright.getByRole('button', { name: 'Continue' }).click(),
       { url: /#runtime-ready$/, timeoutMs: 3000 },
     );
-    await runtimeTab.playwright.verifyState({
-      description: 'Runtime tab reached the expected hash',
-      url: /#runtime-ready$/,
-    });
+    if (!/#runtime-ready$/.test(runtimeTab.playwright.url())) throw new Error('Runtime tab did not reach the expected hash.');
     nodeRepl.write({ navigationUrl: page.url() });
   `);
   assert.equal(navigated.ok, true, navigated.error);

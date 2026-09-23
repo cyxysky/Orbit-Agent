@@ -9,7 +9,7 @@ import { executePlaywrightMcpOperation } from './runtime-browser-mcp';
 const domShape = {
   ...browserControlShape,
   action: z.enum(['state', 'snapshot', 'code', 'dismissSurface', 'navigate', 'tabs', 'waitForHumanVerification'])
-    .describe('snapshot reads current actionable elements and surface; code acts and must verify; dismissSurface closes an observed popup and verifies it.'),
+    .describe('snapshot reads actionable elements and surfaces; code acts and returns data.postActionState after attempted input (page.verifyState does not exist); dismissSurface always sends a direct mouse click at viewport (0,0), then reports data.closureConfirmed and postActionState. A delivered click is not proof that the popup closed.'),
   reason: z.string().min(1).max(300),
   code: z.string().min(1).max(40000).optional(),
   scope: z.enum(['active', 'all']).optional(), frame: z.string().max(200).optional(),
@@ -18,14 +18,11 @@ const domShape = {
   maxMs: z.number().int().min(1000).max(1800000).optional(),
   snapshotView: z.enum(['actionable', 'full', 'text']).optional().describe('snapshot only: actionable controls by default, full semantic tree, or readable text.'),
   snapshotCursor: z.string().min(1).max(1000).optional().describe('snapshot only: nextCursor from the same DOM observation.'),
-  surfaceId: z.string().min(1).max(200).optional().describe('dismissSurface only: exact active surface id from a current observation.'),
-  dismissMethod: z.enum(['escape', 'backdrop']).optional().describe('dismissSurface only: Escape or a verified backdrop click outside the surface.'),
   recoveryReview: z.string().max(6000).optional(),
   observationMode: z.enum(['replace', 'append', 'keep-pair']).optional(),
 };
 const domSchema = z.object(domShape).strict().superRefine((value, ctx) => {
   if (value.action === 'code' && !value.code) ctx.addIssue({ code: 'custom', path: ['code'], message: 'code is required' });
-  if (value.action === 'dismissSurface' && !value.surfaceId) ctx.addIssue({ code: 'custom', path: ['surfaceId'], message: 'surfaceId is required' });
   if (value.action === 'navigate' || value.action === 'tabs') {
     const result = visualBrowserInputSchema.safeParse(value);
     if (!result.success) for (const issue of result.error.issues) ctx.addIssue({ code: 'custom', path: issue.path, message: issue.message });
@@ -33,7 +30,7 @@ const domSchema = z.object(domShape).strict().superRefine((value, ctx) => {
 });
 const hybridSchema = z.object({ ...visualBrowserInputSchema.shape, ...domShape,
   action: z.enum(['state', 'snapshot', 'code', 'dismissSurface', 'observe', 'act', 'images', 'navigate', 'tabs', 'waitForHumanVerification'])
-    .describe('snapshot reads current actionable elements and surface; code acts and must verify; dismissSurface closes an observed popup and verifies it.'),
+    .describe('snapshot reads actionable elements and surfaces; code acts and returns data.postActionState after attempted input (page.verifyState does not exist); dismissSurface always sends a direct mouse click at viewport (0,0), then reports data.closureConfirmed and postActionState. A delivered click is not proof that the popup closed.'),
 }).strict().superRefine((value, ctx) => {
   try { parseBrowserInteractionInput(value, 'hybrid'); }
   catch (error) { ctx.addIssue({ code: 'custom', message: error instanceof Error ? error.message : 'Invalid browser action' }); }
@@ -71,8 +68,8 @@ export function browserInteractionInstructions(mode: BrowserChatInteractionMode)
   return 'Use navigate for URL/route navigation and tabs for listing, opening, selecting or closing session tabs. These browser controls are available in every mode. Page keyboard actions cannot control the address bar or browser tabs. ' + (mode === 'visual'
     ? 'Browser interaction mode: VISUAL. Use observe/act/images with current screenshot evidence. DOM, AX, locators and page scripts are unavailable. Never bypass this mode through other tools or recalled historical instructions.'
     : mode === 'dom'
-      ? 'Browser interaction mode: DOM. Use snapshot for an actionable semantic control list and current surface id, state for scoped Playwright AX tree, and code for Playwright actions. Every code cell that performs an action must call page.verifyState() after its last action; otherwise it returns browser-verification-required with the fresh state. Use dismissSurface with an observed active surface id for verified Escape or safe backdrop dismissal; never blindly force-click (0,0). When image input and automatic capture are available, the next model request includes actual pixels of the latest active viewport in [Current browser observation] after the tool receipt. Inspect the pixels and returned DOM/result before a dependent action; no separate image-read call is needed. If that image is unavailable, use live DOM without claiming visual inspection.'
-      : 'Browser interaction mode: HYBRID. Use snapshot for actionable semantic controls and the current surface, state for scoped Playwright AX tree, code for Playwright actions, and observe/act/images for visual interaction. Every code cell that performs an action must call page.verifyState() after its last action; otherwise the tool returns browser-verification-required with fresh state. Use dismissSurface with an observed active surface id for verified Escape or safe backdrop dismissal; never blindly force-click (0,0). When image input and automatic capture are available, the next request includes the latest viewport pixels in [Current browser observation] after the tool receipt; inspect that image with returned result/DOM before a dependent action. If unavailable, use live DOM without claiming visual inspection.');
+      ? 'Browser interaction mode: DOM. Use snapshot for actionable semantic controls and the current surface, state for scoped Playwright AX tree, and code for Playwright actions. page.verifyState does not exist. After attempted code input, inspect data.postActionState and the returned result before dependent work; use ordinary Playwright reads inside a cell if a dependent action needs immediate evidence. When image input and automatic capture are available, the next request also includes the latest viewport pixels in [Current browser observation]; inspect them without a separate image-read call. If unavailable, use live DOM without claiming visual inspection. dismissSurface always sends a direct mouse click at viewport (0,0), without Escape or a surface-id prerequisite. Outer ok means the click was delivered, not that the popup closed; inspect data.closureConfirmed, data.outcome, data.postActionState, and the latest screenshot before continuing.'
+      : 'Browser interaction mode: HYBRID. Use snapshot for actionable semantic controls and the current surface, state for scoped Playwright AX tree, code for Playwright actions, and observe/act/images for visual interaction. page.verifyState does not exist. After attempted code input, inspect data.postActionState and the returned result before dependent work; use ordinary Playwright reads inside a cell if a dependent action needs immediate evidence. When image input and automatic capture are available, the next request also includes the latest viewport pixels in [Current browser observation]; inspect them without a separate image-read call. If unavailable, use live DOM without claiming visual inspection. dismissSurface always sends a direct mouse click at viewport (0,0), without Escape or a surface-id prerequisite. Outer ok means the click was delivered, not that the popup closed; inspect data.closureConfirmed, data.outcome, data.postActionState, and the latest screenshot before continuing.');
 }
 
 // One installed Skill describes the protocol; the host-selected mode and schema
@@ -121,14 +118,13 @@ export async function executeBrowserInteraction(session: BrowserSession, raw: un
     }
   }
   if (command.action === 'dismissSurface') {
-    const result = await session.dismissBrowserSurface({ surfaceId: command.surfaceId!,
-      method: command.dismissMethod || 'escape', abortSignal: signal });
-    const recoveryState = !result.ok ? await session.readBrowserState({ scope: 'active', maxOutputChars: 8000, abortSignal: signal })
-      .catch((error) => ({ ok: false, actual: error instanceof Error ? error.message : String(error) })) : undefined;
+    const result = await session.dismissBrowserSurface({ abortSignal: signal });
+    const postActionState = await session.readBrowserState({ scope: 'active', maxOutputChars: 4000, abortSignal: signal })
+      .catch((error) => ({ ok: false, actual: error instanceof Error ? error.message : String(error) }));
     const observation = options.imageInputAvailable === false ? undefined
       : await session.captureBrowserObservation(options.runId || 'browser', signal).catch(() => undefined);
     return { ...result,
-      ...(recoveryState ? { data: { ...(result.data as object), recoveryState } } : {}),
+      data: { ...(result.data as object), postActionState },
       ...(observation ? { browserObservation: observation, referenceImagePath: observation.path } : {}) };
   }
   if (command.action === 'state') return session.readBrowserState({ ...command, abortSignal: signal });
@@ -140,13 +136,18 @@ export async function executeBrowserInteraction(session: BrowserSession, raw: un
     const result = await session.executeBrowserCode({ ...command, code, imageInputAvailable, ensureStarted: options.ensureStarted,
       attachments: options.attachments, credentials: options.credentials, runId: options.runId || 'browser',
       stepIndex: options.stepIndex || 0, abortSignal: signal });
-    if (result.failureCategory !== 'browser-no-action' && result.failureCategory !== 'browser-verification-required') return result;
-    // A skipped or unverified action needs a fresh active-surface read before
-    // the model can decide whether to verify, dismiss, or choose another target.
-    const recoveryState = await session.readBrowserState({ scope: 'active', maxOutputChars: 8000, abortSignal: signal })
-      .catch((error) => ({ ok: false, actual: error instanceof Error ? error.message : String(error) }));
+    const skippedAction = result.failureCategory === 'browser-no-action';
     const data = result.data && typeof result.data === 'object' ? result.data as Record<string, unknown> : {};
-    return { ...result, data: { ...data, recoveryState } };
+    const executionState = data.executionState && typeof data.executionState === 'object'
+      ? data.executionState as { attemptedActions?: unknown } : undefined;
+    const attemptedAction = Array.isArray(executionState?.attemptedActions) && executionState.attemptedActions.length > 0;
+    if (!skippedAction && !attemptedAction && result.ok) return result;
+    // Preserve the execution result and attach one bounded live observation
+    // after attempted input or a failed cell whose input outcome is uncertain.
+    const recovery = skippedAction || !attemptedAction;
+    const currentState = await session.readBrowserState({ scope: 'active', maxOutputChars: recovery ? 8000 : 4000, abortSignal: signal })
+      .catch((error) => ({ ok: false, actual: error instanceof Error ? error.message : String(error) }));
+    return { ...result, data: { ...data, [recovery ? 'recoveryState' : 'postActionState']: currentState } };
   }
   if (options.imageInputAvailable === false) return { ok: false, actual: 'Visual actions require a model with image input. Use DOM actions in hybrid mode or select an image-capable model.' };
   if (command.action === 'images') return options.selectImages
