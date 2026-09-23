@@ -399,6 +399,15 @@ function startStreamMetrics(stream: BrowserPreviewStream, metrics: () => Browser
 function readLiveInput(value: unknown): BrowserLiveInput | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const input = value as Record<string, unknown>;
+  if (input.kind === 'browserControl' && typeof input.action === 'string'
+    && ['navigate', 'open', 'close', 'back', 'forward', 'reload'].includes(input.action)) {
+    if (input.action === 'navigate' && (typeof input.url !== 'string' || input.url.length > 16000)) return undefined;
+    if (input.action === 'close' && (typeof input.tabId !== 'string' || !input.tabId.trim())) return undefined;
+    return { kind: 'browserControl', action: input.action as Extract<BrowserLiveInput, { kind: 'browserControl' }>['action'],
+      ...(typeof input.url === 'string' ? { url: input.url } : {}),
+      ...(typeof input.tabId === 'string' ? { tabId: input.tabId } : {}) };
+  }
+  if (input.kind === 'clipboard' && (input.action === 'copy' || input.action === 'cut')) return { kind: 'clipboard', action: input.action };
   if (input.kind === 'tab' && typeof input.tabId === 'string' && input.tabId.trim()) {
     return { kind: 'tab', tabId: input.tabId.trim() };
   }
@@ -533,7 +542,9 @@ function handleClientMessage(client: BrowserPreviewClient, text: string) {
           requestId,
           error: result?.actual || 'Browser chat session not found',
         });
-      } else if (input.kind === 'tab') {
+      } else if (input.kind === 'clipboard') {
+        sendToClient(client, { type: 'clipboard', requestId, text: (result.data as { clipboardText?: string } | undefined)?.clipboardText || '' });
+      } else if (input.kind === 'tab' || input.kind === 'browserControl') {
         // The active-page listener handles tab changes from every source.
         // Restarting here too races that listener and resets the decoder twice.
       } else if (result.liveControl || result.liveSelect) {

@@ -89,7 +89,14 @@ export function buildAiCycleToolDetailMap(cycles: BrowserChatAiOutputCycle[], st
     });
   });
 
-  cycles.forEach((cycle) => {
+  cycles.forEach((cycle, cycleIndex) => {
+    // Only the latest model request can still be awaiting an execution trace.
+    // Old rejected proposals must not spin for the remainder of the whole turn.
+    const superseded = cycles.slice(cycleIndex + 1).some(next =>
+      next.messageId === cycle.messageId && next.subagentId === cycle.subagentId
+      && (next.agentStepIndex !== undefined && cycle.agentStepIndex !== undefined
+        ? next.agentStepIndex > cycle.agentStepIndex
+        : next.output.tools.length > 0));
     const unmatched: Array<{ aiTool: BrowserChatAiOutputTool; aiToolIndex: number }> = [];
     let matchedInCycle = false;
     cycle.output.tools.forEach((aiTool, aiToolIndex) => {
@@ -159,10 +166,10 @@ export function buildAiCycleToolDetailMap(cycles: BrowserChatAiOutputCycle[], st
 
     let optimisticToolShown = false;
     unmatched.forEach(({ aiTool, aiToolIndex }) => {
-      if (!aiTool.invalid && (matchedInCycle || !running || optimisticToolShown)) return;
+      if (!aiTool.invalid && (matchedInCycle || !running || (optimisticToolShown && !superseded))) return;
       if (!aiTool.invalid) optimisticToolShown = true;
       const stepIndex = typeof cycle.stepIndex === 'number' ? cycle.stepIndex : -1;
-      const pendingExecution = running && !aiTool.invalid;
+      const pendingExecution = running && !aiTool.invalid && !superseded;
       const parseError = aiTool.invalid
         ? aiTool.error || '工具参数解析失败'
         : '工具没有返回执行记录';
@@ -175,6 +182,7 @@ export function buildAiCycleToolDetailMap(cycles: BrowserChatAiOutputCycle[], st
         error: parseError,
         ok: pendingExecution ? undefined : false,
         result: parseError,
+        ...(!aiTool.invalid && superseded ? { rawResult: { failureCategory: 'missing-tool-receipt', actual: parseError } } : {}),
       };
       const invalidStep: StepExecutionResult = {
         index: stepIndex,

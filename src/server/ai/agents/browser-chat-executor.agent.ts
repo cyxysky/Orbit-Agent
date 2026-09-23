@@ -2834,45 +2834,49 @@ async function executeRuntimeStep(input: {
       ...browserTools,
       ...allowedExternalTools,
     };
+    // Accept every call in a model step, while keeping shared browser state,
+    // approval and journal/checkpoint writes in invocation order.
+    let modelToolQueue = Promise.resolve();
     const toolsForRequest: RuntimeToolDefinitions = Object.fromEntries(Object.entries(toolDefinitions).map(([name, definition]) => {
       const execute = definition.execute;
       if (!execute) return [name, definition];
       return [name, { ...definition, execute: async (...args: Parameters<typeof execute>) => {
-        if (requestAllowedToolNames && !requestAllowedToolNames.has(name)) {
-          throw new Error(`Tool ${name} is not executable in this step. Complete the prerequisite using: ${[...requestAllowedToolNames].sort().join(', ')}.`);
-        }
-        await raceWithAbort(decisionReady.promise, requestWatchdog.abortSignal);
-        const callId = args[1].toolCallId;
-        const receipt = (value: unknown, error = false): ModelMessage => ({ role: 'tool', content: [{ type: 'tool-result', toolName: name, toolCallId: callId, output: { type: error ? 'error-json' : 'json', value: jsonSafe(value) } }] });
-        if (decisionCalls.length !== 1) {
-          const result = { ok: false, error: 'Exactly one tool per model step. None of these calls executed.' };
-          return result;
-        }
-        if (input.requestToolConfirmation && browserToolApprovalRequest({ toolName: name, toolInput: args[0] })) {
-          await journal.save('awaiting_approval', n => { n.pending!.phase = 'awaiting-approval'; });
-          requestWatchdog.pause();
-          let approval: Awaited<ReturnType<typeof requestBrowserToolApproval>>;
-          try { approval = await requestBrowserToolApproval({ toolName: name, toolInput: args[0], stepIndex, request: input.requestToolConfirmation }); }
-          finally { requestWatchdog.resume(); }
-          if (approval === 'denied') {
-            const result = { ok: false, outcome: 'not-executed', reason: 'Host denied this action.' };
-            await journal.result(receipt(result, true)); return result;
+        const run = async () => {
+          if (requestAllowedToolNames && !requestAllowedToolNames.has(name)) {
+            throw new Error(`Tool ${name} is not executable in this step. Complete the prerequisite using: ${[...requestAllowedToolNames].sort().join(', ')}.`);
           }
-        }
-        await journal.begin();
-        try {
-          const result = await execute(...args);
-          const message = receipt(result);
-          await checkpointContext([message]);
-          const uncertain = (result as BrowserActionResult | undefined)?.failureCategory === 'execution-uncertain';
-          await journal.result(message, uncertain, visualContext.persisted());
-          // Exact paging receipts must never be secondarily shortened, or nextOffset would skip unread text.
-          const part = (runtimeModelToolReceipt(message) as Extract<ModelMessage, { role: 'tool' }>).content[0];
-          return part.type === 'tool-result' && 'value' in part.output ? part.output.value : result;
-        } catch (error) {
-          if (journal.state.pending?.phase === 'executing') await journal.result(receipt({ error: String(error), outcome: 'unknown', safeToRetry: false }, true), true);
-          throw error;
-        }
+          await raceWithAbort(decisionReady.promise, requestWatchdog.abortSignal);
+          const callId = args[1].toolCallId;
+          const receipt = (value: unknown, error = false): ModelMessage => ({ role: 'tool', content: [{ type: 'tool-result', toolName: name, toolCallId: callId, output: { type: error ? 'error-json' : 'json', value: jsonSafe(value) } }] });
+          if (input.requestToolConfirmation && browserToolApprovalRequest({ toolName: name, toolInput: args[0] })) {
+            await journal.save('awaiting_approval', n => { n.pending!.phase = 'awaiting-approval'; });
+            requestWatchdog.pause();
+            let approval: Awaited<ReturnType<typeof requestBrowserToolApproval>>;
+            try { approval = await requestBrowserToolApproval({ toolName: name, toolInput: args[0], stepIndex, request: input.requestToolConfirmation }); }
+            finally { requestWatchdog.resume(); }
+            if (approval === 'denied') {
+              const result = { ok: false, outcome: 'not-executed', reason: 'Host denied this action.' };
+              await journal.result(receipt(result, true)); return result;
+            }
+          }
+          await journal.begin(callId);
+          try {
+            const result = await execute(...args);
+            const message = receipt(result);
+            await checkpointContext([message]);
+            const uncertain = (result as BrowserActionResult | undefined)?.failureCategory === 'execution-uncertain';
+            await journal.result(message, uncertain, visualContext.persisted());
+            // Exact paging receipts must never be secondarily shortened, or nextOffset would skip unread text.
+            const part = (runtimeModelToolReceipt(message) as Extract<ModelMessage, { role: 'tool' }>).content[0];
+            return part.type === 'tool-result' && 'value' in part.output ? part.output.value : result;
+          } catch (error) {
+            if (journal.state.pending?.phase === 'executing') await journal.result(receipt({ error: String(error), outcome: 'unknown', safeToRetry: false }, true), true);
+            throw error;
+          }
+        };
+        const pending = modelToolQueue.then(run);
+        modelToolQueue = pending.then(() => undefined, () => undefined);
+        return pending;
       } }];
     }));
     nativeToolsRef.current = toolsForRequest;

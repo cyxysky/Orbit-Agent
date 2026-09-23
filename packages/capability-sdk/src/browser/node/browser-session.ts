@@ -775,6 +775,8 @@ export type BrowserKeyboardAction = {
 };
 
 export type BrowserLiveInput =
+  | { kind: 'browserControl'; action: 'navigate' | 'open' | 'close' | 'back' | 'forward' | 'reload'; url?: string; tabId?: string }
+  | { kind: 'clipboard'; action: 'copy' | 'cut' }
   | {
       kind: 'tab';
       tabId: string;
@@ -1194,13 +1196,22 @@ export class BrowserSession {
   private lastVisualClick?: { surfaceId: string; x: number; y: number };
 
   /** Pure pixel observation for the Agent route; no DOM/AX extraction. */
-  private async captureVisualFrame(runId: string, signal?: AbortSignal): Promise<NonNullable<BrowserActionResult['browserObservation']>> {
+  private async captureVisualFrame(runId: string, signal?: AbortSignal, settle = true): Promise<NonNullable<BrowserActionResult['browserObservation']>> {
     signal?.throwIfAborted();
     const page = this.activePage;
     if (page.isClosed()) throw new Error('Current browser surface is closed.');
     const surfaceId = this.visualSurfaceIds.get(page) || randomUUID();
     this.visualSurfaceIds.set(page, surfaceId);
-    const url = page.url();
+    // Input dispatch and navigation commit both precede asynchronous rendering.
+    // Wait on browser lifecycle/pixels only; pure visual mode must not read DOM/AX.
+    const startedAt = Date.now();
+    const deadline = startedAt + 4000;
+    if (settle) {
+      await raceWithAbort(page.waitForLoadState('domcontentloaded', { timeout: 1500 }).catch(error => {
+        if (!(error instanceof Error) || error.name !== 'TimeoutError') throw error;
+      }), signal);
+    }
+    let url = page.url();
     const client = await page.context().newCDPSession(page);
     // Browser viewport metadata does not extract DOM/AX or execute page script.
     // Keep scroll, zoom and same-URL navigation guards independent of video pixels.
@@ -1209,16 +1220,43 @@ export class BrowserSession {
       return JSON.stringify({ surfaceId, url: page.url(), navigation: this.navigationSequenceByPage.get(page) || 0,
         viewport: cssVisualViewport, layoutWidth: cssLayoutViewport.clientWidth, layoutHeight: cssLayoutViewport.clientHeight });
     };
-    let bytes: Buffer;
-    let contextKey: string;
+    let bytes: Buffer | undefined;
+    let contextKey = '';
     try {
-      contextKey = await readContext();
-      bytes = await raceWithAbort(page.screenshot({ type: 'png', scale: 'css', timeout: 15000 }), signal);
-      if (contextKey !== await readContext()) throw new Error('Browser viewport or document changed during capture.');
+      let previousHash: string | undefined;
+      let stableSince = Date.now();
+      do {
+        signal?.throwIfAborted();
+        if (page !== this.activePage) throw new Error('Browser surface changed during capture.');
+        const before = await readContext();
+        const sample = await raceWithAbort(page.screenshot({
+          type: 'png', scale: 'css', timeout: settle ? Math.max(1000, deadline - Date.now()) : 15000,
+        }), signal);
+        const after = await readContext();
+        if (before !== after) {
+          if (!settle) throw new Error('Browser viewport or document changed during capture.');
+          // Discard frames spanning navigation/scroll; do not return an earlier frame.
+          bytes = undefined;
+          previousHash = undefined;
+          stableSince = Date.now();
+        } else {
+          const hash = createHash('sha256').update(sample).digest('hex');
+          if (hash !== previousHash || after !== contextKey) stableSince = Date.now();
+          previousHash = hash;
+          bytes = sample;
+          contextKey = after;
+          url = page.url();
+          if (!settle || (Date.now() - startedAt >= 1000 && Date.now() - stableSince >= 500)) break;
+        }
+        const remainingMs = deadline - Date.now();
+        if (remainingMs <= 0) break;
+        await raceWithAbort(new Promise<void>(resolve => setTimeout(resolve, Math.min(200, remainingMs))), signal);
+      } while (Date.now() < deadline);
     } finally {
       await client.detach().catch(() => undefined);
     }
     signal?.throwIfAborted();
+    if (!bytes) throw new Error('Browser viewport or document changed during capture. Observe again.');
     if (page !== this.activePage || page.url() !== url) throw new Error('Browser surface changed during capture.');
     if (bytes.length < 24 || bytes.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') throw new Error('Invalid PNG observation.');
     const width = bytes.readUInt32BE(16), height = bytes.readUInt32BE(20);
@@ -1338,7 +1376,7 @@ export class BrowserSession {
         data: { outcome: 'not-executed', reason: staleReason, requestedObservationId: input.observationId,
           currentObservationId: original?.id, observationAgeMs: Number.isFinite(observationAgeMs) ? observationAgeMs : undefined, maxAgeMs: 60000 } };
       let fresh: NonNullable<BrowserActionResult['browserObservation']>;
-      try { fresh = await this.captureVisualFrame(input.runId, signal); }
+      try { fresh = await this.captureVisualFrame(input.runId, signal, false); }
       catch (error) {
         this.latestBrowserObservation = { status: 'unavailable', actionable: false, error: String(error) };
         return { ok: false, failureCategory: 'state-conflict', actual: 'Could not capture the current page before input; no action executed. Observe again before deciding.',
@@ -3409,6 +3447,21 @@ export class BrowserSession {
     return this.withSessionOperation(async () => {
 
     if (input.kind === 'tab') return this.switchLivePreviewTab(input.tabId);
+    if (input.kind === 'browserControl') {
+      if (input.action === 'navigate') return this.executeBrowserControl({ action: 'navigate', url: input.url });
+      if (input.action === 'open' || input.action === 'close') return this.executeBrowserControl({
+        action: 'tabs', tabOperation: input.action, url: input.url, tabId: input.tabId,
+      });
+      const page = this.activePage;
+      this.browserViewportEvidence = undefined;
+      this.latestBrowserObservation = { status: 'unavailable', actionable: false };
+      this.stateReader?.clear();
+      if (input.action === 'back') await page.goBack({ waitUntil: 'commit', timeout: 30_000 });
+      else if (input.action === 'forward') await page.goForward({ waitUntil: 'commit', timeout: 30_000 });
+      else await page.reload({ waitUntil: 'commit', timeout: 30_000 });
+      this.notifyLivePreviewTabsChanged();
+      return { ok: true, actual: 'Browser navigation completed.' };
+    }
     if (input.kind === 'files') return this.applyLiveFiles(input);
     if (input.kind === 'dialog') return this.resolveLiveDialog(input);
     const page = this.activePage;
@@ -3576,6 +3629,30 @@ export class BrowserSession {
       await page.keyboard.press(key);
       invalidateObservation();
       return { ok: true, actual: `Live browser pressed ${key}.` };
+    }
+
+    if (input.kind === 'clipboard') {
+      // Relay the focused page selection, not the server's shared OS clipboard.
+      let text = '';
+      for (const frame of page.frames()) {
+        const selection = await frame.evaluate(() => {
+          if (!document.hasFocus()) return '';
+          let element = document.activeElement;
+          while (element?.shadowRoot?.activeElement) element = element.shadowRoot.activeElement;
+          // The parent document can retain an old selection while an iframe has focus.
+          if (element instanceof HTMLIFrameElement || element instanceof HTMLFrameElement) return '';
+          if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+            if (element instanceof HTMLInputElement && element.type === 'password') return '';
+            return element.value.slice(element.selectionStart ?? 0, element.selectionEnd ?? 0);
+          }
+          return window.getSelection()?.toString() || '';
+        });
+        if (selection) { text = selection; break; }
+      }
+      if (text.length > 1_000_000) return { ok: false, actual: '选中内容过长，请分段复制。' };
+      if (text) await page.keyboard.press(input.action === 'cut' ? 'ControlOrMeta+x' : 'ControlOrMeta+c');
+      if (input.action === 'cut') invalidateObservation();
+      return { ok: true, actual: 'Clipboard selection read.', data: { clipboardText: text } };
     }
 
     if (input.kind === 'text') {

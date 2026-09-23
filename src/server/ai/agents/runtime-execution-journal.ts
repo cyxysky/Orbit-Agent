@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { ModelMessage } from 'ai';
 import { queryDatabaseOne, queryDatabase, executeDatabase, runDatabaseTransaction, type DatabaseExecutor } from '@/server/db/database';
 
-type Pending = { id: string; phase: 'planned' | 'awaiting-approval' | 'executing' | 'uncertain' | 'completed'; messages: ModelMessage[]; calls: Array<{ toolCallId: string; toolName: string; input: unknown }>; results: ModelMessage[] };
+type Pending = { id: string; phase: 'planned' | 'awaiting-approval' | 'executing' | 'uncertain' | 'completed'; messages: ModelMessage[]; calls: Array<{ toolCallId: string; toolName: string; input: unknown }>; results: ModelMessage[]; startedCallIds?: string[] };
 export type RuntimeJournalState = { revision: number; pending?: Pending; observations?: unknown };
 export class RuntimeExecutionJournal {
   state: RuntimeJournalState = { revision: 0 };
@@ -34,13 +34,18 @@ export class RuntimeExecutionJournal {
   }
   private async completeInterruptedExchange() {
     const pending = this.state.pending;
-    if (!pending || pending.phase === 'completed') return;
-    const unexecuted = pending.phase === 'planned' || pending.phase === 'awaiting-approval';
+    if (!pending) return;
+    const recorded = new Set(pending.results.flatMap(message => message.role === 'tool'
+      ? message.content.flatMap(part => part.type === 'tool-result' ? [part.toolCallId] : []) : []));
+    if (pending.calls.every(call => recorded.has(call.toolCallId))) return;
     await this.save('interrupted_exchange_recorded', n => {
       const recordedIds = new Set(n.pending!.results.flatMap(message => message.role === 'tool'
         ? message.content.flatMap(part => part.type === 'tool-result' ? [part.toolCallId] : []) : []));
       for (const call of pending.calls) {
         if (recordedIds.has(call.toolCallId)) continue;
+        const unexecuted = pending.startedCallIds
+          ? !pending.startedCallIds.includes(call.toolCallId)
+          : pending.phase === 'planned' || pending.phase === 'awaiting-approval';
         n.pending!.results.push({ role: 'tool', content: [{ type: 'tool-result', toolCallId: call.toolCallId, toolName: call.toolName,
           output: { type: 'error-json', value: { outcome: unexecuted ? 'not-executed' : 'unknown',
             reason: unexecuted ? 'Interrupted before execution.' : 'Execution was interrupted without a recorded result.',
@@ -52,13 +57,32 @@ export class RuntimeExecutionJournal {
   async plan(messages: ModelMessage[], calls: Pending['calls']) {
     if (this.state.pending) throw new Error('Cannot replace an uncheckpointed tool exchange.');
     if (new Set(calls.map(call => call.toolCallId)).size !== calls.length) throw new Error('Duplicate tool call IDs in decision.');
-    await this.save('model_planned', n => { n.pending = { id: randomUUID(), phase: 'planned', messages, calls, results: [] }; }, async executor => {
+    await this.save('model_planned', n => { n.pending = { id: randomUUID(), phase: 'planned', messages, calls, results: [], startedCallIds: [] }; }, async executor => {
       for (const call of calls) await executeDatabase('INSERT INTO agent_runtime_call (session_id, scope_id, call_id) VALUES (?, ?, ?)', [this.sessionId, this.scopeId, call.toolCallId], executor);
     });
   }
-  async begin() { await this.save('execution_started', n => { if (!n.pending || !['planned', 'awaiting-approval'].includes(n.pending.phase)) throw new Error('No planned tool exchange to execute.'); n.pending.phase = 'executing'; }); }
+  async begin(callId?: string) {
+    await this.save('execution_started', n => {
+      const pending = n.pending;
+      const id = callId ?? (pending?.calls.length === 1 ? pending.calls[0].toolCallId : undefined);
+      if (!pending || !id || !pending.calls.some(call => call.toolCallId === id)
+        || pending.startedCallIds?.includes(id)
+        || pending.results.some(message => message.role === 'tool' && message.content.some(part => part.type === 'tool-result' && part.toolCallId === id))) {
+        throw new Error('No unexecuted planned tool call to execute.');
+      }
+      (pending.startedCallIds ??= []).push(id);
+      pending.phase = 'executing';
+    });
+  }
   async result(message: ModelMessage, uncertain = false, observations?: unknown) {
-    await this.save(uncertain ? 'execution_uncertain' : 'tool_result', n => { if (!n.pending) throw new Error('Missing pending decision.'); n.pending.results.push(message); if (observations) n.observations = observations; n.pending.phase = 'completed'; });
+    await this.save(uncertain ? 'execution_uncertain' : 'tool_result', n => {
+      if (!n.pending) throw new Error('Missing pending decision.');
+      n.pending.results.push(message);
+      if (observations) n.observations = observations;
+      const recordedIds = new Set(n.pending.results.flatMap(result => result.role === 'tool'
+        ? result.content.flatMap(part => part.type === 'tool-result' ? [part.toolCallId] : []) : []));
+      n.pending.phase = n.pending.calls.every(call => recordedIds.has(call.toolCallId)) ? 'completed' : 'planned';
+    });
   }
   async clear() {
     await this.completeInterruptedExchange();

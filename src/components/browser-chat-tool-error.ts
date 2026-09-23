@@ -111,6 +111,9 @@ function localizedOfficeSourceMessage(message: string) {
 }
 
 export function browserChatToolOutcomeLabel(value: unknown) {
+  const record = asRecord(value);
+  if (record?.outcome === 'not-executed' || (typeof value === 'string' && value.startsWith('未执行：'))) return '未执行';
+  if (record?.failureCategory === 'missing-tool-receipt') return '无执行记录';
   const failure = officeSourceValidationFailure(value);
   if (!failure) return undefined;
   if (failure.validation === 'failed' || failure.validationStatus === 'failed') {

@@ -1,7 +1,7 @@
 'use client';
 
 import { type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Check, Download, Globe, Loader2, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Check, Download, Globe, Loader2, Plus, RotateCw, X } from 'lucide-react';
 import { FloatingWindow } from '@/components/FloatingWindow';
 import { AppInput } from '@/components/ui/app-input';
 import { useI18n } from '@/i18n/I18nProvider';
@@ -54,6 +54,8 @@ type BrowserChatPreviewDisplayMetrics = BrowserChatPreviewServerMetrics & {
 const BROWSER_CHAT_PREVIEW_VIDEO_MIME_TYPE = 'video/mp4; codecs="avc1.42C029"';
 
 type BrowserChatPreviewInput =
+  | { kind: 'browserControl'; action: 'navigate' | 'open' | 'close' | 'back' | 'forward' | 'reload'; url?: string; tabId?: string }
+  | { kind: 'clipboard'; action: 'copy' | 'cut' }
   | { kind: 'tab'; tabId: string }
   | { kind: 'move'; xRatio: number; yRatio: number }
   | { kind: 'click'; xRatio: number; yRatio: number; button: 'left' | 'right' | 'middle'; clickCount: number }
@@ -141,6 +143,8 @@ export function BrowserChatWebPreviewModal({
   const previewImageRef = useRef<HTMLImageElement | null>(null);
   const previewVideoRef = useRef<HTMLVideoElement | null>(null);
   const previewStageRef = useRef<HTMLDivElement | null>(null);
+  const addressInputRef = useRef<HTMLInputElement | null>(null);
+  const [addressDraft, setAddressDraft] = useState<string | null>(null);
   const previewFileInputRef = useRef<HTMLInputElement | null>(null);
   const handledPreviewDownloadIdsRef = useRef(new Set<string>());
   const mediaSourceRef = useRef<MediaSource | null>(null);
@@ -610,6 +614,7 @@ export function BrowserChatWebPreviewModal({
               download?: Omit<BrowserChatPreviewDownload, 'status'>;
               transport?: 'image' | 'video';
               type?: string;
+              text?: string;
               width?: number;
             };
             if (message.type === 'tabsChanged' && Array.isArray(message.tabs)) {
@@ -677,6 +682,10 @@ export function BrowserChatWebPreviewModal({
             } else if (message.type === 'ready') {
               if (previewInputReadyRef.current) setStatus('live');
               setStreamError('');
+            } else if (message.type === 'clipboard' && message.text) {
+              void Promise.resolve().then(() => navigator.clipboard.writeText(message.text!)).catch(() => {
+                setInputError('无法写入本地剪贴板，请允许此页面访问剪贴板后重试');
+              });
             } else if (message.type === 'inputError') {
               setNativeControlBusy(false);
               setInputError(message.error || '实时界面操作失败');
@@ -790,7 +799,7 @@ export function BrowserChatWebPreviewModal({
 
   const postInput = useCallback((input: BrowserChatPreviewInput, reportError: boolean) => {
     const stream = streamRef.current;
-    if (!stream || stream.readyState !== WebSocket.OPEN || (!previewInputReadyRef.current && input.kind !== 'tab')) {
+    if (!stream || stream.readyState !== WebSocket.OPEN || (!previewInputReadyRef.current && input.kind !== 'tab' && input.kind !== 'browserControl')) {
       if (reportError) setInputError('实时界面正在重连，请稍后重试');
       return false;
     }
@@ -802,6 +811,29 @@ export function BrowserChatWebPreviewModal({
     setInputError('');
     return postInput(input, true);
   }, [postInput]);
+
+  const browserControl = useCallback((action: Extract<BrowserChatPreviewInput, { kind: 'browserControl' }>['action'], tabId?: string) => {
+    setNativeControl(null);
+    if (sendInput({ kind: 'browserControl', action, tabId })) {
+      setAddressDraft(action === 'open' ? '' : null);
+      if (action === 'open') window.requestAnimationFrame(() => addressInputRef.current?.focus());
+      else previewStageRef.current?.focus();
+    }
+  }, [sendInput]);
+
+  const navigateAddress = useCallback(() => {
+    const raw = (addressDraft ?? frameStateRef.current.url).trim();
+    if (!raw) return;
+    try {
+      const url = new URL(raw === 'about:blank' || /^[a-z][a-z\d+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`);
+      if (!['http:', 'https:'].includes(url.protocol) && url.href !== 'about:blank') throw new Error('unsupported');
+      if (sendInput({ kind: 'browserControl', action: 'navigate', url: url.href })) {
+        setAddressDraft(null);
+        addressInputRef.current?.blur();
+        previewStageRef.current?.focus();
+      }
+    } catch { setInputError('请输入有效的 HTTP 或 HTTPS 地址'); }
+  }, [addressDraft, sendInput]);
 
   const relativePoint = useCallback((clientX: number, clientY: number, element: HTMLElement, clamp = false) => {
     if (!frame?.imageUrl && !videoDisplayReady) return undefined;
@@ -943,6 +975,32 @@ export function BrowserChatWebPreviewModal({
 
   const pressPreviewKey = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.nativeEvent.isComposing || event.key === 'Process') return;
+    if (['Control', 'Meta', 'Alt', 'Shift'].includes(event.key)) return;
+    const command = event.ctrlKey || event.metaKey;
+    const letter = event.key.toLowerCase();
+    // Let the local browser dispatch paste, then relay its clipboard text once.
+    if ((command && letter === 'v') || (event.shiftKey && event.key === 'Insert')) {
+      event.stopPropagation();
+      return;
+    }
+    if (command && ['c', 'x'].includes(letter)) {
+      event.preventDefault(); event.stopPropagation();
+      sendInput({ kind: 'clipboard', action: letter === 'x' ? 'cut' : 'copy' });
+      return;
+    }
+    if (command && letter === 'l') {
+      event.preventDefault(); event.stopPropagation();
+      addressInputRef.current?.focus(); addressInputRef.current?.select();
+      return;
+    }
+    if ((command && ['t', 'w', 'r'].includes(letter)) || event.key === 'F5'
+      || (event.altKey && ['ArrowLeft', 'ArrowRight'].includes(event.key))) {
+      event.preventDefault(); event.stopPropagation();
+      const action = event.altKey ? (event.key === 'ArrowLeft' ? 'back' : 'forward')
+        : letter === 't' ? 'open' : letter === 'w' ? 'close' : 'reload';
+      browserControl(action, action === 'close' ? frameStateRef.current.tabs.find(tab => tab.active)?.id : undefined);
+      return;
+    }
     if (nativeControl && event.key === 'Escape') {
       event.preventDefault();
       event.stopPropagation();
@@ -957,7 +1015,7 @@ export function BrowserChatWebPreviewModal({
         event.metaKey ? 'Meta' : '',
         event.altKey ? 'Alt' : '',
         event.shiftKey ? 'Shift' : '',
-        key.length === 1 ? key.toUpperCase() : key,
+        key,
       ].filter(Boolean);
       key = parts.join('+');
     } else if (event.shiftKey && key.length > 1) {
@@ -968,9 +1026,10 @@ export function BrowserChatWebPreviewModal({
     event.preventDefault();
     event.stopPropagation();
     sendInput({ kind: 'key', key });
-  }, [nativeControl, sendInput]);
+  }, [browserControl, nativeControl, sendInput]);
 
   const pastePreviewText = useCallback((event: ReactClipboardEvent<HTMLDivElement>) => {
+    event.stopPropagation();
     const text = event.clipboardData.getData('text');
     if (!text) return;
     event.preventDefault();
@@ -1079,31 +1138,46 @@ export function BrowserChatWebPreviewModal({
 
   return (
     <FloatingWindow title={t('实时界面')} className="browser-chat-web-preview-modal" onClose={onClose}>
-        {frame?.tabs?.length ? (
-          <div className="browser-chat-web-preview-tabs">
-            {frame.tabs.map((tab) => (
-              <button
-                className={tab.active ? 'active' : ''}
-                key={tab.id}
-                onClick={() => void switchPreviewTab(tab.id)}
-                title={tab.url}
-                type="button"
-              >
-                <Globe size={13} />
-                <span>{tab.url || t('标签页 {index}', { index: tab.index + 1 })}</span>
-              </button>
+        <div className="browser-chat-web-preview-tabs" aria-label={t('浏览器标签页')}>
+          <div className="browser-chat-web-preview-tab-list">
+            {(frame?.tabs || []).map((tab) => (
+              <div className={`browser-chat-web-preview-tab${tab.active ? ' active' : ''}`} key={tab.id}>
+                <button aria-pressed={tab.active} className="browser-chat-web-preview-tab-select"
+                  onClick={() => void switchPreviewTab(tab.id)} title={tab.url} type="button">
+                  <Globe size={13} />
+                  <span>{tab.url && tab.url !== 'about:blank' ? tab.url.replace(/^https?:\/\//, '').replace(/\/$/, '') : t('新标签页')}</span>
+                </button>
+                <button className="browser-chat-web-preview-tab-close" aria-label={t('关闭标签页')}
+                  title={t('关闭标签页')} onClick={() => browserControl('close', tab.id)} type="button"><X size={13} /></button>
+              </div>
             ))}
           </div>
-        ) : null}
+          <button className="browser-chat-web-preview-icon-button" aria-label={t('新增标签页')} title={t('新增标签页')}
+            onClick={() => browserControl('open')} type="button"><Plus size={16} /></button>
+        </div>
 
-        <header className="ui-modal-header browser-chat-web-preview-header">
-          <div className="browser-chat-web-preview-address" title={statusLabel}>
-              <Globe aria-hidden="true" size={14} />
-              <span className="browser-chat-web-preview-url" title={frame?.url || ''}>
-                {frame?.url || t('等待会话浏览器启动')}
-              </span>
+        <header className="browser-chat-web-preview-header">
+          <div className="browser-chat-web-preview-navigation">
+            <button className="browser-chat-web-preview-icon-button" aria-label={t('后退')} title={t('后退')}
+              onClick={() => browserControl('back')} type="button"><ArrowLeft size={16} /></button>
+            <button className="browser-chat-web-preview-icon-button" aria-label={t('前进')} title={t('前进')}
+              onClick={() => browserControl('forward')} type="button"><ArrowRight size={16} /></button>
+            <button className="browser-chat-web-preview-icon-button" aria-label={t('刷新')} title={t('刷新')}
+              onClick={() => browserControl('reload')} type="button"><RotateCw size={15} /></button>
           </div>
-          {previewMetricsLabel ? <span className="browser-chat-web-preview-metrics">{previewMetricsLabel}</span> : null}
+          <form className="browser-chat-web-preview-address" onSubmit={event => { event.preventDefault(); navigateAddress(); }}>
+              <Globe aria-hidden="true" size={14} />
+              <input aria-label={t('网页地址')} autoComplete="off" spellCheck={false} ref={addressInputRef}
+                className="browser-chat-web-preview-url" placeholder={t('输入网址，按 Enter 打开')}
+                value={addressDraft ?? frame?.url ?? ''} onChange={event => setAddressDraft(event.target.value)}
+                onFocus={event => { setAddressDraft(event.target.value); event.target.select(); }}
+                onBlur={() => setAddressDraft(null)}
+                onKeyDown={event => {
+                  event.stopPropagation();
+                  if (event.key === 'Escape') { setAddressDraft(null); event.currentTarget.blur(); previewStageRef.current?.focus(); }
+                }} />
+          </form>
+          <span className="browser-chat-web-preview-metrics" title={statusLabel}>{previewMetricsLabel}</span>
 
         </header>
 

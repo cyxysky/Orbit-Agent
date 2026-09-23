@@ -2384,35 +2384,44 @@ html body .browser-chat-chat-pane .browser-chat-compose.browser-chat-compose--re
   display: flex;
   gap: 4px;
   min-height: 39px;
-  overflow-x: auto;
-  padding: 5px 12px;
+  min-width: 0;
+  padding: 6px 10px 0;
   background: var(--panel-soft);
   border-bottom-color: var(--border);
 }
 
-.browser-chat-web-preview-tabs button {
+.browser-chat-web-preview-tab-select {
   align-items: center;
   background: transparent;
   border: 0;
   cursor: pointer;
   display: inline-flex;
-  flex: 0 1 220px;
+  flex: 1 1 auto;
   font-size: 12px;
   gap: 6px;
   min-height: 28px;
-  min-width: 110px;
+  min-width: 0;
   padding: 0 9px;
   border-radius: var(--app-radius-sm);
   color: var(--muted);
   font-weight: 500;
 }
 
-.browser-chat-web-preview-tabs button.active {
+.browser-chat-web-preview-tab.active {
   background: var(--panel);
   border: 1px solid var(--border);
   box-shadow: var(--shadow-xs);
   color: var(--foreground);
 }
+
+.browser-chat-web-preview-tab-list { display: flex; gap: 5px; min-width: 0; overflow-x: auto; scrollbar-width: thin; }
+.browser-chat-web-preview-tab { display: flex; align-items: center; flex: 0 1 220px; min-width: 115px; max-width: 240px; height: 32px; border: 1px solid transparent; border-radius: 9px 9px 0 0; padding-right: 4px; }
+.browser-chat-web-preview-tab.active .browser-chat-web-preview-tab-select { color: var(--foreground); }
+.browser-chat-web-preview-tab:hover { background: color-mix(in srgb, var(--foreground) 5%, transparent); }
+.browser-chat-web-preview-icon-button, .browser-chat-web-preview-tab-close { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 7px; color: var(--muted); background: transparent; cursor: pointer; }
+.browser-chat-web-preview-tab-close { width: 22px; height: 22px; }
+.browser-chat-web-preview-icon-button:hover, .browser-chat-web-preview-tab-close:hover { color: var(--foreground); background: color-mix(in srgb, var(--foreground) 9%, transparent); }
+.browser-chat-web-preview-icon-button:focus-visible, .browser-chat-web-preview-tab-close:focus-visible, .browser-chat-web-preview-tab-select:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: -2px; }
 
 
 
