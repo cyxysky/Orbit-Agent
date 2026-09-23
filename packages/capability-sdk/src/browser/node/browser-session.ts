@@ -8139,18 +8139,18 @@ export class BrowserSession {
    * DOMSnapshot/AX collection, which is reserved for explicit semantic search
    * tools and is never run after every action.
    */
-  async readDomObservationSnapshot(options: { cursor?: string; mode?: BrowserSnapshotView } = {}) {
+  async readDomObservationSnapshot(options: { cursor?: string; mode?: BrowserSnapshotView; maxOutputChars?: number } = {}) {
     return this.withSessionOperation(async () => {
 
     const startedAt = Date.now();
     const cursor = options.cursor ? parseDomObservationCursor(options.cursor) : undefined;
-    if (options.cursor && !cursor) throw new Error('Invalid DOM-observation snapshot cursor. Capture a fresh takeSnapshot instead.');
+    if (options.cursor && !cursor) throw new Error('Invalid DOM-observation snapshot cursor. Read a fresh snapshot without a cursor.');
 
     if (cursor) {
       if (!options.mode) throw new Error('Snapshot continuation requires the same explicit mode together with cursor.');
       const record = this.domObservationPagination;
       if (!record || record.id !== cursor.id || record.mode !== cursor.mode) {
-        throw new Error('The DOM-observation snapshot cursor is no longer available. Capture a fresh takeSnapshot instead.');
+        throw new Error('The DOM-observation snapshot cursor is no longer available. Read a fresh snapshot without a cursor.');
       }
       if (options.mode && options.mode !== cursor.mode) {
         throw new Error(`Snapshot cursor mode is ${cursor.mode}; do not change mode while paging.`);
@@ -8172,6 +8172,8 @@ export class BrowserSession {
     }
 
     const mode = options.mode || 'actionable';
+    const pageMaxChars = Math.max(4000, Math.min(domObservationPageCharLimit(mode),
+      Number.isFinite(options.maxOutputChars) ? Math.floor(options.maxOutputChars!) : domObservationPageCharLimit(mode)));
     if (mode === 'changes') {
       const changes = await this.readInterActionChangeJournal();
       const observation = await this.readPageObservation();
@@ -8182,8 +8184,8 @@ export class BrowserSession {
         mode,
         navigationSequence: this.navigationSequenceByPage.get(this.activePage) || 0,
         observation,
-        pageMaxChars: domObservationPageCharLimit(mode),
-        pageStarts: domObservationPageStarts(changeLines, domObservationPageCharLimit(mode)),
+        pageMaxChars,
+        pageStarts: domObservationPageStarts(changeLines, pageMaxChars),
         page: this.activePage,
         url: this.activePage.url(),
       };
@@ -8226,8 +8228,8 @@ export class BrowserSession {
       mode,
       navigationSequence: this.navigationSequenceByPage.get(this.activePage) || 0,
       observation,
-      pageMaxChars: domObservationPageCharLimit(mode),
-      pageStarts: domObservationPageStarts(lines, domObservationPageCharLimit(mode)),
+      pageMaxChars,
+      pageStarts: domObservationPageStarts(lines, pageMaxChars),
       page: this.activePage,
       url: this.activePage.url(),
     };

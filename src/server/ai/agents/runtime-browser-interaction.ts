@@ -106,7 +106,7 @@ export async function executeBrowserInteraction(session: BrowserSession, raw: un
   if (command.action === 'snapshot') {
     try {
       const snapshot = await session.readDomObservationSnapshot({ mode: command.snapshotView || 'actionable',
-        cursor: command.snapshotCursor });
+        cursor: command.snapshotCursor, maxOutputChars: command.maxOutputChars || 12000 });
       const activeAx = await session.readBrowserState({ scope: 'active', maxOutputChars: 8000, abortSignal: signal });
       const activeAxData = activeAx.data && typeof activeAx.data === 'object'
         ? activeAx.data as { pageState?: string; truncated?: boolean; nextCursor?: string } : undefined;
@@ -141,9 +141,9 @@ export async function executeBrowserInteraction(session: BrowserSession, raw: un
       attachments: options.attachments, credentials: options.credentials, runId: options.runId || 'browser',
       stepIndex: options.stepIndex || 0, abortSignal: signal });
     if (result.failureCategory !== 'browser-no-action' && result.failureCategory !== 'browser-verification-required') return result;
-    // The cell declared an action but skipped it. Supply a bounded live read
-    // immediately, so the next decision need not infer a target from its label.
-    const recoveryState = await session.readBrowserState({ scope: 'all', maxOutputChars: 8000, abortSignal: signal })
+    // A skipped or unverified action needs a fresh active-surface read before
+    // the model can decide whether to verify, dismiss, or choose another target.
+    const recoveryState = await session.readBrowserState({ scope: 'active', maxOutputChars: 8000, abortSignal: signal })
       .catch((error) => ({ ok: false, actual: error instanceof Error ? error.message : String(error) }));
     const data = result.data && typeof result.data === 'object' ? result.data as Record<string, unknown> : {};
     return { ...result, data: { ...data, recoveryState } };

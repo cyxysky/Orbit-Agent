@@ -2545,12 +2545,12 @@ function browserCodeKernelMain() {
       }
     }
     const isTransientPicker = (surface: KernelPageObservation['activeSurface']) => Boolean(surface
-      && !surface.modal && surface.likelyOverlay);
+      && surface.likelyOverlay && (!surface.modal || surface.depth > 0));
     const priorPopup = lastAction?.before?.activeSurface;
     const currentPopup = current.activeSurface;
     const popupStillOpen = isTransientPicker(priorPopup)
       && current.surfaces.some((surface) => surface.id === priorPopup?.id);
-    const popupJustOpened = isTransientPicker(currentPopup)
+    const popupJustOpened = Boolean(currentPopup?.likelyOverlay)
       && !lastAction?.before?.surfaces.some((surface) => surface.id === currentPopup?.id);
     if ((popupStillOpen || popupJustOpened) && !input.activeSurface) {
       checks.push({ name: 'activeSurface:explicit-check-required', ok: false,
