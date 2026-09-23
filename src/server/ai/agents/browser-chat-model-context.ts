@@ -98,9 +98,13 @@ function modelMessageText(message: ModelMessage) {
   }).join('\n').trim();
 }
 
+export function isOriginalBrowserChatUserMessage(message: ModelMessage) {
+  return message.role === 'user' && !isRuntimePromptCacheMetadataMessage(message)
+    && !/^\[(?:Approved historical memory|Historical handoff|Historical context segment|Document visual QA|Attachment visual content|Explicit visual evidence|Browser observation)/.test(modelMessageText(message));
+}
+
 export function latestBrowserChatUserMessageIndex(messages: ModelMessage[]) {
-  return messages.findLastIndex(message => message.role === 'user' && !isRuntimePromptCacheMetadataMessage(message)
-    && !/^\[(?:Approved historical memory|Historical handoff|Historical context segment|Document visual QA|Attachment visual content|Explicit visual evidence|Browser observation)/.test(modelMessageText(message)));
+  return messages.findLastIndex(isOriginalBrowserChatUserMessage);
 }
 
 function currentTurnContains(messages: ModelMessage[], role: 'user' | 'assistant', text: string) {

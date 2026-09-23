@@ -2488,7 +2488,7 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
         },
       } : {}),
       ...(activeSurface ? { activeSurface } : {}),
-      surfaces: entries.map((entry) => entry.surface),
+      surfaces: entries.filter((entry) => entry.surface.likelyOverlay).map((entry) => entry.surface),
       surfaceStack,
       topSurfaceIds,
       surfaceTransition,

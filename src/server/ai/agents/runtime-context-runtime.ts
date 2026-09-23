@@ -2,11 +2,15 @@ import { randomUUID } from 'node:crypto';
 import type { ModelMessage } from 'ai';
 import { assembleRuntimeContext, runtimeContextMessageRef, type RuntimeContextInput, type ContextCompressionProgress } from './runtime-context-assembler';
 import { contextSummaryInputTokens, contextSegmentMarker, summarizeContextBatch, parseContextSummary, ContextSummaryError, type ContextSummaryGenerator, type ContextSummaryRetry } from './runtime-semantic-summary';
+import { isOriginalBrowserChatUserMessage } from './browser-chat-model-context';
+import { skillBodyKeysForPreservation } from './hidden-runtime-skills';
+import { hasSourceFileReceipt, prepareRuntimeSourceFiles } from './runtime-source-files';
 
 type Checkpoint = { messages: ModelMessage[]; activeMessages: ModelMessage[]; continuationSummary: string; removedIndexes: number[]; compressedMessages: number; segmentRecords: ModelMessage[] };
 /** Owns compaction and persistence; the assembler remains a deterministic projection. */
 export async function prepareRuntimeContext(input: RuntimeContextInput & {
   continuationSummary: string; compressionTriggerTokens: number; compressionTargetTokens: number;
+  sourceRecords?: Record<string, ModelMessage>;
   generateSummary: ContextSummaryGenerator;
   onSummaryRetry?: (retry: ContextSummaryRetry) => void | Promise<void>;
   failedCompactions?: Map<string, ContextSummaryError>;
@@ -15,7 +19,13 @@ export async function prepareRuntimeContext(input: RuntimeContextInput & {
   onProgress?: (progress: ContextCompressionProgress, messages: ModelMessage[]) => void | Promise<void>;
   onCheckpoint?: (checkpoint: Checkpoint) => void | Promise<void>;
 }) {
-  let active = [...input.messages];
+  const files = prepareRuntimeSourceFiles({ messages: input.messages, records: input.sourceRecords,
+    inputBudgetTokens: input.inputBudgetTokens,
+    query: JSON.stringify([input.pinnedUser?.content || input.messages[input.currentUserIndex]?.content,
+      input.messages.filter(message => message.role === 'assistant').slice(-3).map(message => message.content)]) });
+  input = { ...input, knowledge: [...input.knowledge, ...files.knowledge] };
+  const sourceFileReceipts = files.messages.filter(hasSourceFileReceipt);
+  let active = [...files.messages];
   let state = parseContextSummary(input.continuationSummary) || { version: 3 as const, epoch: 0 };
   let observations = input.observations;
   const currentRequest = input.pinnedUser || input.messages[input.currentUserIndex];
@@ -25,18 +35,22 @@ export async function prepareRuntimeContext(input: RuntimeContextInput & {
     const hasHandoff = typeof active[0]?.content === 'string' && active[0].content.startsWith(contextSegmentMarker);
     active.splice(hasHandoff ? 1 : 0, 0, pinnedUser);
   }
-  const build = () => assembleRuntimeContext({ ...input, messages: active, pinnedUser, observations });
+  const build = () => {
+    const packet = assembleRuntimeContext({ ...input, messages: active, pinnedUser, observations });
+    packet.manifest.sourceFiles = files.stats;
+    return packet;
+  };
   let packet = build();
   const beforeTokens = packet.manifest.estimatedTokensAfter;
   let compressedMessages = 0;
-  const segmentRecords: ModelMessage[] = [];
+  const segmentRecords: ModelMessage[] = [...sourceFileReceipts];
   let compactionFailure: string | undefined;
   let compactionFailureDetails: Record<string, unknown> | undefined;
   let compactionStopReason: { code: string; message: string } | undefined;
   let attemptedCompaction = false;
   const configuredKeepRecent = Number(process.env.AI_CONTEXT_KEEP_RECENT_BLOCKS);
   const keepRecent = Number.isFinite(configuredKeepRecent) ? Math.max(4, Math.floor(configuredKeepRecent)) : 4;
-  const maximumInputTokens = Math.min(18000, input.inputBudgetTokens);
+  const maximumInputTokens = Math.min(64000, Math.floor(input.inputBudgetTokens * 0.6));
   for (let attempt = 0; packet.manifest.estimatedTokensAfter > (attempt === 0 ? input.compressionTriggerTokens : input.compressionTargetTokens) && attempt < 8; attempt++) {
     const blocks: ModelMessage[][] = [];
     for (let start = 0; start < active.length;) {
@@ -44,10 +58,15 @@ export async function prepareRuntimeContext(input: RuntimeContextInput & {
       if (active[start].role === 'assistant') while (active[end]?.role === 'tool') end++;
       blocks.push(active.slice(start, end)); start = end;
     }
+    // Only identical Skill bodies are deduplicated. Version drift must not make
+    // a previously read body eligible for lossy summarization.
+    const latestSkillBlocks = new Map<string, ModelMessage[]>();
+    for (const block of blocks) for (const key of skillBodyKeysForPreservation(block)) latestSkillBlocks.set(key, block);
+    const protectedSkillBlocks = new Set(latestSkillBlocks.values());
     const source: ModelMessage[] = [];
-    const pinnedIndex = pinnedRef ? active.findLastIndex(message => runtimeContextMessageRef(message) === pinnedRef) : -1;
     let selectionStop = { code: 'recent-interactions-retained', message: 'Only retained recent interactions remain outside the historical handoff.' };
-    let selectedMessageCount = 0;
+    let prefixMessageCount = 0;
+    let sourceMessageCount = 0;
     for (const block of blocks.slice(0, Math.max(0, blocks.length - keepRecent))) {
       const calls = block.flatMap(message => message.role === 'assistant' && Array.isArray(message.content) ? message.content.filter(part => part.type === 'tool-call').map(part => part.toolCallId) : []);
       const results = new Set(block.flatMap(message => Array.isArray(message.content) ? message.content.filter(part => part.type === 'tool-result').map(part => part.toolCallId) : []));
@@ -55,22 +74,37 @@ export async function prepareRuntimeContext(input: RuntimeContextInput & {
         selectionStop = { code: 'incomplete-tool-exchange', message: 'The next historical interaction has no complete tool results.' };
         break;
       }
-      // Keep the exact current request in the active window, at the replacement boundary.
-      const historical = block.filter((_message, index) => selectedMessageCount + index !== pinnedIndex);
+      // A handoff cannot cross an exact user instruction or Skill body. Doing so
+      // moves later history ahead of that instruction and changes its meaning.
+      const protectedBlock = block.some(message => isOriginalBrowserChatUserMessage(message)
+        || (pinnedRef && runtimeContextMessageRef(message) === pinnedRef))
+        || protectedSkillBlocks.has(block);
+      const loneHandoff = block.length === 1 && typeof block[0].content === 'string'
+        && block[0].content.startsWith(contextSegmentMarker);
+      if (protectedBlock || (loneHandoff && source.length === 0)) {
+        if (source.length) {
+          selectionStop = { code: 'protected-boundary', message: 'The next exact user instruction or Skill body starts a new historical segment.' };
+          break;
+        }
+        prefixMessageCount += block.length;
+        continue;
+      }
+      const historical = block;
       if (contextSummaryInputTokens(pinnedUser, [...source, ...historical]) > maximumInputTokens) {
         selectionStop = { code: 'source-input-limit', message: 'The next complete interaction exceeds the summary input capacity.' };
         break;
       }
-      source.push(...historical); selectedMessageCount += block.length;
+      source.push(...historical); sourceMessageCount += block.length;
     }
-    const onlyHandoff = source.length === 1 && typeof source[0].content === 'string' && source[0].content.startsWith(contextSegmentMarker);
-    if (!source.length || onlyHandoff) {
-      compactionStopReason = selectionStop;
+    if (!source.length) {
+      compactionStopReason = prefixMessageCount && selectionStop.code === 'recent-interactions-retained'
+        ? { code: 'protected-content-retained', message: 'Original user instructions, loaded Skills and recent interactions are retained verbatim; no further historical batch is eligible.' }
+        : selectionStop;
       break;
     }
-    const retained = active.slice(selectedMessageCount);
-    const pinRemoved = pinnedUser && pinnedIndex < selectedMessageCount;
-    const replace = (message: ModelMessage) => [message, ...(pinRemoved ? [pinnedUser] : []), ...retained];
+    const prefix = active.slice(0, prefixMessageCount);
+    const retained = active.slice(prefixMessageCount + sourceMessageCount);
+    const replace = (message: ModelMessage) => [...prefix, message, ...retained];
     const sourceKey = runtimeContextMessageRef({ role: 'user', content: JSON.stringify({
       source: source.map(runtimeContextMessageRef), pinnedUser: pinnedUser && runtimeContextMessageRef(pinnedUser), maximumInputTokens,
     }) });
@@ -109,7 +143,7 @@ export async function prepareRuntimeContext(input: RuntimeContextInput & {
     // Commit the complete replacement and audit evidence before publishing it in memory.
     await input.onCheckpoint?.({ messages: assembleRuntimeContext({ ...input, messages: replacement, pinnedUser, observations }).messages,
       activeMessages: replacement, continuationSummary: JSON.stringify(nextState), removedIndexes: [],
-      compressedMessages: compressedMessages + source.length, segmentRecords: [candidate.message] });
+      compressedMessages: compressedMessages + source.length, segmentRecords: [...sourceFileReceipts, candidate.message] });
     active = replacement; state = nextState; compressedMessages += source.length; segmentRecords.push(candidate.message);
     packet = build();
     await input.onProgress?.({ stage: 'batch', completedMessages: compressedMessages, totalMessages: compressedMessages, beforeTokens, afterTokens: packet.manifest.estimatedTokensAfter }, packet.messages);
@@ -130,7 +164,7 @@ export async function prepareRuntimeContext(input: RuntimeContextInput & {
     if (packet.manifest.estimatedTokensAfter <= input.compressionTargetTokens) compactionStopReason = undefined;
     else compactionStopReason ??= { code: 'refreshed-context', message: 'Refreshed request context remains above the compression target.' };
   }
-  if (packet.manifest.estimatedTokensAfter > input.inputBudgetTokens) throw new ContextSummaryError('Context budget exceeded. Current request, required constraints and latest image were preserved; no model request was sent.', {
+  if (packet.manifest.estimatedTokensAfter > input.inputBudgetTokens) throw new ContextSummaryError('Context capacity exceeded. Original user instructions, loaded Skills and latest image were preserved; no model request was sent.', {
     details: { code: 'input-capacity-exceeded', compactionStopReason, estimatedTokens: packet.manifest.estimatedTokensAfter, inputBudgetTokens: input.inputBudgetTokens },
   });
   packet.manifest.id = `ctxreq_${randomUUID()}`;

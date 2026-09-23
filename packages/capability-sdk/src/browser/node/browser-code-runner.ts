@@ -57,9 +57,16 @@ export type BrowserCodeActivity = {
   navigationChanged: boolean;
   tabChanged: boolean;
   verification?: {
-    status: 'passed' | 'failed';
+    status: 'passed' | 'failed' | 'required';
     detail: string;
   };
+  surfaceTransitions?: Array<{
+    action: string;
+    beforeId?: string;
+    afterId?: string;
+    openedIds: string[];
+    closedIds: string[];
+  }>;
 };
 
 export type BrowserCodeRunResult = {
@@ -262,6 +269,30 @@ export function browserCodeHasImageOperation(code: string) {
   return found;
 }
 
+/** A declared browser input skipped by a conditional is not an executed action.
+ * Inspect the AST so strings, comments and read-only calls do not count. */
+export function browserCodeHasDeclaredBrowserAction(code: string) {
+  const ast = parseBrowserCodeAst(code);
+  if (!ast) return false;
+  const actions = new Set([
+    'click', 'dblclick', 'tap', 'check', 'uncheck', 'setChecked', 'dragTo', 'dragAndDrop',
+    'fill', 'type', 'press', 'pressSequentially', 'selectOption', 'clear', 'setInputFiles',
+    'focus', 'blur', 'selectText', 'setTextSelection', 'goto', 'reload', 'goBack', 'goForward',
+    'setContent', 'insertText', 'move', 'hover', 'wheel', 'scroll', 'scrollIntoViewIfNeeded',
+    'new', 'use', 'close', 'claimTab',
+  ]);
+  let found = false;
+  walkBrowserCodeAst(ast, (node) => {
+    if (node.type !== 'CallExpression' && node.type !== 'OptionalCallExpression') return;
+    const path = browserCodeMemberPath(node.callee as BrowserCodeAstNode | undefined);
+    if (path && path.length > 1 && actions.has(path[path.length - 1])) {
+      found = true;
+      return false;
+    }
+  });
+  return found;
+}
+
 export function browserCodePolicyViolation(code: string) {
   if (/\.dispatchEvent\s*\(\s*(?:[^,()]+,\s*)?['"]click['"]/i.test(code)) {
     return 'browserCode forbids dispatchEvent("click") because it bypasses Playwright actionability. Refresh the DOM evidence and use one unique visible Playwright locator.';
@@ -339,7 +370,7 @@ type PendingExecution = {
 const maxDiagnosticChars = 4_000;
 const defaultBrowserCodeKernelReadyTimeoutMs = 10_000;
 const defaultBrowserCodeExecutionTimeoutMs = 90_000;
-export const BROWSER_CODE_KERNEL_RUNTIME_REVISION = 44;
+export const BROWSER_CODE_KERNEL_RUNTIME_REVISION = 46;
 
 function boundedInteger(value: unknown, fallback: number, min: number, max: number) {
   const parsed = typeof value === 'number' ? value : Number(value);
@@ -527,6 +558,7 @@ function browserCodeKernelMain() {
     uidReferences: Map<string, BrowserCodeUidReference>;
     requestId: string;
     verification?: BrowserCodeActivity['verification'];
+    surfaceTransitions: NonNullable<BrowserCodeActivity['surfaceTransitions']>;
   } | undefined;
   const screenshotProvenance = new WeakMap<object, CoordinateClickEvidence & { fullPage: boolean }>();
   const screenshotProvenanceByDigest = new Map<string, CoordinateClickEvidence & { fullPage: boolean }>();
@@ -543,7 +575,11 @@ function browserCodeKernelMain() {
   const imageDigest = (value: Uint8Array) => childCreateHash('sha256').update(value).digest('hex');
 
   const recordAction = (action: string) => {
-    activeExecution?.actions.push(action);
+    if (activeExecution) {
+      activeExecution.actions.push(action);
+      // An assertion before this action cannot verify its outcome.
+      activeExecution.verification = undefined;
+    }
     if (activeExecution) send({ type: 'action-progress', requestId: activeExecution.requestId, action, completed: false });
   };
 
@@ -1041,6 +1077,18 @@ function browserCodeKernelMain() {
     const after = await readUnifiedPageObservation(page);
     lastActionObservationByPage.set(page, { action, before, after });
     activeExecution.observationsBeforeAction.set(page, after);
+    if (before) {
+      const beforeIds = new Set(before.surfaces.map((surface) => surface.id));
+      const afterIds = new Set(after.surfaces.map((surface) => surface.id));
+      activeExecution.surfaceTransitions.push({
+        action,
+        ...(before.activeSurface?.id ? { beforeId: before.activeSurface.id } : {}),
+        ...(after.activeSurface?.id ? { afterId: after.activeSurface.id } : {}),
+        openedIds: [...afterIds].filter((id) => !beforeIds.has(id)),
+        closedIds: [...beforeIds].filter((id) => !afterIds.has(id)),
+      });
+      if (activeExecution.surfaceTransitions.length > 20) activeExecution.surfaceTransitions.shift();
+    }
   };
 
   const locatorIntentTerms = (selector: string) => {
@@ -2199,6 +2247,29 @@ function browserCodeKernelMain() {
         // Keep the native mouse implementation when it cannot be decorated.
       }
     }
+    // Native keyboard.type can resolve even when the focused control rejects every
+    // character. Observe delivery at the real editable target, without synthesizing
+    // framework events or exposing entered values (which may contain credentials).
+    const observeTextDelivery = async () => {
+      for (const frame of page.frames()) {
+        const handle = await frame.evaluateHandle(() => {
+          if (!document.hasFocus()) return null;
+          let element = document.activeElement;
+          while (element?.shadowRoot?.activeElement) element = element.shadowRoot.activeElement;
+          if (!(element instanceof HTMLElement) || element.matches(':disabled, [readonly]')
+            || !(element.isContentEditable || element.matches('textarea, input:not([type]), input[type="text"], input[type="search"], input[type="email"], input[type="url"], input[type="tel"], input[type="password"], input[type="number"]'))) return null;
+          const value = () => element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement ? element.value : element.textContent || '';
+          const before = value();
+          const counts: Record<string, number> = { beforeinput: 0, input: 0, change: 0, keydown: 0, keyup: 0 };
+          const observe = (event: Event) => { counts[event.type]++; };
+          for (const name of Object.keys(counts)) element.addEventListener(name, observe, true);
+          return { element, value, before, counts, observe };
+        });
+        if (await handle.evaluate(state => state !== null)) return handle;
+        await handle.dispose();
+      }
+      throw new Error('TEXT_INPUT_NOT_EDITABLE: No focused editable text control. Inspect data.diagnostics and focus the actual editor before typing; a picker trigger or decorative caret is not an editable input.');
+    };
     const patchInputDevice = (
       device: Record<string, unknown>,
       name: string,
@@ -2216,7 +2287,28 @@ function browserCodeKernelMain() {
               return Reflect.apply(original, device, args);
             }
             await prepareStateChangingAction(page, action);
-            const result = await Reflect.apply(original, device, args);
+            const textEntry = (name === 'type' || name === 'insertText') && typeof args[0] === 'string' && args[0].length > 0;
+            const delivery = textEntry ? await observeTextDelivery() : undefined;
+            let result: unknown;
+            try {
+              result = await Reflect.apply(original, device, args);
+              if (delivery) {
+                const observed = await delivery.evaluate(state => state && ({
+                  events: state.counts, valueChanged: state.value() !== state.before,
+                  beforeLength: state.before.length, afterLength: state.value().length,
+                }));
+                if (observed && !observed.events.input && !observed.valueChanged) {
+                  throw new Error(`TEXT_INPUT_NOT_DELIVERED: Native typing produced no input event or value change at the focused editor. Event counts: ${JSON.stringify(observed)}. Inspect the control instead of retrying with another delay.`);
+                }
+              }
+            } finally {
+              if (delivery) {
+                await delivery.evaluate(state => {
+                  if (state) for (const name of Object.keys(state.counts)) state.element.removeEventListener(name, state.observe, true);
+                }).catch(() => undefined);
+                await delivery.dispose();
+              }
+            }
             await completeStateChangingAction(page, action);
             return result;
           },
@@ -2311,7 +2403,17 @@ function browserCodeKernelMain() {
     const description = String(input?.description || '').trim();
     if (!description) throw new Error('page.verifyState() requires a concise expected business-state description.');
     const checks: Array<{ name: string; ok: boolean; actual: unknown }> = [];
-    const current = await readUnifiedPageObservation(page);
+    let current = await readUnifiedPageObservation(page);
+    if (input.activeSurface === 'closed' || input.activeSurface === 'absent') {
+      const surfaceId = input.surfaceId?.trim() || (input.activeSurface === 'closed' ? lastAction?.before?.activeSurface?.id : undefined);
+      const deadline = Date.now() + 900;
+      while (Date.now() < deadline && (surfaceId
+        ? current.surfaces.some((surface) => surface.id === surfaceId)
+        : Boolean(current.activeSurface))) {
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        current = await readUnifiedPageObservation(page);
+      }
+    }
     if (input.url !== undefined) {
       const expected = input.url;
       const currentUrl = page.url();
@@ -2344,10 +2446,14 @@ function browserCodeKernelMain() {
       const currentId = currentSurface?.id || '';
       const beforeIds = new Set(lastAction?.before?.surfaces.map(surface => surface.id) || []);
       const currentIds = new Set(current.surfaces.map(surface => surface.id));
+      const replacementPopup = Boolean(input.activeSurface === 'closed'
+        && current.activeSurface?.likelyOverlay && !current.activeSurface.modal
+        && current.activeSurface.id !== beforeId
+        && !lastAction?.before?.surfaceStack.some((surface) => surface.id === current.activeSurface?.id));
       const ok = input.activeSurface === 'opened'
         ? Boolean(currentId) && !beforeIds.has(currentId)
         : input.activeSurface === 'closed'
-          ? surfaceId ? !currentId : Boolean(beforeId) && !currentIds.has(beforeId)
+          ? (surfaceId ? !currentId : Boolean(beforeId) && !currentIds.has(beforeId)) && !replacementPopup
           : input.activeSurface === 'changed'
             ? beforeId !== currentId
             : input.activeSurface === 'present'
@@ -2356,7 +2462,7 @@ function browserCodeKernelMain() {
       checks.push({
         name: `activeSurface:${input.activeSurface}`,
         ok,
-        actual: currentSurface || null,
+        actual: currentSurface || current.activeSurface || null,
       });
     }
     const locatorInput = input?.locator;
@@ -2437,6 +2543,24 @@ function browserCodeKernelMain() {
           checks.push({ name: `locator:${state}`, ok, actual });
         }
       }
+    }
+    const isTransientPicker = (surface: KernelPageObservation['activeSurface']) => Boolean(surface
+      && !surface.modal && surface.likelyOverlay);
+    const priorPopup = lastAction?.before?.activeSurface;
+    const currentPopup = current.activeSurface;
+    const popupStillOpen = isTransientPicker(priorPopup)
+      && current.surfaces.some((surface) => surface.id === priorPopup?.id);
+    const popupJustOpened = isTransientPicker(currentPopup)
+      && !lastAction?.before?.surfaces.some((surface) => surface.id === currentPopup?.id);
+    if ((popupStillOpen || popupJustOpened) && !input.activeSurface) {
+      checks.push({ name: 'activeSurface:explicit-check-required', ok: false,
+        actual: { id: popupStillOpen ? priorPopup?.id : currentPopup?.id,
+          state: popupStillOpen ? 'still-open' : 'opened' } });
+    }
+    const relevantPopupId = popupStillOpen ? priorPopup?.id : popupJustOpened ? currentPopup?.id : undefined;
+    if (relevantPopupId && input.surfaceId && input.surfaceId !== relevantPopupId) {
+      checks.push({ name: 'activeSurface:exact-id-required', ok: false,
+        actual: { expectedSurfaceId: relevantPopupId, checkedSurfaceId: input.surfaceId } });
     }
     if (!checks.length) {
       throw new Error('page.verifyState() requires url, activeSurface, or locator state evidence.');
@@ -2705,7 +2829,7 @@ function browserCodeKernelMain() {
       'page.domSnapshot() returns page-state plus a read-only Playwright AX tree scoped to the active surface by default; pass { scope: "all" } only for background context. browser.user.openTabs() reports only tabs owned by the current conversation group, with active-tab and tab-group metadata.',
       'Page and Locator factory methods expose only currently rendered matches: CSS-hidden descendants and zero-rectangle nodes are excluded before count() and positional selection. aria-hidden changes accessibility exposure but does not by itself make a geometrically rendered target invisible or unactionable. Element actions then validate target computed style and hit testing, run an action-specific Playwright trial for every remaining pointer candidate, and execute only the unique candidate that passes all stages; CSS-hidden file inputs used by setInputFiles are recovered only at that action boundary.',
       'Coordinate clicks require either reusable fresh viewport-screenshot evidence from a previous cell or a point inside a rect returned by boundingBox() for one exact visible actionable Locator. Rect-derived clicks work without image input.',
-      'page.verifyState() is an optional read-only assertion helper; it never gates later actions or successful cell completion.',
+      'After any browser action, call page.verifyState() with a concrete URL, locator value/state, or exact surface transition. An action without a passing postcondition returns browser-verification-required even when the Playwright call completed.',
       'Every session Page exposes setTextSelection(locator, spec). Call it on the Page that owns the locator, including for frame locators, then use that same Page keyboard.insertText()/press() in the same cell. Use browser.tabs.use(tab) or tab.use() when the global page binding should switch tabs.',
       'page.getByUid(uid) synchronously returns a normal Playwright Locator for an exact dom-* UID exposed by the latest DOM evidence. A stale, unexposed, navigated, or detached UID fails with STALE_DOM_EVIDENCE and must be replaced from fresh evidence.',
       `Playwright action timeout: ${browserCodeActionTimeoutMs}ms; navigation timeout: ${browserCodeNavigationTimeoutMs}ms.`,
@@ -2982,6 +3106,7 @@ function browserCodeKernelMain() {
       uidBindings: new Map(),
       uidBindingErrors: new Map(),
       uidReferences: new Map(),
+      surfaceTransitions: [],
       requestId: input.requestId,
     };
     const publishPendingCoordinateClickEvidence = async () => {
@@ -3032,11 +3157,18 @@ function browserCodeKernelMain() {
       const finalPageCount = browserContext.pages().filter((candidatePage) => !candidatePage.isClosed()).length;
       const navigationChanged = Boolean(finalPage && finalPage.url() !== initialUrl);
       const tabChanged = finalPage !== initialPage || finalPageCount !== initialPageCount;
+      if (activeExecution.actions.length && !activeExecution.verification) {
+        activeExecution.verification = {
+          status: 'required',
+          detail: 'Browser actions completed without a passing page.verifyState() after the last action. Inspect the current state and verify the intended outcome before continuing; do not replay the action.',
+        };
+      }
       const activity: BrowserCodeActivity = {
         actions: [...activeExecution.actions],
         navigationChanged,
         tabChanged,
         ...(activeExecution.verification ? { verification: activeExecution.verification } : {}),
+        ...(activeExecution.surfaceTransitions.length ? { surfaceTransitions: [...activeExecution.surfaceTransitions] } : {}),
       };
       const selectedTargetId = finalPage ? await targetIdForPage(finalPage) : undefined;
       const ownedTargetIds = cdpScope?.targetIds()
@@ -3062,8 +3194,12 @@ function browserCodeKernelMain() {
         const fields = await Promise.all(diagnosticPage.frames().slice(0, 24).map(async frame => {
           const read = await settleKernelTask(frame.evaluate(() => {
             const focused = document.activeElement;
-            const controls = Array.from(document.querySelectorAll('input, textarea, [contenteditable=""], [contenteditable="true"], [role="combobox"]'));
+            const controls = Array.from(document.querySelectorAll(
+              'input, textarea, [contenteditable=""], [contenteditable="true"], [role="combobox"], button, [role="button"], [class*="close-icon"]',
+            ));
             if (focused && !controls.includes(focused)) controls.unshift(focused);
+            const runtime = (window as Window & { __aiDomRuntime?: { activeSurfaceElement?: () => Element | undefined } }).__aiDomRuntime;
+            const activeSurfaceElement = runtime?.activeSurfaceElement?.();
             return controls.flatMap(element => {
               const rect = element.getBoundingClientRect();
               const style = getComputedStyle(element);
@@ -3072,23 +3208,38 @@ function browserCodeKernelMain() {
               const input = element as HTMLInputElement;
               const hit = document.elementFromPoint(Math.max(0, Math.min(innerWidth - 1, rect.x + rect.width / 2)), Math.max(0, Math.min(innerHeight - 1, rect.y + rect.height / 2)));
               const topmost = hit === element || Boolean(hit && element.contains(hit));
+              const buttonText = element.matches('button, [role="button"], [class*="close-icon"]')
+                ? element.textContent?.trim().replace(/\s+/g, ' ').slice(0, 100) : undefined;
+              const label = element.getAttribute('aria-label') || element.getAttribute('title')
+                || input.labels?.[0]?.textContent?.trim() || buttonText;
+              if (!label && element !== focused && !element.matches('input, textarea, [contenteditable]')) return [];
               return [{ descriptor: element.tagName.toLowerCase() + (element.id ? '#' + element.id : ''),
                 ...(element.id ? { selector: '#' + CSS.escape(element.id) } : {}),
                 role: element.getAttribute('role'), type: element.getAttribute('type'),
                 name: element.getAttribute('name'), placeholder: element.getAttribute('placeholder'),
-                label: element.getAttribute('aria-label') || input.labels?.[0]?.textContent?.trim().slice(0, 120),
+                label,
                 focused: element === focused, editable: ((element as HTMLElement).isContentEditable || element.matches('input:read-write, textarea:read-write'))
                   && !input.readOnly && !input.disabled && element.getAttribute('aria-disabled') !== 'true',
                 readOnly: Boolean(input.readOnly), disabled: Boolean(input.disabled), topmost,
+                inActiveSurface: Boolean(activeSurfaceElement?.contains(element)),
+                ...(!topmost && hit ? { blocker: hit.tagName.toLowerCase()
+                  + (hit.id ? '#' + hit.id : '')
+                  + (typeof hit.className === 'string' && hit.className ? '.' + hit.className.trim().replace(/\s+/g, '.').slice(0, 90) : '') } : {}),
                 rect: { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) },
               }];
-            }).sort((a, b) => Number(b.focused) - Number(a.focused) || Number(b.topmost) - Number(a.topmost)).slice(0, 12);
+            }).sort((a, b) => Number(b.inActiveSurface) - Number(a.inActiveSurface)
+              || Number(b.focused) - Number(a.focused) || Number(b.topmost) - Number(a.topmost)).slice(0, 24);
           }), 500, 'editable control diagnosis');
           return read.ok ? read.value.map(control => ({ ...control, frameUrl: compactObservationUrl(frame.url()) })) : [];
         }));
         return { activeSurface: observation.activeSurface, focusedElement: observation.focusedElement,
-          controls: fields.flat().sort((a, b) => Number(b.focused) - Number(a.focused) || Number(b.topmost) - Number(a.topmost)).slice(0, 16),
-          note: 'Live read-only diagnosis. Rectangles and visibility do not prove clickability. Resolve the observed editable control; dismiss the observed blocker before retrying a covered target. No input values are included.' };
+          surfaces: observation.surfaces?.slice(0, 12).map(surface => ({ id: surface.id, selector: surface.selector,
+            kind: surface.kind, label: surface.label, parentId: surface.parentId, zIndex: surface.zIndex })),
+          surfaceStack: observation.surfaceStack?.map(surface => ({ id: surface.id, selector: surface.selector,
+            kind: surface.kind, label: surface.label })),
+          controls: fields.flat().sort((a, b) => Number(b.inActiveSurface) - Number(a.inActiveSurface)
+            || Number(b.focused) - Number(a.focused) || Number(b.topmost) - Number(a.topmost)).slice(0, 24),
+          note: 'Live read-only diagnosis; no input values. A backdrop blocking Cancel/Close belongs to a foreground surface: dismiss that surface (Escape when supported), observe again, then click the intended control. Overlay DOM order is not a reliable target; avoid .last() on generic overlay roots. Force and coordinate clicks do not bypass a covering layer.' };
       })(), 2000, 'interaction diagnosis');
       send({
         type: 'result',
@@ -3106,6 +3257,7 @@ function browserCodeKernelMain() {
           navigationChanged: false,
           tabChanged: false,
           ...(activeExecution.verification ? { verification: activeExecution.verification } : {}),
+          ...(activeExecution.surfaceTransitions.length ? { surfaceTransitions: [...activeExecution.surfaceTransitions] } : {}),
         },
         memoryUsage: hostProcess.memoryUsage(),
       });

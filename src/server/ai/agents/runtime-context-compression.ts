@@ -98,6 +98,25 @@ export function omitRuntimeModelToolExchange(messages: ModelMessage[], toolCallI
   return completeRuntimeModelToolChain(filtered);
 }
 
+/** Keep archived evidence intact while excluding retired tool exchanges from a new model request. */
+export function omitRuntimeModelToolNames(messages: ModelMessage[], names: ReadonlySet<string>) {
+  if (!names.size) return completeRuntimeModelToolChain(messages);
+  const omittedIds = new Set(messages.flatMap((message) => (
+    message.role === 'assistant' && Array.isArray(message.content)
+      ? message.content.flatMap((part) => part.type === 'tool-call' && names.has(part.toolName) ? [part.toolCallId] : [])
+      : []
+  )));
+  const filtered = messages.flatMap((message) => {
+    if (!Array.isArray(message.content)) return [message];
+    const content = message.content.filter((part) => (
+      (part.type !== 'tool-call' && part.type !== 'tool-result')
+      || (!names.has(part.toolName) && !omittedIds.has(part.toolCallId))
+    ));
+    return content.length ? [{ ...message, content } as ModelMessage] : [];
+  });
+  return completeRuntimeModelToolChain(filtered);
+}
+
 export function atomicRuntimeModelMessageBlocks(messages: ModelMessage[]) {
   const blocks: ModelMessage[][] = [];
   const completeMessages = completeRuntimeModelToolChain(messages);

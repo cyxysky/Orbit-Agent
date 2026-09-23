@@ -167,10 +167,9 @@ export function buildBrowserChatAiCycleRenderEntries<TCycle extends BrowserChatA
   const flushExecuted = () => {
     if (!pendingExecuted.length) return;
     const first = pendingExecuted[0];
-    const last = pendingExecuted[pendingExecuted.length - 1];
     entries.push({
       cycles: pendingExecuted,
-      id: `executed-cycles-${first.id}-${last.id}-${pendingExecuted.length}`,
+      id: `executed-cycles-${first.id}`,
       kind: 'executed',
     });
     pendingExecuted = [];
@@ -204,9 +203,8 @@ export function buildBrowserChatMessageRenderEntries<TMessage extends BrowserCha
     if (!pendingExecutedGroup.length) return;
     if (pendingExecutedGroup.length > 1) {
       const first = pendingExecutedGroup[0];
-      const last = pendingExecutedGroup[pendingExecutedGroup.length - 1];
       entries.push({
-        id: `executed-${first.id}-${last.id}-${pendingExecutedGroup.length}`,
+        id: `executed-${first.id}`,
         items: pendingExecutedGroup,
         kind: 'executed-group',
       });

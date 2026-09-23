@@ -76,8 +76,8 @@ export function BrowserChatRecoveryPanel({ sessionId, busy }: { sessionId: strin
           </section>)}
           {error && <p className="browser-chat-recovery-error" role="alert">{error}</p>}
         </div>
-        <footer className="browser-chat-plan-footer browser-chat-recovery-footer">
-          <button type="button" className="ui-button ui-button--primary browser-chat-plan-primary browser-chat-recovery-extract" disabled={disabled} onClick={() => void memoryAction()}>
+        <footer className="browser-chat-recovery-footer">
+          <button type="button" className="ui-button ui-button--primary browser-chat-recovery-extract" disabled={disabled} onClick={() => void memoryAction()}>
             {saving ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}<span>{saving ? '正在处理…' : '提炼本轮记忆'}</span><ArrowRight size={15} />
           </button>
         </footer>

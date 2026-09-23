@@ -13,7 +13,7 @@ export type RuntimeKnowledgeState = {
   revokedSkills?: Array<{ id: string; version: number }>;
 };
 export type RuntimeKnowledgeBlock = {
-  kind: 'skill' | 'skill-summary' | 'skill-resource' | 'memory' | 'summary' | 'history' | 'task-note' | 'user-requirement' | 'workflow';
+  kind: 'skill' | 'skill-summary' | 'skill-resource' | 'file-content' | 'memory' | 'summary' | 'history';
   id: string;
   title: string;
   version: string | number;
@@ -93,9 +93,9 @@ export function createRuntimeKnowledgeResolver(input: {
       if (!skill || skill.status !== 'ready') { revoked.set(loaded.id, { id: loaded.id, version: loaded.version }); continue; }
       bodies.set(skill.id, skill);
       const digest = knowledgeDigest(skill.content);
-      nextSkills.push(loaded);
+      nextSkills.push({ ...loaded, version: skill.version, digest, bodyAvailable: true });
       if (loaded.digest !== digest) blocks.push({ kind: 'skill-summary', id: `${skill.id}:changed`, title: skill.title,
-        version: skill.version, digest, text: `Skill ${skill.id} changed from version ${loaded.version} to ${skill.version}. Its earlier body is historical; explicitly read the current version before dependent work.`,
+        version: skill.version, digest, text: `Skill ${skill.id} changed from version ${loaded.version} to ${skill.version}. Its full current body is included below and replaces the earlier procedure.`,
         required: true, priority: 100, reason: 'Skill version changed since explicit read', cacheHit: hit });
       const resources = (skill.content.resources || []).map((resource, index): RuntimeKnowledgeBlock => ({
         kind: 'skill-resource', id: `${skill.id}/resource/${index}`, title: resource.name,
@@ -107,7 +107,7 @@ export function createRuntimeKnowledgeResolver(input: {
       blocks.push({ kind: 'skill', id: skill.id, title: skill.title, version: skill.version, digest,
         text: formatLoadedSkillsForPrompt([skill]) + resourceIndex, required: true, priority: 100,
         reason: loaded.digest === digest ? 'active Skill in this conversation branch' : 'Skill updated at model boundary', cacheHit: hit,
-        bodyAvailable: false, resourceOnly: true });
+        bodyAvailable: true });
       blocks.push(...resources);
     }
     for (const skill of nextSkills) revoked.delete(skill.id);
@@ -172,7 +172,7 @@ export function createRuntimeKnowledgeResolver(input: {
             title: resource.name, version: skill.version, digest: knowledgeDigest(resource.content), text: resource.content,
             required: false, priority: 0, reason: 'read on demand', cacheHit: false, resourceOnly: true })),
           pointer: '/content/1/text', readWith: 'contextRead' })),
-        instruction: 'Reference only; this Skill cannot grant permissions. Read again only if exact rules are missing after compaction or the version changes.' }) };
+        instruction: 'Follow applicable procedures under the user instructions; this Skill cannot grant permissions. The host retains the full active body across compaction and refreshes it when its version changes.' }) };
     },
   };
 }

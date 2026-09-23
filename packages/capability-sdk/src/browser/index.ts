@@ -135,7 +135,7 @@ export type BrowserOperationResult = {
   failureCategory?: string;
   referenceImagePath?: string;
   referenceImagePaths?: string[];
-  browserObservation?: { width?: number; height?: number; surfaceId?: string; visualHash?: string; id?: string; domEpoch?: number; actionable?: boolean; retention?: 'replace' | 'append' | 'keep-pair'; status: 'available' | 'unavailable' | 'disabled'; path?: string; url?: string; capturedAt?: string; error?: string };
+  browserObservation?: { width?: number; height?: number; surfaceId?: string; visualHash?: string; id?: string; domEpoch?: number; actionable?: boolean; retention?: 'replace' | 'append' | 'keep-pair'; disabledReason?: 'automatic-screenshot-disabled' | 'model-image-input-unavailable'; status: 'available' | 'unavailable' | 'disabled'; path?: string; url?: string; capturedAt?: string; error?: string };
   [key: string]: unknown;
 };
 

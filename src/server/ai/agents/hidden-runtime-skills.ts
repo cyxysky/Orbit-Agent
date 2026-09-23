@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { browserInteractionSkill } from './runtime-browser-interaction';
 import type { BrowserActionResult } from '@cjfclonedeep/capability-sdk/browser/node';
 import type { CapabilitySkill } from '@cjfclonedeep/capability-sdk';
@@ -133,6 +134,38 @@ export function hiddenRuntimeSkillIdsInModelContext(messages: ReadonlyArray<{ ro
     }
   }
   return loaded;
+}
+
+/** Preservation is independent of execution eligibility. An older Skill body
+ * is still an exact read receipt, even when it no longer satisfies the current
+ * version gate. User Skills must not depend on membership in the system catalog. */
+export function skillBodyKeysForPreservation(messages: ReadonlyArray<{ role: string; content: unknown }>) {
+  const record = (value: unknown): Record<string, unknown> | undefined => {
+    if (typeof value === 'string') { try { value = JSON.parse(value); } catch { return undefined; } }
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+  };
+  const calls = new Map<string, string>();
+  for (const message of messages) if (message.role === 'assistant' && Array.isArray(message.content)) {
+    for (const part of message.content) {
+      const input = record(part.input);
+      if (part.type === 'tool-call' && part.toolName === 'skill' && typeof input?.skillId === 'string') calls.set(part.toolCallId, input.skillId);
+    }
+  }
+  const ids = new Set<string>();
+  const add = (id: string, body: string) => ids.add(`${id}:${createHash('sha256').update(body).digest('hex')}`);
+  for (const message of messages) if (['assistant', 'tool'].includes(message.role) && Array.isArray(message.content)) {
+    for (const part of message.content) {
+      if (part.type !== 'tool-result') continue;
+      const result = record(record(part.output)?.value), actual = record(result?.actual);
+      if (part.toolName === 'skill' && result?.ok === true && typeof result.actual === 'string' && result.actual.trim()) {
+        const id = calls.get(part.toolCallId) || (typeof actual?.skillId === 'string' ? actual.skillId : undefined);
+        if (id) add(id, typeof actual?.content === 'string' ? actual.content : result.actual);
+      }
+      if (result?.ok === false && actual?.code === 'RUNTIME_SKILL_CONTENT_RETURNED'
+        && typeof actual.requiredSkillId === 'string' && typeof actual.skillContent === 'string' && actual.skillContent.trim()) add(actual.requiredSkillId, actual.skillContent);
+    }
+  }
+  return ids;
 }
 
 export function requiredHiddenRuntimeSkillId(

@@ -84,7 +84,7 @@ export function formatLoadedSkillsForPrompt(skills: SkillRecord[]) {
   if (!selected.length) return '';
   return [
     'Loaded Skills for the current runtime context:',
-    'Follow these operating instructions for the current task. Prefer current page evidence when it contradicts a Skill.',
+    'Follow applicable procedures for the current task, subject to the user instructions and later corrections. Live page evidence determines current UI facts; it does not waive user constraints or required procedures. Loaded Skill bodies remain available after history compaction.',
     ...selected.map((skill) => [
       '',
       `<skill id="${xmlAttribute(skill.id)}" version="${xmlAttribute(skill.version)}">`,

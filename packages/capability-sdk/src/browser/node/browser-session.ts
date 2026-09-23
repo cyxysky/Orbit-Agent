@@ -23,7 +23,7 @@ import type { BrowserPageObservation } from './browser-page-observation.ts';
 import { applyEditableTextSelection, readEditableText, resolveEditableTextSelection, type BrowserTextSelectionSpec } from './editable-text-selection.ts';
 import { buildSnapshotViews, captureAxSnapshot, snapshotRoleIsActionable, type CapturedSnapshotFrame, type SnapshotNodeWithUid, type SnapshotRecord, type SnapshotView } from './ax-snapshot.ts';
 import { captureDomSnapshot } from './dom-snapshot.ts';
-import { BROWSER_CODE_KERNEL_RUNTIME_REVISION, browserCodePolicyViolation, browserCodeReportedFailure, BrowserCodeKernel, type BrowserCodeAttachmentBinding, type BrowserCodeActivity, type BrowserCodeConnection, type BrowserCodeCredentialBinding, type BrowserCodeRuntimeStateOperation, type BrowserCodeUidReference, type BrowserCodeViewportEvidence } from './browser-code-runner.ts';
+import { BROWSER_CODE_KERNEL_RUNTIME_REVISION, browserCodeHasDeclaredBrowserAction, browserCodePolicyViolation, browserCodeReportedFailure, BrowserCodeKernel, type BrowserCodeAttachmentBinding, type BrowserCodeActivity, type BrowserCodeConnection, type BrowserCodeCredentialBinding, type BrowserCodeRuntimeStateOperation, type BrowserCodeUidReference, type BrowserCodeViewportEvidence } from './browser-code-runner.ts';
 import { resolveBrowserSessionSurface, type BrowserSessionSurface } from './browser-session-surface.ts';
 import { compactDiagnosticText, isAlreadyHandledJavaScriptDialogError, shouldIgnoreConsoleError, snapshotFrameUrl, stringifyDiagnosticValue, unknownErrorMessage } from './browser-session-diagnostics.ts';
 import { isBlankBrowserUrlLike, isBlankPage } from './browser-session-page-policy.ts';
@@ -157,7 +157,7 @@ export type BrowserActionResult = {
   /** Images emitted by browserCode that should be attached to the next model request in order. */
   referenceImagePaths?: string[];
   /** Final viewport observation, distinct from explicitly emitted image artifacts. */
-  browserObservation?: { width?: number; height?: number; surfaceId?: string; visualHash?: string; id?: string; domEpoch?: number; actionable?: boolean; retention?: 'replace' | 'append' | 'keep-pair'; status: 'available' | 'unavailable' | 'disabled'; path?: string; url?: string; capturedAt?: string; error?: string };
+  browserObservation?: { width?: number; height?: number; surfaceId?: string; visualHash?: string; id?: string; domEpoch?: number; actionable?: boolean; retention?: 'replace' | 'append' | 'keep-pair'; disabledReason?: 'automatic-screenshot-disabled' | 'model-image-input-unavailable'; status: 'available' | 'unavailable' | 'disabled'; path?: string; url?: string; capturedAt?: string; error?: string };
   /** Safe basenames for emitted screenshots. */
   screenshotFileNames?: string[];
   /** A compact continuation cursor for paged snapshot readers. */
@@ -1148,6 +1148,7 @@ export class BrowserSession {
   private browser?: Browser;
   private browserServer?: BrowserServer;
   private browserCodeConnection?: BrowserCodeConnection;
+  private readonly closeHooks = new Set<() => Promise<void>>();
   private browserCodeKernel?: BrowserCodeKernel;
   private browserCodeTargetIds = new WeakMap<Page, string>();
   private browserCodeKernelRevision?: number;
@@ -1464,7 +1465,7 @@ export class BrowserSession {
     return this.latestBrowserObservation;
   }
 
-  private automaticBrowserScreenshotEnabled() {
+  automaticBrowserScreenshotEnabled() {
     return String(this.configuredValue('BROWSER_CODE_AUTO_SCREENSHOT') ?? 'true').trim().toLowerCase() !== 'false';
   }
 
@@ -1571,6 +1572,21 @@ export class BrowserSession {
     } catch {
       return '';
     }
+  }
+
+  /** Browser transports may attach to this session without owning its browser. */
+  browserAutomationConnection(): BrowserCodeConnection {
+    if (!this.browserCodeConnection || !this.isUsable()) throw new Error('Browser session is not ready for an external automation transport.');
+    return { ...this.browserCodeConnection };
+  }
+
+  async focusActivePage() {
+    await this.activePage.bringToFront();
+  }
+
+  onClose(handler: () => Promise<void>) {
+    this.closeHooks.add(handler);
+    return () => this.closeHooks.delete(handler);
   }
 
   hasNonBlankActivePage() {
@@ -2970,10 +2986,17 @@ export class BrowserSession {
         if (!isCurrentPage() || !result.data) return;
         // Resize pixels outside Chromium, just like automatic observations. CDP
         // clip scaling can disturb the shared surface while another capture runs.
-        const pixels = sharp(Buffer.from(result.data, 'base64')).resize(outputViewport.width, outputViewport.height);
-        const resized = await (format === 'jpeg' ? pixels.jpeg({ quality }) : pixels.png()).toBuffer();
+        const captured = Buffer.from(result.data, 'base64');
+        const pixels = sharp(captured);
+        const capturedDimensions = await pixels.metadata();
+        const resized = capturedDimensions.width === outputViewport.width
+          && capturedDimensions.height === outputViewport.height
+          ? captured
+          : await (format === 'jpeg'
+            ? pixels.resize(outputViewport.width, outputViewport.height).jpeg({ quality }).toBuffer()
+            : pixels.resize(outputViewport.width, outputViewport.height).png().toBuffer());
         if (!isCurrentPage()) return;
-        pushOutputFrame(binding.page, resized.toString('base64'), cssViewport, outputViewport, {
+        pushOutputFrame(binding.page, resized === captured ? result.data : resized.toString('base64'), cssViewport, outputViewport, {
           deviceHeight: outputViewport.height,
           deviceWidth: outputViewport.width,
         });
@@ -3873,6 +3896,94 @@ export class BrowserSession {
     }, options.abortSignal);
   }
 
+  async dismissBrowserSurface(input: {
+    surfaceId: string;
+    method: 'escape' | 'backdrop';
+    abortSignal?: AbortSignal;
+  }): Promise<BrowserActionResult> {
+    return this.withSessionOperation(async (signal) => {
+      const before = await this.readPageObservation();
+      const surface = before.activeSurface;
+      if (!surface || surface.id !== input.surfaceId) return {
+        ok: false,
+        failureCategory: 'state-conflict',
+        summary: 'The requested surface is no longer the active surface; no input was sent.',
+        data: { requestedSurfaceId: input.surfaceId, observation: before, outcome: 'not-executed' },
+      };
+      const page = this.activePage;
+      let point: { x: number; y: number; hit: string } | undefined;
+      if (input.method === 'backdrop') {
+        const frame = surface.framePath
+          ? page.frames().find((candidate) => this.getFramePath(candidate) === surface.framePath)
+          : page.mainFrame();
+        if (!frame) return { ok: false, failureCategory: 'state-conflict',
+          summary: 'The surface frame disappeared; no input was sent.', data: { observation: before, outcome: 'not-executed' } };
+        const localPoint = await frame.evaluate((rect) => {
+          const candidates = [
+            [8, 8], [innerWidth - 8, 8], [8, innerHeight - 8], [innerWidth - 8, innerHeight - 8],
+            [Math.max(8, rect.left - 8), Math.max(8, Math.min(innerHeight - 8, rect.top + 8))],
+            [Math.min(innerWidth - 8, rect.right + 8), Math.max(8, Math.min(innerHeight - 8, rect.top + 8))],
+          ];
+          for (const [x, y] of candidates) {
+            if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) continue;
+            if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) continue;
+            const hit = document.elementFromPoint(x, y);
+            const backdrop = hit?.closest('[class*="backdrop" i], [class*="mask" i], [data-backdrop], [data-overlay-backdrop]');
+            if (!backdrop || hit !== backdrop || getComputedStyle(backdrop).pointerEvents === 'none') continue;
+            return { x, y, hit: backdrop.tagName.toLowerCase() + (typeof backdrop.className === 'string' ? `.${backdrop.className.trim().replace(/\s+/g, '.')}` : '') };
+          }
+          return null;
+        }, surface.rect).catch(() => null);
+        if (!localPoint) return { ok: false, failureCategory: 'surface-backdrop-unavailable',
+          summary: 'No unobstructed backdrop point outside the active surface was found; no input was sent.',
+          data: { observation: before, outcome: 'not-executed' } };
+        const frameBox = frame === page.mainFrame() ? undefined : await frame.frameElement().then((element) => element.boundingBox());
+        if (frame !== page.mainFrame() && !frameBox) return { ok: false, failureCategory: 'state-conflict',
+          summary: 'The surface frame is not visible; no input was sent.', data: { observation: before, outcome: 'not-executed' } };
+        point = { x: localPoint.x + (frameBox?.x || 0), y: localPoint.y + (frameBox?.y || 0), hit: localPoint.hit };
+      }
+      this.stateReader?.clear();
+      this.browserViewportEvidence = undefined;
+      this.latestBrowserObservation = { status: 'unavailable', error: 'A surface dismissal was attempted; earlier screenshots are stale.' };
+      try {
+        if (input.method === 'escape') await raceWithAbort(page.keyboard.press('Escape'), signal);
+        else await raceWithAbort(page.mouse.click(point!.x, point!.y), signal);
+      } catch (error) {
+        const after = await this.readPageObservation().catch(() => undefined);
+        return { ok: false, failureCategory: 'surface-dismissal-uncertain',
+          summary: 'The dismissal input failed or timed out; inspect current state before another action.',
+          data: { error: unknownErrorMessage(error), method: input.method, before, after, point, outcome: 'unknown' } };
+      }
+      let after = await this.readPageObservation();
+      const deadline = Date.now() + 900;
+      while (Date.now() < deadline && after.surfaces.some((candidate) => candidate.id === input.surfaceId)) {
+        await raceWithAbort(new Promise<void>((resolve) => setTimeout(resolve, 60)), signal);
+        after = await this.readPageObservation();
+      }
+      const closed = !after.surfaces.some((candidate) => candidate.id === input.surfaceId);
+      const replacementPopup = closed && Boolean(after.activeSurface?.likelyOverlay
+        && !after.activeSurface.modal && after.activeSurface.id !== input.surfaceId
+        && !before.surfaceStack.some((candidate) => candidate.id === after.activeSurface?.id));
+      const lostParentSurfaceIds = before.surfaceStack
+        .filter((candidate) => candidate.id !== input.surfaceId && !after.surfaces.some((next) => next.id === candidate.id))
+        .map((candidate) => candidate.id);
+      const verified = closed && !replacementPopup && lostParentSurfaceIds.length === 0;
+      return {
+        ok: verified,
+        ...(!verified ? { failureCategory: replacementPopup ? 'surface-replaced'
+          : closed ? 'surface-dismissal-side-effect' : 'surface-not-dismissed' } : {}),
+        summary: verified ? 'The observed surface closed and its parent surfaces remain open.'
+          : replacementPopup ? 'The original surface disappeared, but another popup remains active; inspect before continuing.'
+            : closed ? 'The surface closed, but a parent surface also disappeared; inspect before continuing.'
+            : 'The dismissal action completed, but the observed surface remains open.',
+        verification: { status: verified ? 'passed' : 'failed',
+          detail: `surface ${input.surfaceId} ${closed ? 'closed' : 'remains open'}; replacement popup: ${replacementPopup}; lost parent surfaces: ${lostParentSurfaceIds.join(', ') || 'none'}` },
+        data: { method: input.method, before, after, lostParentSurfaceIds,
+          ...(point ? { point } : {}), outcome: verified ? 'verified-closed' : replacementPopup ? 'popup-replaced' : closed ? 'side-effect' : 'verified-open' },
+      };
+    }, input.abortSignal);
+  }
+
 
   async readStructuredPageText() {
     return (await this.readDomObservation({ includeInteractiveCandidates: false })).structuredText;
@@ -4574,11 +4685,13 @@ export class BrowserSession {
       // A failed cell can still have changed the page. Never reuse an older image.
       this.lastScreenshotMetrics = undefined;
       this.browserViewportEvidence = undefined;
+      const withoutSingularImagePath = { ...result };
+      delete withoutSingularImagePath.referenceImagePath;
       if (input.imageInputAvailable === false || !this.automaticBrowserScreenshotEnabled()) {
-        const observation = { status: 'disabled' as const };
+        const observation = { status: 'disabled' as const,
+          disabledReason: input.imageInputAvailable === false ? 'model-image-input-unavailable' as const : 'automatic-screenshot-disabled' as const };
         this.latestBrowserObservation = observation;
-        const data = result.data && typeof result.data === 'object' ? result.data as Record<string, unknown> : {};
-        return { ...result, browserObservation: observation, data: { ...data, observation } };
+        return { ...withoutSingularImagePath, browserObservation: observation };
       }
       let observation: NonNullable<BrowserActionResult['browserObservation']>;
       const capture = new BrowserOperationDeadline(boundedPositiveIntegerEnv(
@@ -4613,13 +4726,7 @@ export class BrowserSession {
         capture.dispose();
       }
       this.latestBrowserObservation = observation;
-      const { path: imagePath, ...metadata } = observation;
-      const data = result.data && typeof result.data === 'object' ? result.data as Record<string, unknown> : {};
-      return { ...result, browserObservation: observation,
-        data: { ...data, observation: { ...metadata, ...(imagePath ? { fileName: path.basename(imagePath) } : {}) } },
-        ...(imagePath ? { referenceImagePath: imagePath,
-          referenceImagePaths: [...(result.referenceImagePaths || []), imagePath] } : {}),
-      };
+      return { ...withoutSingularImagePath, browserObservation: observation };
     }, input.abortSignal);
   }
 
@@ -4761,6 +4868,7 @@ export class BrowserSession {
       navigationChanged: execution.activity?.navigationChanged === true || finalUrl !== initialUrl,
       tabChanged: execution.activity?.tabChanged === true || finalPage !== page || pagesCreatedDuringExecution.size > 0,
       ...(execution.activity?.verification ? { verification: execution.activity.verification } : {}),
+      ...(execution.activity?.surfaceTransitions ? { surfaceTransitions: execution.activity.surfaceTransitions } : {}),
     };
     const emittedImagePaths: string[] = [];
     const emittedImageErrors: string[] = [];
@@ -4778,11 +4886,22 @@ export class BrowserSession {
         emittedImageErrors.push(error instanceof Error ? error.message : String(error));
       }
     }
+    const noDeclaredActionExecuted = execution.ok
+      && browserCodeHasDeclaredBrowserAction(code)
+      && execution.executionState?.attemptedActions.length === 0
+      && execution.executionState.completedActions.length === 0
+      && !inferredActivity.navigationChanged
+      && !inferredActivity.tabChanged;
+    const resultFailure = execution.ok ? browserCodeReportedFailure(execution.value) : undefined;
     const reportedFailure = execution.ok
-      ? browserCodeReportedFailure(execution.value)
+      ? resultFailure
+        || (noDeclaredActionExecuted ? 'The code declared a browser action, but no browser action was attempted. A conditional target guard may have skipped it. Read the current target and page state before choosing a changed action.' : undefined)
+        || (inferredActivity.verification?.status === 'required' ? inferredActivity.verification.detail : undefined)
       : undefined;
     const effectiveOk = execution.ok && !reportedFailure;
     const effectiveError = execution.error || reportedFailure;
+    const returnedPage = execution.value && typeof execution.value === 'object' && !Array.isArray(execution.value)
+      ? execution.value as Record<string, unknown> : undefined;
     const payload = {
       result: execution.value ?? null,
       ...(effectiveError ? { error: effectiveError } : {}),
@@ -4796,14 +4915,19 @@ export class BrowserSession {
           note: 'The persistent browserCode kernel was recycled to release memory. Top-level JavaScript bindings from earlier cells are no longer available.',
         },
       } : {}),
-      finalPage: { url: finalUrl, title: finalTitle },
+      ...(returnedPage?.url === finalUrl && returnedPage.title === finalTitle
+        ? {} : { finalPage: { url: finalUrl, title: finalTitle } }),
       ...(inferredActivity.verification ? { verification: inferredActivity.verification } : {}),
+      ...(inferredActivity.surfaceTransitions?.length ? { surfaceTransitions: inferredActivity.surfaceTransitions } : {}),
       ...(emittedImagePaths.length ? { images: emittedImagePaths.map((filePath) => ({ fileName: path.basename(filePath) })) } : {}),
       ...(emittedImageErrors.length ? { imageErrors: emittedImageErrors } : {}),
     };
     const result: BrowserActionResult = {
       ok: effectiveOk,
-      ...(!effectiveOk ? { failureCategory: reportedFailure ? 'browser-result-failed'
+      ...(!effectiveOk ? { failureCategory: resultFailure ? 'browser-result-failed'
+        : noDeclaredActionExecuted ? 'browser-no-action'
+        : inferredActivity.verification?.status === 'required' ? 'browser-verification-required'
+        : reportedFailure ? 'browser-result-failed'
         : execution.kernelReset?.reason === 'out-of-memory' ? 'browser-kernel-out-of-memory'
           : `browser-${execution.executionState?.status || 'code-failed'}` } : {}),
       data: payload,
@@ -4902,6 +5026,9 @@ export class BrowserSession {
     const shouldKeepOpen = !options.force && (
       options.keepOpen === true && this.isUsable()
     );
+    const closeHooks = [...this.closeHooks];
+    this.closeHooks.clear();
+    await Promise.allSettled(closeHooks.map(hook => hook()));
     let disposeLocalState = false;
     const activeScreencasts = [...(this.activeScreencasts || [])];
     this.activeScreencasts ||= new Set<BrowserScreencastHandle>();
@@ -7571,9 +7698,8 @@ export class BrowserSession {
             ? inputEvents > 0 || valueChanged
             : input.replace !== false ? inputEvents > 0 || valueChanged || valueBefore === '' : true;
           return {
-            // Fast DOM insertion intentionally emits input/change rather than
-            // synthetic keydown events. The observable value/input result is
-            // the delivery contract for text entry.
+            // Native non-US text may emit input without keydown/keyup. Delivery
+            // is separate from the component committing its model on blur/selection.
             ok: navigated || delivered,
             detail: `${keyEvents} keydown and ${inputEvents} input event(s) observed; valueLength ${valueBefore?.length ?? '?'}→${valueAfter?.length ?? '?'}; navigation=${navigated}.`,
           };

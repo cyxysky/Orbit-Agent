@@ -1,7 +1,6 @@
 'use client';
 import { normalizeBrowserChatInteractionMode, type BrowserChatInteractionMode } from '@/lib/browser-chat-interaction-mode';
 import { BrowserChatRecoveryPanel } from './BrowserChatRecoveryPanel';
-import { BrowserChatPlanPanel } from './BrowserChatPlanPanel';
 
 import { browserChatSessionListTimestamp, compareBrowserChatSessionCreation, upsertBrowserChatSessionByCreation } from '@/lib/browser-chat-session-order';
 import { browserChatToolSource, type BrowserChatToolSource } from '@/lib/browser-chat-tool-source';
@@ -252,6 +251,7 @@ import {
   browserChatLogsForMessage,
   formatBrowserChatElapsedTime,
   isBrowserChatManualVerificationStatusText,
+  type BrowserChatAiCycleRenderEntry,
   type BrowserChatLogIndex as BrowserChatLogIndexModel,
 } from '@/components/browser-chat-message-model';
 import {
@@ -3628,7 +3628,9 @@ const BrowserChatAiCycleLine = memo(function BrowserChatAiCycleLine({
         }
         const { tool, toolDetail } = entry;
         const executedTool = toolDetail.tool;
-        const source = browserChatToolSource(executedTool, [...toolDetails.values()].map((detail) => detail.tool));
+        const source = executedTool.name === 'contextRead'
+          ? browserChatToolSource(executedTool, [...toolDetails.values()].map((detail) => detail.tool))
+          : undefined;
         const label = browserChatToolLabel(executedTool.name, executedTool.input, t, source);
         const failureMeta = browserChatToolFailureSummary(executedTool.rawResult ?? executedTool.error ?? executedTool.result);
         const meta = executedTool.invalid
@@ -4641,10 +4643,29 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
       ...syntheticHistoricalOutput.cycles,
     ]);
   }, [renderedProviderCycles, syntheticHistoricalOutput.cycles]);
-  const aiOutputCycleEntries = useMemo(() => buildBrowserChatAiCycleRenderEntries(
-    renderAiOutputCycles,
-    (cycle) => cycle.output.tools.some((_tool, index) => aiCycleToolDetails.has(aiCycleToolKey(cycle.id, index))),
-  ), [aiCycleToolDetails, renderAiOutputCycles]);
+  const previousAiOutputCycleEntriesRef = useRef<BrowserChatAiCycleRenderEntry<BrowserChatAiOutputCycle>[]>([]);
+  const aiOutputCycleEntries = useMemo(() => {
+    const next = buildBrowserChatAiCycleRenderEntries(
+      renderAiOutputCycles,
+      (cycle) => cycle.output.tools.some((_tool, index) => aiCycleToolDetails.has(aiCycleToolKey(cycle.id, index))),
+    );
+    const previousById = new Map(previousAiOutputCycleEntriesRef.current.map((entry) => [
+      entry.kind === 'cycle' ? entry.cycle.id : entry.id, entry,
+    ]));
+    const shared = next.map((entry) => {
+      const previous = previousById.get(entry.kind === 'cycle' ? entry.cycle.id : entry.id);
+      if (!previous || previous.kind !== entry.kind) return entry;
+      if (entry.kind === 'cycle' && previous.kind === 'cycle') {
+        return previous.cycle === entry.cycle ? previous : entry;
+      }
+      if (entry.kind === 'executed' && previous.kind === 'executed'
+        && previous.cycles.length === entry.cycles.length
+        && entry.cycles.every((cycle, index) => cycle === previous.cycles[index])) return previous;
+      return entry;
+    });
+    previousAiOutputCycleEntriesRef.current = shared;
+    return shared;
+  }, [aiCycleToolDetails, renderAiOutputCycles]);
   const shouldShowStepTimeline = currentTimelineEntries.length > 0 || waitingForTool;
   const hasFinalText = Boolean(finalText.trim());
   const hasStructuredResponse = Boolean(message.parts?.some((part) => (
@@ -5010,31 +5031,14 @@ const BrowserChatTurnNavigator = memo(function BrowserChatTurnNavigator({
   );
 });
 
-const BrowserChatExecutedGroup = memo(function BrowserChatExecutedGroup({
-  expandedArtifactMessageId,
-  items,
-  lastAssistantMessageId,
-  logIndex,
-  sessionAwaitingHuman,
-  onLoadMessageRecords,
-  outputCycles,
-  onResolveToolConfirmation,
-  onResumeHumanVerification,
-  onSelectTool,
-  pendingToolConfirmation,
-  resolvingConfirmationAction,
-  resolvingConfirmationId,
-  resumingHumanVerification,
-  subagents,
-  stepsByIndex,
-}: {
+type BrowserChatExecutedGroupProps = {
   expandedArtifactMessageId?: string;
   items: BrowserChatMessage[];
   lastAssistantMessageId?: string;
   logIndex: BrowserChatLogIndex;
   sessionAwaitingHuman?: boolean;
   onLoadMessageRecords: BrowserChatMessageRecordLoader;
-  outputCycles: BrowserChatAiOutputCycle[];
+  outputCyclesByMessageId: Map<string, BrowserChatAiOutputCycle[]>;
   onResolveToolConfirmation?: (confirmationId: string, action: BrowserChatToolConfirmationAction) => void | Promise<void>;
   onResumeHumanVerification?: () => void | Promise<void>;
   onSelectTool: (detail: BrowserChatToolDetail) => void;
@@ -5042,20 +5046,36 @@ const BrowserChatExecutedGroup = memo(function BrowserChatExecutedGroup({
   resolvingConfirmationAction?: BrowserChatToolConfirmationAction | null;
   resolvingConfirmationId?: string | null;
   resumingHumanVerification?: boolean;
-  subagents: BrowserChatSubagentRecord[];
-  stepsByIndex: Map<number, StepExecutionResult>;
-}) {
+  subagentsByMessageId: Map<string, BrowserChatSubagentRecord[]>;
+  stepsByMessageId: Map<string, StepExecutionResult[]>;
+};
+
+const BrowserChatExecutedGroup = memo(function BrowserChatExecutedGroup({
+  expandedArtifactMessageId,
+  items,
+  lastAssistantMessageId,
+  logIndex,
+  sessionAwaitingHuman,
+  onLoadMessageRecords,
+  outputCyclesByMessageId,
+  onResolveToolConfirmation,
+  onResumeHumanVerification,
+  onSelectTool,
+  pendingToolConfirmation,
+  resolvingConfirmationAction,
+  resolvingConfirmationId,
+  resumingHumanVerification,
+  subagentsByMessageId,
+  stepsByMessageId,
+}: BrowserChatExecutedGroupProps) {
   const itemViews = items.map((item) => {
-    const steps = (item.stepIndexes || [])
-      .map((stepIndex) => stepsByIndex.get(stepIndex))
-      .filter((step): step is StepExecutionResult => step?.messageId === item.id);
     return {
       item,
       logs: browserChatLogsForMessage(item, logIndex),
-      outputCycles: outputCycles.filter((cycle) => cycle.messageId === item.id),
+      outputCycles: outputCyclesByMessageId.get(item.id) || emptyBrowserChatOutputCycles,
       running: item.status === 'running',
-      subagents: subagents.filter((subagent) => subagent.messageId === item.id),
-      steps,
+      subagents: subagentsByMessageId.get(item.id) || emptyBrowserChatSubagents,
+      steps: stepsByMessageId.get(item.id) || emptyBrowserChatSteps,
     };
   });
   return (
@@ -5090,6 +5110,18 @@ const BrowserChatExecutedGroup = memo(function BrowserChatExecutedGroup({
       </div>
     </article>
   );
+}, (previous, next) => {
+  if (previous.items.length !== next.items.length) return false;
+  for (const key of Object.keys(next) as Array<keyof BrowserChatExecutedGroupProps>) {
+    if (key === 'items' || key === 'logIndex' || key === 'outputCyclesByMessageId'
+      || key === 'subagentsByMessageId' || key === 'stepsByMessageId') continue;
+    if (previous[key] !== next[key]) return false;
+  }
+  return previous.items.every((item, index) => item === next.items[index]
+    && previous.logIndex.byMessageId.get(item.id) === next.logIndex.byMessageId.get(item.id)
+    && previous.outputCyclesByMessageId.get(item.id) === next.outputCyclesByMessageId.get(item.id)
+    && previous.subagentsByMessageId.get(item.id) === next.subagentsByMessageId.get(item.id)
+    && previous.stepsByMessageId.get(item.id) === next.stepsByMessageId.get(item.id));
 });
 
 const BrowserChatMessageList = memo(function BrowserChatMessageList({
@@ -5169,6 +5201,7 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
   const [screenshotPreview, setScreenshotPreview] = useState<BrowserChatScreenshotPreview | null>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const followLatestRef = useRef(true);
+  const userScrollIntentUntilRef = useRef(0);
   const scrollingToLatestRef = useRef(false);
   const scrollToLatestTimerRef = useRef(0);
   const cancelTurnScrollRef = useRef<(() => void) | null>(null);
@@ -5317,6 +5350,8 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
     frame = requestAnimationFrame(animate);
   }, [getScrollContainer]);
   const firstMessageId = messages[0]?.id || '';
+  const lastMessageId = messages[messages.length - 1]?.id || '';
+  const previousLastMessageIdRef = useRef(lastMessageId);
 
   const addLoadedHistoryHeight = useCallback(() => {
     const pending = pendingHistoryHeightRef.current;
@@ -5404,6 +5439,20 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
     return undefined;
   }, [firstMessageId, getScrollContainer, onInitialPositioned, sessionId, settleHistoryHeight]);
 
+  useLayoutEffect(() => {
+    const previousLastMessageId = previousLastMessageIdRef.current;
+    previousLastMessageIdRef.current = lastMessageId;
+    if (!previousLastMessageId || previousLastMessageId === lastMessageId
+      || !followLatestRef.current || earlierLoadInFlightRef.current) return;
+    const container = getScrollContainer();
+    if (!container) return;
+    // Appending the optimistic user/assistant turn can change the preceding
+    // answer's layout. Pin before paint so a content resize cannot be mistaken
+    // for the reader scrolling away from the bottom.
+    container.scrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+    setShowScrollToBottom(false);
+  }, [getScrollContainer, lastMessageId]);
+
   const trackScrollPosition = useCallback(() => {
     const container = getScrollContainer();
     if (!container) return;
@@ -5423,8 +5472,11 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
       setShowScrollToBottom(false);
       return;
     }
-    followLatestRef.current = distanceFromBottom <= 16;
-    setShowScrollToBottom(distanceFromBottom > 72);
+    if (distanceFromBottom <= 16) followLatestRef.current = true;
+    else if (performance.now() <= userScrollIntentUntilRef.current) {
+      followLatestRef.current = false;
+    }
+    setShowScrollToBottom(!followLatestRef.current && distanceFromBottom > 72);
   }, [getScrollContainer]);
 
   const scrollToLatest = useCallback(() => {
@@ -5489,7 +5541,7 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
     const observedChildren = new Set<Element>();
     const scheduleScrollToBottom = () => {
       if (!followLatestRef.current || earlierLoadInFlightRef.current) return;
-      if (frame) cancelAnimationFrame(frame);
+      if (frame) return;
       frame = requestAnimationFrame(() => {
         frame = 0;
         if (!followLatestRef.current || earlierLoadInFlightRef.current) return;
@@ -5513,11 +5565,23 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
     // ResizeObserver owns content-height changes. Watching every text mutation
     // also observes elapsed timers and forces layout even when height is stable.
     const mutationObserver = new MutationObserver(syncObservedChildren);
+    const markUserScrollIntent = () => { userScrollIntentUntilRef.current = performance.now() + 600; };
+    const markPointerDrag = (event: PointerEvent) => { if (event.buttons) markUserScrollIntent(); };
     scrollContainer.addEventListener('scroll', trackScrollPosition, { passive: true });
+    scrollContainer.addEventListener('wheel', markUserScrollIntent, { passive: true });
+    scrollContainer.addEventListener('touchstart', markUserScrollIntent, { passive: true });
+    scrollContainer.addEventListener('pointerdown', markUserScrollIntent, { passive: true });
+    scrollContainer.addEventListener('pointermove', markPointerDrag, { passive: true });
+    scrollContainer.addEventListener('keydown', markUserScrollIntent);
     syncObservedChildren();
     mutationObserver.observe(messageList, { childList: true });
     return () => {
       scrollContainer.removeEventListener('scroll', trackScrollPosition);
+      scrollContainer.removeEventListener('wheel', markUserScrollIntent);
+      scrollContainer.removeEventListener('touchstart', markUserScrollIntent);
+      scrollContainer.removeEventListener('pointerdown', markUserScrollIntent);
+      scrollContainer.removeEventListener('pointermove', markPointerDrag);
+      scrollContainer.removeEventListener('keydown', markUserScrollIntent);
       mutationObserver.disconnect();
       resizeObserver.disconnect();
       if (frame) cancelAnimationFrame(frame);
@@ -5568,7 +5632,8 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
       }
       const reachedTop = browserChatReachedHistoryTop(previousScrollTop, currentScrollTop);
       previousScrollTop = currentScrollTop;
-      if (!reachedTop || !earlierLoadArmedRef.current) return;
+      if (!reachedTop || !earlierLoadArmedRef.current
+        || performance.now() > userScrollIntentUntilRef.current) return;
       earlierLoadArmedRef.current = false;
       void loadEarlier();
     };
@@ -5613,7 +5678,7 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
               logIndex={logIndex}
               onLoadMessageRecords={onLoadMessageRecords}
               onResolveToolConfirmation={onResolveToolConfirmation}
-              outputCycles={outputCycles}
+              outputCyclesByMessageId={outputCyclesByMessageId}
               onResumeHumanVerification={onResumeHumanVerification}
               onSelectTool={onSelectTool}
               pendingToolConfirmation={pendingToolConfirmation}
@@ -5621,8 +5686,8 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
               resolvingConfirmationId={resolvingConfirmationId}
               resumingHumanVerification={resumingHumanVerification}
               sessionAwaitingHuman={sessionAwaitingHuman}
-              subagents={subagents}
-              stepsByIndex={stepsByIndex}
+              subagentsByMessageId={subagentsByMessageId}
+              stepsByMessageId={stepsByMessageId}
             />
             </BrowserChatHistoryRow>
           );
@@ -10161,10 +10226,6 @@ export function BrowserChatWorkspace({
       </div>
       <div className="browser-chat-conversation-header-actions">
         <BrowserChatRecoveryPanel key={`recovery-${session.id}`} sessionId={session.id} busy={currentBusy} />
-        <BrowserChatPlanPanel key={session.id} sessionId={session.id} busy={currentBusy}
-          onResume={() => { void loadSession(session.id); }}
-          onContinue={() => { void sendMessage('请读取 workflow 的当前状态，继续当前阶段全部可执行待办，不重复已完成操作，不跳过用户确认。'); }}
-          onStart={() => { void sendMessage('请使用 workflow 登记当前任务的完整阶段、全部用例和验收检查，阶段内连续执行，阶段结束后由我在执行计划面板确认。先读取完整需求，不要只登记一部分。'); }} />
         {webPreviewRuntime ? (
           <button
             aria-label={t('打开实时界面')}
@@ -10377,7 +10438,7 @@ export function BrowserChatWorkspace({
           embeddedBrowserActive && embeddedChatCollapsed ? 'embedded-chat-collapsed' : '',
         ].filter(Boolean).join(' ')}
       >
-        <div className="browser-chat-plan-layout"><div className="browser-chat-plan-conversation">
+        <div className="browser-chat-conversation-surface">
         {embeddedBrowserActive ? (
           <div
             className={embeddedChatCollapsed ? 'browser-chat-embedded-workspace chat-collapsed' : 'browser-chat-embedded-workspace'}
@@ -10435,8 +10496,6 @@ export function BrowserChatWorkspace({
             </aside>
           </div>
         ) : renderChatPane()}
-        </div>
-
         </div>
       </main>
 
