@@ -1410,15 +1410,20 @@ export function EnvironmentSettings({
     setDeleteLoginAccountError('');
   }
 
+  async function deleteLoginAccount(account: LoginAccountMetadata) {
+    if (account.userId !== normalizedUserId) throw new Error(t('只读'));
+    const response = await fetch(withWebPilotBasePath(`/api/login-accounts/${encodeURIComponent(account.id)}`), { method: 'DELETE' });
+    await readApiJson(response, t('删除登录账号失败'));
+    setLoginAccounts((current) => current.filter((item) => item.id !== account.id));
+  }
+
   async function confirmDeleteLoginAccount() {
     const account = deleteLoginAccountTarget;
     if (!account) return;
     setDeletingLoginAccountId(account.id);
     setDeleteLoginAccountError('');
     try {
-      const response = await fetch(withWebPilotBasePath(`/api/login-accounts/${encodeURIComponent(account.id)}`), { method: 'DELETE' });
-      await readApiJson(response, t('删除登录账号失败'));
-      setLoginAccounts((current) => current.filter((item) => item.id !== account.id));
+      await deleteLoginAccount(account);
       setDeleteLoginAccountTarget(null);
     } catch (error) {
       setDeleteLoginAccountError(error instanceof Error ? t(error.message) : t('删除登录账号失败'));
@@ -1503,16 +1508,21 @@ export function EnvironmentSettings({
     setDeletePersonalMemoryError('');
   }
 
+  async function deletePersonalMemory(item: PersonalMemoryItem) {
+    if (item.userId !== normalizedUserId) throw new Error(t('只读'));
+    const response = await fetch(personalMemoryItemApiPath(item), { method: 'DELETE' });
+    await readApiJson(response, t('删除个性化记忆失败'));
+    setPersonalMemoryItems((current) => current.filter((entry) => entry.id !== item.id));
+    if (personalMemoryDraft.id === item.id) closePersonalMemoryEditor();
+  }
+
   async function confirmDeletePersonalMemory() {
     const item = deletePersonalMemoryTarget;
     if (!item) return;
     setDeletingPersonalMemoryId(item.id);
     setDeletePersonalMemoryError('');
     try {
-      const response = await fetch(personalMemoryItemApiPath(item), { method: 'DELETE' });
-      await readApiJson(response, t('删除个性化记忆失败'));
-      setPersonalMemoryItems((current) => current.filter((entry) => entry.id !== item.id));
-      if (personalMemoryDraft.id === item.id) closePersonalMemoryEditor();
+      await deletePersonalMemory(item);
       setDeletePersonalMemoryTarget(null);
     } catch (error) {
       setDeletePersonalMemoryError(error instanceof Error ? t(error.message) : t('删除个性化记忆失败'));
@@ -2189,6 +2199,8 @@ export function EnvironmentSettings({
               ...(item.aliases || []),
             ]}
             items={personalMemoryItems}
+            canDeleteItem={(item) => item.userId === normalizedUserId}
+            onDeleteItem={deletePersonalMemory}
             rowClassName={(item) => item.status === 'disabled' ? 'is-disabled' : ''}
             searchPlaceholder={t('筛选记忆')}
             toolbarActions={showSectionTitles ? undefined : memoryActions}
@@ -2334,6 +2346,8 @@ export function EnvironmentSettings({
               account.userId,
             ]}
             items={loginAccounts}
+            canDeleteItem={(account) => account.userId === normalizedUserId}
+            onDeleteItem={deleteLoginAccount}
             rowClassName={(account) => account.status === 'disabled' ? 'is-disabled' : ''}
             searchPlaceholder={t('筛选登录账号')}
             toolbarActions={showSectionTitles ? undefined : accountActions}

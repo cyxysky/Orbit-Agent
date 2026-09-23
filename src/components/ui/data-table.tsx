@@ -101,7 +101,7 @@ export function DataTable<T>({
                 allowsSorting={column.sortable !== false && Boolean(column.accessor)}
                 className={column.className}
                 id={column.id}
-                isRowHeader={index === 0}
+                isRowHeader={index === (columns[0]?.id === '__selection' ? 1 : 0)}
                 key={column.id}
               >
                 {({ sortDirection }) => column.sortable !== false && column.accessor ? (
@@ -112,7 +112,7 @@ export function DataTable<T>({
               </Table.Column>
             ))}
           </Table.Header>
-          <Table.Body items={rows} renderEmptyState={() => (
+          <Table.Body items={rows} dependencies={[columns, rowClassName]} renderEmptyState={() => (
             <EmptyState className="management-table-empty-state">
               <span>{emptyText}</span>
             </EmptyState>

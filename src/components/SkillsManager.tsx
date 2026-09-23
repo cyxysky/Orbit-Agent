@@ -215,18 +215,23 @@ export function SkillsManager({
     }
   }
 
+  async function deleteSkill(target: SkillRecord) {
+    if (target.userId !== normalizedUserId) throw new Error(t('只读'));
+    const response = await fetch(skillsApiUrl(`/api/skills/${encodeURIComponent(target.id)}`), { method: 'DELETE' });
+    await readApiJson<unknown>(response, t('删除 Skill 失败'));
+    setSkills((current) => current.filter((item) => item.id !== target.id));
+    setExpandedSkillIds((current) => current.filter((id) => id !== target.id));
+    if (editingSkillId === target.id) closeEditorModal();
+    onChanged?.();
+  }
+
   async function confirmDeleteSkill() {
     if (!deleteTarget) return;
     const target = deleteTarget;
     setDeletingSkillId(target.id);
     try {
-      const response = await fetch(skillsApiUrl(`/api/skills/${target.id}`), { method: 'DELETE' });
-      await readApiJson<unknown>(response, t('删除 Skill 失败'));
-      setSkills((current) => current.filter((item) => item.id !== target.id));
-      setExpandedSkillIds((current) => current.filter((id) => id !== target.id));
-      if (editingSkillId === target.id) closeEditorModal();
+      await deleteSkill(target);
       setDeleteTarget(null);
-      onChanged?.();
     } catch (error) {
       window.alert(error instanceof Error ? error.message : t('删除 Skill 失败'));
     } finally {
@@ -378,6 +383,8 @@ export function SkillsManager({
                   skill.userId,
                 ]}
                 items={skills}
+                canDeleteItem={(skill) => skill.userId === normalizedUserId}
+                onDeleteItem={deleteSkill}
                 renderExpandedRow={(skill) => expandedSkillIds.includes(skill.id) ? (
                     <div className="skills-manager-item-detail">
                       <div className="skills-manager-item-intro">
