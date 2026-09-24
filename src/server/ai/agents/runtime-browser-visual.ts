@@ -9,7 +9,8 @@ export const browserControlShape = {
 };
 export const visualBrowserInputSchema = z.object({
   ...browserControlShape,
-  action: z.enum(['observe', 'act', 'images', 'navigate', 'tabs', 'waitForHumanVerification', 'requestUserInput']),
+  action: z.enum(['observe', 'act', 'images', 'dismissSurface', 'navigate', 'tabs', 'waitForHumanVerification', 'requestUserInput'])
+    .describe('dismissSurface clicks viewport (0,0) to close an option surface; check closureConfirmed and the latest screenshot before continuing.'),
   reason: z.string().min(1).max(300),
   question: z.string().min(1).max(4000).optional().describe('requestUserInput: a concrete question identifying the material or decision needed to continue the current task.'),
   observationId: z.string().optional(),
@@ -46,7 +47,7 @@ export const visualBrowserInputSchema = z.object({
     }
   }
 });
-export const visualBrowserDescription = 'Pure visual browser. navigate opens an absolute URL in the active tab. tabs lists/opens/selects/closes session tabs through browser controls, without DOM access. observe captures current PNG; act performs one complete page mouse/keyboard gesture, including double/right click, drag and held modifiers, using CURRENT observationId and CSS viewport coordinates. images selects historical comparison images (latest always retained). DOM, AX, JavaScript and locators are unavailable. Old screenshots cannot authorize actions. Call observe after navigation or a stale-action rejection; inspect current state after an uncertain action.';
+export const visualBrowserDescription = 'Pure visual browser. navigate opens an absolute URL in the active tab. tabs lists/opens/selects/closes session tabs through browser controls, without DOM access. observe captures current PNG; act performs one complete page mouse/keyboard gesture, including double/right click, drag and held modifiers, using CURRENT observationId and CSS viewport coordinates. dismissSurface clicks viewport (0,0) to close an option surface and returns closure evidence without an observationId. images selects historical comparison images (latest always retained). DOM, AX, JavaScript and locators are unavailable. Old screenshots cannot authorize actions. Call observe after navigation or a stale-action rejection; inspect current state after an uncertain action.';
 
 export const visualBrowserSkill = {
   id: 'system-browser-visual-runtime', title: 'Visual Browser', required: true,
@@ -59,5 +60,5 @@ type inserts text into the already focused page control; click to focus first. k
 Use observationMode replace for navigation, append for continuous inspection, keep-pair for comparisons. images with imageIds selects comparison evidence; an empty list clears historical selection. Current is always retained. After a failure, inspect the actual new image and put evidence-based diagnosis and a changed recovery action in recoveryReview. Unknown execution is recorded without locking the conversation; inspect current state before deciding how to continue. A completed gesture is not business success. visualChanged:false means no screenshot/route change was observed at capture time; it is not proof of no effect. Do not keep clicking the same coordinates without new evidence. Check focus, loading and the intended gesture (single/double/right click or drag).
 For URL navigation use {action:"navigate",url:"https://example.com/path#route",reason:"..."}. To open a new tab use {action:"tabs",tabOperation:"open",url:"https://example.com",reason:"..."}; omit url for about:blank. Use tabs with tabOperation list to get session tab IDs, then select or close with tabId. These are browser controls and require no screenshot coordinates. After changing page or tab, observe and verify the current screenshot before page interaction. act key goes only to the webpage: it CANNOT focus the browser address bar, open/switch/close tabs, or operate browser chrome. Do not use Control+l/Control+t for navigation. Credentials, OTP and file chooser operations needing user input use waitForHumanVerification. Never fabricate a locator, use DOM/AX, execute JavaScript or route browser page extraction through another tool.
 Historical tool output is archived by ref and read on demand with contextRead. Keep user requirements exact, record unverified task notes separately, and verify visible outcomes before claiming completion.`,
-  activation: [{ toolName: 'browser', actions: ['observe', 'act', 'images', 'navigate', 'tabs', 'waitForHumanVerification', 'requestUserInput'] }],
+  activation: [{ toolName: 'browser', actions: ['observe', 'act', 'images', 'dismissSurface', 'navigate', 'tabs', 'waitForHumanVerification', 'requestUserInput'] }],
 };
