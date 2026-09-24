@@ -12,11 +12,11 @@ export function normalizeDisabledBrowserChatTools(value: unknown): string[] {
 }
 
 /** A blocked report is not a verification request. Any later browser call supersedes the request. */
-export function browserChatHasPendingManualVerification(
+export function browserChatHasPendingHumanInput(
   tools: readonly { name: string; ok?: boolean; input?: unknown }[],
 ) {
   const latest = tools.findLast((tool) => tool.name === 'browser');
   const input = latest?.input;
   return latest?.ok === true && !!input && typeof input === 'object'
-    && 'action' in input && input.action === 'waitForHumanVerification';
+    && 'action' in input && ['waitForHumanVerification', 'requestUserInput'].includes(String(input.action));
 }

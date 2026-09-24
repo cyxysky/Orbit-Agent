@@ -1288,8 +1288,24 @@ export class BrowserSession {
       width, height, path: imagePath, url, capturedAt: new Date().toISOString(), retention: 'replace' };
   }
 
-  async captureBrowserObservation(runId: string, abortSignal?: AbortSignal) {
-    return this.withSessionOperation(signal => this.captureVisualFrame(runId, signal), abortSignal);
+  async captureBrowserObservation(runId: string, abortSignal?: AbortSignal, authorizeCodeCoordinates = false) {
+    return this.withSessionOperation(async (signal) => {
+      const observation = await this.captureVisualFrame(runId, signal);
+      if (!authorizeCodeCoordinates) return observation;
+      this.browserViewportEvidence = undefined;
+      const page = this.activePage;
+      const geometry = await page.evaluate(() => {
+        const win = window as Window & { __aiCoordinateEvidenceDocumentId?: string; __aiDomMutationState?: { epoch?: number } };
+        win.__aiCoordinateEvidenceDocumentId ||= Date.now() + '-' + Math.random();
+        return { documentId: win.__aiCoordinateEvidenceDocumentId, url: location.href,
+          domEpoch: Number(win.__aiDomMutationState?.epoch || 0), width: innerWidth, height: innerHeight,
+          devicePixelRatio, scrollX, scrollY };
+      }).catch(() => undefined);
+      if (geometry && page === this.activePage && geometry.url === observation.url) {
+        this.browserViewportEvidence = { ...geometry, capturedAt: Date.now() };
+      }
+      return { ...observation, actionable: Boolean(this.browserViewportEvidence) };
+    }, abortSignal);
   }
 
   /** Browser chrome operations, independent of DOM and screenshot targeting. */
@@ -4937,16 +4953,17 @@ export class BrowserSession {
       && !inferredActivity.navigationChanged
       && !inferredActivity.tabChanged;
     const resultFailure = execution.ok ? browserCodeReportedFailure(execution.value) : undefined;
-    const reportedFailure = execution.ok
-      ? resultFailure
-        || (noDeclaredActionExecuted ? 'The code declared a browser action, but no browser action was attempted. A conditional target guard may have skipped it. Read the current target and page state before choosing a changed action.' : undefined)
-      : undefined;
+    const reportedFailure = resultFailure;
     const effectiveOk = execution.ok && !reportedFailure;
     const effectiveError = execution.error || reportedFailure;
     const returnedPage = execution.value && typeof execution.value === 'object' && !Array.isArray(execution.value)
       ? execution.value as Record<string, unknown> : undefined;
     const payload = {
       result: execution.value ?? null,
+      ...(noDeclaredActionExecuted ? {
+        actionOutcome: 'skipped',
+        actionNote: 'The code declared a browser action, but no browser action was attempted. A conditional target guard may have skipped it. The returned page data is still valid; inspect the current target before choosing a changed action.',
+      } : {}),
       ...(effectiveError ? { error: effectiveError } : {}),
       ...(execution.diagnostics ? { diagnostics: execution.diagnostics } : {}),
       ...(execution.aborted === true ? { aborted: true } : {}),
@@ -4967,13 +4984,14 @@ export class BrowserSession {
     const result: BrowserActionResult = {
       ok: effectiveOk,
       ...(!effectiveOk ? { failureCategory: resultFailure ? 'browser-result-failed'
-        : noDeclaredActionExecuted ? 'browser-no-action'
         : reportedFailure ? 'browser-result-failed'
         : execution.kernelReset?.reason === 'out-of-memory' ? 'browser-kernel-out-of-memory'
           : `browser-${execution.executionState?.status || 'code-failed'}` } : {}),
       data: payload,
       summary: effectiveOk
-        ? `Browser script returned in ${Date.now() - operation.startedAt}ms; business outcome requires verification from the returned evidence.`
+        ? noDeclaredActionExecuted
+          ? `Browser script returned page data in ${Date.now() - operation.startedAt}ms, but its declared action was skipped; no action completed. Inspect the current target before proceeding.`
+          : `Browser script returned in ${Date.now() - operation.startedAt}ms; business outcome requires verification from the returned evidence.`
         : `Browser script ${reportedFailure ? 'returned a failure' : execution.executionState?.status || 'failed'}; ${execution.executionState?.completedActions.length || 0} action(s) completed. Review data.error, data.diagnostics when available, and the current observation before choosing a changed recovery action.`,
       ...(emittedImagePaths.length ? { referenceImagePath: emittedImagePaths[0], referenceImagePaths: emittedImagePaths } : {}),
     };

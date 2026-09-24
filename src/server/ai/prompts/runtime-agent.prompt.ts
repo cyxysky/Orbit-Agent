@@ -33,7 +33,7 @@ export function buildCodexObjectPrompt(
     allowedTypes.includes('skill') ? '- For skill, set params.action="read" and provide the exact params.skillId from an available <system_skill> or user Skill summary before the governed tool action.' : '',
     browserEnabled ? '- For browser, choose params.action and required fields from the current mode schema; include a concise params.reason. Follow the current browser protocol supplied in context.' : '',
     allowedTypes.includes('finalResponse')
-      ? '- Complete the turn with type="finalResponse" and ordered params.blocks. type="answer" is progress narration only.'
+      ? '- Complete the turn with type="finalResponse", params.completion={complete:true,remainingWork:[]}, and ordered params.blocks only after the active request is fully handled. complete:false cannot end the turn, regardless of status or declared blockers. Continue independent feasible work. type="answer" is progress narration only.'
       : answerAllowed
         ? '- This step may use type="answer" only for non-terminal progress narration.'
         : '- A final answer is unavailable in this step; execute an allowed tool and continue from its result.',

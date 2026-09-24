@@ -366,7 +366,7 @@ type PendingExecution = {
 const maxDiagnosticChars = 4_000;
 const defaultBrowserCodeKernelReadyTimeoutMs = 10_000;
 const defaultBrowserCodeExecutionTimeoutMs = 90_000;
-export const BROWSER_CODE_KERNEL_RUNTIME_REVISION = 48;
+export const BROWSER_CODE_KERNEL_RUNTIME_REVISION = 49;
 
 function boundedInteger(value: unknown, fallback: number, min: number, max: number) {
   const parsed = typeof value === 'number' ? value : Number(value);
@@ -467,7 +467,6 @@ function browserCodeKernelMain() {
   const browserCodePageObservationTimeoutMs = 2_500;
   const browserCodeAxSnapshotTimeoutMs = 6_000;
   const browserCodeSnapshotFallbackTimeoutMs = 1_500;
-  const maxBrowserCodeImages = 4;
   const maxBrowserCodeImageBytes = 8 * 1024 * 1024;
   const maxBrowserCodeImageBytesTotal = 20 * 1024 * 1024;
   const childRequire = eval('require') as typeof require;
@@ -648,9 +647,6 @@ function browserCodeKernelMain() {
     },
     async emitImage(value: unknown, options: { mimeType?: BrowserCodeImage['mimeType'] } = {}) {
       if (!activeExecution) throw new Error('nodeRepl.emitImage() is only available while browserCode is executing.');
-      if (activeExecution.images.length >= maxBrowserCodeImages) {
-        throw new Error(`browserCode can emit at most ${maxBrowserCodeImages} images per cell.`);
-      }
       let mimeType = options.mimeType || 'image/png';
       let buffer: Buffer;
       if (typeof value === 'string') {
@@ -1040,13 +1036,17 @@ function browserCodeKernelMain() {
     page: import('playwright').Page | undefined,
     action: string,
     report = true,
+    retainViewportEvidence = false,
   ) => {
     if (page && activeExecution && !activeExecution.observationsBeforeAction.has(page)) {
       await markPageObserved(page);
     }
     if (page) {
-      // Even a timed-out input can mutate a page. Retire coordinate evidence BEFORE dispatch.
-      for (const [id, evidence] of coordinateClickEvidenceByDocument) if (evidence.page === page) coordinateClickEvidenceByDocument.delete(id);
+      // A viewport image remains usable for repeated coordinate clicks while
+      // the document and viewport geometry still match. Other inputs retire it.
+      if (!retainViewportEvidence) for (const [id, evidence] of coordinateClickEvidenceByDocument) {
+        if (evidence.page === page) coordinateClickEvidenceByDocument.delete(id);
+      }
       for (const [id, evidence] of coordinateRectEvidenceByDocument) if (evidence.some(item => item.page === page)) coordinateRectEvidenceByDocument.delete(id);
       activeExecution?.pendingCoordinateClickEvidence.delete(page);
       activeExecution?.pendingCoordinateRectEvidence.delete(page);
@@ -1625,6 +1625,20 @@ function browserCodeKernelMain() {
     && evidence.scrollY === current.scrollY
   );
 
+  const sameViewportClickState = (
+    evidence: CoordinateClickEvidence,
+    current: CoordinateClickEvidence | undefined,
+  ) => Boolean(
+    current
+    && evidence.url === current.url
+    && evidence.documentId === current.documentId
+    && evidence.width === current.width
+    && evidence.height === current.height
+    && evidence.devicePixelRatio === current.devicePixelRatio
+    && evidence.scrollX === current.scrollX
+    && evidence.scrollY === current.scrollY
+  );
+
   const coordinateEvidenceMaxAgeMs = 5 * 60_000;
 
   const coordinatePointInsideRect = (
@@ -1661,7 +1675,7 @@ function browserCodeKernelMain() {
     if (
       screenshotEvidence
       && Date.now() - screenshotEvidence.capturedAt <= coordinateEvidenceMaxAgeMs
-      && sameCoordinateClickState(screenshotEvidence, current)
+      && sameViewportClickState(screenshotEvidence, current)
     ) {
       return;
     }
@@ -1689,9 +1703,9 @@ function browserCodeKernelMain() {
     }
 
     throw new Error(
-      'Coordinate clicking requires either a fresh emitted viewport screenshot from a previous browserCode cell, '
+      'Coordinate clicking requires either a recent automatic or emitted viewport screenshot visible to the model, '
       + 'or a point inside the current rect returned by boundingBox() for one exact visible actionable Locator. '
-      + 'Screenshot evidence expires after a state-changing input, DOM revision, document, URL, viewport, zoom, scroll change, or five minutes. Reobserve before another coordinate action; semantic locators can be resolved live.',
+      + 'Viewport evidence expires after document, URL, viewport, browser zoom, scroll change, or five minutes. Reobserve before another coordinate action; semantic locators can be resolved live.',
     );
   };
 
@@ -2220,7 +2234,7 @@ function browserCodeKernelMain() {
           value: async (x: number, y: number, options?: { button?: string; clickCount?: number }) => {
             await requireCoordinateClickEvidence(page, x, y);
             await markPageObserved(page);
-            await prepareStateChangingAction(page, 'mouse.click');
+            await prepareStateChangingAction(page, 'mouse.click', true, true);
             const kind = options?.button === 'right' ? 'right' : (options?.clickCount || 1) > 1 ? 'double' : 'click';
             await moveVisibleAiPointer(page, { x, y }, kind);
             const result = await Reflect.apply(nativeClick, page.mouse, [x, y, options]);
@@ -2602,7 +2616,7 @@ function browserCodeKernelMain() {
       'Use browser.tabs.list()/new()/use()/finalize(), browser.user.openTabs()/claimTab(), tab.playwright, tab.cua, page.getByUid(), page.domSnapshot(), page.activeSurface(), page.setTextSelection(), page.expectNavigation(), attachmentVault.setInputFiles(), and nodeRepl.emitImage().',
       'page.domSnapshot() returns page-state plus a read-only Playwright AX tree scoped to the active surface by default; pass { scope: "all" } only for background context. browser.user.openTabs() reports only tabs owned by the current conversation group, with active-tab and tab-group metadata.',
       'Page and Locator factory methods expose only currently rendered matches: CSS-hidden descendants and zero-rectangle nodes are excluded before count() and positional selection. aria-hidden changes accessibility exposure but does not by itself make a geometrically rendered target invisible or unactionable. Element actions then validate target computed style and hit testing, run an action-specific Playwright trial for every remaining pointer candidate, and execute only the unique candidate that passes all stages; CSS-hidden file inputs used by setInputFiles are recovered only at that action boundary.',
-      'Coordinate clicks require either reusable fresh viewport-screenshot evidence from a previous cell or a point inside a rect returned by boundingBox() for one exact visible actionable Locator. Rect-derived clicks work without image input.',
+      'Coordinate clicks use the latest automatic or explicitly emitted viewport screenshot visible to the model, or a point inside a rect returned by boundingBox() for one exact visible actionable Locator. Repeated coordinate clicks may use the same viewport while its document, URL, viewport, zoom, and scroll position remain unchanged. Rect-derived clicks work without image input.',
       'page.verifyState() is not available. After browser actions, inspect the returned result and the host-supplied post-action state and screenshot. Use ordinary Playwright waits or targeted reads in the cell when the next action depends on a specific condition; a completed input alone does not prove a business outcome.',
       'Every session Page exposes setTextSelection(locator, spec). Call it on the Page that owns the locator, including for frame locators, then use that same Page keyboard.insertText()/press() in the same cell. Use browser.tabs.use(tab) or tab.use() when the global page binding should switch tabs.',
       'page.getByUid(uid) synchronously returns a normal Playwright Locator for an exact dom-* UID exposed by the latest DOM evidence. A stale, unexposed, navigated, or detached UID fails with STALE_DOM_EVIDENCE and must be replaced from fresh evidence.',
@@ -2915,7 +2929,7 @@ function browserCodeKernelMain() {
       if (input.viewportEvidence) {
         const current = await captureCoordinateClickState(page);
         const evidence = { ...input.viewportEvidence, page };
-        if (sameCoordinateClickState(evidence, current)
+        if (sameViewportClickState(evidence, current)
           && Date.now() - evidence.capturedAt <= coordinateEvidenceMaxAgeMs) {
           coordinateClickEvidenceByDocument.set(evidence.documentId, evidence);
         }

@@ -3,7 +3,7 @@ import { normalizeDisabledBrowserChatTools } from '@/lib/browser-chat-tools';
 
 // Internal instructions shared with the runtime tool definitions.
 export const runtimeBuiltinToolPrompts = {
-  finalResponse: 'Finish the request with ordered registered response blocks. Every block has type and params, validated by the selected type schema. Copy content[].block from successful capability results. Use core.markdown with params.text for prose and core.ui with params.tree for declarative layouts. The client preserves array order.',
+  finalResponse: 'Finish the active request with ordered registered response blocks. In Browser Chat, include completion: { complete: true, remainingWork: [] } only after the entire active request is handled. A finalResponse with complete=false is rejected for every status, even when blocker strings are supplied; keep working instead of inventing a per-turn budget or asking whether to continue. status=failed is for a completed execution with a failed outcome, not unfinished work. Every block has type and params, validated by the selected type schema. Copy content[].block from successful capability results. Use core.markdown with params.text for prose and core.ui with params.tree for declarative layouts. The client preserves array order.',
   skill: `Read a Skill by exact id. Hidden runtime Skills for this mode are ${hiddenRuntimeSkillIds().join(', ')}. A successful read can be reused while its exact current content remains in the active tool history; reread only when missing, compacted away, or changed.`,
 };
 

@@ -27,6 +27,7 @@ export type BrowserChatUIMessageMetadata = {
   createdAt: string;
   updatedAt?: string;
   status?: 'queued' | 'running' | 'passed' | 'failed' | 'blocked' | 'interrupted';
+  responseDraft?: { id: string; blocks: ResponseBlock[] } | null;
   attachments?: unknown[];
   skillIds?: string[];
 };

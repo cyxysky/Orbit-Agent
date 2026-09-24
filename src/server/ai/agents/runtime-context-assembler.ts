@@ -114,7 +114,7 @@ export function boundToolResult(message: ModelMessage, budget: number): ModelMes
   }) };
 }
 
-export type ContextCompressionProgress = { stage: 'start' | 'batch' | 'complete'; completedMessages: number; totalMessages: number; beforeTokens: number; afterTokens: number };
+export type ContextCompressionProgress = { stage: 'start' | 'batch' | 'complete'; completedMessages: number; totalMessages: number; beforeTokens: number; afterTokens: number; parallelBatchCount?: number };
 
 /** Pure request projection. Storage, retrieval, summarization and checkpointing belong to the runtime. */
 export type RuntimeContextInput = {

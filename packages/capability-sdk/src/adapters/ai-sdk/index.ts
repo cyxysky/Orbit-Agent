@@ -1,4 +1,4 @@
-import { jsonSchema, stepCountIs, tool, type ToolExecutionOptions, type ToolSet } from 'ai';
+import { jsonSchema, tool, type ToolExecutionOptions, type ToolSet } from 'ai';
 import {
   mountCapabilities,
   type CapabilitySkillInstructionMode,
@@ -150,8 +150,6 @@ export function toAISDKToolSet(
 }
 
 export type MountAISDKCapabilitiesOptions = MountCapabilitiesOptions & {
-  /** Maximum model steps for agentOptions; finalResponse also terminates the loop. */
-  maxSteps?: number;
   instructions?: string;
   adapter?: Omit<AISDKCapabilityAdapterOptions, 'skills' | 'responseSession'>;
   skills?: AISDKCapabilitySkillOptions;
@@ -164,7 +162,7 @@ export type MountedAISDKCapabilities = Omit<MountedCapabilities, 'tools'> & {
   agentOptions: {
     tools: ToolSet;
     instructions: string;
-    stopWhen: ReturnType<typeof stepCountIs>[];
+    stopWhen: Array<() => boolean>;
     toolChoice: 'auto';
   };
   snapshot: MountedCapabilities;
@@ -189,6 +187,7 @@ export function createAISDKResponseTool(session: ResponseSession, options: {
       const response = input.parse(value);
       const result = options.onAccept ? await options.onAccept(response, execution)
         : { accepted: true, blockCount: response.blocks.length };
+      if (result && typeof result === 'object' && 'accepted' in result && result.accepted === false) return result;
       session.accept(response);
       return result;
     },
@@ -202,8 +201,6 @@ export async function mountAISDKCapabilities(
   const mounted = await mountCapabilities(options);
   const skills = { ...options.skills, mode: options.skills?.mode || 'lazy' };
   try {
-    const maxSteps = options.maxSteps ?? 20;
-    if (!Number.isSafeInteger(maxSteps) || maxSteps < 1) throw new Error('maxSteps must be a positive integer.');
     const responseSession = new ResponseSession(mounted.responses);
     const tools = toAISDKToolSet(mounted, { ...options.adapter, skills, responseSession });
     const hasResponses = mounted.responses.definitions().length > 0;
@@ -211,7 +208,7 @@ export async function mountAISDKCapabilities(
       if (tools.finalResponse) throw new Error('Capability tool name collides with finalResponse.');
       tools.finalResponse = createAISDKResponseTool(responseSession);
     }
-    const stopWhen = [stepCountIs(maxSteps), ...(hasResponses ? [() => responseSession.accepted] : [])];
+    const stopWhen = hasResponses ? [() => responseSession.accepted] : [];
     const capabilityInstructions = mounted.skillCatalog.instructions(skills.mode, {
       skillToolName: skills.toolName,
     });

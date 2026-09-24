@@ -1,7 +1,11 @@
 import type { CapabilityInputSchema, JsonSchema } from './index.ts';
 
 export type ResponseBlock<T = Record<string, unknown>> = { type: string; params: T };
-export type StructuredResponse = { status: 'passed' | 'failed' | 'blocked'; blocks: ResponseBlock[] };
+export type ResponseCompletion = {
+  complete: boolean;
+  remainingWork: string[];
+};
+export type StructuredResponse = { status: 'passed' | 'failed' | 'blocked'; blocks: ResponseBlock[]; completion?: ResponseCompletion };
 export type ResponseResource = { topic: string; id: string };
 
 /** Pure contracts: safe to import in a browser, with no runtime or React dependency. */
@@ -64,11 +68,25 @@ export class ResponseRegistry {
 
   parseResponse(value: unknown): StructuredResponse {
     const response = object(value);
-    if (Object.keys(response).some(key => key !== 'status' && key !== 'blocks')) throw new Error('Unknown response field.');
+    if (Object.keys(response).some(key => key !== 'status' && key !== 'blocks' && key !== 'completion')) throw new Error('Unknown response field.');
     const status = response.status;
     if (status !== 'passed' && status !== 'failed' && status !== 'blocked') throw new Error('Invalid response status.');
     if (!Array.isArray(response.blocks) || !response.blocks.length || response.blocks.length > 64) throw new Error('Expected 1 to 64 response blocks.');
-    return { status, blocks: response.blocks.map((block, index) => {
+    let completion: ResponseCompletion | undefined;
+    if (response.completion !== undefined) {
+      const declared = object(response.completion);
+      if (Object.keys(declared).some(key => key !== 'complete' && key !== 'remainingWork')) throw new Error('Unknown completion field.');
+      if (typeof declared.complete !== 'boolean') throw new Error('completion.complete must be a boolean.');
+      if (!Array.isArray(declared.remainingWork) || declared.remainingWork.length > 64
+        || declared.remainingWork.some(item => typeof item !== 'string' || !item.trim() || item.length > 500)) {
+        throw new Error('completion.remainingWork must be an array of at most 64 nonempty strings.');
+      }
+      completion = {
+        complete: declared.complete,
+        remainingWork: declared.remainingWork.map(item => (item as string).trim()),
+      };
+    }
+    return { status, ...(completion ? { completion } : {}), blocks: response.blocks.map((block, index) => {
       try { return this.parse(block); }
       catch (error) { throw new Error(`blocks.${index}: ${error instanceof Error ? error.message : String(error)}`); }
     }) };
@@ -99,6 +117,14 @@ export class ResponseRegistry {
       type: 'object', additionalProperties: false, required: ['status', 'blocks'],
       properties: {
         status: { type: 'string', enum: ['passed', 'failed', 'blocked'] },
+        completion: {
+          type: 'object', additionalProperties: false, required: ['complete', 'remainingWork'],
+          description: 'Declare whether the active user request is complete and list any unfinished work. Hosts may require this declaration before accepting a final response.',
+          properties: {
+            complete: { type: 'boolean', description: 'True only after the active user request is fully handled.' },
+            remainingWork: { type: 'array', maxItems: 64, items: { type: 'string', minLength: 1, maxLength: 500 } },
+          },
+        },
         blocks: { type: 'array', minItems: 1, maxItems: 64, items: { anyOf: variants } },
       },
     };
@@ -213,6 +239,7 @@ export class ResponseSession {
     }
     return {
       status: this.#explicit?.status ?? fallback.status ?? 'passed',
+      ...(this.#explicit?.completion ? { completion: this.#explicit.completion } : {}),
       blocks: this.registry.assemble(this.#explicit?.blocks ?? fallback.blocks ?? [], [...this.#generated.values()]),
     };
   }

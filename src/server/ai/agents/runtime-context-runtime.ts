@@ -48,109 +48,161 @@ export async function prepareRuntimeContext(input: RuntimeContextInput & {
   let compactionFailureDetails: Record<string, unknown> | undefined;
   let compactionStopReason: { code: string; message: string } | undefined;
   let attemptedCompaction = false;
+  let lastCompactionError: ContextSummaryError | undefined;
+  const createdHandoffs = new Set<string>();
+  const rejectedBatchKeys = new Set<string>();
   const configuredKeepRecent = Number(process.env.AI_CONTEXT_KEEP_RECENT_BLOCKS);
   const keepRecent = Number.isFinite(configuredKeepRecent) ? Math.max(4, Math.floor(configuredKeepRecent)) : 4;
   const maximumInputTokens = Math.min(64000, Math.floor(input.inputBudgetTokens * 0.6));
-  for (let attempt = 0; packet.manifest.estimatedTokensAfter > (attempt === 0 ? input.compressionTriggerTokens : input.compressionTargetTokens) && attempt < 8; attempt++) {
-    const blocks: ModelMessage[][] = [];
+  while (packet.manifest.estimatedTokensAfter > (compressedMessages ? input.compressionTargetTokens : input.compressionTriggerTokens)) {
+    const blocks: Array<{ messages: ModelMessage[]; start: number; end: number }> = [];
     for (let start = 0; start < active.length;) {
       let end = start + 1;
       if (active[start].role === 'assistant') while (active[end]?.role === 'tool') end++;
-      blocks.push(active.slice(start, end)); start = end;
+      blocks.push({ messages: active.slice(start, end), start, end }); start = end;
     }
-    // Only identical Skill bodies are deduplicated. Version drift must not make
-    // a previously read body eligible for lossy summarization.
-    const latestSkillBlocks = new Map<string, ModelMessage[]>();
-    for (const block of blocks) for (const key of skillBodyKeysForPreservation(block)) latestSkillBlocks.set(key, block);
-    const protectedSkillBlocks = new Set(latestSkillBlocks.values());
-    const source: ModelMessage[] = [];
-    let selectionStop = { code: 'recent-interactions-retained', message: 'Only retained recent interactions remain outside the historical handoff.' };
-    let prefixMessageCount = 0;
-    let sourceMessageCount = 0;
+    // Every loaded Skill receipt remains exact, including older versions.
+    const protectedSkillBlocks = new Set(blocks
+      .filter(block => skillBodyKeysForPreservation(block.messages).size > 0)
+      .map(block => block.messages));
+    type SourceBatch = { start: number; end: number; messages: ModelMessage[]; sourceTokens: number; key: string };
+    const batches: SourceBatch[] = [];
+    let pending: { start: number; end: number; messages: ModelMessage[] } | undefined;
+    const emptyPromptTokens = contextSummaryInputTokens(pinnedUser, []);
+    const flush = () => {
+      if (!pending) return;
+      const sourceTokens = contextSummaryInputTokens(pinnedUser, pending.messages) - emptyPromptTokens;
+      const key = runtimeContextMessageRef({ role: 'user', content: JSON.stringify({
+        source: pending.messages.map(runtimeContextMessageRef), pinnedUser: pinnedUser && runtimeContextMessageRef(pinnedUser), maximumInputTokens,
+      }) });
+      batches.push({ ...pending, sourceTokens, key });
+      pending = undefined;
+    };
+    let oversizedBlocks = 0;
+    let incompleteBlocks = 0;
     for (const block of blocks.slice(0, Math.max(0, blocks.length - keepRecent))) {
-      const calls = block.flatMap(message => message.role === 'assistant' && Array.isArray(message.content) ? message.content.filter(part => part.type === 'tool-call').map(part => part.toolCallId) : []);
-      const results = new Set(block.flatMap(message => Array.isArray(message.content) ? message.content.filter(part => part.type === 'tool-result').map(part => part.toolCallId) : []));
-      if (calls.some(id => !results.has(id))) {
-        selectionStop = { code: 'incomplete-tool-exchange', message: 'The next historical interaction has no complete tool results.' };
-        break;
-      }
+      const messages = block.messages;
+      const calls = messages.flatMap(message => message.role === 'assistant' && Array.isArray(message.content) ? message.content.filter(part => part.type === 'tool-call').map(part => part.toolCallId) : []);
+      const results = new Set(messages.flatMap(message => Array.isArray(message.content) ? message.content.filter(part => part.type === 'tool-result').map(part => part.toolCallId) : []));
+      const incomplete = messages[0]?.role === 'tool' || calls.some(id => !results.has(id));
       // A handoff cannot cross an exact user instruction or Skill body. Doing so
       // moves later history ahead of that instruction and changes its meaning.
-      const protectedBlock = block.some(message => isOriginalBrowserChatUserMessage(message)
+      const protectedBlock = messages.some(message => isOriginalBrowserChatUserMessage(message)
         || (pinnedRef && runtimeContextMessageRef(message) === pinnedRef))
-        || protectedSkillBlocks.has(block);
-      const loneHandoff = block.length === 1 && typeof block[0].content === 'string'
-        && block[0].content.startsWith(contextSegmentMarker);
-      if (protectedBlock || (loneHandoff && source.length === 0)) {
-        if (source.length) {
-          selectionStop = { code: 'protected-boundary', message: 'The next exact user instruction or Skill body starts a new historical segment.' };
-          break;
-        }
-        prefixMessageCount += block.length;
+        || protectedSkillBlocks.has(messages)
+        || messages.some(message => createdHandoffs.has(runtimeContextMessageRef(message)));
+      if (incomplete || protectedBlock) {
+        flush();
+        if (incomplete) incompleteBlocks++;
         continue;
       }
-      const historical = block;
-      if (contextSummaryInputTokens(pinnedUser, [...source, ...historical]) > maximumInputTokens) {
-        selectionStop = { code: 'source-input-limit', message: 'The next complete interaction exceeds the summary input capacity.' };
-        break;
+      const proposed = [...(pending?.messages || []), ...messages];
+      if (contextSummaryInputTokens(pinnedUser, proposed) > maximumInputTokens) {
+        flush();
+        if (contextSummaryInputTokens(pinnedUser, messages) > maximumInputTokens) {
+          oversizedBlocks++;
+          continue;
+        }
       }
-      source.push(...historical); sourceMessageCount += block.length;
+      if (!pending) pending = { start: block.start, end: block.end, messages: [...messages] };
+      else { pending.end = block.end; pending.messages.push(...messages); }
     }
-    if (!source.length) {
-      compactionStopReason = prefixMessageCount && selectionStop.code === 'recent-interactions-retained'
-        ? { code: 'protected-content-retained', message: 'Original user instructions, loaded Skills and recent interactions are retained verbatim; no further historical batch is eligible.' }
-        : selectionStop;
-      break;
-    }
-    const prefix = active.slice(0, prefixMessageCount);
-    const retained = active.slice(prefixMessageCount + sourceMessageCount);
-    const replace = (message: ModelMessage) => [...prefix, message, ...retained];
-    const sourceKey = runtimeContextMessageRef({ role: 'user', content: JSON.stringify({
-      source: source.map(runtimeContextMessageRef), pinnedUser: pinnedUser && runtimeContextMessageRef(pinnedUser), maximumInputTokens,
-    }) });
-    const previousFailure = input.failedCompactions?.get(sourceKey);
-    if (previousFailure) {
-      compactionFailure = previousFailure.message;
-      compactionFailureDetails = { ...previousFailure.details, retrySkipped: true, reusedFailure: true,
-        summaryRequestMade: false, reason: 'Same source batch already failed in this turn.' };
-      if (packet.manifest.estimatedTokensAfter > input.inputBudgetTokens) throw previousFailure;
+    flush();
+    // A short isolated exchange can cost more as a handoff once its source
+    // references are included. Prefer substantial batches, including earlier
+    // handoffs, and keep searching after one batch fails validation.
+    const eligible = batches.filter(batch => batch.sourceTokens >= Math.max(600, batch.messages.length * 75));
+    eligible.sort((left, right) => right.sourceTokens - left.sourceTokens || left.start - right.start);
+    const available = eligible.filter(candidate => !rejectedBatchKeys.has(candidate.key) && !input.failedCompactions?.has(candidate.key));
+    const candidates = available.slice(0, 4);
+    if (!candidates.length) {
+      const cachedFailure = eligible.map(candidate => input.failedCompactions?.get(candidate.key)).find(Boolean);
+      if (cachedFailure && !lastCompactionError) {
+        lastCompactionError = cachedFailure;
+        compactionFailure = cachedFailure.message;
+        compactionFailureDetails = { ...cachedFailure.details, retrySkipped: true, reusedFailure: true,
+          summaryRequestMade: false, candidateCount: eligible.length };
+      }
+      compactionStopReason = batches.length === 0
+        ? { code: oversizedBlocks ? 'source-input-limit' : incompleteBlocks ? 'incomplete-tool-exchange' : 'protected-content-retained',
+          message: 'No complete historical batch can be summarized while retaining exact user instructions, Skill bodies and recent interactions.' }
+        : { code: eligible.length ? 'candidate-failures' : 'no-beneficial-batch',
+          message: eligible.length ? 'Every eligible historical batch failed in this turn; their original messages were preserved.'
+            : 'Only short historical batches remain; a handoff would add more context than it removes.' };
       break;
     }
     attemptedCompaction = true;
-    await input.onProgress?.({ stage: 'start', completedMessages: compressedMessages, totalMessages: source.length, beforeTokens, afterTokens: packet.manifest.estimatedTokensAfter }, packet.messages);
-    let candidate: Awaited<ReturnType<typeof summarizeContextBatch>>;
-    try {
-      candidate = await summarizeContextBatch({ currentRequest: pinnedUser, messages: source, maximumInputTokens, generate: input.generateSummary,
-        onRetry: input.onSummaryRetry, abortSignal: input.abortSignal,
-        validate: (message) => {
-          const replacement = replace(message);
-          if (assembleRuntimeContext({ ...input, messages: replacement, pinnedUser, observations }).manifest.estimatedTokensAfter >= packet.manifest.estimatedTokensAfter) {
-            throw new ContextSummaryError('Handoff did not reduce the context window. Summarize more concisely without copying source payloads.');
-          }
-        } });
-    } catch (error) {
-      input.abortSignal?.throwIfAborted();
-      const failure = error instanceof ContextSummaryError ? error : new ContextSummaryError(error instanceof Error ? error.message : String(error), { cause: error });
-      input.failedCompactions?.set(sourceKey, failure);
-      compactionFailure = failure.message;
-      compactionFailureDetails = failure.details;
-      if (packet.manifest.estimatedTokensAfter > input.inputBudgetTokens) throw failure;
-      break;
-    }
+    const waveMessageCount = candidates.reduce((count, candidate) => count + candidate.messages.length, 0);
+    await input.onProgress?.({ stage: 'start', completedMessages: compressedMessages,
+      totalMessages: compressedMessages + waveMessageCount, beforeTokens, afterTokens: packet.manifest.estimatedTokensAfter,
+      parallelBatchCount: candidates.length }, packet.messages);
+    const sourceWindow = active;
+    const sourceWindowTokens = packet.manifest.estimatedTokensAfter;
+    const outcomes = await Promise.all(candidates.map(async (batch) => {
+      try {
+        const candidate = await summarizeContextBatch({ currentRequest: pinnedUser, messages: batch.messages,
+          maximumInputTokens, generate: input.generateSummary, onRetry: input.onSummaryRetry, abortSignal: input.abortSignal,
+          validate: (message) => {
+            const replacement = [...sourceWindow.slice(0, batch.start), message, ...sourceWindow.slice(batch.end)];
+            if (assembleRuntimeContext({ ...input, messages: replacement, pinnedUser, observations }).manifest.estimatedTokensAfter >= sourceWindowTokens) {
+              throw new ContextSummaryError('Handoff did not reduce the context window. Summarize more concisely without copying source payloads.');
+            }
+          } });
+        return { batch, candidate } as const;
+      } catch (error) {
+        return { batch, error } as const;
+      }
+    }));
     input.abortSignal?.throwIfAborted();
-    const replacement = replace(candidate.message);
-    const nextState = { version: 3 as const, epoch: state.epoch + 1, handoffRef: candidate.segment.ref, pinnedUserRef: pinnedUser ? runtimeContextMessageRef(pinnedUser) : undefined };
-    // Commit the complete replacement and audit evidence before publishing it in memory.
-    await input.onCheckpoint?.({ messages: assembleRuntimeContext({ ...input, messages: replacement, pinnedUser, observations }).messages,
-      activeMessages: replacement, continuationSummary: JSON.stringify(nextState), removedIndexes: [],
-      compressedMessages: compressedMessages + source.length, segmentRecords: [...sourceFileReceipts, candidate.message] });
-    active = replacement; state = nextState; compressedMessages += source.length; segmentRecords.push(candidate.message);
-    packet = build();
-    await input.onProgress?.({ stage: 'batch', completedMessages: compressedMessages, totalMessages: compressedMessages, beforeTokens, afterTokens: packet.manifest.estimatedTokensAfter }, packet.messages);
+    let removedBefore = 0;
+    // Model calls above are independent. Checkpoints below stay serial and in
+    // source order so a crash always leaves a valid chronological transcript.
+    for (const outcome of outcomes.sort((left, right) => left.batch.start - right.batch.start)) {
+      if (packet.manifest.estimatedTokensAfter <= input.compressionTargetTokens) break;
+      const { batch } = outcome;
+      if ('error' in outcome) {
+        const error = outcome.error;
+        const failure = error instanceof ContextSummaryError ? error
+          : new ContextSummaryError(error instanceof Error ? error.message : String(error), { cause: error });
+        // A provider error or invalid generated handoff can succeed on a later
+        // step. Only cache a deterministic input-size rejection across steps.
+        if (failure.details?.code === 'input-limit') input.failedCompactions?.set(batch.key, failure);
+        rejectedBatchKeys.add(batch.key);
+        lastCompactionError = failure;
+        compactionFailure = failure.message;
+        compactionFailureDetails = failure.details;
+        continue;
+      }
+      const { candidate } = outcome;
+      const start = batch.start - removedBefore;
+      const end = batch.end - removedBefore;
+      const replacement = [...active.slice(0, start), candidate.message, ...active.slice(end)];
+      const nextPacket = assembleRuntimeContext({ ...input, messages: replacement, pinnedUser, observations });
+      if (nextPacket.manifest.estimatedTokensAfter >= packet.manifest.estimatedTokensAfter) {
+        const failure = new ContextSummaryError('Handoff did not reduce the current context window. Original batch preserved.', {
+          details: { code: 'invalid-handoff', reason: 'parallel-commit' },
+        });
+        rejectedBatchKeys.add(batch.key);
+        lastCompactionError = failure;
+        compactionFailure = failure.message;
+        compactionFailureDetails = failure.details;
+        continue;
+      }
+      const nextState = { version: 3 as const, epoch: state.epoch + 1, handoffRef: candidate.segment.ref,
+        pinnedUserRef: pinnedUser ? runtimeContextMessageRef(pinnedUser) : undefined };
+      // Commit the complete replacement and audit evidence before publishing it in memory.
+      await input.onCheckpoint?.({ messages: nextPacket.messages, activeMessages: replacement,
+        continuationSummary: JSON.stringify(nextState), removedIndexes: [],
+        compressedMessages: compressedMessages + batch.messages.length, segmentRecords: [...sourceFileReceipts, candidate.message] });
+      active = replacement; state = nextState; compressedMessages += batch.messages.length;
+      segmentRecords.push(candidate.message);
+      createdHandoffs.add(runtimeContextMessageRef(candidate.message));
+      removedBefore += batch.messages.length - 1;
+      packet = build();
+      await input.onProgress?.({ stage: 'batch', completedMessages: compressedMessages,
+        totalMessages: compressedMessages, beforeTokens, afterTokens: packet.manifest.estimatedTokensAfter }, packet.messages);
+    }
     if (packet.manifest.estimatedTokensAfter <= input.compressionTargetTokens) break;
-  }
-  if (compressedMessages && !compactionFailure && packet.manifest.estimatedTokensAfter > input.compressionTargetTokens) {
-    compactionStopReason ??= { code: 'batch-limit', message: 'Reached the batch limit; saved handoffs and remaining source messages were preserved.' };
   }
   // Summary generation (including a failed, best-effort attempt) can outlive a
   // screenshot's action window. Refresh after ALL batches, before model dispatch;
@@ -164,8 +216,15 @@ export async function prepareRuntimeContext(input: RuntimeContextInput & {
     if (packet.manifest.estimatedTokensAfter <= input.compressionTargetTokens) compactionStopReason = undefined;
     else compactionStopReason ??= { code: 'refreshed-context', message: 'Refreshed request context remains above the compression target.' };
   }
+  if (packet.manifest.estimatedTokensAfter <= input.compressionTargetTokens) {
+    compactionFailure = undefined;
+    compactionFailureDetails = undefined;
+    compactionStopReason = undefined;
+  }
   if (packet.manifest.estimatedTokensAfter > input.inputBudgetTokens) throw new ContextSummaryError('Context capacity exceeded. Original user instructions, loaded Skills and latest image were preserved; no model request was sent.', {
-    details: { code: 'input-capacity-exceeded', compactionStopReason, estimatedTokens: packet.manifest.estimatedTokensAfter, inputBudgetTokens: input.inputBudgetTokens },
+    details: { code: 'input-capacity-exceeded', compactionStopReason, estimatedTokens: packet.manifest.estimatedTokensAfter,
+      inputBudgetTokens: input.inputBudgetTokens, lastCompactionFailure: lastCompactionError?.message,
+      lastCompactionFailureDetails: lastCompactionError?.details },
   });
   packet.manifest.id = `ctxreq_${randomUUID()}`;
   packet.manifest.createdAt = new Date().toISOString();

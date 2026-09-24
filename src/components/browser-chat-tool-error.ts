@@ -122,6 +122,18 @@ export function browserChatToolOutcomeLabel(value: unknown) {
   return '部分已保存，仍有冲突';
 }
 
+export function browserChatToolActionSkipped(value: unknown) {
+  const result = asRecord(typeof value === 'string' ? parsedJsonValue(value) : value);
+  return asRecord(result?.data)?.actionOutcome === 'skipped' || result?.failureCategory === 'browser-no-action';
+}
+
+export function browserChatSkippedActionLabel(value: unknown) {
+  if (!browserChatToolActionSkipped(value)) return undefined;
+  const result = asRecord(typeof value === 'string' ? parsedJsonValue(value) : value);
+  const data = asRecord(result?.data);
+  return data?.result === null || data?.result === undefined ? '动作未执行' : '已返回数据，未操作';
+}
+
 export function browserChatToolFailureSummary(value: unknown) {
   const failure = officeSourceValidationFailure(value);
   if (!failure) return undefined;

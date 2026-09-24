@@ -4,7 +4,7 @@
 
 登録出力の接続例は [Registered output](AI-SDK.md#registered-output) を参照してください。
 `responses`、`responseSession`、自動 `finalResponse` 登録に対応しています。
-`agentOptions.stopWhen` を保持し、ステップ数は `maxSteps` で指定してください。
+`agentOptions.stopWhen` を保持し、有効な最終応答でループを終了してください。
 
 Capability Provider を AI SDK 7 のツールと Agent 指示に変換します。
 
@@ -214,7 +214,7 @@ process.once('SIGINT', cancel);
 let runtime: Awaited<ReturnType<typeof mountAISDKCapabilities>> | undefined;
 try {
   runtime = await mountAISDKCapabilities({
-    providers, configurations, maxSteps: 10,
+    providers, configurations,
     context: { runId: randomUUID(), abortSignal: abort.signal },
     configStore: new EnvironmentCapabilityConfigStore(process.env),
     skills: { mode: 'eager' },

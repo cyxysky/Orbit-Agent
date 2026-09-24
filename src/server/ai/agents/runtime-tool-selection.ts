@@ -35,7 +35,7 @@ function actionFromInput(input: unknown) {
   return typeof action === 'string' ? action : undefined;
 }
 
-export function isBrowserHumanVerificationCall(toolName: string, toolInput: unknown) {
+export function isBrowserHumanPauseCall(toolName: string, toolInput: unknown) {
   return toolName === browserCapabilityToolNames.browser
-    && actionFromInput(toolInput) === 'waitForHumanVerification';
+    && ['waitForHumanVerification', 'requestUserInput'].includes(actionFromInput(toolInput) || '');
 }

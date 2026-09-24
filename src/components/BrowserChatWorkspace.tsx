@@ -47,7 +47,7 @@ import { Popover } from '@heroui/react/popover';
 import { HoverCard } from '@/components/HoverCard';
 import { BrowserChatToolsHelp } from '@/components/BrowserChatToolsHelp';
 import { BrowserChatReasoning } from '@/components/BrowserChatReasoning';
-import { browserChatHasPendingManualVerification, normalizeDisabledBrowserChatTools } from '@/lib/browser-chat-tools';
+import { browserChatHasPendingHumanInput, normalizeDisabledBrowserChatTools } from '@/lib/browser-chat-tools';
 import { IconAction } from '@/components/ui/icon-action';
 import { CopyTextButton } from '@/components/ui/copy-text-button';
 import { TextArea } from '@heroui/react/textarea';
@@ -183,8 +183,10 @@ import {
 } from '@/components/browser-chat-realtime-model';
 import { parseJsonObjectText, stripAnsiControlCodes } from '@/lib/browser-chat-format';
 import {
+  browserChatToolActionSkipped,
   browserChatToolFailureSummary,
   browserChatToolOutcomeLabel,
+  browserChatSkippedActionLabel,
   browserChatToolValidationSummary,
 } from '@/components/browser-chat-tool-error';
 import {
@@ -239,10 +241,8 @@ import { NumberTicker } from '@/components/ui/number-ticker';
 import { ProgressiveBlur } from '@/components/ui/progressive-blur';
 import { RainbowButton } from '@/components/ui/rainbow-button';
 import {
-  browserChatAiCycleAnchorsText,
   browserChatAssistantMessageHasExecutionMetadata,
   browserChatMessageElapsedMs,
-  browserChatMessageIsTextStreaming,
   normalizeBrowserChatMessageRunStates,
   browserChatTerminalAnswerCycleIndex,
   buildBrowserChatAiCycleRenderEntries,
@@ -289,10 +289,12 @@ import {
 import { modelCapabilities } from '@/lib/model-capabilities';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 import { artifactApiUrl } from '@/lib/artifacts';
-import type {
-  BrowserChatUIMessage,
-  BrowserChatUIMessageMetadata,
-  BrowserChatUIMessagePart,
+import {
+  browserChatFinalBlocksToParts,
+  type BrowserChatFinalBlock,
+  type BrowserChatUIMessage,
+  type BrowserChatUIMessageMetadata,
+  type BrowserChatUIMessagePart,
 } from '@/lib/browser-chat-ui-message';
 import { useTheme } from '@/theme/ThemeProvider';
 import type {
@@ -313,6 +315,7 @@ type BrowserChatMessage = {
   role: 'user' | 'assistant';
   content: string;
   parts?: BrowserChatUIMessagePart[];
+  responseDraft?: { id: string; blocks: BrowserChatFinalBlock[] };
   createdAt: string;
   updatedAt?: string;
   clientMessageId?: string;
@@ -963,6 +966,8 @@ function toolStatusLabel(tool: BrowserChatToolCall) {
   const outcome = browserChatToolOutcomeLabel(rawResult);
   if (outcome) return outcome;
   if (isRecoveredTransientTool(tool)) return '已恢复';
+  const skippedLabel = browserChatSkippedActionLabel(rawResult);
+  if (skippedLabel) return skippedLabel;
   if (tool.ok === true) return '已完成';
   if (tool.ok === false) return '失败';
   return '执行中';
@@ -979,11 +984,12 @@ function browserChatToolPresentation(
   const inferredFailed = !isActive && tool.ok === undefined && step.status === 'failed';
   const rawResult = tool.rawResult ?? tool.error ?? tool.result;
   const skillReadRequired = isRuntimeSkillReadRequired(rawResult);
-  const failed = !skillReadRequired && (Boolean(browserChatToolOutcomeLabel(rawResult))
+  const skipped = browserChatToolActionSkipped(rawResult);
+  const failed = !skipped && !skillReadRequired && (Boolean(browserChatToolOutcomeLabel(rawResult))
     || (tool.ok === false && !isRecoveredTransientTool(tool)) || inferredFailed);
   return {
     isActive,
-    stateClass: failed ? ' is-failed' : isActive ? ' is-running' : '',
+    stateClass: failed ? ' is-failed' : isActive ? ' is-running' : skipped ? ' is-skipped' : '',
     status: tool.ok !== undefined
       ? toolStatusLabel(tool)
       : isActive ? '执行中' : inferredFailed ? '失败' : step.status === 'blocked' ? '已暂停' : '已完成',
@@ -1032,6 +1038,7 @@ function browserChatToolLabel(name: string, input: unknown, t: (value: string) =
     const action = toolInputValue(asRecord(input), ['action']);
     if (action === 'state') return t('读取浏览器状态');
     if (action === 'waitForHumanVerification') return t('等待人工验证');
+    if (action === 'requestUserInput') return t('等待补充资料');
     return t('执行浏览器代码');
   }
   const labels: Record<string, string> = {
@@ -1081,7 +1088,9 @@ function browserChatToolMeta(name: string, input: unknown, t: (value: string, pa
 
   const lower = name.toLowerCase();
   if (name === 'browser') {
-    return record.action === 'waitForHumanVerification'
+    return record.action === 'requestUserInput'
+      ? toolInputValue(record, ['question', 'reason'])
+      : record.action === 'waitForHumanVerification'
       ? toolInputValue(record, ['reason', 'maxMs'])
       : toolInputValue(record, ['reason']) || String(record.action || 'Playwright');
   }
@@ -1123,6 +1132,7 @@ function browserChatToolMeta(name: string, input: unknown, t: (value: string, pa
   if (name === 'memory') return toolInputValue(record, ['action', 'query', 'key', 'id']);
   if (name === 'readSubagent') return toolInputValue(record, ['uuid']);
   if (name === 'waitForHumanVerification') return toolInputValue(record, ['maxMs']);
+  if (name === 'requestUserInput') return toolInputValue(record, ['question']);
   if (name === 'spawnSubagents') return Array.isArray(record.tasks) ? t('{count} 个任务', { count: record.tasks.length }) : '';
   if (lower.includes('fill')) return summarizeToolFields(record.fields, t) || toolInputValue(record, ['text', 'content', 'value']);
   if (lower.includes('click') || lower.includes('hover') || lower.includes('drag')) {
@@ -1911,6 +1921,7 @@ function overlayBrowserChatUIMessages(
       role: 'assistant',
       content: browserChatUIMessageText(uiMessage),
       parts: uiMessage.parts,
+      responseDraft: uiMessage.metadata.responseDraft ?? undefined,
       createdAt: uiMessage.metadata.createdAt,
       updatedAt: uiMessage.metadata.updatedAt,
       clientMessageId,
@@ -3515,7 +3526,7 @@ const BrowserChatStepToolCards = memo(function BrowserChatStepToolCards({
               </div>
             )}
             {pendingManualVerificationToolKey === `${step.index}:${toolIndex}` ? (
-              <BrowserChatManualVerificationCard onResume={!running ? onResumeHumanVerification : undefined} resuming={resumingHumanVerification} />
+              <BrowserChatManualVerificationCard input={tool.input} onResume={!running ? onResumeHumanVerification : undefined} resuming={resumingHumanVerification} />
             ) : null}
             <BrowserChatToolConfirmationActions
               pending={pendingConfirmation}
@@ -3698,7 +3709,7 @@ const BrowserChatAiCycleLine = memo(function BrowserChatAiCycleLine({
                 </div>
               )}
               {pendingManualVerificationToolKey === `${toolDetail.stepIndex}:${toolDetail.toolIndex}` ? (
-                <BrowserChatManualVerificationCard onResume={!running ? onResumeHumanVerification : undefined} resuming={resumingHumanVerification} />
+                <BrowserChatManualVerificationCard input={executedTool.input} onResume={!running ? onResumeHumanVerification : undefined} resuming={resumingHumanVerification} />
               ) : null}
               <BrowserChatToolConfirmationActions
                 pending={pendingConfirmation}
@@ -3792,13 +3803,24 @@ const BrowserChatExecutedCycleGroup = memo(function BrowserChatExecutedCycleGrou
 });
 
 const BrowserChatManualVerificationCard = memo(function BrowserChatManualVerificationCard({
+  input,
   onResume,
   resuming,
 }: {
+  input?: unknown;
   onResume?: () => void | Promise<void>;
   resuming?: boolean;
 }) {
   const { t } = useI18n();
+  const request = input && typeof input === 'object' ? input as { action?: string; question?: string } : undefined;
+  if (request?.action === 'requestUserInput') return (
+    <BrowserChatConfirmationPanel
+      title={t('需要你补充资料')}
+      description={request.question || t('请提供继续当前任务所需的信息或文件。')}
+    >
+      <p>{t('在下方输入回复或添加附件，发送后继续当前任务。')}</p>
+    </BrowserChatConfirmationPanel>
+  );
   return (
     <BrowserChatConfirmationPanel
       title={t('需要人工完成验证')}
@@ -4458,7 +4480,9 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
       ? { ...part, text: t(part.text) }
       : part)
     : message.parts;
-  const textStreaming = browserChatMessageIsTextStreaming(message);
+  const draftResponseParts = useMemo(() => message.responseDraft?.blocks.length
+    ? browserChatFinalBlocksToParts(message.responseDraft.blocks)
+    : [], [message.responseDraft]);
   const normalizedFinalText = useMemo(() => finalText.replace(/\s+/g, ' ').trim(), [finalText]);
   const rawAiOutputCycles = useMemo(() => (
     sortBrowserChatAiOutputCycles(outputCycles.filter((cycle) => !cycle.subagentId))
@@ -4503,9 +4527,6 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
       };
     });
   }, [aiOutputCycles, normalizedFinalText, terminalAnswerCycleIndex]);
-  const finalTextAnchoredToToolCycle = useMemo(() => (
-    aiOutputCycles.some((cycle) => browserChatAiCycleAnchorsText(cycle, finalText))
-  ), [aiOutputCycles, finalText]);
   const pairedAiOutputCycles = useSharedBrowserChatValue(useMemo(() => processAiOutputCycles.flatMap((cycle) => {
     const hasVisibleNarrative = cycle.output.parts.some((part) => {
       if (part.kind === 'text') return Boolean(cycle.output.texts[part.index]?.trim());
@@ -4549,7 +4570,7 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
     return [];
   }), [aiCycleRepresentedToolKeys, timelineSteps]);
   const manualVerificationPaused = Boolean(manualVerificationRequired)
-    && browserChatHasPendingManualVerification(steps.flatMap((step) => step.tools || []));
+    && browserChatHasPendingHumanInput(steps.flatMap((step) => step.tools || []));
   const pendingManualVerificationToolKey = manualVerificationPaused
     ? steps.flatMap((step) => (step.tools || []).map((tool, toolIndex) => ({ tool, key: `${step.index}:${toolIndex}` })))
       .findLast(({ tool }) => tool.name === 'browser')?.key
@@ -4769,9 +4790,15 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
           ) : null}
         </BrowserChatProcessDisclosure>
       ) : null}
-      {/* Keep the answer mounted as the turn finishes so images and charts retain their state. */}
-      {hasFinalResponse && (!running || !finalTextAnchoredToToolCycle) ? (
-        <div className={`browser-chat-answer${textStreaming ? ' is-streaming' : ''}`}>
+      {running && draftResponseParts.length ? (
+        <div className="browser-chat-answer is-streaming is-draft">
+          <div className="browser-chat-answer-draft-label">{t('回复草稿 · 尚未通过完成校验')}</div>
+          <BrowserChatOrderedResponse fallbackText="" parts={draftResponseParts} />
+        </div>
+      ) : null}
+      {/* Show the main answer only after the turn commits its terminal response. */}
+      {hasFinalResponse && !running ? (
+        <div className="browser-chat-answer">
           <BrowserChatOrderedResponse fallbackText={hideManualVerificationStatusText ? '' : displayFinalText} parts={displayResponseParts} />
         </div>
       ) : null}
@@ -8421,7 +8448,7 @@ export function BrowserChatWorkspace({
     status: currentUIMessageStatus,
   } = useChat<BrowserChatUIMessage>({
     chat: currentUIChat,
-    throttle: 100,
+    throttle: 32,
   });
   const currentRequestUIMessages = useSharedBrowserChatValue(receivedRequestUIMessages);
   const sessionUiKey = `${session?.userId || requestUserId}:${session?.id || 'new'}`;
@@ -8606,11 +8633,12 @@ export function BrowserChatWorkspace({
   }, [attachments]);
 
   useEffect(() => {
-    if (!session || selectedSessionRunning || session.pendingToolConfirmation) return undefined;
+    if (!session || selectedSessionRunning || session.turnState === 'awaiting_human' || session.pendingToolConfirmation) return undefined;
     const sessionId = session.id;
     const timer = window.setTimeout(() => {
       setSession((current) => {
-        if (!current || current.id !== sessionId || isBrowserChatSessionRunning(current) || current.pendingToolConfirmation) {
+        if (!current || current.id !== sessionId || isBrowserChatSessionRunning(current)
+          || current.turnState === 'awaiting_human' || current.pendingToolConfirmation) {
           return current;
         }
         if (!current.logs.length && !current.steps.length && !current.outputCycles.length && !current.subagents.length) {
@@ -9354,8 +9382,7 @@ export function BrowserChatWorkspace({
       setPendingMessageSessionId(active.id);
       const optimisticTimestamp = new Date().toISOString();
       const willQueue = isBrowserChatSessionRunning(active)
-        || active.turnState === 'awaiting_human'
-        || active.messages.some((message) => message.status === 'queued');
+        || (active.turnState !== 'awaiting_human' && active.messages.some((message) => message.status === 'queued'));
       const optimisticUserMessage: BrowserChatMessage = {
         id: `${clientMessageId}:user`,
         role: 'user',
@@ -10300,7 +10327,9 @@ export function BrowserChatWorkspace({
     </header>
   ) : null;
 
-  const chatErrorMessage = stripAnsiControlCodes(error || session?.error || '');
+  // Persisted turn failures belong to their message and execution log. Showing
+  // session.error here replays an old result as a fresh toast on every load.
+  const chatErrorMessage = stripAnsiControlCodes(error);
 
   const renderChatPane = () => (
     <div className={`${hasChatContent ? 'browser-chat-chat-pane has-messages' : 'browser-chat-chat-pane'}${embeddedBrowserActive ? ' embedded-chat' : ''}`}>

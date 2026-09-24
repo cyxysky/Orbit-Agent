@@ -6,7 +6,7 @@ import { formatToolPayload } from '@/lib/browser-chat-format';
 import { useI18n } from '@/i18n/I18nProvider';
 import type { StepExecutionResult } from '@/server/ai/schemas/runtime.schema';
 import { AppModal } from '@/components/ui/app-modal';
-import { browserChatToolOutcomeLabel } from '@/components/browser-chat-tool-error';
+import { browserChatSkippedActionLabel, browserChatToolOutcomeLabel } from '@/components/browser-chat-tool-error';
 
 type BrowserChatToolCall = NonNullable<StepExecutionResult['tools']>[number];
 
@@ -19,9 +19,12 @@ export type BrowserChatToolDialogDetail = {
 };
 
 function toolStatusLabel(tool: BrowserChatToolCall, step: StepExecutionResult) {
-  const outcome = browserChatToolOutcomeLabel(tool.rawResult ?? tool.error ?? tool.result);
+  const rawResult = tool.rawResult ?? tool.error ?? tool.result;
+  const outcome = browserChatToolOutcomeLabel(rawResult);
   if (outcome) return outcome;
   if (tool.recovered === true && tool.transient === true) return '已恢复';
+  const skippedLabel = browserChatSkippedActionLabel(rawResult);
+  if (skippedLabel) return skippedLabel;
   if (tool.ok === true) return '已完成';
   if (tool.ok === false) return '失败';
   if (step.status === 'failed') return '失败';
@@ -31,6 +34,7 @@ function toolStatusLabel(tool: BrowserChatToolCall, step: StepExecutionResult) {
 }
 
 function toolStatusTone(status: string) {
+  if (status === '动作未执行' || status === '已返回数据，未操作') return 'warning';
   if (status.includes('校验失败') || status.includes('仍有冲突')) return 'warning';
   if (status === '失败') return 'danger';
   if (status === '已暂停') return 'warning';

@@ -211,7 +211,7 @@ process.once('SIGINT', cancel);
 let runtime: Awaited<ReturnType<typeof mountAISDKCapabilities>> | undefined;
 try {
   runtime = await mountAISDKCapabilities({
-    providers, configurations, maxSteps: 10,
+    providers, configurations,
     context: { runId: randomUUID(), abortSignal: abort.signal },
     configStore: new EnvironmentCapabilityConfigStore(process.env),
     skills: { mode: 'eager' },
@@ -311,7 +311,7 @@ const finalResponse = {
   },
 };
 
-// Stop the framework loop when responses.accepted is true, retaining its step limit.
+// Stop the framework loop when responses.accepted is true.
 // After the loop (and after all streamed tool results have arrived):
 const output = responses.finish();
 // Persist/send output.status and output.blocks via your host's message transport.
@@ -339,8 +339,7 @@ blocked session may finish with zero blocks; the model schema requires 1..64 blo
 
 For AI SDK, `mountAISDKCapabilities({ responses: coreResponses, ... })` performs
 these tool/session bindings automatically. Use its `responseSession.finish(...)`
-after generation, and preserve `agentOptions.stopWhen` (accepted response or
-`maxSteps`, default 20). For an already mounted runtime, pass a fresh session to
+after generation, and preserve `agentOptions.stopWhen` (accepted response). For an already mounted runtime, pass a fresh session to
 `toAISDKToolSet(snapshot, { responseSession })`, add
 `createAISDKResponseTool(responseSession)`, and connect the same stop condition.
 

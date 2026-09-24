@@ -9,8 +9,9 @@ export const browserControlShape = {
 };
 export const visualBrowserInputSchema = z.object({
   ...browserControlShape,
-  action: z.enum(['observe', 'act', 'images', 'navigate', 'tabs', 'waitForHumanVerification']),
+  action: z.enum(['observe', 'act', 'images', 'navigate', 'tabs', 'waitForHumanVerification', 'requestUserInput']),
   reason: z.string().min(1).max(300),
+  question: z.string().min(1).max(4000).optional().describe('requestUserInput: a concrete question identifying the material or decision needed to continue the current task.'),
   observationId: z.string().optional(),
   kind: z.enum(['click', 'hover', 'move', 'drag', 'scroll', 'type', 'key']).optional(),
   x: z.number().finite().nonnegative().optional(), y: z.number().finite().nonnegative().optional(),
@@ -25,6 +26,7 @@ export const visualBrowserInputSchema = z.object({
   imageIds: z.array(z.string()).max(12).optional().describe('Select historical image IDs; latest image always remains selected. Empty resets history.'),
   recoveryReview: z.string().max(6000).optional(), maxMs: z.number().int().positive().optional(),
 }).strict().superRefine((input, ctx) => {
+  if (input.action === 'requestUserInput' && !input.question) ctx.addIssue({ code: 'custom', path: ['question'], message: 'requestUserInput requires question' });
   if (input.action === 'navigate' && !input.url) ctx.addIssue({ code: 'custom', path: ['url'], message: 'navigate requires url' });
   if (input.action === 'tabs') {
     if (!input.tabOperation) ctx.addIssue({ code: 'custom', path: ['tabOperation'], message: 'tabs requires tabOperation' });
@@ -57,5 +59,5 @@ type inserts text into the already focused page control; click to focus first. k
 Use observationMode replace for navigation, append for continuous inspection, keep-pair for comparisons. images with imageIds selects comparison evidence; an empty list clears historical selection. Current is always retained. After a failure, inspect the actual new image and put evidence-based diagnosis and a changed recovery action in recoveryReview. Unknown execution is recorded without locking the conversation; inspect current state before deciding how to continue. A completed gesture is not business success. visualChanged:false means no screenshot/route change was observed at capture time; it is not proof of no effect. Do not keep clicking the same coordinates without new evidence. Check focus, loading and the intended gesture (single/double/right click or drag).
 For URL navigation use {action:"navigate",url:"https://example.com/path#route",reason:"..."}. To open a new tab use {action:"tabs",tabOperation:"open",url:"https://example.com",reason:"..."}; omit url for about:blank. Use tabs with tabOperation list to get session tab IDs, then select or close with tabId. These are browser controls and require no screenshot coordinates. After changing page or tab, observe and verify the current screenshot before page interaction. act key goes only to the webpage: it CANNOT focus the browser address bar, open/switch/close tabs, or operate browser chrome. Do not use Control+l/Control+t for navigation. Credentials, OTP and file chooser operations needing user input use waitForHumanVerification. Never fabricate a locator, use DOM/AX, execute JavaScript or route browser page extraction through another tool.
 Historical tool output is archived by ref and read on demand with contextRead. Keep user requirements exact, record unverified task notes separately, and verify visible outcomes before claiming completion.`,
-  activation: [{ toolName: 'browser', actions: ['observe', 'act', 'images', 'navigate', 'tabs', 'waitForHumanVerification'] }],
+  activation: [{ toolName: 'browser', actions: ['observe', 'act', 'images', 'navigate', 'tabs', 'waitForHumanVerification', 'requestUserInput'] }],
 };

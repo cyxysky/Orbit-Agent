@@ -41,6 +41,7 @@ export async function POST(request: Request, context: BrowserChatSessionRouteCon
             createdAt: message.createdAt,
             updatedAt: message.updatedAt,
             status: message.status,
+            responseDraft: message.responseDraft ?? null,
           };
           const nextMetadataSignature = JSON.stringify(messageMetadata);
           if (!started) {

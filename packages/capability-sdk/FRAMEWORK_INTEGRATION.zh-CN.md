@@ -208,7 +208,7 @@ process.once('SIGINT', cancel);
 let runtime: Awaited<ReturnType<typeof mountAISDKCapabilities>> | undefined;
 try {
   runtime = await mountAISDKCapabilities({
-    providers, configurations, maxSteps: 10,
+    providers, configurations,
     context: { runId: randomUUID(), abortSignal: abort.signal },
     configStore: new EnvironmentCapabilityConfigStore(process.env),
     skills: { mode: 'eager' },
@@ -297,7 +297,7 @@ session.observe(toolName, result);
 // finalResponse 的执行回调；格式无效会抛错，让模型修正：
 session.accept(finalArguments);
 
-// session.accepted 为 true 时结束循环，同时保留框架原有步数限制。
+// session.accepted 为 true 时结束循环。
 // 所有正常终答都必须通过工具 accept；生成/流式消费结束后统一组装：
 const output = session.finish();
 // 通过宿主消息协议保存/发送 output.status 和 output.blocks。
@@ -315,8 +315,7 @@ const output = session.finish();
 
 AI SDK 使用 `mountAISDKCapabilities({ responses: coreResponses, ... })` 时，
 工具收集和 finalResponse 注册自动完成。生成结束后调用返回的
-`responseSession.finish(...)`，并保留 `agentOptions.stopWhen`：有效终答或
-`maxSteps` 步结束，默认 20 步；无效 finalResponse 不会触发终答停止。
+`responseSession.finish(...)`，并保留 `agentOptions.stopWhen`：有效终答会结束循环；无效 finalResponse 不会触发终答停止。
 自行组合底层适配器时，把新 session 传给 `toAISDKToolSet` 的 responseSession，
 并添加 `createAISDKResponseTool(session)` 和相同停止条件。
 

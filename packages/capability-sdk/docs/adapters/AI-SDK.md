@@ -16,7 +16,7 @@ import { mountAISDKCapabilities } from '@cjfclonedeep/capability-sdk/ai-sdk';
 
 // providers, model, prompt and trustedContext are supplied by the consuming host.
 const runtime = await mountAISDKCapabilities({
-  providers, context: trustedContext, responses: coreResponses, maxSteps: 20,
+  providers, context: trustedContext, responses: coreResponses,
 });
 try {
   const agent = new ToolLoopAgent({ model, ...runtime.agentOptions });
@@ -31,7 +31,7 @@ try {
 The adapter collects successful standard tool results and automatically adds
 `finalResponse` when response types exist. That tool's schema and instructions come
 from `runtime.responses`. Its name is reserved in this mode. `agentOptions.stopWhen`
-ends on an accepted response or `maxSteps` (default 20); preserve it when spreading
+ends on an accepted response; preserve it when spreading
 options. Invalid final arguments remain correctable by the model. Streaming hosts
 call `finish` after consuming the stream. On failed/blocked exits pass the matching
 fallback status; an accepted structured response takes precedence over fallback.
@@ -256,7 +256,7 @@ process.once('SIGINT', cancel);
 let runtime: Awaited<ReturnType<typeof mountAISDKCapabilities>> | undefined;
 try {
   runtime = await mountAISDKCapabilities({
-    providers, configurations, maxSteps: 10,
+    providers, configurations,
     context: { runId: randomUUID(), abortSignal: abort.signal },
     configStore: new EnvironmentCapabilityConfigStore(process.env),
     skills: { mode: 'eager' },

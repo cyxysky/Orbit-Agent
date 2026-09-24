@@ -1,6 +1,6 @@
 import { normalizeBrowserChatInteractionMode, type BrowserChatInteractionMode } from '@/lib/browser-chat-interaction-mode';
 import { enqueueMemoryJob, runMemoryJobs } from '../runtime-memory-lifecycle';
-import { browserChatHasPendingManualVerification } from '@/lib/browser-chat-tools';
+import { browserChatHasPendingHumanInput } from '@/lib/browser-chat-tools';
 import { browserChatToolSource } from '@/lib/browser-chat-tool-source';
 import { compareBrowserChatSessionCreation } from '@/lib/browser-chat-session-order';
 import { markdownBlock } from '@cjfclonedeep/capability-sdk/responses';
@@ -49,6 +49,8 @@ import { browserChatSessionTitleParts } from '@/lib/browser-chat-title';
 import {
   browserChatExecutionParts,
   browserChatFinalBlocksToParts,
+  browserChatFinalBlocksToText,
+  browserChatFinalResponseSchema,
   type BrowserChatFinalBlock,
   type BrowserChatUIMessagePart,
 } from '@/lib/browser-chat-ui-message';
@@ -199,6 +201,7 @@ export type BrowserChatMessage = {
   role: 'user' | 'assistant';
   content: string;
   parts?: BrowserChatUIMessagePart[];
+  responseDraft?: { id: string; blocks: BrowserChatFinalBlock[] };
   createdAt: string;
   updatedAt?: string;
   clientMessageId?: string;
@@ -772,8 +775,8 @@ function browserChatProgressPersistDelayMs() {
 }
 
 function browserChatStreamPublishDelayMs() {
-  const raw = Number(process.env.BROWSER_CHAT_STREAM_PUBLISH_DELAY_MS || 100);
-  const normalized = Number.isFinite(raw) ? Math.floor(raw) : 100;
+  const raw = Number(process.env.BROWSER_CHAT_STREAM_PUBLISH_DELAY_MS || 40);
+  const normalized = Number.isFinite(raw) ? Math.floor(raw) : 40;
   return Math.min(Math.max(normalized, 16), 160);
 }
 
@@ -791,7 +794,7 @@ function trimBrowserChatOutputCycles(cycles: readonly BrowserChatAiOutputCycle[]
 
 function compactBrowserChatRuntimeWindow(session: BrowserChatSessionRecord) {
   session.messages = session.messages.slice(-browserChatRuntimeMessageLimit);
-  session.steps = session.steps.slice(-browserChatRuntimeStepLimit);
+  session.steps = session.steps.slice(-browserChatRuntimeRecentStepWindowSize);
   session.logs = trimBrowserChatLogs(session.logs || []).slice(-browserChatRuntimeLogLimit);
   if (!dirtyRecords.has(session.id)) seedPersistenceCursor(session);
 }
@@ -1518,7 +1521,7 @@ function safeJson(value: unknown) {
 type CompletedRunStatus = 'passed' | 'failed' | 'blocked';
 
 function statusFromSteps(steps: StepExecutionResult[]): CompletedRunStatus {
-  if (browserChatHasPendingManualVerification(steps.flatMap((step) => step.tools || []))) return 'blocked';
+  if (browserChatHasPendingHumanInput(steps.flatMap((step) => step.tools || []))) return 'blocked';
   if (steps.some((step) => step.status === 'failed')) return 'failed';
   return 'passed';
 }
@@ -1861,7 +1864,8 @@ type BrowserChatClientSessionSnapshot = BrowserChatSessionSnapshot & {
 
 function clientSnapshot(session: BrowserChatSessionRecord): BrowserChatClientSessionSnapshot {
   const header = sessionSnapshotHeader(session);
-  const activeMessage = activeBrowserChatAssistantMessage(session);
+  const activeMessage = activeBrowserChatAssistantMessage(session)
+    || (session.turnState === 'awaiting_human' ? latestManualVerificationAssistant(session)?.message : undefined);
   const activeStepIndexes = new Set(activeMessage?.stepIndexes || []);
   const latestMessages = session.messages.slice(-BROWSER_CHAT_MESSAGE_PAGE_SIZE);
   const messages = activeMessage && !latestMessages.some((message) => message.id === activeMessage.id)
@@ -1919,6 +1923,21 @@ function browserChatAssistantParts(
     : [...executionParts, ...finalParts];
 }
 
+function browserChatStreamingParts(message: BrowserChatMessage) {
+  // Tool input is still a draft. Only the accepted terminal response may
+  // populate the main answer; narration remains in the execution timeline.
+  return (message.parts || []).filter((part) => part.type === 'dynamic-tool' || part.type === 'data-step');
+}
+
+function browserChatLiveResponseMessage(message: BrowserChatMessage) {
+  if (message.status !== 'running') return message;
+  return {
+    ...message,
+    content: '',
+    parts: [],
+  };
+}
+
 function publishBrowserChatUIStreamUpdate(sessionId: string) {
   const listeners = uiStreamListeners.get(sessionId);
   const session = sessions.get(sessionId);
@@ -1967,7 +1986,7 @@ export function subscribeBrowserChatUIStream(
       : [];
     listener({
       pendingToolConfirmation: currentSession?.pendingToolConfirmation,
-      message,
+      message: message ? browserChatLiveResponseMessage(message) : undefined,
       outputCycles,
       steps: message
         ? (currentSession
@@ -2090,16 +2109,37 @@ function recoveredStatusForStaleAssistantMessage(
   session: Pick<BrowserChatSessionRecord, 'steps'>,
   message: BrowserChatMessage,
 ): BrowserChatMessage['status'] {
+  const acceptedResponse = browserChatAcceptedFinalResponse(session.steps, message);
+  if (acceptedResponse) return acceptedResponse.status;
   const linkedIndexes = new Set(message.stepIndexes || []);
   const linkedSteps = linkedIndexes.size
     ? session.steps.filter((step) => linkedIndexes.has(step.index))
     : [];
   const steps = linkedSteps.length ? linkedSteps : session.steps.slice(-1);
-  if (browserChatHasPendingManualVerification(steps.flatMap((step) => step.tools || []))) return 'blocked';
+  if (browserChatHasPendingHumanInput(steps.flatMap((step) => step.tools || []))) return 'blocked';
   if (steps.some((step) => step.status === 'failed')) return 'failed';
-  if (steps.some((step) => step.status === 'passed')) return 'passed';
   return 'interrupted';
 }
+
+function browserChatAcceptedFinalResponse(steps: StepExecutionResult[], message: BrowserChatMessage) {
+  const linkedIndexes = new Set(message.stepIndexes || []);
+  for (let stepIndex = steps.length - 1; stepIndex >= 0; stepIndex -= 1) {
+    const step = steps[stepIndex];
+    if (!step) continue;
+    if (step.messageId !== message.id && !linkedIndexes.has(step.index)) continue;
+    const tools = step.tools || [];
+    for (let toolIndex = tools.length - 1; toolIndex >= 0; toolIndex -= 1) {
+      const tool = tools[toolIndex];
+      if (!tool) continue;
+      if (tool.name !== 'finalResponse' || tool.ok !== true) continue;
+      const parsed = browserChatFinalResponseSchema.safeParse(tool.input);
+      if (parsed.success) return parsed.data;
+    }
+  }
+  return undefined;
+}
+
+const browserChatUnfinishedReply = '本轮执行未完成，未生成有效终答。已保留执行记录。';
 
 function finalizeIdleRunningAssistantMessages(session: BrowserChatSessionRecord) {
   if (session.busy || session.status === 'running' || activeTurns.has(session.id)) return false;
@@ -2107,11 +2147,19 @@ function finalizeIdleRunningAssistantMessages(session: BrowserChatSessionRecord)
   session.messages = session.messages.map((message) => {
     if (message.role !== 'assistant' || message.status !== 'running') return message;
     changed = true;
-    const updated = {
+    const acceptedResponse = browserChatAcceptedFinalResponse(session.steps, message);
+    const content = acceptedResponse
+      ? browserChatFinalBlocksToText(acceptedResponse.blocks)
+      : browserChatUnfinishedReply;
+    const updated: BrowserChatMessage = {
       ...message,
+      content,
+      responseDraft: undefined,
       status: recoveredStatusForStaleAssistantMessage(session, message),
       activity: undefined,
     };
+    updated.parts = browserChatAssistantParts(session, updated,
+      acceptedResponse?.blocks || [markdownBlock(content)]);
     markMessageDirty(session, updated);
     return updated;
   });
@@ -2170,7 +2218,8 @@ function preserveInterruptedModelContext(
 
 function preserveInterruptedTurn(session: BrowserChatSessionRecord, assistantMessageId: string, timestamp: string) {
   const currentMessage = session.messages.find((message) => message.id === assistantMessageId);
-  const currentContent = currentMessage?.content.trim() || '';
+  const acceptedResponse = currentMessage && browserChatAcceptedFinalResponse(session.steps, currentMessage);
+  const currentContent = acceptedResponse ? browserChatFinalBlocksToText(acceptedResponse.blocks) : '';
   preserveInterruptedModelContext(session, assistantMessageId, currentContent);
   replaceSessionSteps(session, session.steps.map((step) => {
     if (step.status !== 'queued' && step.status !== 'running') return step;
@@ -2191,6 +2240,7 @@ function preserveInterruptedTurn(session: BrowserChatSessionRecord, assistantMes
           ? currentContent
           : `${currentContent}\n\n${browserChatInterruptionNote}`
         : browserChatInterruptedReply,
+      responseDraft: undefined,
       status: 'interrupted',
       activity: undefined,
       updatedAt: timestamp,
@@ -2258,6 +2308,7 @@ function recordFromSnapshot(
       ...rawMessage,
       role: rawMessage.role === 'assistant' ? 'assistant' : 'user',
       content: textFromUnknown(rawMessage.content),
+      responseDraft: rawMessage.status === 'running' ? rawMessage.responseDraft : undefined,
       parts: Array.isArray(rawMessage.parts)
         ? rawMessage.parts
         : textFromUnknown(rawMessage.content).trim()
@@ -2268,18 +2319,45 @@ function recordFromSnapshot(
     };
     const message = recoverAssistantMessageFromLogs(safeMessage, session.logs || [], steps);
     const contentIsTransient = message.role === 'assistant' && isTransientBrowserChatProgress(message.content);
+    const acceptedResponse = message.role === 'assistant' && (message.status === 'running' || contentIsTransient)
+      ? browserChatAcceptedFinalResponse(steps, message)
+      : undefined;
+    const unacceptedRunningResponse = message.role === 'assistant'
+      && message.status === 'running' && !acceptedResponse;
+    const executionParts = message.status === 'running' || contentIsTransient
+      ? (message.parts || []).filter((part) => (
+        part.type === 'dynamic-tool' || part.type === 'data-step'
+      ))
+      : [];
     const stepIndexes = transientStepIndexes.size
       ? (message.stepIndexes || []).filter((stepIndex) => !transientStepIndexes.has(stepIndex))
       : message.stepIndexes;
     if (preserveRecentRunningState && message.status === 'running') {
+      if (unacceptedRunningResponse) return { ...message, content: '', parts: executionParts, stepIndexes };
       return stepIndexes === message.stepIndexes ? message : { ...message, stepIndexes };
     }
     if (message.status !== 'running' && !contentIsTransient) {
       return stepIndexes === message.stepIndexes ? message : { ...message, stepIndexes };
     }
+    const content = acceptedResponse
+      ? browserChatFinalBlocksToText(acceptedResponse.blocks)
+      : unacceptedRunningResponse
+        ? browserChatUnfinishedReply
+        : contentIsTransient
+          ? '本轮对话在准备页面状态时中断，未执行新的浏览器操作。'
+          : message.content || '上次对话未完成，已恢复为空闲状态。';
+    const finalParts = acceptedResponse
+      ? browserChatFinalBlocksToParts(acceptedResponse.blocks)
+      : unacceptedRunningResponse || contentIsTransient
+        ? browserChatFinalBlocksToParts([markdownBlock(content)])
+        : message.parts || [];
     return {
       ...message,
-      content: contentIsTransient ? '本轮对话在准备页面状态时中断，未执行新的浏览器操作。' : message.content || '上次对话未完成，已恢复为空闲状态。',
+      content,
+      responseDraft: undefined,
+      parts: acceptedResponse || unacceptedRunningResponse || contentIsTransient
+        ? [...executionParts, ...finalParts]
+        : finalParts,
       status: message.status === 'running' || contentIsTransient
         ? recoveredStatusForStaleAssistantMessage({ steps } as Pick<BrowserChatSessionRecord, 'steps'>, message)
         : message.status,
@@ -2399,7 +2477,9 @@ async function readSessionSnapshot(sessionId: string) {
 }
 
 const browserChatRuntimeMessageLimit = 96;
-const browserChatRuntimeStepLimit = 128;
+// Only the in-memory/readback window is bounded; model execution has no step-count cap.
+// Older steps remain in persisted history and the model transcript is managed separately.
+const browserChatRuntimeRecentStepWindowSize = 128;
 const browserChatRuntimeLogLimit = 256;
 
 async function readRuntimeSessionSnapshot(sessionId: string) {
@@ -2411,7 +2491,7 @@ async function readRuntimeSessionSnapshot(sessionId: string) {
   >(sessionId, {
     logLimit: browserChatRuntimeLogLimit,
     messageLimit: browserChatRuntimeMessageLimit,
-    stepLimit: browserChatRuntimeStepLimit,
+    stepLimit: browserChatRuntimeRecentStepWindowSize,
   });
   if (!isBrowserChatSessionSnapshot(item)) return undefined;
   const { history: _history, ...snapshot } = item;
@@ -2543,7 +2623,7 @@ async function publishBrowserChatTextStreamSnapshot(sessionId: string, assistant
       pendingToolConfirmation: header.pendingToolConfirmation ?? null,
     },
     messages: [{
-      ...message,
+      ...browserChatLiveResponseMessage(message),
       artifacts: message.artifacts ? [...message.artifacts] : undefined,
       attachments: message.attachments ? [...message.attachments] : undefined,
       stepIndexes: message.stepIndexes ? [...message.stepIndexes] : undefined,
@@ -3947,6 +4027,62 @@ export async function sendBrowserChatMessage(
       { code: 'model_image_input_unsupported', status: 400 },
     );
   }
+  const paused = !session.busy && session.turnState === 'awaiting_human'
+    ? latestManualVerificationAssistant(session) : undefined;
+  const pausedStepIndexes = new Set(paused?.message.stepIndexes || []);
+  const pendingBrowserCall = paused && session.steps
+    .filter((step) => pausedStepIndexes.has(step.index))
+    .flatMap((step) => step.tools || [])
+    .findLast((tool) => tool.name === 'browser');
+  const pendingAction = pendingBrowserCall?.input && typeof pendingBrowserCall.input === 'object'
+    && 'action' in pendingBrowserCall.input ? pendingBrowserCall.input.action : undefined;
+  if (paused && ['requestUserInput', 'waitForHumanVerification'].includes(String(pendingAction))
+    && !activeTurns.has(session.id)) {
+    await store.applyRuntimeEnv();
+    session.safetyMode = requestedSafetyMode;
+    session.browserInteractionMode = requestedBrowserInteractionMode;
+    session.disabledTools = requestedDisabledTools;
+    session.modelProvider = requestedModelSettings.provider;
+    session.model = requestedModelSettings.model;
+    const timestamp = nextBrowserChatMessageTimestamp(session);
+    const originalUser = [...session.messages.slice(0, paused.messageIndex)].reverse()
+      .find((message) => message.role === 'user');
+    const userReply: BrowserChatMessage = {
+      id: id('msg'), role: 'user', content: messageText,
+      parts: [{ type: 'text', text: messageText }], attachments,
+      skillIds: selectedSkills.map((skill) => skill.id),
+      createdAt: timestamp, updatedAt: timestamp, clientMessageId: normalizedClientMessageId,
+    };
+    const assistantMessage: BrowserChatMessage = {
+      id: id('msg'), role: 'assistant', content: '', parts: [],
+      createdAt: timestamp, updatedAt: timestamp, clientMessageId: normalizedClientMessageId,
+      status: 'running', stepIndexes: [],
+      activity: { phase: 'chat:user-input:resume', label: '已收到用户回复，正在继续原任务', updatedAt: timestamp },
+    };
+    session.messages.push(userReply, assistantMessage);
+    markMessageDirty(session, userReply);
+    markMessageDirty(session, assistantMessage);
+    const abortController = new AbortController();
+    registerBrowserChatTurn(activeTurns, session.id, {
+      session, assistantMessageId: assistantMessage.id, abortController,
+    });
+    transitionBrowserChatSession(session, {
+      type: 'turnStarted', assistantMessageId: assistantMessage.id, abortController, at: timestamp,
+    });
+    appendLog(session, 'chat:user-input:resume', '用户回复了暂停中的任务，继续当前执行回合', { messageId: assistantMessage.id });
+    persistAndNotify(session.id);
+    const continuation = [
+      originalUser?.content || '',
+      pendingAction === 'requestUserInput'
+        ? '[系统继续] 这是你主动请求的用户补充资料。继续此前尚未完成的同一任务，保留已验证事实与未完成事项；不要把这条回复当成新任务。'
+        : '[系统继续] 用户对你请求的人工验证作了回复。先读取当前浏览器状态核实验证结果，再继续同一任务；不要仅凭回复宣称验证成功。',
+      modelMessageText,
+    ].filter(Boolean).join('\n\n');
+    const fromStepIndex = Math.max(0, ...session.steps.map((step) => step.index)) + 1;
+    void runBrowserChatMessage(session, continuation, continuation, userReply.id,
+      assistantMessage.id, fromStepIndex, abortController, attachments, selectedSkills);
+    return clientSnapshot(session);
+  }
   if (
     session.busy
     || activeTurns.has(session.id)
@@ -4110,7 +4246,7 @@ function latestManualVerificationAssistant(session: BrowserChatSessionRecord) {
     const message = session.messages[index];
     if (message.role !== 'assistant') continue;
     const stepIndexes = new Set(message.stepIndexes || []);
-    const waiting = message.status === 'blocked' && browserChatHasPendingManualVerification(session.steps
+    const waiting = message.status === 'blocked' && browserChatHasPendingHumanInput(session.steps
       .filter((step) => stepIndexes.has(step.index)).flatMap((step) => step.tools || []));
     if (waiting) return { message, messageIndex: index };
     const subagent = [...blockedSubagents.values()].find((item) => (
@@ -4203,14 +4339,17 @@ function updateAssistantMessage(
   const index = session.messages.findIndex((message) => message.id === assistantMessageId);
   if (index < 0) return;
   const updated = updater(session.messages[index]);
+  const settled = updated.status && updated.status !== 'running' && updated.status !== 'queued'
+    ? { ...updated, responseDraft: undefined }
+    : updated;
   const artifacts = mergeBrowserChatArtifactSummaries(
-    updated.artifacts,
+    settled.artifacts,
     browserChatArtifactsFromSteps(session.steps.filter((step) => step.messageId === assistantMessageId)),
   );
   session.messages[index] = {
-    ...updated,
+    ...settled,
     artifacts,
-    updatedAt: updated.updatedAt || now(),
+    updatedAt: settled.updatedAt || now(),
   };
   markMessageDirty(session, session.messages[index]);
 }
@@ -5770,15 +5909,19 @@ async function runBrowserChatMessage(
             streamingReasoningIndex: active ? index : undefined,
           });
           updateAssistantMessage(session, assistantMessageId, message => ({
-            ...message, parts: browserChatAssistantParts(session, message), updatedAt: now(),
+            ...message, parts: browserChatStreamingParts(message), updatedAt: now(),
           }));
           scheduleBrowserChatTextStreamPublish(session.id, assistantMessageId);
           persistAndNotify(session.id, { defer: true, mergePersisted: false });
         },
-        onTextStream: ({ agentStepIndex, blocks, runtimeStepIndex, text: streamedText }) => {
+        onTextStream: ({ agentStepIndex, responseDraft, runtimeStepIndex, text: streamedText }) => {
           if (!isActiveBrowserChatTurn(session, assistantMessageId, abortController)) return;
+          if (!streamedText && responseDraft === undefined) return;
+          if (responseDraft === null && !session.messages.some((message) => (
+            message.id === assistantMessageId && message.responseDraft
+          ))) return;
           const timestamp = now();
-          if (!blocks?.length && streamedText) {
+          if (streamedText) {
             const cycleId = browserChatStreamingOutputCycleId(assistantMessageId, runtimeStepIndex, agentStepIndex);
             const previous = session.outputCycles?.find(cycle => cycle.id === cycleId);
             upsertBrowserChatOutputCycle(session, {
@@ -5792,7 +5935,7 @@ async function runBrowserChatMessage(
           updateAssistantMessage(session, assistantMessageId, (message) => {
             const updated: BrowserChatMessage = {
               ...message,
-              ...(blocks?.length ? { content: streamedText } : {}),
+              ...(responseDraft !== undefined ? { responseDraft: responseDraft || undefined } : {}),
               activity: nextBrowserChatActivity({
                 phase: 'ai:text:streaming', previous: message.activity, timestamp,
                 label: message.activity?.phase === 'ai:runtime:receiving' || message.activity?.phase === 'ai:text:streaming'
@@ -5802,7 +5945,7 @@ async function runBrowserChatMessage(
               status: 'running',
               updatedAt: timestamp,
             };
-            return { ...updated, parts: browserChatAssistantParts(session, updated, blocks) };
+            return { ...updated, parts: browserChatStreamingParts(updated) };
           });
           session.updatedAt = timestamp;
           scheduleBrowserChatTextStreamPublish(session.id, assistantMessageId);
@@ -5871,9 +6014,18 @@ async function runBrowserChatMessage(
             const timestamp = now();
             updateAssistantMessage(session, assistantMessageId, (message) => {
               const latestTool = step.tools?.at(-1);
+              const rejectedFinalResponse = step.tools?.some((tool) => (
+                tool.name === 'finalResponse' && tool.ok === false
+              ));
+              const rejectedDraft = message.responseDraft && step.tools?.some((tool) => (
+                tool.name === 'finalResponse' && tool.ok === false
+                && (tool.id === message.responseDraft?.id || tool === latestTool)
+              ));
               const keepRequestActivity = latestTool?.ok !== undefined && message.activity?.operationId?.startsWith('ai:');
               const updated: BrowserChatMessage = {
                 ...message,
+                ...(rejectedFinalResponse ? { content: '' } : {}),
+                ...(rejectedDraft ? { responseDraft: undefined } : {}),
                 activity: keepRequestActivity ? message.activity : nextBrowserChatActivity({
                   ...runningAssistantActivity(step, timestamp), timestamp, previous: message.activity,
                   operationId: latestTool ? `tool:${latestTool.id || `${step.index}:${step.tools!.length}`}` : undefined,
@@ -5972,6 +6124,7 @@ async function runBrowserChatMessage(
         const updated: BrowserChatMessage = {
           ...message,
           content: result.reply,
+          responseDraft: undefined,
           updatedAt: finishedAt,
           stepIndexes: Array.from(new Set([
             ...(message.stepIndexes || []),
@@ -6003,7 +6156,7 @@ async function runBrowserChatMessage(
         transitionBrowserChatSession(session, {
           type: 'turnFinished',
           at: completedAt,
-          error: result.status === 'failed' ? result.reply || '本轮执行失败。' : undefined,
+          error: result.status === 'failed' ? '本轮执行未完成，详情见对应回复与执行日志。' : undefined,
         });
       }
       replaceSessionLogs(session, [
@@ -6014,9 +6167,9 @@ async function runBrowserChatMessage(
           phase: result.status === 'blocked' ? 'chat:run:blocked'
             : result.status === 'failed' ? 'chat:run:failed' : 'chat:run:done',
           message: result.status === 'blocked'
-            ? '已暂停自动操作，等待用户完成人工验证后继续。'
+            ? '已暂停自动操作，等待用户补充信息或完成人工验证后继续。'
             : result.status === 'failed'
-            ? result.reply || '本轮执行失败，执行记录已保存。'
+            ? '本轮执行未完成，详情见对应回复与执行日志。'
             : shouldCloseCompletedBrowser
             ? '本轮对话操作已完成，最终结果已写入，浏览器已自动关闭。'
             : keepCompletedBrowser
@@ -6071,6 +6224,7 @@ async function runBrowserChatMessage(
         const updated: BrowserChatMessage = {
           ...item,
           content: terminalReply,
+          responseDraft: undefined,
           updatedAt: session.updatedAt,
           status: interrupted ? 'interrupted' : 'failed',
           activity: undefined,

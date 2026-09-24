@@ -6,8 +6,7 @@
 
 ## 注册输出
 
-每轮调用 `mountAISDKCapabilities({ providers, context, responses: coreResponses,
-maxSteps: 20 })`：包的响应定义从 manifest 自动汇总，responses 仅传宿主额外类型，
+每轮调用 `mountAISDKCapabilities({ providers, context, responses: coreResponses })`：包的响应定义从 manifest 自动汇总，responses 仅传宿主额外类型，
 不要重复传入包已经声明的类型。适配器自动收集工具块并注册 finalResponse。
 
 将返回的 agentOptions 展开到 ToolLoopAgent，保留其中 toolChoice（auto）和 stopWhen；有效终答或
@@ -237,7 +236,7 @@ process.once('SIGINT', cancel);
 let runtime: Awaited<ReturnType<typeof mountAISDKCapabilities>> | undefined;
 try {
   runtime = await mountAISDKCapabilities({
-    providers, configurations, maxSteps: 10,
+    providers, configurations,
     context: { runId: randomUUID(), abortSignal: abort.signal },
     configStore: new EnvironmentCapabilityConfigStore(process.env),
     skills: { mode: 'eager' },

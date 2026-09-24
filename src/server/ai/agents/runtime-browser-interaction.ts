@@ -8,9 +8,10 @@ import { executePlaywrightMcpOperation } from './runtime-browser-mcp';
 
 const domShape = {
   ...browserControlShape,
-  action: z.enum(['state', 'snapshot', 'code', 'dismissSurface', 'navigate', 'tabs', 'waitForHumanVerification'])
-    .describe('snapshot reads actionable elements and surfaces; code acts and returns data.postActionState after attempted input (page.verifyState does not exist); dismissSurface always sends a direct mouse click at viewport (0,0), then reports data.closureConfirmed and postActionState. A delivered click is not proof that the popup closed.'),
+  action: z.enum(['state', 'snapshot', 'code', 'dismissSurface', 'navigate', 'tabs', 'waitForHumanVerification', 'requestUserInput'])
+    .describe('snapshot reads actionable elements and surfaces; code acts and returns data.postActionState after attempted input, data.actionOutcome="skipped" when a conditional action did not run, and data.pageErrorIndicators for visible HTTP errors (page.verifyState does not exist); dismissSurface always sends a direct mouse click at viewport (0,0), then reports data.closureConfirmed and postActionState. A delivered click is not proof that the popup closed.'),
   reason: z.string().min(1).max(300),
+  question: z.string().min(1).max(4000).optional().describe('requestUserInput: ask for specific user-owned information or an attachment needed for the current task; the user reply resumes the same task.'),
   code: z.string().min(1).max(40000).optional(),
   scope: z.enum(['active', 'all']).optional(), frame: z.string().max(200).optional(),
   selector: z.string().max(2000).optional(), query: z.string().max(300).optional(), cursor: z.string().max(1000).optional(),
@@ -29,26 +30,38 @@ const domSchema = z.object(domShape).strict().superRefine((value, ctx) => {
   }
 });
 const hybridSchema = z.object({ ...visualBrowserInputSchema.shape, ...domShape,
-  action: z.enum(['state', 'snapshot', 'code', 'dismissSurface', 'observe', 'act', 'images', 'navigate', 'tabs', 'waitForHumanVerification'])
-    .describe('snapshot reads actionable elements and surfaces; code acts and returns data.postActionState after attempted input (page.verifyState does not exist); dismissSurface always sends a direct mouse click at viewport (0,0), then reports data.closureConfirmed and postActionState. A delivered click is not proof that the popup closed.'),
+  action: z.enum(['state', 'snapshot', 'code', 'dismissSurface', 'observe', 'act', 'images', 'navigate', 'tabs', 'waitForHumanVerification', 'requestUserInput'])
+    .describe('snapshot reads actionable elements and surfaces; code acts and returns data.postActionState after attempted input, data.actionOutcome="skipped" when a conditional action did not run, and data.pageErrorIndicators for visible HTTP errors (page.verifyState does not exist); dismissSurface always sends a direct mouse click at viewport (0,0), then reports data.closureConfirmed and postActionState. A delivered click is not proof that the popup closed.'),
 }).strict().superRefine((value, ctx) => {
   try { parseBrowserInteractionInput(value, 'hybrid'); }
   catch (error) { ctx.addIssue({ code: 'custom', message: error instanceof Error ? error.message : 'Invalid browser action' }); }
 });
 const mcpSchema = z.object({
   ...browserControlShape,
-  action: z.enum(['mcp', 'navigate', 'tabs', 'waitForHumanVerification']),
+  action: z.enum(['mcp', 'navigate', 'tabs', 'waitForHumanVerification', 'requestUserInput']),
   reason: z.string().min(1).max(300),
+  question: z.string().min(1).max(4000).optional(),
   tool: z.string().min(1).max(100).optional().describe('Use list to discover tools, then an exact official Playwright MCP browser_* tool name.'),
   arguments: z.record(z.string(), z.unknown()).optional(),
   maxMs: z.number().int().min(1000).max(1800000).optional(),
 }).strict().superRefine((value, ctx) => {
+  if (value.action === 'requestUserInput' && !value.question) ctx.addIssue({ code: 'custom', path: ['question'], message: 'requestUserInput requires question' });
   if (value.action === 'mcp' && !value.tool) ctx.addIssue({ code: 'custom', path: ['tool'], message: 'mcp requires tool' });
   if (value.action === 'navigate' || value.action === 'tabs') {
     const result = visualBrowserInputSchema.safeParse(value);
     if (!result.success) for (const issue of result.error.issues) ctx.addIssue({ code: 'custom', path: issue.path, message: issue.message });
   }
 });
+
+function visiblePageErrorIndicators(state: unknown) {
+  const result = state && typeof state === 'object' ? state as { data?: unknown } : undefined;
+  const data = result?.data && typeof result.data === 'object' ? result.data as { pageState?: unknown } : undefined;
+  if (typeof data?.pageState !== 'string') return [];
+  return data.pageState.split(/\r?\n/)
+    .filter((line) => /\[(?:4|5)\d\d\]|\b(?:HTTP|status)\s*:?\s*[45]\d\d\b/i.test(line))
+    .slice(0, 3)
+    .map((line) => line.trim().slice(0, 400));
+}
 
 export function browserInteractionSchema(mode: BrowserChatInteractionMode) {
   return mode === 'mcp' ? mcpSchema : mode === 'visual' ? visualBrowserInputSchema : mode === 'dom' ? domSchema : hybridSchema;
@@ -60,12 +73,12 @@ export function parseBrowserInteractionInput(value: unknown, mode: BrowserChatIn
   if (mode !== 'visual' && (action === 'state' || action === 'code')) {
     return browserToolInput.parse(domSchema.parse(value));
   }
-  if (mode === 'dom' && !['navigate', 'tabs', 'waitForHumanVerification'].includes(action || '')) throw new Error('DOM mode allows state, snapshot, code, dismissSurface, navigate, tabs and waitForHumanVerification.');
+  if (mode === 'dom' && !['navigate', 'tabs', 'waitForHumanVerification', 'requestUserInput'].includes(action || '')) throw new Error('DOM mode allows state, snapshot, code, dismissSurface, navigate, tabs, waitForHumanVerification and requestUserInput.');
   return visualBrowserInputSchema.parse(value);
 }
 export function browserInteractionInstructions(mode: BrowserChatInteractionMode) {
-  if (mode === 'mcp') return 'Browser interaction mode: PLAYWRIGHT MCP. The browser tool accepts action=mcp, tool=list to discover the official server tools and their schemas, then action=mcp with an exact browser_* tool name and its arguments. Use browser_snapshot to inspect live accessibility state and browser_click/browser_type/browser_fill_form for interaction. Use native action=navigate and action=tabs for URLs and session-owned tabs; MCP tab management is unavailable to the model. The official MCP server attaches to this conversation browser through its automation endpoint; do not use historical tab indexes or element references. browser_run_code_unsafe is unavailable. After each call, read the returned snapshot and the latest screenshot pixels in [Current browser observation] when image input is available. A successful MCP receipt is not proof of the requested page or business outcome. If a target is covered by a picker, use the picker itself or an evidenced dismissal action before clicking behind it. Use action=waitForHumanVerification for secret entry that requires the user.';
-  return 'Use navigate for URL/route navigation and tabs for listing, opening, selecting or closing session tabs. These browser controls are available in every mode. Page keyboard actions cannot control the address bar or browser tabs. ' + (mode === 'visual'
+  if (mode === 'mcp') return 'Browser interaction mode: PLAYWRIGHT MCP. The browser tool accepts action=mcp, tool=list to discover the official server tools and their schemas, then action=mcp with an exact browser_* tool name and its arguments. Use browser_snapshot to inspect live accessibility state and browser_click/browser_type/browser_fill_form for interaction. Use native action=navigate and action=tabs for URLs and session-owned tabs; MCP tab management is unavailable to the model. The official MCP server attaches to this conversation browser through its automation endpoint; do not use historical tab indexes or element references. browser_run_code_unsafe is unavailable. After each call, read the returned snapshot and the latest screenshot pixels in [Current browser observation] when image input is available. A successful MCP receipt is not proof of the requested page or business outcome. If a target is covered by a picker, use the picker itself or an evidenced dismissal action before clicking behind it. Use action=waitForHumanVerification for secret entry that requires the user. Use action=requestUserInput with a concrete question only when user-owned information or an attachment is essential and cannot be obtained from available evidence; the reply resumes the same task.';
+  return 'Use navigate for URL/route navigation and tabs for listing, opening, selecting or closing session tabs. These browser controls are available in every mode. Page keyboard actions cannot control the address bar or browser tabs. Use requestUserInput with a concrete question only when user-owned information or an attachment is essential and independent work is complete. The user may reply in the conversation and the same task resumes; do not report the task complete while waiting. For code calls, data.actionOutcome="skipped" means reads succeeded but a conditional browser action did not run; inspect data.recoveryState and do not claim the action completed. ' + (mode === 'visual'
     ? 'Browser interaction mode: VISUAL. Use observe/act/images with current screenshot evidence. DOM, AX, locators and page scripts are unavailable. Never bypass this mode through other tools or recalled historical instructions.'
     : mode === 'dom'
       ? 'Browser interaction mode: DOM. Use snapshot for actionable semantic controls and the current surface, state for scoped Playwright AX tree, and code for Playwright actions. page.verifyState does not exist. After attempted code input, inspect data.postActionState and the returned result before dependent work; use ordinary Playwright reads inside a cell if a dependent action needs immediate evidence. When image input and automatic capture are available, the next request also includes the latest viewport pixels in [Current browser observation]; inspect them without a separate image-read call. If unavailable, use live DOM without claiming visual inspection. dismissSurface always sends a direct mouse click at viewport (0,0), without Escape or a surface-id prerequisite. Outer ok means the click was delivered, not that the popup closed; inspect data.closureConfirmed, data.outcome, data.postActionState, and the latest screenshot before continuing.'
@@ -78,8 +91,8 @@ export const browserInteractionSkill = {
   ...browserRuntimeSkill,
   id: 'system-browser-interaction-runtime',
   summary: '<system_skill><id>system-browser-interaction-runtime</id><title>Browser</title><description>DOM, visual, hybrid or Playwright MCP browser interaction according to the host-selected mode.</description></system_skill>',
-  content: `The host-selected browser interaction mode overrides mode-specific guidance below. Only use actions in the current tool schema. Historical mode settings do not authorize unavailable actions. In Playwright MCP mode, use the official MCP tool definitions returned by browser action=mcp tool=list, and use native navigate/tabs for session-owned navigation. MCP tool results and the current screenshot are evidence, not business success.\n\nDOM and hybrid code protocol:\n${browserRuntimeSkill.content.replaceAll(browserRuntimeSkill.id, 'system-browser-interaction-runtime')}\n\nVisual protocol (visual mode; also available in hybrid):\n${visualBrowserSkill.content}\n\nIn hybrid mode the visual protocol restrictions on DOM/AX/code apply only to the act action; state and code remain available. In DOM mode use DOM/locators for actions, and inspect the attached latest screenshot as outcome evidence when image input is supported. Receiving an image does not require a separate read tool call; do not ignore its visible state when planning the next dependent action.`,
-  activation: [{ toolName: 'browser', actions: ['state', 'snapshot', 'code', 'dismissSurface', 'observe', 'act', 'images', 'navigate', 'tabs', 'waitForHumanVerification', 'mcp'] }],
+  content: `The host-selected browser interaction mode overrides mode-specific guidance below. Only use actions in the current tool schema. Historical mode settings do not authorize unavailable actions. In Playwright MCP mode, use the official MCP tool definitions returned by browser action=mcp tool=list, and use native navigate/tabs for session-owned navigation. MCP tool results and the current screenshot are evidence, not business success. Use requestUserInput with a concrete question only when essential information or a file must come from the user; their reply resumes the same task.\n\nDOM and hybrid code protocol:\n${browserRuntimeSkill.content.replaceAll(browserRuntimeSkill.id, 'system-browser-interaction-runtime')}\n\nVisual protocol (visual mode; also available in hybrid):\n${visualBrowserSkill.content}\n\nIn hybrid mode the visual protocol restrictions on DOM/AX/code apply only to the act action; state and code remain available. In DOM mode use DOM/locators for actions, and inspect the attached latest screenshot as outcome evidence when image input is supported. Receiving an image does not require a separate read tool call; do not ignore its visible state when planning the next dependent action.`,
+  activation: [{ toolName: 'browser', actions: ['state', 'snapshot', 'code', 'dismissSurface', 'observe', 'act', 'images', 'navigate', 'tabs', 'waitForHumanVerification', 'requestUserInput', 'mcp'] }],
 };
 
 export async function executeBrowserInteraction(session: BrowserSession, raw: unknown, options: {
@@ -91,6 +104,9 @@ export async function executeBrowserInteraction(session: BrowserSession, raw: un
   const mode = normalizeBrowserChatInteractionMode(options.mode);
   const command = parseBrowserInteractionInput(raw, mode);
   const signal = options.abortSignal;
+  if (command.action === 'requestUserInput') return { ok: true,
+    actual: '已暂停当前任务，等待用户通过对话输入文字或附件。收到回复后继续同一任务。',
+    userInput: { requested: true, question: command.question } };
   await options.ensureStarted?.(signal);
   if (command.action === 'mcp') return executePlaywrightMcpOperation(session, { tool: command.tool!, arguments: command.arguments }, {
     runId: options.runId || 'browser', abortSignal: signal,
@@ -136,8 +152,8 @@ export async function executeBrowserInteraction(session: BrowserSession, raw: un
     const result = await session.executeBrowserCode({ ...command, code, imageInputAvailable, ensureStarted: options.ensureStarted,
       attachments: options.attachments, credentials: options.credentials, runId: options.runId || 'browser',
       stepIndex: options.stepIndex || 0, abortSignal: signal });
-    const skippedAction = result.failureCategory === 'browser-no-action';
     const data = result.data && typeof result.data === 'object' ? result.data as Record<string, unknown> : {};
+    const skippedAction = data.actionOutcome === 'skipped';
     const executionState = data.executionState && typeof data.executionState === 'object'
       ? data.executionState as { attemptedActions?: unknown } : undefined;
     const attemptedAction = Array.isArray(executionState?.attemptedActions) && executionState.attemptedActions.length > 0;
@@ -147,7 +163,15 @@ export async function executeBrowserInteraction(session: BrowserSession, raw: un
     const recovery = skippedAction || !attemptedAction;
     const currentState = await session.readBrowserState({ scope: 'active', maxOutputChars: recovery ? 8000 : 4000, abortSignal: signal })
       .catch((error) => ({ ok: false, actual: error instanceof Error ? error.message : String(error) }));
-    return { ...result, data: { ...data, [recovery ? 'recoveryState' : 'postActionState']: currentState } };
+    const pageErrorIndicators = visiblePageErrorIndicators(currentState);
+    return {
+      ...result,
+      data: { ...data, [recovery ? 'recoveryState' : 'postActionState']: currentState,
+        ...(pageErrorIndicators.length ? { pageErrorIndicators } : {}) },
+      ...(pageErrorIndicators.length ? {
+        summary: `${result.summary || 'Browser script returned.'} Visible page error indicator: ${pageErrorIndicators[0]}. Investigate before attributing an empty or unexpected view to business logic.`,
+      } : {}),
+    };
   }
   if (options.imageInputAvailable === false) return { ok: false, actual: 'Visual actions require a model with image input. Use DOM actions in hybrid mode or select an image-capable model.' };
   if (command.action === 'images') return options.selectImages

@@ -5,7 +5,7 @@ import { repeatedBrowserExecutionEvidence } from './runtime-execution-progress';
 import { browserInteractionSchema, browserInteractionInstructions, parseBrowserInteractionInput, executeBrowserInteraction } from './runtime-browser-interaction';
 import { normalizeBrowserChatInteractionMode, type BrowserChatInteractionMode } from '@/lib/browser-chat-interaction-mode';
 import { responseRegistry } from '@/lib/response-registry';
-import { browserChatHasPendingManualVerification } from '@/lib/browser-chat-tools';
+import { browserChatHasPendingHumanInput } from '@/lib/browser-chat-tools';
 import { artifactApiUrl } from '@/lib/artifacts';
 import { browserChatCapabilityResult } from '@/lib/browser-chat-capability-result';
 import { coreResponses, markdownBlock } from '@cjfclonedeep/capability-sdk/responses';
@@ -104,7 +104,7 @@ import {
 } from './runtime-retry-policy';
 
 import {
-  isBrowserHumanVerificationCall,
+  isBrowserHumanPauseCall,
   runtimeAllowedToolTypes,
   runtimeToolLoopStopToolNames,
 } from './runtime-tool-selection';
@@ -157,8 +157,8 @@ export type BrowserChatReadSkill = (skillId: string) => Promise<BrowserActionRes
 
 export type BrowserChatTextStreamUpdate = {
   agentStepIndex: number;
-  blocks?: BrowserChatFinalBlock[];
   delta: string;
+  responseDraft?: { id: string; blocks: BrowserChatFinalBlock[] } | null;
   runtimeStepIndex: number;
   stepNumber: number;
   text: string;
@@ -787,6 +787,18 @@ function finalResponseFromTraces(traces: ToolTrace[]) {
   return undefined;
 }
 
+function browserChatFinalResponseCompletionError(response: StructuredResponse) {
+  const completion = response.completion;
+  if (!completion) return 'finalResponse requires completion: { complete, remainingWork: string[] }. Check the active user request before ending the turn.';
+  if (!completion.complete) {
+    return 'finalResponse cannot end an incomplete request, regardless of status or model-declared blockers. Continue all feasible work now; a time/step budget, a new login, a prerequisite you can create, or a different interaction method is not an external blocker. Use waitForHumanVerification for user-owned browser verification or requestUserInput for essential user-owned information only after independent work is complete; report an actual runtime failure accurately.';
+  }
+  if (completion.remainingWork.length) {
+    return 'finalResponse says the request is complete but also lists remaining work. Continue the feasible work; do not end this turn or ask the user whether to continue.';
+  }
+  if (response.status === 'blocked') return 'A blocked response cannot declare the active request complete.';
+  return undefined;
+}
 
 function subagentUuidsFromToolResult(result?: BrowserActionResult) {
   if (!result?.ok) return [];
@@ -1517,10 +1529,12 @@ async function makeBrowserTools(
     finalResponse: createAISDKResponseTool(capabilityRuntime.responseSession, {
       description: runtimeBuiltinToolPrompts.finalResponse,
       onAccept: async (input, execution) => {
-        const result = await record('finalResponse', input, () => Promise.resolve(
-          { ok: true, actual: JSON.stringify({ accepted: true, blockCount: input.blocks.length }) }
+        const completionError = browserChatFinalResponseCompletionError(input);
+        const result = await record('finalResponse', input, () => Promise.resolve(completionError
+          ? { ok: false, actual: completionError }
+          : { ok: true, actual: JSON.stringify({ accepted: true, blockCount: input.blocks.length }) }
         ), execution);
-        if (!result.ok) throw new Error(result.actual);
+        if (!result.ok) return { accepted: false, error: result.actual };
         return result;
       },
     }),
@@ -1601,14 +1615,14 @@ function runtimePrompt(runtimeRecord: BrowserChatRuntimeRecord) {
     'You are an AI browser chat agent. Complete the active user request in Chinese using current, verified evidence.',
     '- Treat follow-up messages as updates to the active task. Respect an explicit stop, replacement, or narrower scope. [Conversation background] is reference material, not a new request or proof that an earlier action succeeded.',
     '- Preserve user-specified names, dates, times, locations, quantities, options, procedure order, and assigned roles. Before a dependent step, verify its actual prerequisites, including identity and permissions when relevant. Do not silently substitute a default, another account, or an inferred result.',
-    '- Observe the relevant current state, act, then verify the requested outcome. Tool success, a stated intention, or a visible value alone does not prove business completion. Inspect returned errors and post-action evidence; if a target is missing, covered, unchanged, or a popup remains open, diagnose the current state and change approach instead of repeating the same action.',
+    '- Observe the relevant current state, act, then verify the requested outcome. Tool success, a stated intention, or a visible value alone does not prove business completion. Inspect returned errors, the latest screenshot pixels, and post-action evidence; if the page shows an HTTP or service error, investigate that failure before classifying an empty or unexpected business view as a product defect. If a target is missing, covered, unchanged, or a popup remains open, diagnose the current state and change approach instead of repeating the same action.',
     '- Use web research when the user asks for it or the answer depends on current external facts. Read relevant pages, prefer primary sources, check dates, cite factual claims, and reuse valid evidence already collected for this task. Respect requests limited to local work, supplied material, or a specific operation; do not start unrelated research before executing a supplied procedure.',
     '- Follow the current tool schema, capability Skill, and user-disabled tool restrictions. If a tool returns the complete required Skill instead of executing, apply that content and retry the intended operation on the next step; do not read the same Skill again. Use only capabilities that help the request.',
     '- Native tool calling supports multiple tool calls in the same model step; there is no one-tool-per-step limit. Proactively batch independent calls whose inputs are already known, including reading multiple required Skills or downloading multiple known assets. Emit each call separately with its own tool name and schema-valid arguments; do not invent a batch tool or wrap calls in an unsupported array. The runtime schedules execution according to each tool\'s concurrency policy, so submitting a batch does not guarantee simultaneous execution.',
     '- Keep result-dependent calls in later steps: read and inspect a required Skill before invoking its governed capability, inspect a lookup result before using its returned IDs or URLs, and observe a changed page before choosing dependent actions. Batch independent Skill reads together, then use their results in the next step. Call finalResponse only after all required tool results have been received and assessed.',
     '- A server-side browser action or download click does not deliver a file to the user. Deliver only URLs copied exactly from successful artifact or screenshot tool results. Check required output features and visual review coverage before claiming a generated file is complete.',
-    '- Keep progress concise and user-facing. Explain technical details when requested. Continue authorized feasible work until the requested boundary or an evidenced blocker; report any material unfinished result accurately.',
-    '- Complete every turn through finalResponse, including text-only answers and clarifications. Use blocked only after a successful waitForHumanVerification request. Use ordered registered blocks; prose is {type:"core.markdown",params:{text:"..."}} and generated blocks come from successful tool results. Ordinary assistant text is progress, not the final answer.',
+    '- Keep progress concise and user-facing. Explain technical details when requested. Continue authorized feasible work until the requested boundary or an evidenced blocker. Do not invent a per-turn, per-pass, tool-count, or time limit; do not ask whether to continue work the user already requested. A partial report is progress, not permission to stop.',
+    '- Complete every fully handled turn through finalResponse, including text-only answers. It is accepted only with completion.complete=true and completion.remainingWork=[]; status=failed means the requested work was carried out but produced a failed outcome, not that you chose to stop early. completion.complete=false is progress, never a terminal finalResponse, regardless of listed blocker strings. Continue authorized feasible work across model steps and context compression. A new login, a sample you can create, a different browser interaction, elapsed time, or a self-imposed step budget is not permission to stop. For user-owned browser verification, use waitForHumanVerification; for essential user-owned information or an attachment, use requestUserInput with a concrete question. Both pause this same task and may be used only after completing independent work. Prose is {type:"core.markdown",params:{text:"..."}}. Ordinary assistant text is progress, not the final answer.',
     caseSystemPrompt ? `Loaded safety rules and Skills:\n${caseSystemPrompt}` : '',
     customPrompt,
   ].filter(Boolean).join('\n');
@@ -1854,11 +1868,16 @@ function deriveBrowserChatStepDecision(text: string, traces: ToolTrace[]): Runti
   const note = extractProgressNote(text);
   const toolReason = executed.map((trace) => readableActionFromTrace(trace)).find(Boolean);
 
-  if (last && !failed && isBrowserHumanVerificationCall(last.name, last.input)) {
+  if (last && !failed && isBrowserHumanPauseCall(last.name, last.input)) {
+    const request = last.input && typeof last.input === 'object' ? last.input as { action?: string; question?: string } : undefined;
     return {
-      action: readableActionFromTrace(last) || toolReason || 'Wait for human verification',
-      expected: 'The user should complete captcha, login, security verification, or other manual work in the visible browser.',
-      actual: last.result ? browserOperationSummary(last.result) : 'AI requested human intervention before continuing browser-chat work.',
+      action: readableActionFromTrace(last) || toolReason || 'Wait for user input',
+      expected: request?.action === 'requestUserInput'
+        ? request.question || 'The user should provide the requested information or attachment.'
+        : 'The user should complete captcha, login, security verification, or other manual work in the visible browser.',
+      actual: request?.action === 'requestUserInput'
+        ? request.question || 'Waiting for the requested user input.'
+        : last.result ? browserOperationSummary(last.result) : 'AI requested human intervention before continuing browser-chat work.',
       status: 'blocked',
       note,
     };
@@ -2365,7 +2384,8 @@ async function executeRuntimeStep(input: {
           return appendedMessages;
         }
         await input.ensureBrowserStarted?.(abortSignal);
-        const observation = await session.captureBrowserObservation(input.runId, abortSignal);
+        const observation = await session.captureBrowserObservation(input.runId, abortSignal,
+          browserMode === 'dom' || browserMode === 'hybrid');
         if (observation.status !== 'available' || !observation.path) {
           if (browserMode === 'visual') throw new Error('Current browser screenshot is unavailable.');
           appendedMessages.push({ role: 'user', content: '[Browser observation] Screenshot unavailable. Use current DOM via state/code; visual actions require a fresh observation.' });
@@ -2519,7 +2539,11 @@ async function executeRuntimeStep(input: {
             const compressionStats = modelMessagesTextAndImageStats({ system: requestSystemPrompt, messages: compressionMessages }, stepTools);
             if (progress.stage === 'start' && progress.completedMessages === 0) compressionBeforeStats = compressionStats;
             await onAttemptDebug?.({ phase: progress.stage === 'start' ? 'ai:context-compression:start' : 'ai:context-compression:progress', stepIndex,
-              message: progress.stage === 'start' ? '正在压缩较早的对话记录' : `正在压缩上下文：已处理 ${progress.completedMessages}/${progress.totalMessages} 条记录`,
+              message: progress.stage === 'start'
+                ? progress.parallelBatchCount && progress.parallelBatchCount > 1
+                  ? `正在并行压缩 ${progress.parallelBatchCount} 批较早的对话记录`
+                  : '正在压缩较早的对话记录'
+                : `正在压缩上下文：已处理 ${progress.completedMessages}/${progress.totalMessages} 条记录`,
               details: { ...progress, beforeTokens: compressionBeforeStats.estimatedTotalTokens, afterTokens: compressionStats.estimatedTotalTokens,
                 modelContextStats: { ...compressionStats, windowTokens } } });
           },
@@ -2527,7 +2551,8 @@ async function executeRuntimeStep(input: {
         if (rejectedContextTokens !== undefined && assembled.manifest.estimatedTokensAfter >= rejectedContextTokens) {
           throw new ContextSummaryError('Unable to reduce the previously rejected model input. Required context and recent interactions were preserved.', {
             details: { code: 'context-retry-no-progress', rejectedTokens: rejectedContextTokens, estimatedTokens: assembled.manifest.estimatedTokensAfter,
-              stopReason: assembled.manifest.compactionStopReason },
+              stopReason: assembled.manifest.compactionStopReason, compactionFailure: assembled.manifest.compactionFailure,
+              compactionFailureDetails: assembled.manifest.compactionFailureDetails },
           });
         }
       } catch (error) {
@@ -2893,13 +2918,14 @@ async function executeRuntimeStep(input: {
         : hasToolCall<typeof toolsForRequest>(toolName)
     ));
     const stopAfterHumanVerification: StopCondition<typeof toolsForRequest> = ({ steps }) => steps.some((step) => (
-      step.toolCalls.some((call) => isBrowserHumanVerificationCall(call.toolName, call.input))
+      step.toolCalls.some((call) => isBrowserHumanPauseCall(call.toolName, call.input))
     ));
     stopWhen.push(stopAfterHumanVerification);
     try {
       let streamedStepText = '';
       let publishedStepText = '';
-      let publishedFinalBlocksSignature = '';
+      let publishedDraftId = '';
+      let publishedDraftSignature = '';
       const streamedToolInputs = new Map<string, { json: string; toolName: string }>();
       let receivedChunks = 0;
       let lastReceiveProgressAt = 0;
@@ -2939,22 +2965,33 @@ async function executeRuntimeStep(input: {
         });
         ensureActive();
       };
-      const publishFinalBlocks = async (blocks: BrowserChatFinalBlock[], stepNumber: number) => {
-        const signature = JSON.stringify(blocks);
-        if (!blocks.length || signature === publishedFinalBlocksSignature) return;
-        const text = browserChatFinalBlocksToText(blocks);
-        const delta = text.startsWith(publishedStepText)
-          ? text.slice(publishedStepText.length)
-          : text;
-        publishedStepText = text;
-        publishedFinalBlocksSignature = signature;
+      const publishResponseDraft = async (id: string, blocks: BrowserChatFinalBlock[], stepNumber: number) => {
+        if (!blocks.length) return;
+        const signature = `${id}:${JSON.stringify(blocks)}`;
+        if (signature === publishedDraftSignature) return;
+        publishedDraftId = id;
+        publishedDraftSignature = signature;
         await onTextStream?.({
           agentStepIndex: retryAgentStepOffset + stepNumber + 1,
-          blocks,
-          delta,
+          delta: '',
+          responseDraft: { id, blocks },
           runtimeStepIndex: stepIndex,
           stepNumber,
-          text,
+          text: '',
+        });
+        ensureActive();
+      };
+      const clearResponseDraft = async (stepNumber: number) => {
+        if (!publishedDraftId && stepNumber > 0) return;
+        publishedDraftId = '';
+        publishedDraftSignature = '';
+        await onTextStream?.({
+          agentStepIndex: retryAgentStepOffset + stepNumber + 1,
+          delta: '',
+          responseDraft: null,
+          runtimeStepIndex: stepIndex,
+          stepNumber,
+          text: '',
         });
         ensureActive();
       };
@@ -2966,6 +3003,7 @@ async function executeRuntimeStep(input: {
       const prepareAgentStep = async ({ stepNumber, responseMessages }: { stepNumber: number; responseMessages: ModelMessage[] }) => {
         requestWatchdog.touch();
         ensureActive();
+        await clearResponseDraft(stepNumber);
         if (stepNumber > 0) {
           // Advancing the SDK loop proves the preceding request and its tool
           // checkpoint completed. A new request gets the full retry allowance.
@@ -3238,11 +3276,11 @@ async function executeRuntimeStep(input: {
               streamedToolInput.json += chunk.delta;
               if (streamedToolInput.toolName !== 'finalResponse') return;
               const partial = await parsePartialJson(streamedToolInput.json);
-              await publishFinalBlocks(activeResponses.partial(partial.value), toolExecutionGate.stepNumber);
+              await publishResponseDraft(chunk.id, activeResponses.partial(partial.value), toolExecutionGate.stepNumber);
               return;
             }
             if (chunk.type === 'tool-call' && chunk.toolName === 'finalResponse') {
-              await publishFinalBlocks(activeResponses.partial(chunk.input), toolExecutionGate.stepNumber);
+              await publishResponseDraft(chunk.toolCallId, activeResponses.partial(chunk.input), toolExecutionGate.stepNumber);
               return;
             }
             if (chunk.type !== 'text-delta' || !chunk.text) return;
@@ -3946,7 +3984,6 @@ export async function executeInteractiveBrowserTurn(input: {
     }
 
     await persistCompletedToolStep();
-    const lastTool = operationalTraces.at(-1);
     const pendingSubagentUuids = pendingSubagentUuidsFromSteps(newSteps);
     if (pendingSubagentUuids.length) {
       await input.onDebug?.({
@@ -3968,7 +4005,7 @@ export async function executeInteractiveBrowserTurn(input: {
       endedWithFinalAnswer = true;
       break;
     }
-    if (lastTool?.result?.ok === true && isBrowserHumanVerificationCall(lastTool.name, lastTool.input)) {
+    if (browserChatHasPendingHumanInput(newSteps.flatMap((step) => step.tools || []))) {
       finalStatus = 'blocked';
       if (!reply) reply = browserChatReplyFromDecision(decision);
       finalBlocks = [markdownBlock(reply)];
@@ -3981,7 +4018,7 @@ export async function executeInteractiveBrowserTurn(input: {
 
   // A final report or request for more information completes this turn. Only
   // an actual successful browser verification request may suspend execution.
-  if (finalStatus === 'blocked' && !browserChatHasPendingManualVerification(
+  if (finalStatus === 'blocked' && !browserChatHasPendingHumanInput(
     newSteps.flatMap((step) => step.tools || []),
   )) finalStatus = 'passed';
 
@@ -4289,6 +4326,8 @@ async function executeCodexRuntimeObject(input: {
         executed: true,
       };
     }
+    const completionError = browserChatFinalResponseCompletionError(parsed.data);
+    if (completionError) return { text: completionError, executed: true };
     const completedAt = Date.now();
     const trace: ToolTrace = {
       id: input.toolCallId,

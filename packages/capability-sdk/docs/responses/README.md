@@ -89,7 +89,7 @@ registers `finalResponse` when output types exist, and exposes `responseSession`
 After generation (or after consuming a stream), use
 `responseSession.finish()` as the structured message payload. Preserve
 `agentOptions.toolChoice` (auto) and `agentOptions.stopWhen`: it stops after
-an accepted final response or `maxSteps` (default 20). Invalid final arguments do
+an accepted final response. Invalid final arguments do
 not trigger the response stop condition. Mount once per turn, or create a new
 session and tool set per turn when retaining a lower-level capability runtime.
 

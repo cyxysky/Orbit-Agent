@@ -296,7 +296,7 @@ npm install "ai@>=7 <8" @ai-sdk/openai-compatible
 Save as mcp-agent.ts. Set the same model environment variables documented in README, then run `npx tsx mcp-agent.ts "your task"`. Server-side parsing and authorization remain in force. The client forwards server instructions and preserves full MCP results. This text-result example needs an additional native image mapping when the model must inspect screenshots.
 
 ```ts
-import { ToolLoopAgent, stepCountIs, jsonSchema, tool, type ToolSet } from 'ai';
+import { ToolLoopAgent, jsonSchema, tool, type ToolSet } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 const client = new Client({ name: 'my-agent-client', version: '1.0.0' });
@@ -330,7 +330,7 @@ try {
     },
   })]));
   const agent = new ToolLoopAgent({ model: modelProvider.chatModel(modelId),
-    tools: agentTools, instructions, stopWhen: stepCountIs(10) });
+    tools: agentTools, instructions });
   const result = await agent.generate({ prompt: process.argv[2]
     || 'Describe the available tools and their intended usage.' });
   console.log(result.text);

@@ -4360,6 +4360,17 @@ body.is-dragging-embedded-tab .browser-chat-compose--reference .browser-chat-inl
   overflow-wrap: anywhere;
 }
 
+.browser-chat-answer.is-draft {
+  border-left: 2px solid var(--border);
+  padding-left: 12px;
+}
+
+.browser-chat-answer-draft-label {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
 .browser-chat-tool-confirmation {
   overflow: hidden;
 }
