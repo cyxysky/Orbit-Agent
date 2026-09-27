@@ -15,7 +15,7 @@ codeSandbox({ action: "run", reason, language: "javascript" | "python", code, ar
 codeSandbox({ action: "readFile", reason, artifactId, offset?, limit?, encoding?: "utf8" | "base64" })
 
 - Use only these arguments. timeoutMs is an integer from 1000 to 300000; maxOutputChars is an integer from 1000 to 200000. Send JSON numbers, not strings. Both are capped by host settings; a larger request does not override the host ceiling.
-- stdout and stderr share one character budget (default 30000). The host exposes this as Code Sandbox / Output limit (AGENT_CODE_SANDBOX_MAX_OUTPUT_CHARS). Dependencies and execution share the total timeout budget.
+- stdout and stderr share one character budget (default 30000). The host exposes this as Code Sandbox / Output limit (AGENT_CODE_SANDBOX_MAX_OUTPUT_CHARS). Dependency installation uses the host's separate installation timeout; timeoutMs limits code execution after installation.
 
 ## JavaScript module mode and dependencies
 
@@ -23,7 +23,7 @@ codeSandbox({ action: "readFile", reason, artifactId, offset?, limit?, encoding?
 - Example: packages: ["lodash@4.17.21"], code: "import lodash from 'lodash'; console.log(lodash.sum([1, 2, 3]));".
 - For sharp use import sharp from 'sharp'; with an exact sharp version in packages. If a CommonJS-only API needs require, explicitly define it: import { createRequire } from 'node:module'; const require = createRequire(import.meta.url).
 - A 'require is not defined in ES module scope' error means the submitted code used CommonJS syntax in ESM. Fix the import syntax; do not diagnose it as a failed installation.
-- Request a small number of exact-version dependencies: JavaScript uses lodash@4.17.21; Python uses requests==2.32.3. npm lifecycle scripts are disabled. Packages requiring install-time compilation may not work; prefer packages with compatible prebuilt binaries.
+- Request a small number of exact-version dependencies: JavaScript uses lodash@4.17.21; Python uses requests==2.32.3. Never send bare names such as matplotlib or scipy. Check the available Python version before choosing versions; Python installation accepts compatible binary wheels only, so older releases without a wheel for that Python/platform fail rather than compiling from source. npm lifecycle scripts are disabled.
 
 ## Output and deliverables
 

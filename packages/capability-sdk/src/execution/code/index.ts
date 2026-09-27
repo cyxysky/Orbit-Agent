@@ -74,7 +74,8 @@ const runParser = z.object({
   language: z.enum(['javascript', 'python']),
   code: z.string().min(1).max(100_000),
   args: z.array(z.string().max(2_000)).max(32).optional(),
-  packages: z.array(z.string().trim().min(1).max(200)).max(32).optional(),
+  packages: z.array(z.string().trim().min(1).max(200)).max(32).optional()
+    .describe('Exact versions only: Python ["matplotlib==3.10.1"], JavaScript ["lodash@4.17.21"]. Python packages must provide binary wheels for the runner Python version and platform.'),
   outputFiles: z.array(z.string().min(1).max(500)).max(16).optional().describe('Additional relative files to save. Files under outputs/ are saved automatically, separately from stdout.'),
   inputFiles: z.array(z.object({ artifactId: z.string().min(1).max(1000), path: z.string().min(1).max(500) }).strict()).max(16).optional().describe('Mount previously saved sandbox artifacts under inputs/, e.g. {artifactId, path:"inputs/chart.png"}.'),
   timeoutMs: z.number().int().min(1_000).max(300_000).optional(),
@@ -145,7 +146,7 @@ export function createCodeSandboxTool(executor: CodeSandboxExecutor, configurati
           ok: false,
           error: {
             code: 'code-package-spec-invalid',
-            message: `Only exact package versions are allowed. Invalid ${input.language} package spec(s): ${invalidPackages.join(', ')}`,
+            message: `Only exact package versions are allowed. Invalid ${input.language} package spec(s): ${invalidPackages.join(', ')}. Example: ${input.language === 'python' ? 'matplotlib==3.10.1' : 'lodash@4.17.21'}.`,
           },
         };
       }
@@ -156,7 +157,7 @@ export function createCodeSandboxTool(executor: CodeSandboxExecutor, configurati
       if (packages.length && configuration.AGENT_CODE_SANDBOX_ALLOW_PACKAGE_INSTALL !== 'true') {
         return { ok: false, error: { code: 'code-package-install-disabled', message: 'Package installation is disabled by host configuration.' } };
       }
-      const configuredTimeoutMs = normalizeBoundedInteger(configuration.AGENT_CODE_SANDBOX_TIMEOUT_MS, 30_000, 1_000, 300_000);
+      const configuredTimeoutMs = normalizeBoundedInteger(configuration.AGENT_CODE_SANDBOX_TIMEOUT_MS, 300_000, 1_000, 300_000);
       const configuredMaxOutputChars = normalizeBoundedInteger(configuration.AGENT_CODE_SANDBOX_MAX_OUTPUT_CHARS, 30_000, 1_000, 200_000);
       const maxOutputChars = Math.min(input.maxOutputChars ?? configuredMaxOutputChars, configuredMaxOutputChars);
       try {
@@ -169,7 +170,7 @@ export function createCodeSandboxTool(executor: CodeSandboxExecutor, configurati
           artifactInputs: input.inputFiles,
           networkMode: configuration.AGENT_CODE_SANDBOX_NETWORK_MODE === 'none' ? 'none' : 'full',
           timeoutMs: Math.min(input.timeoutMs ?? configuredTimeoutMs, configuredTimeoutMs),
-          installTimeoutMs: normalizeBoundedInteger(configuration.AGENT_CODE_SANDBOX_INSTALL_TIMEOUT_MS, 120_000, 5_000, 300_000),
+          installTimeoutMs: normalizeBoundedInteger(configuration.AGENT_CODE_SANDBOX_INSTALL_TIMEOUT_MS, 600_000, 5_000, 600_000),
           maxOutputChars,
           memoryLimitMb: normalizeBoundedInteger(configuration.AGENT_CODE_SANDBOX_MEMORY_MB, 512, 64, 4096),
           cpuLimit: Math.min(4, Math.max(0.1, Number(configuration.AGENT_CODE_SANDBOX_CPU_LIMIT) || 1)),

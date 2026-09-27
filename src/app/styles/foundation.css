@@ -619,6 +619,59 @@ input[type="checkbox"]:not([data-slot], [data-slot] *):focus-visible {
   line-height: 1.6;
 }
 
+.management-table-empty-state {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  font-size: 13px;
+  justify-content: center;
+  line-height: 1.75;
+  min-height: 280px;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 40px 24px;
+  border: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  border-radius: 20px;
+  background: radial-gradient(ellipse at 50% 20%, color-mix(in srgb, var(--accent) 4%, transparent), transparent 65%), var(--panel);
+  text-align: center;
+  width: 100%;
+}
+
+.management-table-empty-icon {
+  display: grid;
+  place-items: center;
+  width: 58px;
+  height: 58px;
+  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border-radius: 19px;
+  background: color-mix(in srgb, var(--panel) 80%, transparent);
+  color: color-mix(in srgb, var(--accent) 65%, var(--muted));
+  box-shadow: 0 6px 22px -16px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.management-table-empty-copy { max-width: 360px; }
+.management-table-empty-title { margin: 0; color: var(--foreground); font-size: 14px; font-weight: 500; }
+.management-table-empty-description { margin: 7px 0 0; color: var(--muted); font-size: 12px; }
+.management-table-empty-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 8px 14px;
+  border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--accent-strong);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.management-table-empty-button:hover { background: color-mix(in srgb, var(--accent) 6%, var(--panel)); border-color: var(--accent-border); }
+.management-table-empty-button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 4px; }
+
+
 .ui-liquid-glass-loader,
 .ui-liquid-glass-loader.ui-liquid-glass-loader--compact {
   --ui-loading-dot-gap: 4px;

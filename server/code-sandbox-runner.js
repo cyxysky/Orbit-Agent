@@ -10,11 +10,15 @@ const HOST = process.env.CODE_SANDBOX_RUNNER_HOST || '127.0.0.1';
 const PORT = Number(process.env.CODE_SANDBOX_RUNNER_PORT || 18100);
 const TOKEN = String(process.env.CODE_SANDBOX_RUNNER_TOKEN || '').trim();
 const WORKSPACE_ROOT = path.resolve(process.env.CODE_SANDBOX_RUNNER_WORKSPACE || path.join(os.tmpdir(), 'webpilot-code-sandbox'));
+// The Windows development runner reuses wheel downloads across disposable jobs.
+// Container runners do not retain a cross-job pip cache.
+const PIP_CACHE_DIRECTORY = process.platform === 'win32' ? path.join(WORKSPACE_ROOT, 'pip-cache') : '';
 const MAX_BODY_BYTES = 46 * 1024 * 1024;
 const MAX_CODE_CHARS = 100_000;
 const MAX_OUTPUT_CHARS = 200_000;
 const MAX_PACKAGES = 32;
 const MAX_TIMEOUT_MS = 300_000;
+const MAX_INSTALL_TIMEOUT_MS = 600_000;
 const MAX_CONCURRENCY = Math.max(1, Math.min(16, Number(process.env.CODE_SANDBOX_RUNNER_CONCURRENCY || 2)));
 const PYTHON_EXECUTABLE = process.platform === 'win32' ? 'python' : 'python3';
 const PYTHON_BIN_DIRECTORY = process.platform === 'win32' ? 'Scripts' : 'bin';
@@ -76,6 +80,7 @@ function runBoundedProcess(input) {
         shell: input.shell || false,
         stdio: 'pipe',
         detached: true,
+        windowsHide: true,
         ...(process.platform === 'linux' ? { uid: 10001, gid: 10001 } : {}),
       });
     } catch (error) {
@@ -140,6 +145,7 @@ function environment(jobDirectory, pythonPackages) {
     TMP: '/tmp',
     PYTHONNOUSERSITE: '1',
     PYTHONPATH: pythonPackages,
+    ...(PIP_CACHE_DIRECTORY ? { PIP_CACHE_DIR: PIP_CACHE_DIRECTORY } : {}),
     NPM_CONFIG_AUDIT: 'false',
     NPM_CONFIG_FUND: 'false',
   };
@@ -147,6 +153,17 @@ function environment(jobDirectory, pythonPackages) {
 
 function failureText(result) {
   return [result.error, result.stderr && result.stderr.trim(), result.stdout && result.stdout.trim()].filter(Boolean).join('\n').slice(0, 8_000) || 'Process failed.';
+}
+
+function installationError(stage, result, timeoutMs) {
+  const noWheel = stage === 'Package installation'
+    && /No matching distribution found|Could not find a version that satisfies the requirement/i.test(`${result.stderr}\n${result.stdout}`);
+  const reason = result.timedOut
+    ? `${stage} timed out after ${timeoutMs}ms.`
+    : result.aborted ? `${stage} was aborted.`
+      : noWheel ? 'Package installation failed: no compatible binary wheel was found for this Python version and platform.'
+        : `${stage} failed.`;
+  return new Error(`${reason}\n${failureText(result)}`);
 }
 
 async function installPackages(input) {
@@ -165,7 +182,7 @@ async function installPackages(input) {
       signal: input.signal,
       shell: process.platform === 'win32',
     });
-    if (result.error || result.exitCode !== 0) throw new Error(`Package installation failed.\n${failureText(result)}`);
+    if (result.error || result.exitCode !== 0) throw installationError('Package installation', result, input.timeoutMs);
   } else {
     const venv = path.join(input.jobDirectory, '.venv');
     const venvResult = await runBoundedProcess({
@@ -177,18 +194,18 @@ async function installPackages(input) {
       maxOutputChars: 8_000,
       signal: input.signal,
     });
-    if (venvResult.error || venvResult.exitCode !== 0) throw new Error(`Python environment creation failed.\n${failureText(venvResult)}`);
+    if (venvResult.error || venvResult.exitCode !== 0) throw installationError('Python environment creation', venvResult, input.timeoutMs);
     const pip = path.join(venv, PYTHON_BIN_DIRECTORY, process.platform === 'win32' ? 'pip.exe' : 'pip');
     const result = await runBoundedProcess({
       executable: pip,
-      args: ['install', '--disable-pip-version-check', '--no-input', '--no-cache-dir', '--target', target, ...input.packages],
+      args: ['install', '--disable-pip-version-check', '--no-input', ...(PIP_CACHE_DIRECTORY ? [] : ['--no-cache-dir']), '--only-binary=:all:', '--target', target, ...input.packages],
       cwd: input.jobDirectory,
       env: input.env,
-      timeoutMs: input.timeoutMs,
+      timeoutMs: Math.max(1, input.timeoutMs - (Date.now() - startedAt)),
       maxOutputChars: 8_000,
       signal: input.signal,
     });
-    if (result.error || result.exitCode !== 0) throw new Error(`Package installation failed.\n${failureText(result)}`);
+    if (result.error || result.exitCode !== 0) throw installationError('Package installation', result, input.timeoutMs);
     input.executable = path.join(venv, PYTHON_BIN_DIRECTORY, PYTHON_BINARY);
   }
   return { elapsedMs: Date.now() - startedAt };
@@ -207,8 +224,8 @@ async function execute(payload, signal) {
   if (invalidPackages.length) throw new Error(`Only exact package versions are allowed: ${invalidPackages.join(', ')}`);
   if (payload.networkMode !== 'full') throw new Error('This runner is network-enabled. Use a separately deployed no-network runner for networkMode=none.');
 
-  const timeoutMs = Math.max(1_000, Math.min(MAX_TIMEOUT_MS, Number(payload.timeoutMs) || 30_000));
-  const installTimeoutMs = Math.max(5_000, Math.min(timeoutMs, Number(payload.installTimeoutMs) || 120_000));
+  const timeoutMs = Math.max(1_000, Math.min(MAX_TIMEOUT_MS, Number(payload.timeoutMs) || 300_000));
+  const installTimeoutMs = Math.max(5_000, Math.min(MAX_INSTALL_TIMEOUT_MS, Number(payload.installTimeoutMs) || MAX_INSTALL_TIMEOUT_MS));
   const maxOutputChars = Math.max(1_000, Math.min(MAX_OUTPUT_CHARS, Number(payload.maxOutputChars) || 30_000));
   const startedAt = Date.now();
   let jobDirectory;
@@ -233,14 +250,14 @@ async function execute(payload, signal) {
     };
     const install = await installPackages({
       ...execution,
-      timeoutMs: Math.min(installTimeoutMs, Math.max(1, timeoutMs - (Date.now() - startedAt))),
+      timeoutMs: installTimeoutMs,
     });
     const result = await runBoundedProcess({
       executable: execution.executable,
       args: [file, ...args],
       cwd: jobDirectory,
       env,
-      timeoutMs: Math.max(1, timeoutMs - (Date.now() - startedAt)),
+      timeoutMs,
       maxOutputChars,
       signal,
     });

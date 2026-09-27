@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import Script from 'next/script';
 import '@open-file-viewer/core/style.css';
 import { WorkspaceBrandProvider } from '@/brand/WorkspaceBrandProvider';
 import { product } from '@/brand/product';
@@ -26,7 +27,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
   return (
     <html lang="zh-CN" suppressHydrationWarning>
       <body>
-        <script dangerouslySetInnerHTML={{ __html: themeBootScript }} />
+        <Script id="theme-bootstrap" strategy="beforeInteractive">{themeBootScript}</Script>
         <ThemeProvider>
           <I18nProvider>
             <WorkspaceBrandProvider>

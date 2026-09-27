@@ -625,13 +625,11 @@ type BrowserChatMessageRecordLoader = (
 function BrowserChatTransientLogDialog({
   liveEntries,
   loadRecords,
-  messageContent,
   messageId,
   onClose,
 }: {
   liveEntries: BrowserChatLogRecord[];
   loadRecords: BrowserChatMessageRecordLoader;
-  messageContent?: string;
   messageId: string;
   onClose: () => void;
 }) {
@@ -699,7 +697,6 @@ function BrowserChatTransientLogDialog({
       hasMore={hasMore}
       loading={loading}
       loadingMore={loadingMore}
-      messageContent={messageContent}
       onClose={onClose}
       onLoadMore={cursor ? () => loadPage(cursor) : undefined}
       onRetry={() => loadPage(cursor)}
@@ -5228,7 +5225,9 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
   const [screenshotPreview, setScreenshotPreview] = useState<BrowserChatScreenshotPreview | null>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const followLatestRef = useRef(true);
+  const lastObservedScrollTopRef = useRef(0);
   const userScrollIntentUntilRef = useRef(0);
+  const userScrollDirectionRef = useRef<'up' | 'down' | null>(null);
   const scrollingToLatestRef = useRef(false);
   const scrollToLatestTimerRef = useRef(0);
   const cancelTurnScrollRef = useRef<(() => void) | null>(null);
@@ -5428,6 +5427,8 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
       pendingHistoryHeightRef.current = null;
       earlierLoadInFlightRef.current = false;
       earlierLoadArmedRef.current = true;
+      userScrollIntentUntilRef.current = 0;
+      userScrollDirectionRef.current = null;
       setShowScrollToBottom(false);
     }
     const pendingHistoryHeight = pendingHistoryHeightRef.current;
@@ -5452,6 +5453,7 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
       container.style.scrollBehavior = 'auto';
       container.scrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
       container.style.scrollBehavior = previousScrollBehavior;
+      lastObservedScrollTopRef.current = container.scrollTop;
       followLatestRef.current = true;
       setShowScrollToBottom(false);
     };
@@ -5477,12 +5479,15 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
     // answer's layout. Pin before paint so a content resize cannot be mistaken
     // for the reader scrolling away from the bottom.
     container.scrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+    lastObservedScrollTopRef.current = container.scrollTop;
     setShowScrollToBottom(false);
   }, [getScrollContainer, lastMessageId]);
 
   const trackScrollPosition = useCallback(() => {
     const container = getScrollContainer();
     if (!container) return;
+    const previousScrollTop = lastObservedScrollTopRef.current;
+    lastObservedScrollTopRef.current = container.scrollTop;
     if (container.scrollTop > 0) earlierLoadArmedRef.current = true;
     if (earlierLoadInFlightRef.current) {
       followLatestRef.current = false;
@@ -5499,9 +5504,13 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
       setShowScrollToBottom(false);
       return;
     }
-    if (distanceFromBottom <= 16) followLatestRef.current = true;
-    else if (performance.now() <= userScrollIntentUntilRef.current) {
-      followLatestRef.current = false;
+    if (performance.now() <= userScrollIntentUntilRef.current) {
+      if (userScrollDirectionRef.current === 'up' || container.scrollTop < previousScrollTop - 0.5) {
+        followLatestRef.current = false;
+      } else if ((userScrollDirectionRef.current === 'down' || container.scrollTop > previousScrollTop + 0.5)
+        && distanceFromBottom <= 16) {
+        followLatestRef.current = true;
+      }
     }
     setShowScrollToBottom(!followLatestRef.current && distanceFromBottom > 72);
   }, [getScrollContainer]);
@@ -5542,6 +5551,7 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
     const pinToBottom = () => {
       if (cancelled || !followLatestRef.current) return;
       container.scrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+      lastObservedScrollTopRef.current = container.scrollTop;
       followLatestRef.current = true;
       setShowScrollToBottom(false);
       if (performance.now() - startedAt < 420) frame = requestAnimationFrame(pinToBottom);
@@ -5573,6 +5583,7 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
         frame = 0;
         if (!followLatestRef.current || earlierLoadInFlightRef.current) return;
         scrollContainer.scrollTop = Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight);
+        lastObservedScrollTopRef.current = scrollContainer.scrollTop;
       });
     };
     const resizeObserver = new ResizeObserver(scheduleScrollToBottom);
@@ -5592,7 +5603,17 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
     // ResizeObserver owns content-height changes. Watching every text mutation
     // also observes elapsed timers and forces layout even when height is stable.
     const mutationObserver = new MutationObserver(syncObservedChildren);
-    const markUserScrollIntent = () => { userScrollIntentUntilRef.current = performance.now() + 600; };
+    const markUserScrollIntent = (event?: Event) => {
+      userScrollIntentUntilRef.current = performance.now() + 600;
+      if (event instanceof WheelEvent) {
+        userScrollDirectionRef.current = event.deltaY < 0 ? 'up' : event.deltaY > 0 ? 'down' : null;
+        if (event.deltaY < 0 && scrollContainer.scrollHeight > scrollContainer.clientHeight + 1) {
+          followLatestRef.current = false;
+        }
+      } else {
+        userScrollDirectionRef.current = null;
+      }
+    };
     const markPointerDrag = (event: PointerEvent) => { if (event.buttons) markUserScrollIntent(); };
     scrollContainer.addEventListener('scroll', trackScrollPosition, { passive: true });
     scrollContainer.addEventListener('wheel', markUserScrollIntent, { passive: true });
@@ -10553,7 +10574,6 @@ export function BrowserChatWorkspace({
           key={`${session?.id || 'session'}:${logDialogMessageId}`}
           liveEntries={logDialogLiveEntries}
           loadRecords={loadMessageRecords}
-          messageContent={logDialogMessage ? compactText(logDialogMessage.content, 80) : undefined}
           messageId={logDialogMessageId}
           onClose={() => setLogDialogMessageId(null)}
         />

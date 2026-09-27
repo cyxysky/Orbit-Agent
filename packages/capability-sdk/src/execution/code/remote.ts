@@ -34,7 +34,8 @@ export function createHttpCodeSandboxExecutor(input: {
   };
   return {
     async run(execution: CodeSandboxExecution, context): Promise<CodeSandboxExecutionResult> {
-      const signal = context.abortSignal ? AbortSignal.any([context.abortSignal, AbortSignal.timeout(execution.timeoutMs + 10_000)]) : AbortSignal.timeout(execution.timeoutMs + 10_000);
+      const responseTimeoutMs = execution.timeoutMs + (execution.packages.length ? execution.installTimeoutMs : 0) + 10_000;
+      const signal = context.abortSignal ? AbortSignal.any([context.abortSignal, AbortSignal.timeout(responseTimeoutMs)]) : AbortSignal.timeout(responseTimeoutMs);
       let response: Response;
       try {
         response = await fetch(`${baseUrl}/v1/execute`, {

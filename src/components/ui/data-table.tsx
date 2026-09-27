@@ -2,6 +2,7 @@
 
 import { EmptyState } from '@heroui/react/empty-state';
 import { Table } from '@heroui/react/table';
+import { Layers } from 'lucide-react';
 import type { SortDescriptor } from 'react-aria-components';
 import { useDeferredValue, useMemo, useState, type ReactNode } from 'react';
 import { useI18n } from '@/i18n/I18nProvider';
@@ -43,6 +44,8 @@ export function DataTable<T>({
   columns,
   compact = false,
   data,
+  emptyDescription,
+  emptyAction,
   emptyText,
   getRowId,
   minWidth,
@@ -53,6 +56,8 @@ export function DataTable<T>({
   columns: DataTableColumn<T>[];
   compact?: boolean;
   data: T[];
+  emptyDescription?: string;
+  emptyAction?: ReactNode;
   emptyText: string;
   getRowId: (item: T) => string;
   minWidth?: number;
@@ -86,6 +91,17 @@ export function DataTable<T>({
       : [{ id, item, kind: 'data' as const }];
   }), [getRowId, renderExpandedRow, sortedData]);
 
+  if (data.length === 0) {
+    return <EmptyState className="management-table-empty-state">
+      <div className="management-table-empty-icon" aria-hidden="true"><Layers size={25} strokeWidth={1.25} /></div>
+      <div className="management-table-empty-copy" role="status">
+        <p className="management-table-empty-title">{emptyText}</p>
+        {emptyDescription ? <p className="management-table-empty-description">{emptyDescription}</p> : null}
+      </div>
+      {emptyAction ? <div className="management-table-empty-action">{emptyAction}</div> : null}
+    </EmptyState>;
+  }
+
   return (
     <Table variant="primary" className={['app-data-table', compact ? 'is-compact' : '', className || ''].filter(Boolean).join(' ')}>
       <Table.ScrollContainer>
@@ -112,11 +128,7 @@ export function DataTable<T>({
               </Table.Column>
             ))}
           </Table.Header>
-          <Table.Body items={rows} dependencies={[columns, rowClassName]} renderEmptyState={() => (
-            <EmptyState className="management-table-empty-state">
-              <span>{emptyText}</span>
-            </EmptyState>
-          )}>
+          <Table.Body items={rows} dependencies={[columns, rowClassName]}>
             {(row) => row.kind === 'expanded' ? (
               <Table.Row id={row.id}>
                 <Table.Cell colSpan={columns.length}>{row.content}</Table.Cell>

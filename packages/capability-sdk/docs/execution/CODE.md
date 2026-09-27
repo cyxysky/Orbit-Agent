@@ -236,8 +236,8 @@ The following table lists literal defaults from the package settings; dynamic de
 | `AGENT_CODE_SANDBOX_BACKEND` | `remote` | `runtime` |
 | `AGENT_CODE_SANDBOX_RUNNER_URL` | `http://webpilot-code-sandbox:18100` | `runtime` |
 | `AGENT_CODE_SANDBOX_RUNNER_TOKEN` | `` | `runtime` |
-| `AGENT_CODE_SANDBOX_TIMEOUT_MS` | `30000` | `runtime` |
-| `AGENT_CODE_SANDBOX_INSTALL_TIMEOUT_MS` | `120000` | `runtime` |
+| `AGENT_CODE_SANDBOX_TIMEOUT_MS` | `300000` | `runtime` |
+| `AGENT_CODE_SANDBOX_INSTALL_TIMEOUT_MS` | `600000` | `runtime` |
 | `AGENT_CODE_SANDBOX_MAX_OUTPUT_CHARS` | `30000` | `runtime` |
 | `AGENT_CODE_SANDBOX_NETWORK_MODE` | `full` | `runtime` |
 | `AGENT_CODE_SANDBOX_ALLOW_PACKAGE_INSTALL` | `true` | `runtime` |

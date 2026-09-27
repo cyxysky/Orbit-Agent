@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { BrowserChatCodeViewer } from '@/components/BrowserChatCodeViewer';
 import { Check, Copy, Loader2, X } from 'lucide-react';
 import { formatToolPayload } from '@/lib/browser-chat-format';
 import { useI18n } from '@/i18n/I18nProvider';
@@ -42,50 +43,6 @@ function toolStatusTone(status: string) {
   return 'success';
 }
 
-function highlightedPayloadLine(line: string, lineIndex: number): ReactNode[] {
-  const tokenPattern = /("(?:\\.|[^"\\])*")(?=\s*:)|("(?:\\.|[^"\\])*")|(-?\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b)|\b(true|false|null)\b/g;
-  const nodes: ReactNode[] = [];
-  let cursor = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = tokenPattern.exec(line)) !== null) {
-    if (match.index > cursor) nodes.push(line.slice(cursor, match.index));
-    const tone = match[1]
-      ? 'key'
-      : match[2]
-        ? 'string'
-        : match[3]
-          ? 'number'
-          : match[4] === 'null'
-            ? 'null'
-            : 'boolean';
-    nodes.push(
-      <span className={`browser-chat-tool-code-token is-${tone}`} key={`${lineIndex}-${match.index}`}>
-        {match[0]}
-      </span>,
-    );
-    cursor = match.index + match[0].length;
-  }
-
-  if (cursor < line.length) nodes.push(line.slice(cursor));
-  return nodes.length ? nodes : [' '];
-}
-
-function ToolOutputViewer({ payload, wrap }: { payload: string; wrap: boolean }) {
-  return (
-    <div className={`browser-chat-tool-output-viewer${wrap ? ' is-wrapped' : ''}`} role="region" tabIndex={0}>
-      <div className="browser-chat-tool-output-code">
-        {payload.split('\n').map((line, index) => (
-          <div className="browser-chat-tool-output-line" key={`${index}-${line}`}>
-            <span aria-hidden="true" className="browser-chat-tool-output-line-number">{index + 1}</span>
-            <code>{highlightedPayloadLine(line, index)}</code>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function ToolOutputBody({ payload, wrap, loading, failed, label, onRetry }: {
   payload?: string;
   wrap: boolean;
@@ -109,7 +66,7 @@ function ToolOutputBody({ payload, wrap, loading, failed, label, onRetry }: {
       ) : (
         <>
           {loading || failed ? notice : null}
-          <ToolOutputViewer payload={payload} wrap={wrap} />
+          <BrowserChatCodeViewer payload={payload} wrap={wrap} />
         </>
       )}
     </div>

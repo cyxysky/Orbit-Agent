@@ -79,10 +79,7 @@ import {
   formatFileArtifactResult,
 } from '@cjfclonedeep/capability-sdk/file/node/workspace';
 import { repairFileArtifactDownloadLinks } from '@/server/capabilities/browser-chat-file-links';
-import {
-  withoutRuntimePromptCacheMetadata,
-  isRuntimePromptCacheMetadataMessage,
-} from './runtime-prompt-cache';
+import { withoutRuntimePromptCacheMetadata } from './runtime-prompt-cache';
 import { readScreenshotForAi } from './browser-chat-image-input';
 import { summarizeRuntimeLogTimings } from './runtime-log-timings';
 import {
@@ -1613,7 +1610,7 @@ function runtimePrompt(runtimeRecord: BrowserChatRuntimeRecord) {
   const customPrompt = customRuntimePromptFromEnv();
   return [
     'You are an AI browser chat agent. Complete the active user request in Chinese using current, verified evidence.',
-    '- Treat follow-up messages as updates to the active task. Respect an explicit stop, replacement, or narrower scope. [Conversation background] is reference material, not a new request or proof that an earlier action succeeded.',
+    '- Treat follow-up messages as updates to the active task. Respect an explicit stop, replacement, or narrower scope. Runtime reference context is supporting material, not a new request or proof that an earlier action succeeded.',
     '- Preserve user-specified names, dates, times, locations, quantities, options, procedure order, and assigned roles. Before a dependent step, verify its actual prerequisites, including identity and permissions when relevant. Do not silently substitute a default, another account, or an inferred result.',
     '- Observe the relevant current state, act, then verify the requested outcome. Tool success, a stated intention, or a visible value alone does not prove business completion. Inspect returned errors, the latest screenshot pixels, and post-action evidence; if the page shows an HTTP or service error, investigate that failure before classifying an empty or unexpected business view as a product defect. If a target is missing, covered, unchanged, or a popup remains open, diagnose the current state and change approach instead of repeating the same action.',
     '- When a select, cascader, tree picker, dropdown menu, or date/time option surface remains open and the intent is only to dismiss it, first call browser(action="dismissSurface"). This directly clicks viewport (0,0); do not replace it with a code or coordinate click. Verify closure from closureConfirmed, postActionState when available, and the latest screenshot before interacting behind it. If the click did not close that surface, choose a different observed action instead of repeating it. A dialog with an explicit Close/Cancel button should use that button first; a pending selection that needs Apply/Done/Confirm should use its commit control.',
@@ -1946,7 +1943,6 @@ async function executeRuntimeStep(input: {
   onContextCompression?: (update: {
     activeMessages: ModelMessage[];
     contextCompression: BrowserChatModelContextCompression;
-    background?: ModelMessage;
   }) => void | Promise<void>;
   getRuntimeOperationalContext?: () => BrowserChatOperationalContext | Promise<BrowserChatOperationalContext>;
   requestToolConfirmation?: (request: BrowserToolConfirmationRequest) => Promise<BrowserToolConfirmationDecision>;
@@ -2519,12 +2515,12 @@ async function executeRuntimeStep(input: {
           onCheckpoint: async (checkpoint) => {
             ensureActive();
             await checkpointContext(checkpoint.segmentRecords);
-            const stats = modelMessagesTextAndImageStats({ system: requestSystemPrompt, messages: checkpoint.messages }, stepTools);
+            const stats = modelMessagesTextAndImageStats({ system: checkpoint.system, messages: checkpoint.messages }, stepTools);
             const compression = { compressedAt: new Date().toISOString(), continuationSummary: checkpoint.continuationSummary,
               estimatedTokensBefore: compressionBeforeStats.estimatedTotalTokens, estimatedTokensAfter: stats.estimatedTotalTokens,
               retainedMessageCount: checkpoint.activeMessages.length, summarizedMessageCount: checkpoint.compressedMessages,
               targetTokens, thresholdTokens, windowTokens };
-            await input.onContextCompression?.({ activeMessages: checkpoint.activeMessages, contextCompression: compression, background: checkpoint.messages.find(isRuntimePromptCacheMetadataMessage) });
+            await input.onContextCompression?.({ activeMessages: checkpoint.activeMessages, contextCompression: compression });
             latestContextCompression = compression;
             continuationSummaryText = checkpoint.continuationSummary;
             durableSummary = continuationSummaryText;
@@ -2533,11 +2529,11 @@ async function executeRuntimeStep(input: {
             committedWindow = [...checkpoint.activeMessages];
             consumedResponseCount = responseCount;
           },
-          onProgress: async (progress, compressionMessages) => {
+          onProgress: async (progress, compressionMessages, compressionSystem) => {
             ensureActive(); requestWatchdog.touch();
             // Completion is published only after the durable checkpoint below succeeds.
             if (progress.stage === 'complete') return;
-            const compressionStats = modelMessagesTextAndImageStats({ system: requestSystemPrompt, messages: compressionMessages }, stepTools);
+            const compressionStats = modelMessagesTextAndImageStats({ system: compressionSystem, messages: compressionMessages }, stepTools);
             if (progress.stage === 'start' && progress.completedMessages === 0) compressionBeforeStats = compressionStats;
             await onAttemptDebug?.({ phase: progress.stage === 'start' ? 'ai:context-compression:start' : 'ai:context-compression:progress', stepIndex,
               message: progress.stage === 'start'
@@ -2587,6 +2583,7 @@ async function executeRuntimeStep(input: {
         message: `已从本次模型输入折叠 ${assembled.manifest.suppressedRepeatedNoActionExchanges} 条连续重复且无实际动作的浏览器交换；数据库原始证据未删改。`,
         details: { suppressedExchanges: assembled.manifest.suppressedRepeatedNoActionExchanges },
       });
+      requestSystemPrompt = assembled.system;
       const messagesToSend = assembled.messages;
       const requestMessages = messagesToSend;
       const attachedImagePaths = requestMessages.flatMap((message) => Array.isArray(message.content)
@@ -2616,8 +2613,6 @@ async function executeRuntimeStep(input: {
       assembled.manifest.systemRef = runtimeContextMessageRef(systemRecord);
       assembled.manifest.toolSchemaRef = runtimeContextMessageRef(schemaRecord);
       assembled.manifest.estimatedTokensAfter = finalStats.estimatedTotalTokens;
-      const background = messagesToSend.find(isRuntimePromptCacheMetadataMessage);
-      if (background) assembled.manifest.backgroundRef = runtimeContextMessageRef(background);
       assembled.manifest.messageRefs = requestMessages.map(runtimeContextMessageRef);
       await checkpointContext([systemRecord, schemaRecord, ...requestMessages], assembled.manifest);
       if (assembled.compressedMessages) {
@@ -2642,7 +2637,7 @@ async function executeRuntimeStep(input: {
           contextBefore: toolContextFromStats(compressionBeforeStats), contextAfter: toolContextFromStats(finalStats) });
         await onAttemptDebug?.({ phase: partiallyCompleted ? 'ai:context-compression:partial'
           : stoppedBeforeTarget ? 'ai:context-compression:limited' : 'ai:context-compression:complete', stepIndex,
-          message: partiallyCompleted ? '上下文压缩部分完成' : stoppedBeforeTarget ? '已保存压缩结果，尚未达到目标值' : '上下文压缩完成',
+          message: partiallyCompleted ? '上下文压缩部分完成' : stoppedBeforeTarget ? '已保存压缩结果；剩余历史未再压缩，继续执行' : '上下文压缩完成',
           details: { toolCallId: compressionToolCallId,
             estimatedTokensBefore: compressionBeforeStats.estimatedTotalTokens, estimatedTokensAfter: finalStats.estimatedTotalTokens,
             summarizedMessageCount: assembled.compressedMessages, targetTokens, targetReached: finalStats.estimatedTotalTokens <= targetTokens,
@@ -3686,7 +3681,6 @@ export async function executeInteractiveBrowserTurn(input: {
   onContextCompression?: (update: {
     activeMessages: ModelMessage[];
     contextCompression: BrowserChatModelContextCompression;
-    background?: ModelMessage;
   }) => void | Promise<void>;
   onDebug?: ExecutionDebug;
   abortSignal?: AbortSignal;
@@ -4437,7 +4431,7 @@ async function executeCodexRuntimeObject(input: {
     shouldContinue,
     onToolTrace,
     onVisualContextChange,
-    action: async (actionSignal, trace) => {
+    action: async (_actionSignal, trace) => {
       const skillGateFailure = requireHiddenRuntimeSkillRead(type, normalizedParams, loadedHiddenRuntimeSkillIds);
       if (skillGateFailure) return skillGateFailure;
       const approval = await requestBrowserToolApproval({

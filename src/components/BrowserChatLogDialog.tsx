@@ -135,56 +135,6 @@ function browserChatLogStatusLabel(status: BrowserChatLogStatus) {
   return '已完成';
 }
 
-function browserChatLogRoundStatusLabel(status: BrowserChatLogStatus) {
-  if (status === 'completed') return '成功';
-  return browserChatLogStatusLabel(status);
-}
-
-function browserChatLogsElapsedMs(logs: BrowserChatLogDialogRecord[]) {
-  const totals = summarizeBrowserChatExecutionTotals(logs);
-  const measuredTotal = totals.aiRequestElapsedMs + totals.toolElapsedMs;
-  if (measuredTotal > 0) return measuredTotal;
-  return logs.reduce((total, log) => total + (typeof log.elapsedMs === 'number' ? log.elapsedMs : 0), 0);
-}
-
-type BrowserChatLogRound = {
-  elapsedMs: number;
-  entries: BrowserChatLogDialogRecord[];
-  index: number;
-  status: BrowserChatLogStatus;
-};
-
-function groupBrowserChatLogs(entries: BrowserChatLogDialogRecord[]): BrowserChatLogRound[] {
-  const groupedEntries: BrowserChatLogDialogRecord[][] = [];
-  const pendingEntries: BrowserChatLogDialogRecord[] = [];
-
-  entries.forEach((log) => {
-    if (isAiAttemptStartLog(log)) {
-      if (!groupedEntries.length) {
-        groupedEntries.push([...pendingEntries, log]);
-        pendingEntries.length = 0;
-      } else {
-        groupedEntries.push([log]);
-      }
-      return;
-    }
-    if (groupedEntries.length) {
-      groupedEntries[groupedEntries.length - 1]?.push(log);
-    } else {
-      pendingEntries.push(log);
-    }
-  });
-
-  if (pendingEntries.length) groupedEntries.push(pendingEntries);
-
-  return groupedEntries.map((logs, index) => ({
-    elapsedMs: browserChatLogsElapsedMs(logs),
-    entries: logs,
-    index: index + 1,
-    status: browserChatLogStatus(logs),
-  }));
-}
-
 function browserChatLogMatchesFilter(log: BrowserChatLogDialogRecord, filter: BrowserChatLogFilter) {
   if (filter === 'ai') return isBrowserChatAiLog(log);
   if (filter === 'tool') return isBrowserChatToolLifecycleLog(log);
@@ -297,7 +247,7 @@ function contextCompressionLabel(log: BrowserChatLogDialogRecord) {
   if (log.phase.endsWith('ai:context-compression:progress')) return '上下文压缩进度';
   if (log.phase.endsWith('ai:context-compression:retry')) return '上下文摘要重试';
   if (log.phase.endsWith('ai:context-compression:partial')) return '上下文压缩部分完成';
-  if (log.phase.endsWith('ai:context-compression:limited')) return '上下文压缩已停止（未达目标）';
+  if (log.phase.endsWith('ai:context-compression:limited')) return '上下文压缩已保存（继续执行）';
   if (log.phase.endsWith('ai:context-compression:skipped')) return '上下文压缩已跳过（此前批次失败）';
   if (log.phase.endsWith('ai:context-compression:error')) return '上下文压缩失败';
   if (log.phase.endsWith('ai:context-compression:complete')) return '上下文压缩完成';
@@ -406,41 +356,35 @@ function BrowserChatLogDetails({ expanded, log, nextAiInputTokens }: { expanded:
   );
 }
 
-const logVirtualRowEstimate = 96;
-const logVirtualRoundEstimate = 52;
+const logVirtualRowEstimate = 76;
 
 function BrowserChatLogEntry({
-  detailLog,
-  isLastInRound,
   log,
   measureRef,
   style,
   virtualIndex,
   nextAiInputTokens,
+  updates,
 }: {
-  detailLog?: BrowserChatLogDialogRecord;
-  isLastInRound?: boolean;
   log: BrowserChatLogDialogRecord;
   measureRef?: (node: HTMLLIElement | null) => void;
   style?: CSSProperties;
   virtualIndex?: number;
   nextAiInputTokens?: number;
+  updates?: BrowserChatLogDialogRecord[];
 }) {
   const { t } = useI18n();
   const [expanded, setExpanded] = useState(false);
-  const payloadLog = detailLog || log;
   const eventTitle = t(browserChatLogEventTitle(log));
-  const eventMessage = detailLog && isAiAttemptStartLog(log)
-    ? t('等待模型判断下一步操作')
-    : t(log.message);
-  const inputTokens = aiLogInputTokenCount(payloadLog);
-  const timingLabel = aiLogTimingInline(payloadLog, t);
+  const eventMessage = t(log.message);
+  const displayMessage = eventMessage.startsWith(eventTitle)
+    ? eventMessage.slice(eventTitle.length).replace(/^[\s·:：-]+/, '')
+    : eventMessage;
+  const inputTokens = aiLogInputTokenCount(log);
+  const timingLabel = aiLogTimingInline(log, t);
   const tone = browserChatLogTone(log);
-  const canExpand = Boolean(payloadLog.details && (
-    aiLogRequestPayload(aiLogPayloadDetails(parseJsonObjectText(payloadLog.details)))
-    || !phaseMatches(payloadLog, 'ai:runtime:request')
-  ));
-  const canCopy = phaseMatches(payloadLog, 'ai:runtime:response') || phaseMatches(payloadLog, 'ai:runtime:object');
+  const canExpand = Boolean(log.details || updates?.length || displayMessage);
+  const canCopy = phaseMatches(log, 'ai:runtime:response') || phaseMatches(log, 'ai:runtime:object');
   const copyEvent = async () => {
     if (!navigator.clipboard) return;
     try {
@@ -451,16 +395,24 @@ function BrowserChatLogEntry({
   };
   return (
     <li
-      className={`browser-chat-log-entry is-${tone}${isLastInRound ? ' is-round-last' : ''}`}
+      className={`browser-chat-log-entry is-${tone}${expanded ? ' is-expanded' : ''}`}
       data-index={virtualIndex}
       ref={measureRef}
       style={style}
     >
       <time className="browser-chat-log-time" dateTime={log.time}>{formatLogTime(log.time)}</time>
-      <span aria-hidden="true" className="browser-chat-log-marker" />
       <div className="browser-chat-log-entry-content">
         <div className="browser-chat-log-entry-heading">
+          <span aria-hidden="true" className="browser-chat-log-marker" />
           <strong className="browser-chat-log-event-title">{eventTitle}</strong>
+          {updates && updates.length > 1 ? <span className="browser-chat-log-update-count">{t('{count} 次进度更新', { count: updates.length })}</span> : null}
+          {log.stepIndex !== undefined || inputTokens !== undefined || timingLabel || typeof log.elapsedMs === 'number' ? (
+            <small className="browser-chat-log-entry-meta">
+              {log.stepIndex !== undefined ? <span>{t('步骤 {index}', { index: log.stepIndex })}</span> : null}
+              {inputTokens !== undefined ? <span>{t('AI 输入 · {tokens}', { tokens: `${Math.round(inputTokens).toLocaleString()} tokens` })}</span> : null}
+              {timingLabel ? <span>{timingLabel}</span> : typeof log.elapsedMs === 'number' ? <span>{formatTotalElapsedMs(log.elapsedMs)}</span> : null}
+            </small>
+          ) : null}
           {canCopy || canExpand ? (
             <div className="browser-chat-log-entry-actions">
               {canCopy ? (
@@ -478,46 +430,56 @@ function BrowserChatLogEntry({
             </div>
           ) : null}
         </div>
-        {eventMessage !== eventTitle ? <p className="browser-chat-log-message">{eventMessage}</p> : null}
-        {payloadLog.stepIndex || inputTokens !== undefined || timingLabel || typeof payloadLog.elapsedMs === 'number' ? (
-          <small className="browser-chat-log-entry-meta">
-            {payloadLog.stepIndex ? <span>{t('步骤 {index}', { index: payloadLog.stepIndex })}</span> : null}
-            {inputTokens !== undefined ? <span>{t('AI 输入 · {tokens}', { tokens: `${Math.round(inputTokens).toLocaleString()} tokens` })}</span> : null}
-            {timingLabel ? <span>{timingLabel}</span> : typeof payloadLog.elapsedMs === 'number' ? <span>{formatTotalElapsedMs(payloadLog.elapsedMs)}</span> : null}
-          </small>
+        {displayMessage ? <p className="browser-chat-log-message">{displayMessage}</p> : null}
+        <BrowserChatLogDetails expanded={expanded} log={log} nextAiInputTokens={nextAiInputTokens} />
+        {expanded && updates && updates.length > 1 ? (
+          <details className="browser-chat-log-progress-history">
+            <summary>{t('查看全部 {count} 次进度更新', { count: updates.length })}</summary>
+            <ol>{updates.map(update => <li key={update.id}>
+              <time dateTime={update.time}>{formatLogTime(update.time)}</time>
+              <div><p>{t(update.message)}</p>
+                {update.details ? <BrowserChatPayloadDetails payload={update.details} title={t('日志详情')} /> : null}
+              </div>
+            </li>)}</ol>
+          </details>
         ) : null}
-        <BrowserChatLogDetails expanded={expanded} log={payloadLog} nextAiInputTokens={nextAiInputTokens} />
       </div>
     </li>
   );
 }
 
-type BrowserChatTimelineRow =
-  | { key: string; kind: 'round'; round: BrowserChatLogRound }
-  | { detailLog?: BrowserChatLogDialogRecord; isLastInRound: boolean; key: string; kind: 'log'; log: BrowserChatLogDialogRecord };
+type BrowserChatTimelineRow = {
+  key: string;
+  log: BrowserChatLogDialogRecord;
+  updates?: BrowserChatLogDialogRecord[];
+};
 
-function browserChatTimelineRowsForRound(round: BrowserChatLogRound): BrowserChatTimelineRow[] {
-  const eventRows: Array<{ detailLog?: BrowserChatLogDialogRecord; log: BrowserChatLogDialogRecord }> = [];
-  for (let index = 0; index < round.entries.length; index += 1) {
-    const log = round.entries[index];
-    if (!log) continue;
-    const nextLog = round.entries[index + 1];
-    if (isAiAttemptStartLog(log) && nextLog && phaseMatches(nextLog, 'ai:runtime:request')) {
-      eventRows.push({ detailLog: nextLog, log });
-      index += 1;
+function orderedBrowserChatLogs(entries: BrowserChatLogDialogRecord[]) {
+  return [...entries].sort((a, b) => (Date.parse(a.time) || 0) - (Date.parse(b.time) || 0));
+}
+
+function logAttemptId(log: BrowserChatLogDialogRecord) {
+  const details = aiLogPayloadDetails(parseJsonObjectText(log.details));
+  return stringValue(asRecord(details?.execution)?.attemptId);
+}
+
+function browserChatTimelineRows(entries: BrowserChatLogDialogRecord[]): BrowserChatTimelineRow[] {
+  const rows: BrowserChatTimelineRow[] = [];
+  for (const log of entries) {
+    const previous = rows.at(-1);
+    // Only consecutive updates from the same request can share a row.
+    // Build before filtering so search cannot join unrelated events.
+    if (phaseMatches(log, 'ai:runtime:receiving') && previous
+      && previous.log.phase === log.phase && previous.log.stepIndex === log.stepIndex
+      && previous.log.message === log.message && logAttemptId(previous.log) === logAttemptId(log)) {
+      previous.updates ||= [previous.log];
+      previous.updates.push(log);
+      previous.log = log;
     } else {
-      eventRows.push({ log });
+      rows.push({ key: log.id, log });
     }
   }
-  return [
-    { key: `round-${round.index}`, kind: 'round', round },
-    ...eventRows.map((event, index) => ({
-      ...event,
-      isLastInRound: index === eventRows.length - 1,
-      key: event.detailLog ? `${event.log.id}-${event.detailLog.id}` : event.log.id,
-      kind: 'log' as const,
-    })),
-  ];
+  return rows;
 }
 
 function nextInputTokensByLogId(entries: BrowserChatLogDialogRecord[]) {
@@ -535,14 +497,12 @@ function nextInputTokensByLogId(entries: BrowserChatLogDialogRecord[]) {
   return tokensByLogId;
 }
 
-function BrowserChatVirtualLogList({ allEntries, rounds }: { allEntries: BrowserChatLogDialogRecord[]; rounds: BrowserChatLogRound[] }) {
-  const { t } = useI18n();
+function BrowserChatVirtualLogList({ allEntries, rows }: { allEntries: BrowserChatLogDialogRecord[]; rows: BrowserChatTimelineRow[] }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const rows = useMemo<BrowserChatTimelineRow[]>(() => rounds.flatMap(browserChatTimelineRowsForRound), [rounds]);
   const tokensByLogId = useMemo(() => nextInputTokensByLogId(allEntries), [allEntries]);
   const rowVirtualizer = useVirtualizer({
     count: rows.length,
-    estimateSize: (index) => rows[index]?.kind === 'round' ? logVirtualRoundEstimate : logVirtualRowEstimate,
+    estimateSize: () => logVirtualRowEstimate,
     getItemKey: (index) => rows[index]?.key || index,
     getScrollElement: () => scrollRef.current,
     overscan: 8,
@@ -565,36 +525,15 @@ function BrowserChatVirtualLogList({ allEntries, rounds }: { allEntries: Browser
             transform: `translateY(${virtualRow.start}px)`,
             width: '100%',
           };
-          if (row.kind === 'round') {
-            return (
-              <li
-                className="browser-chat-log-round"
-                data-index={virtualRow.index}
-                key={virtualRow.key}
-                ref={rowVirtualizer.measureElement}
-                style={virtualStyle}
-              >
-                <div className="browser-chat-log-round-title">
-                  <span aria-hidden="true">{row.round.index}</span>
-                  <strong>{t('第 {index} 轮', { index: row.round.index })}</strong>
-                </div>
-                <span className={`browser-chat-log-round-status is-${row.round.status}`}>
-                  {t(browserChatLogRoundStatusLabel(row.round.status))}
-                  {row.round.elapsedMs > 0 ? ` · ${formatTotalElapsedMs(row.round.elapsedMs)}` : ''}
-                </span>
-              </li>
-            );
-          }
           return (
             <BrowserChatLogEntry
-              detailLog={row.detailLog}
               key={virtualRow.key}
-              isLastInRound={row.isLastInRound}
               log={row.log}
+              updates={row.updates}
               measureRef={rowVirtualizer.measureElement}
               style={virtualStyle}
               virtualIndex={virtualRow.index}
-              nextAiInputTokens={tokensByLogId.get((row.detailLog || row.log).id)}
+              nextAiInputTokens={tokensByLogId.get(row.log.id)}
             />
           );
         })}
@@ -619,7 +558,6 @@ export function BrowserChatLogDialog({
   hasMore?: boolean;
   loading?: boolean;
   loadingMore?: boolean;
-  messageContent?: string;
   onClose: () => void;
   onLoadMore?: () => void | Promise<void>;
   onRetry?: () => void | Promise<void>;
@@ -628,24 +566,20 @@ export function BrowserChatLogDialog({
   const { t } = useI18n();
   const [activeFilter, setActiveFilter] = useState<BrowserChatLogFilter>('all');
   const [query, setQuery] = useState('');
+  const orderedEntries = useMemo(() => orderedBrowserChatLogs(entries), [entries]);
   const summary = summarizeBrowserChatLogs(entries);
   const totals = summarizeBrowserChatExecutionTotals(summaryEntries);
-  const rounds = useMemo(() => groupBrowserChatLogs(entries), [entries]);
-  const status = browserChatLogStatus(summaryEntries.length ? summaryEntries : entries);
+  const statusEntries = useMemo(() => orderedBrowserChatLogs(summaryEntries.length ? summaryEntries : entries), [summaryEntries, entries]);
+  const status = browserChatLogStatus(statusEntries);
   const totalElapsedMs = totals.aiRequestElapsedMs + totals.toolElapsedMs;
   const normalizedQuery = query.trim().toLocaleLowerCase();
-  const filteredRounds = useMemo(() => rounds
-    .map((round) => ({
-      ...round,
-      entries: round.entries.filter((log) => {
-        if (!browserChatLogMatchesFilter(log, activeFilter)) return false;
-        if (!normalizedQuery) return true;
-        return `${t(log.message)}\n${t(phaseLabel(log.phase))}\n${log.phase}\n${log.details || ''}`
-          .toLocaleLowerCase()
-          .includes(normalizedQuery);
-      }),
-    }))
-    .filter((round) => round.entries.length > 0), [activeFilter, normalizedQuery, rounds, t]);
+  const rows = useMemo(() => browserChatTimelineRows(orderedEntries), [orderedEntries]);
+  const filteredRows = useMemo(() => rows.filter(row => (row.updates || [row.log]).some(log => {
+    if (!browserChatLogMatchesFilter(log, activeFilter)) return false;
+    if (!normalizedQuery) return true;
+    return `${t(log.message)}\n${t(phaseLabel(log.phase))}\n${log.phase}\n${log.details || ''}`
+      .toLocaleLowerCase().includes(normalizedQuery);
+  })), [activeFilter, normalizedQuery, rows, t]);
   const filterOptions: Array<{ count: number; filter: BrowserChatLogFilter; label: string }> = [
     { count: summary.total, filter: 'all', label: t('全部') },
     { count: summary.ai, filter: 'ai', label: 'AI' },
@@ -662,21 +596,19 @@ export function BrowserChatLogDialog({
       size="log"
     >
         <header className="ui-modal-header browser-chat-log-dialog-header">
-          <div className="ui-modal-heading">
+          <div className="browser-chat-log-heading">
             <div className="browser-chat-log-title-row">
               <h2 className="ui-modal-title" id="browser-chat-log-dialog-title">{t('执行日志')}</h2>
               <span className={`browser-chat-log-status is-${status}`}>{t(browserChatLogStatusLabel(status))}</span>
             </div>
             <p className="ui-modal-subtitle browser-chat-log-dialog-subtitle">
-              <span>{t('{count} 轮 AI 请求', { count: rounds.length })}</span>
-              <span aria-hidden="true">·</span>
-              <span>{t('{count} 条事件', { count: summary.total })}</span>
+              <span>{t('{count} 条原始事件', { count: summary.total })}</span>
               <span aria-hidden="true">·</span>
               <span>{t('总耗时 {time}', { time: formatTotalElapsedMs(totalElapsedMs) })}</span>
             </p>
           </div>
           <div className="browser-chat-log-header-actions">
-            <button className="ui-icon-button ui-modal-close" onClick={onClose} type="button" aria-label={t('关闭')}>
+            <button className="browser-chat-log-close" onClick={onClose} type="button" aria-label={t('关闭')}>
               <X size={19} />
             </button>
           </div>
@@ -712,8 +644,8 @@ export function BrowserChatLogDialog({
               </div>
             </div>
           ) : null}
-          {filteredRounds.length ? (
-            <BrowserChatVirtualLogList allEntries={entries} rounds={filteredRounds} />
+          {filteredRows.length ? (
+            <BrowserChatVirtualLogList key={`${activeFilter}:${normalizedQuery}`} allEntries={orderedEntries} rows={filteredRows} />
           ) : (
             <div className="browser-chat-log-empty" role={loadError ? 'alert' : undefined}>
               <p>{loadError ? t('加载日志失败：{error}', { error: loadError }) : t(loading ? '正在加载日志' : entries.length ? '无匹配日志' : '暂无日志')}</p>

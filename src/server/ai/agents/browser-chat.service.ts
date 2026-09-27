@@ -66,9 +66,7 @@ import {
   compactBrowserChatModelTranscript,
   normalizeBrowserChatModelContext,
   browserChatActiveMessages,
-  browserChatContextRecordId,
   browserChatTranscript,
-  archiveBrowserChatContextMessages,
   serializableBrowserChatModelMessages,
   type BrowserChatModelContext,
 } from '@/server/ai/agents/browser-chat-model-context';
@@ -5219,9 +5217,9 @@ function browserChatBranchContextOptions(session: BrowserChatSessionRecord, bran
       context = normalizeBrowserChatModelContext({ ...context, activeMessages, transcript: [...turnBase, ...turnMessages] });
       await save();
     },
-    onContextCompression: async ({ activeMessages, contextCompression, background }) => {
-      context = normalizeBrowserChatModelContext({ ...archiveBrowserChatContextMessages(context, background ? [background] : []), activeMessages,
-        backgroundRef: background ? browserChatContextRecordId(background) : context.backgroundRef, continuationSummary: contextCompression.continuationSummary });
+    onContextCompression: async ({ activeMessages, contextCompression }) => {
+      context = normalizeBrowserChatModelContext({ ...context, activeMessages,
+        backgroundRef: undefined, continuationSummary: contextCompression.continuationSummary });
       await save();
     },
   };
@@ -5974,14 +5972,13 @@ async function runBrowserChatMessage(
           });
           persistAndNotify(session.id, { defer: true, mergePersisted: false });
         },
-        onContextCompression: async ({ activeMessages, contextCompression, background }) => {
+        onContextCompression: async ({ activeMessages, contextCompression }) => {
           assertTurnActive();
           session.modelContext = normalizeBrowserChatModelContext({
             ...session.modelContext,
             version: 2,
             activeMessages: serializableBrowserChatModelMessages(activeMessages),
-            records: archiveBrowserChatContextMessages(session.modelContext, background ? [background] : []).records,
-            backgroundRef: background ? browserChatContextRecordId(background) : session.modelContext.backgroundRef,
+            backgroundRef: undefined,
             lastCompression: contextCompression,
             continuationSummary: contextCompression.continuationSummary,
           });

@@ -28,7 +28,7 @@ export const uiNodeSchema: z.ZodType<UINode> = z.lazy(() => z.object({
     'timeline',
     'link',
   ]).describe('Declarative primitive. Compose time cards with card/stack/time; metrics with grid/stat/progress; details with keyValue/timeline.'),
-  props: z.record(z.string(), uiValueSchema).optional().describe('Primitive props: title/description; text/tone; columns; label/value/detail; locale/timeZone/dateStyle/timeStyle; items[{label,value}]; href.'),
+  props: z.record(z.string(), uiValueSchema).optional().describe('Primitive props: title/description; text/tone; columns; label/value/detail; locale/timeZone/dateStyle/timeStyle; items[{label,value}]; link: href and label (text is also accepted for the visible link caption).'),
   children: z.array(z.union([z.string().max(10_000), uiNodeSchema])).max(100).optional(),
 }).strict());
 
@@ -52,6 +52,23 @@ export const markdownResponse = defineResponseType({
   },
 });
 export function markdownBlock(text: string): ResponseBlock { return { type: markdownResponse.type, params: { text } }; }
+
+export const htmlParams = z.object({
+  html: z.string().min(1).max(100_000).describe('HTML fragment to render directly, without Markdown fences. Use semantic HTML, inline SVG, links and native details/summary interactions. Scripts, event handlers, forms, embeds and remote assets are unavailable.'),
+  css: z.string().max(40_000).optional().describe('Optional CSS scoped to this isolated HTML document. Style tags and inline styles in html are also supported. Use responsive layouts with natural content height, system fonts, inline SVG or data images; no external assets. The conversation owns vertical scrolling: do not use viewport heights (vh/dvh), fixed heights, max-height or overflow:auto/scroll on the page or its outer content wrapper.'),
+  title: z.string().min(1).max(200).describe('Short accessible title for this UI block.'),
+  text: z.string().min(1).max(20_000).describe('Plain-text equivalent including important facts and download URLs, for history, copying and clients without HTML rendering.'),
+}).strict();
+export type HTMLResponseParams = z.infer<typeof htmlParams>;
+export const htmlResponse = defineResponseType({
+  type: 'core.html',
+  description: 'Custom HTML/CSS UI rendered in an isolated, auto-sized frame. Prefer this for bespoke visual layouts and polished deliverables. Supply html, optional css, title and a complete plain-text equivalent in text. Use restrained typography, generous whitespace and responsive layouts; avoid wrapping every section in bordered cards. JavaScript, event handlers, forms, remote resources and parent-page access are unavailable. Use real artifact URLs in anchors; never invent download links. Theme variables --foreground, --muted, --panel, --border, --accent and --accent-strong are available.',
+  params: defineCapabilityInput(z.toJSONSchema(htmlParams), value => htmlParams.parse(value)),
+  examples: [{ title: 'Summary', text: 'Three sections are ready for review.', html: '<section><p class="eyebrow">READY FOR REVIEW</p><h2>Three sections, one clear story.</h2><p>The updated content is ready to explore.</p></section>', css: 'section{padding:24px 0}h2{font-size:24px;font-weight:500;margin:8px 0}.eyebrow{font-size:11px;letter-spacing:.14em;color:var(--muted)}' }],
+  toText: params => params.text,
+  mapText: (params, transform) => ({ ...params, text: transform(params.text) }),
+});
+
 const uiParams = z.object({ tree: uiNodeSchema }).strict();
 // Recursive schemas use root-local references; the registry relocates them when composing tool schemas.
 export const uiResponse = defineResponseType({
@@ -71,4 +88,4 @@ function mapUI(node: UINode, transform: (text: string) => string): UINode {
     ? { props: { ...node.props, text: transform(node.props.text) } } : {}),
     ...(node.children ? { children: node.children.map(child => typeof child === 'string' ? child : mapUI(child, transform)) } : {}) };
 }
-export const coreResponses = [markdownResponse, uiResponse];
+export const coreResponses = [markdownResponse, uiResponse, htmlResponse];

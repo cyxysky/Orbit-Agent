@@ -74,7 +74,6 @@ export function runBoundedProcess(input: {
     let outputLimitExceeded = false;
     let spawnError: string | undefined;
     let settled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
 
     const stop = (reason: 'timeout' | 'abort') => {
       if (stopReason) return;
@@ -85,7 +84,7 @@ export function runBoundedProcess(input: {
 
     const onAbort = () => stop('abort');
     input.abortSignal?.addEventListener('abort', onAbort, { once: true });
-    timer = setTimeout(() => stop('timeout'), input.timeoutMs);
+    const timer = setTimeout(() => stop('timeout'), input.timeoutMs);
     timer.unref?.();
 
     const append = (target: 'stdout' | 'stderr', chunk: Buffer | string) => {

@@ -100,7 +100,7 @@ async function installPackages(input: {
       : input.executable,
     args: input.language === 'javascript'
       ? ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--no-package-lock', '--no-save', '--prefix', input.jobDirectory, ...input.packages]
-      : ['-m', 'pip', 'install', '--disable-pip-version-check', '--no-input', '--no-cache-dir', '--target', target, ...input.packages],
+      : ['-m', 'pip', 'install', '--disable-pip-version-check', '--no-input', '--no-cache-dir', '--only-binary=:all:', '--target', target, ...input.packages],
     cwd: input.jobDirectory,
     env: input.environment,
     timeoutMs: input.timeoutMs,
@@ -108,7 +108,15 @@ async function installPackages(input: {
     abortSignal: input.abortSignal,
     shell: input.language === 'javascript' && process.platform === 'win32',
   });
-  if (result.error || result.exitCode !== 0) throw new Error(`Package installation failed.\n${cleanError(result)}`);
+  if (result.error || result.exitCode !== 0) {
+    const reason = result.timedOut
+      ? `Package installation timed out after ${input.timeoutMs}ms.`
+      : result.aborted ? 'Package installation was aborted.'
+        : input.language === 'python' && /No matching distribution found|Could not find a version that satisfies the requirement/i.test(`${result.stderr}\n${result.stdout}`)
+          ? 'Package installation failed: no compatible binary wheel was found for this Python version and platform.'
+          : 'Package installation failed.';
+    throw new Error(`${reason}\n${cleanError(result)}`);
+  }
   return { elapsedMs: Date.now() - startedAt };
 }
 
@@ -155,18 +163,17 @@ export function createNodeProcessCodeSandbox(input: LocalProcessOptions & { maxC
           jobDirectory,
           executable,
           npmExecutable: input.npmExecutable,
-          timeoutMs: Math.min(execution.installTimeoutMs, Math.max(1, execution.timeoutMs - (Date.now() - startedAt))),
+          timeoutMs: execution.installTimeoutMs,
           maxOutputChars: execution.maxOutputChars,
           abortSignal: context.abortSignal,
           environment,
         });
-        const remainingMs = Math.max(1, execution.timeoutMs - (Date.now() - startedAt));
         const result = await runBoundedProcess({
           executable,
           args: [file, ...execution.args],
           cwd: jobDirectory,
           env: environment,
-          timeoutMs: remainingMs,
+          timeoutMs: execution.timeoutMs,
           maxOutputChars: execution.maxOutputChars,
           abortSignal: context.abortSignal,
         });

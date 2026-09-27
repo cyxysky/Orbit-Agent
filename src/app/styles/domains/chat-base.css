@@ -2741,7 +2741,7 @@
   align-items: stretch;
   display: grid;
   gap: 8px;
-  margin-top: 18px;
+  margin-top: 8px;
   max-width: min(100%, 760px);
   order: 2;
   width: 100%;

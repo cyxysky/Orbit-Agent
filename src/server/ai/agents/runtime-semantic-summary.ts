@@ -64,14 +64,24 @@ export function contextSummaryPrompt(currentRequest: ModelMessage | undefined, m
 export function contextSummaryInputTokens(currentRequest: ModelMessage | undefined, messages: ModelMessage[]) {
   return estimateRuntimeTextTokens(contextSummaryPrompt(currentRequest, messages)) + 256 + 1536;
 }
+export function historicalContextHandoff(messages: ModelMessage[], summary: string) {
+  const id = randomUUID(), createdAt = new Date().toISOString();
+  const sources = messages.map((message, position) => ({ position, ref: contextSummaryRecord(message).ref }));
+  const message: ModelMessage = { role: 'user', content: `${contextSegmentMarker}\n${JSON.stringify({
+    id, createdAt, sources, sourceAttribution: 'host-batch-lineage', summary,
+    historical: true, verified: false, readWith: 'contextRead',
+  })}` };
+  return { id, createdAt, message };
+}
 export async function summarizeContextBatch(input: {
   currentRequest?: ModelMessage; messages: ModelMessage[];
   generate: ContextSummaryGenerator; maximumInputTokens: number; abortSignal?: AbortSignal;
+  maximumSummaryTokens?: number;
   onRetry?: (retry: ContextSummaryRetry) => void | Promise<void>;
   validate?: (message: ModelMessage) => void;
 }) {
-  const records = input.messages.map(contextSummaryRecord);
-  const prompt = contextSummaryPrompt(input.currentRequest, input.messages);
+  const prompt = contextSummaryPrompt(input.currentRequest, input.messages)
+    + (input.maximumSummaryTokens ? `\n\nKeep the handoff within ${input.maximumSummaryTokens} estimated tokens. Short isolated history needs a very short summary; source references are attached by the host.` : '');
   let correction = '';
   const attemptLimit = 2;
   for (let attempt = 1; attempt <= attemptLimit; attempt++) {
@@ -123,13 +133,12 @@ export async function summarizeContextBatch(input: {
       if (!/[\p{L}\p{N}]/u.test(summary) || /^(?:null|undefined)$/i.test(summary)) {
         throw new Error('Empty summary text; return the historical handoff itself.');
       }
-      const id = randomUUID(), createdAt = new Date().toISOString();
-      const message: ModelMessage = { role: 'user', content: `${contextSegmentMarker}\n${JSON.stringify({
-        id, createdAt, sources: records.map((record, position) => ({ position, ref: record.ref })), sourceAttribution: 'host-batch-lineage', summary,
-        historical: true, verified: false, readWith: 'contextRead',
-      })}` };
+      if (input.maximumSummaryTokens && estimateRuntimeTextTokens(summary) > input.maximumSummaryTokens) {
+        throw new Error(`Handoff exceeds its ${input.maximumSummaryTokens}-token budget. Keep only essential task state.`);
+      }
+      const { id, createdAt, message } = historicalContextHandoff(input.messages, summary);
       input.validate?.(message);
-      return { message, segment: { id, ref: browserChatContextRecordId(message), sourceCount: records.length, createdAt } };
+      return { message, segment: { id, ref: browserChatContextRecordId(message), sourceCount: input.messages.length, createdAt } };
     } catch (error) {
       const failure = error instanceof Error ? error.message : String(error);
       if (attempt === attemptLimit) throw new ContextSummaryError(`Invalid handoff: ${failure}. Original window preserved.`, {

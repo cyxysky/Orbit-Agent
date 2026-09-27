@@ -252,9 +252,9 @@ function waitForInternalPort(port, hostname, child, timeoutMs = 60_000) {
   });
 }
 
-async function startApiRuntimeChild({ appDir, dev, externalPort }) {
+async function startApiRuntimeChild({ appDir, dev, externalPort, runtimePort }) {
   const hostname = '127.0.0.1';
-  const configuredPort = Number(process.env.WEBPILOT_RUNTIME_PORT || 0);
+  const configuredPort = Number(runtimePort || process.env.WEBPILOT_RUNTIME_PORT || 0);
   const port = Number.isInteger(configuredPort) && configuredPort > 0 && configuredPort <= 65_535
     ? configuredPort
     : await availableInternalPort(hostname);
@@ -291,6 +291,7 @@ function createApiRuntimeSupervisor({
   restartDelayMs = 250,
 }) {
   let current;
+  let runtimePort;
   let starting;
   let restartTimer;
   let stopped = false;
@@ -314,12 +315,15 @@ function createApiRuntimeSupervisor({
   };
 
   const start = async () => {
-    const runtime = await startRuntime({ appDir, dev, externalPort });
+    const runtime = await startRuntime({ appDir, dev, externalPort, runtimePort });
     if (stopped) {
       if (!runtime.child.killed) runtime.child.kill('SIGTERM');
       throw new Error('API runtime supervisor is stopped.');
     }
     current = runtime;
+    // Next workers retain their initial environment. Keep their API URL valid
+    // across child restarts instead of assigning a new ephemeral port each time.
+    runtimePort = runtime.port;
     runtime.child.once('exit', (code, signal) => {
       if (current !== runtime) return;
       current = undefined;

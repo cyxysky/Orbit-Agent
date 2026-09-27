@@ -1,6 +1,11 @@
 import { cookies, headers } from 'next/headers';
 import { SIDEBAR_COLLAPSED_COOKIE_NAME, sidebarCollapsedFromCookie } from '@/lib/sidebar-collapse';
 
+function retryableBackendConnection(error: unknown) {
+  const code = (error as { cause?: { code?: string } } | undefined)?.cause?.code;
+  return code === 'ECONNREFUSED' || code === 'ECONNRESET' || code === 'UND_ERR_SOCKET';
+}
+
 export async function readBackendPageData<T>(pathname: string): Promise<T> {
   const incoming = await headers();
   const origin = process.env.WEBPILOT_API_ORIGIN;
@@ -15,9 +20,25 @@ export async function readBackendPageData<T>(pathname: string): Promise<T> {
     forwarded.set('x-webpilot-identity-proof', process.env.WEBPILOT_IDENTITY_HEADER_SECRET || '');
   }
   forwarded.set('x-webpilot-backend-token', process.env.WEBPILOT_INTERNAL_REQUEST_TOKEN || '');
-  const response = await fetch(new URL(pathname, origin), { headers: forwarded, cache: 'no-store' });
-  if (!response.ok) throw new Error(`Unable to load page data (${response.status})`);
-  return response.json() as Promise<T>;
+  const deadline = Date.now() + 30_000;
+  let delay = 200;
+  for (;;) {
+    try {
+      const response = await fetch(new URL(pathname, process.env.WEBPILOT_API_ORIGIN || origin), {
+        headers: forwarded,
+        cache: 'no-store',
+        signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())),
+      });
+      if (!response.ok) throw new Error(`Unable to load page data (${response.status})`);
+      return await response.json() as T;
+    } catch (error) {
+      // These are read-only initialization requests. Never replay mutations or
+      // conceal authorization/application errors while the API recovers.
+      if (!retryableBackendConnection(error) || Date.now() + delay >= deadline) throw error;
+      await new Promise(resolve => setTimeout(resolve, delay));
+      delay = Math.min(delay * 2, 1000);
+    }
+  }
 }
 
 export async function readWorkspacePageContext() {

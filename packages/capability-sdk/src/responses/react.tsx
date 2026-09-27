@@ -2,7 +2,7 @@
 
 import { Component, Suspense, createElement, lazy, type ComponentType, type ReactNode } from 'react';
 import { ResponseRegistry, type ResponseBlock, type ResponseDefinition } from '../index.ts';
-import { markdownResponse, uiResponse } from './index.ts';
+import { htmlResponse, markdownResponse, uiResponse } from './index.ts';
 
 export type ResponseRenderContext = {
   identity: string;
@@ -73,7 +73,9 @@ export function RegisteredResponse({ block, registry, context }: {
 }
 
 const DataUI = lazy(() => import('./data-ui.tsx').then(module => ({ default: module.DeclarativeResponseView })));
+const HTMLUI = lazy(() => import('./html-ui.tsx').then(module => ({ default: module.HTMLResponseView })));
 export const coreResponseRenderers = [
   defineResponseRenderer({ definition: markdownResponse, component: ({ params, context }) => <>{context.renderMarkdown(params.text)}</> }),
   defineResponseRenderer({ definition: uiResponse, component: ({ params, context }) => <DataUI tree={params.tree} renderMarkdown={context.renderMarkdown} /> }),
+  defineResponseRenderer({ definition: htmlResponse, component: ({ params, context }) => <HTMLUI params={params} locale={context.locale} /> }),
 ];

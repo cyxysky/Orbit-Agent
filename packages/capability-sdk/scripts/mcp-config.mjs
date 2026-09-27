@@ -58,8 +58,8 @@ export const configSchema = {
       }),
       code: object('codeSandbox：本地 JavaScript/Python 执行与产物保存。临时工作区按执行器隔离。', {
         enabled,
-        timeoutMs: integer(30000, 1000, 300000, '单次代码执行超时（毫秒）。'),
-        installTimeoutMs: integer(120000, 5000, 300000, '依赖安装与执行共享的时间预算（毫秒）。'),
+        timeoutMs: integer(300000, 1000, 300000, '单次代码执行超时（毫秒）。'),
+        installTimeoutMs: integer(600000, 5000, 600000, '依赖安装的独立超时（毫秒）。'),
         maxOutputChars: integer(30000, 1000, 200000, 'stdout/stderr 合计字符上限；输出文件通过独立产物通道保存。'),
         maxConcurrent: integer(2, 1, 16, '本地代码执行器的并发任务上限。'),
         allowPackageInstall: boolean(true, '是否允许代码任务安装固定版本的 npm/Python 包。'),

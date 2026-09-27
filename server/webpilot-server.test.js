@@ -108,7 +108,7 @@ test('isolates the API runtime in development and production', () => {
   assert.equal(splitRuntimeEnabled(false, true, {}), false);
 });
 
-test('restarts the API runtime after the child process exits', async () => {
+test('restarts the API runtime on the same port used by existing Next workers', async () => {
   let starts = 0;
   const runtimes = [];
   const supervisor = createApiRuntimeSupervisor({
@@ -116,7 +116,7 @@ test('restarts the API runtime after the child process exits', async () => {
     dev: true,
     externalPort: 3000,
     restartDelayMs: 1,
-    startRuntime: async () => {
+    startRuntime: async ({ runtimePort }) => {
       starts += 1;
       const child = new EventEmitter();
       child.exitCode = null;
@@ -129,7 +129,7 @@ test('restarts the API runtime after the child process exits', async () => {
       const runtime = {
         child,
         hostname: '127.0.0.1',
-        port: 41_000 + starts,
+        port: runtimePort || 41_000 + starts,
         ready: Promise.resolve(),
       };
       runtimes.push(runtime);
@@ -143,7 +143,7 @@ test('restarts the API runtime after the child process exits', async () => {
   const second = await supervisor.ensure();
 
   assert.equal(first.port, 41_001);
-  assert.equal(second.port, 41_002);
+  assert.equal(second.port, first.port);
   assert.equal(starts, 2);
   await supervisor.stop();
   assert.equal(runtimes[1].child.killed, true);

@@ -30,6 +30,8 @@ export type ManagementDataTableColumn<T> = {
 
 export function ManagementDataTable<T>({
   columns,
+  emptyDescription,
+  emptyAction,
   emptyText,
   getId,
   getSearchText,
@@ -42,6 +44,8 @@ export function ManagementDataTable<T>({
   onDeleteItem,
 }: {
   columns: ManagementDataTableColumn<T>[];
+  emptyDescription?: string;
+  emptyAction?: ReactNode;
   emptyText: string;
   getId: (item: T) => string;
   getSearchText: (item: T) => string[];
@@ -166,6 +170,12 @@ export function ManagementDataTable<T>({
           sortable: Boolean(column.filter),
         }))]}
         data={filteredItems}
+        emptyDescription={hasActiveFilters ? undefined : emptyDescription}
+        emptyAction={hasActiveFilters ? (
+          <button className="management-table-empty-button" type="button" onClick={() => { setQuery(''); setSelectedIds(new Set()); }}>
+            {t('清空筛选')}
+          </button>
+        ) : emptyAction}
         emptyText={hasActiveFilters ? t('没有符合筛选条件的数据') : emptyText}
         getRowId={getId}
         minWidth={900}

@@ -12,6 +12,17 @@ function numberProp(props: Record<string, unknown>, name: string) {
   return typeof props[name] === 'number' && Number.isFinite(props[name]) ? props[name] : undefined;
 }
 
+function safeLinkHref(value: string) {
+  const href = value.trim();
+  if (!href) return '';
+  try {
+    const protocol = new URL(href, 'https://response.invalid/').protocol;
+    return ['http:', 'https:', 'mailto:', 'tel:'].includes(protocol) ? href : '';
+  } catch {
+    return '';
+  }
+}
+
 function renderChildren(
   children: UINode['children'],
   renderMarkdown?: (markdown: string) => ReactNode,
@@ -100,7 +111,16 @@ function DeclarativeNode({
   if (node.type === 'timeline') return <ol className="capability-response-ui-timeline">{children.map((child, index) => <li key={index}>{child}</li>)}</ol>;
   if (node.type === 'link') {
     const href = textProp(props, 'href');
-    return <a href={href} rel="noreferrer" target="_blank">{textProp(props, 'label') || href || children}</a>;
+    const safeHref = safeLinkHref(href);
+    const label = textProp(props, 'label') || textProp(props, 'text') || (children.length ? children : href);
+    if (!safeHref) return <span className="capability-response-ui-link">{label}</span>;
+    const isDownload = /[?&]download=1(?:&|$)/.test(href);
+    return <a className="capability-response-ui-link" href={safeHref} rel="noopener noreferrer" target="_blank">
+      <span>{label}</span>
+      <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        {isDownload ? <><path d="M12 3v12m-4-4 4 4 4-4" /><path d="M5 16v4h14v-4" /></> : <><path d="M7 17 17 7M7 7h10v10" /></>}
+      </svg>
+    </a>;
   }
   return null;
 }

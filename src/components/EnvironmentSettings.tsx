@@ -2185,6 +2185,12 @@ export function EnvironmentSettings({
               },
             ]}
             emptyText={t('暂无个性化记忆')}
+            emptyDescription={t('把偏好留在这里，让每一次对话更懂你。')}
+            emptyAction={(
+              <button className="management-table-empty-button" onClick={openCreatePersonalMemory} type="button">
+                <Plus size={14} />{t('新增记忆')}
+              </button>
+            )}
             getId={(item) => item.id}
             getSearchText={(item) => [
               item.key,

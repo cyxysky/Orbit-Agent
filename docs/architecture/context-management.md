@@ -6,10 +6,10 @@
 
 ## 分工与请求顺序
 
-- `runtime-context-assembler.ts` 是纯投影函数：稳定系统规则和工具 Schema → 有序活动窗口 → 必要时补回当前用户原文 → 当前任务状态及按需资料 → 历史对照图和当前截图。它不访问数据库、不检索、不调用模型、不写入记忆。
+- `runtime-context-assembler.ts` 是纯投影函数：系统规则与当次运行参考资料组成 `system/instructions`，`messages` 保留有序活动窗口、必要时补回的当前用户原文、独立文件资料和当前截图。它不访问数据库、不检索、不调用模型、不写入记忆。
 - `runtime-context-runtime.ts` 负责预算检查、调用 Compactor、保存替换窗口和刷新观察。原生模式继续由现有 AI SDK 7 循环驱动；Codex 模式仍为每次一个 action object。不会套入示例工程的另一层循环。
 - `records/history` 保留原始证据；`active` 是独立检查点。恢复直接读取 active，不能用全量历史或事件重放重建窗口。
-- 已加载的用户 Skill 正文、当前时间和截图属于请求尾部，不写回活动文字窗口。用户原始消息按顺序直接保留；不再提供 taskContext 或执行计划工具，也不注入这两类状态。
+- 已加载的用户 Skill 正文和当前时间属于当次 `system/instructions`，截图仍属于请求尾部；这些动态资料不写回活动文字窗口。用户原始消息按顺序直接保留；不再提供 taskContext 或执行计划工具，也不注入这两类状态。
 
 ## 预算与滚动压缩
 

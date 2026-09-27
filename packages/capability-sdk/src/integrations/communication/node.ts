@@ -1,7 +1,6 @@
 export { createWeComBotConnection, normalizeWeComInboundMessage, WECOM_BOT_RUNTIME_REVISION, type WeComBotConnection, type WeComInboundMessage, type WeComInboundAttachment } from './wecom-bot.ts';
 import { randomUUID } from 'node:crypto';
 import { createCapabilityDocumentDatabase } from '../../node.ts';
-import path from 'node:path';
 import type { AgentConnector } from '../connectors/index.ts';
 import type { CapabilityExecutionContext, CapabilityRunContext } from '../../index.ts';
 export { createWeComMessageArguments, validateWeComMessageContent } from './wecom.ts';

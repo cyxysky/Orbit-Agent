@@ -141,8 +141,8 @@ codeSandbox：本地 JavaScript/Python 执行与产物保存。临时工作区�
 | 字段 | 类型 | 默认值 | 可选值/范围 | 说明 |
 | --- | --- | --- | --- | --- |
 | `tools.code.enabled` | boolean | `true` | — | 是否注册该工具；false 时不加载模块，不向 MCP 客户端暴露此工具。修改后重启 MCP。 对应 `AGENT_CODE_SANDBOX_ENABLED`。 |
-| `tools.code.timeoutMs` | integer | `30000` | 1000–300000 | 单次代码执行超时（毫秒）。 对应 `AGENT_CODE_SANDBOX_TIMEOUT_MS`。 |
-| `tools.code.installTimeoutMs` | integer | `120000` | 5000–300000 | 依赖安装与执行共享的时间预算（毫秒）。 对应 `AGENT_CODE_SANDBOX_INSTALL_TIMEOUT_MS`。 |
+| `tools.code.timeoutMs` | integer | `300000` | 1000–300000 | 单次代码执行超时（毫秒）。 对应 `AGENT_CODE_SANDBOX_TIMEOUT_MS`。 |
+| `tools.code.installTimeoutMs` | integer | `600000` | 5000–600000 | 依赖安装的独立超时（毫秒）。 对应 `AGENT_CODE_SANDBOX_INSTALL_TIMEOUT_MS`。 |
 | `tools.code.maxOutputChars` | integer | `30000` | 1000–200000 | stdout/stderr 合计字符上限；输出文件通过独立产物通道保存。 对应 `AGENT_CODE_SANDBOX_MAX_OUTPUT_CHARS`。 |
 | `tools.code.maxConcurrent` | integer | `2` | 1–16 | 本地代码执行器的并发任务上限。 对应 `AGENT_CODE_SANDBOX_MAX_CONCURRENCY`。 |
 | `tools.code.allowPackageInstall` | boolean | `true` | — | 是否允许代码任务安装固定版本的 npm/Python 包。 对应 `AGENT_CODE_SANDBOX_ALLOW_PACKAGE_INSTALL`。 |

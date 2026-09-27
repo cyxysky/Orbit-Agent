@@ -263,17 +263,17 @@
             },
             "timeoutMs": {
               "type": "integer",
-              "default": 30000,
+              "default": 300000,
               "minimum": 1000,
               "maximum": 300000,
               "description": "单次代码执行超时（毫秒）。"
             },
             "installTimeoutMs": {
               "type": "integer",
-              "default": 120000,
+              "default": 600000,
               "minimum": 5000,
-              "maximum": 300000,
-              "description": "依赖安装与执行共享的时间预算（毫秒）。"
+              "maximum": 600000,
+              "description": "依赖安装的独立超时（毫秒）。"
             },
             "maxOutputChars": {
               "type": "integer",

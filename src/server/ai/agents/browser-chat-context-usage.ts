@@ -9,7 +9,7 @@ export type BrowserChatContextUsageSnapshot = {
   toolTokens: number;
 };
 
-/** Use the same saved request background for live, idle and restored sessions. */
+/** Estimate against the saved request, including legacy background messages only when that request used one. */
 export function browserChatActiveContextUsage(
   context: BrowserChatModelContext,
   maxTokens: number,
@@ -17,7 +17,7 @@ export function browserChatActiveContextUsage(
 ): BrowserChatContextUsageSnapshot {
   const manifest = context.lastRequest;
   const system = manifest?.systemRef ? context.records[manifest.systemRef]?.content : '';
-  const backgroundRef = context.backgroundRef || manifest?.backgroundRef;
+  const backgroundRef = manifest ? manifest.backgroundRef : context.backgroundRef;
   const background = backgroundRef ? context.records[backgroundRef] : undefined;
   const schema = manifest?.toolSchemaRef ? context.records[manifest.toolSchemaRef]?.content : undefined;
   const estimated = estimateRuntimeMessageContext({

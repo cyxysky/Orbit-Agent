@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import type { ModelMessage } from 'ai';
 import { assembleRuntimeContext, runtimeContextMessageRef, type RuntimeContextInput, type ContextCompressionProgress } from './runtime-context-assembler';
-import { contextSummaryInputTokens, contextSegmentMarker, summarizeContextBatch, parseContextSummary, ContextSummaryError, type ContextSummaryGenerator, type ContextSummaryRetry } from './runtime-semantic-summary';
+import { contextSummaryInputTokens, contextSegmentMarker, historicalContextHandoff, summarizeContextBatch, parseContextSummary, ContextSummaryError, type ContextSummaryGenerator, type ContextSummaryRetry } from './runtime-semantic-summary';
 import { isOriginalBrowserChatUserMessage } from './browser-chat-model-context';
 import { skillBodyKeysForPreservation } from './hidden-runtime-skills';
 import { hasSourceFileReceipt, prepareRuntimeSourceFiles } from './runtime-source-files';
 
-type Checkpoint = { messages: ModelMessage[]; activeMessages: ModelMessage[]; continuationSummary: string; removedIndexes: number[]; compressedMessages: number; segmentRecords: ModelMessage[] };
+type Checkpoint = { system: string; messages: ModelMessage[]; activeMessages: ModelMessage[]; continuationSummary: string; removedIndexes: number[]; compressedMessages: number; segmentRecords: ModelMessage[] };
 /** Owns compaction and persistence; the assembler remains a deterministic projection. */
 export async function prepareRuntimeContext(input: RuntimeContextInput & {
   continuationSummary: string; compressionTriggerTokens: number; compressionTargetTokens: number;
@@ -16,7 +16,7 @@ export async function prepareRuntimeContext(input: RuntimeContextInput & {
   failedCompactions?: Map<string, ContextSummaryError>;
   abortSignal?: AbortSignal;
   refreshObservations?: () => Promise<ModelMessage[]>;
-  onProgress?: (progress: ContextCompressionProgress, messages: ModelMessage[]) => void | Promise<void>;
+  onProgress?: (progress: ContextCompressionProgress, messages: ModelMessage[], system: string) => void | Promise<void>;
   onCheckpoint?: (checkpoint: Checkpoint) => void | Promise<void>;
 }) {
   const files = prepareRuntimeSourceFiles({ messages: input.messages, records: input.sourceRecords,
@@ -111,7 +111,16 @@ export async function prepareRuntimeContext(input: RuntimeContextInput & {
     // A short isolated exchange can cost more as a handoff once its source
     // references are included. Prefer substantial batches, including earlier
     // handoffs, and keep searching after one batch fails validation.
-    const eligible = batches.filter(batch => batch.sourceTokens >= Math.max(600, batch.messages.length * 75));
+    const eligible = batches.filter(batch => batch.sourceTokens >= Math.max(600, batch.messages.length * 75))
+      .map(batch => {
+        const emptyHandoff = historicalContextHandoff(batch.messages, '').message;
+        const replacement = [...active.slice(0, batch.start), emptyHandoff, ...active.slice(batch.end)];
+        const fixedCost = assembleRuntimeContext({ ...input, messages: replacement, pinnedUser, observations }).manifest.estimatedTokensAfter;
+        return { ...batch, maximumSummaryTokens: packet.manifest.estimatedTokensAfter - fixedCost - 128 };
+      })
+      // The source references and envelope can cost most of an isolated exchange.
+      // Do not call the model when there is too little room for a useful handoff.
+      .filter(batch => batch.maximumSummaryTokens >= 400);
     eligible.sort((left, right) => right.sourceTokens - left.sourceTokens || left.start - right.start);
     const available = eligible.filter(candidate => !rejectedBatchKeys.has(candidate.key) && !input.failedCompactions?.has(candidate.key));
     const candidates = available.slice(0, 4);
@@ -135,13 +144,14 @@ export async function prepareRuntimeContext(input: RuntimeContextInput & {
     const waveMessageCount = candidates.reduce((count, candidate) => count + candidate.messages.length, 0);
     await input.onProgress?.({ stage: 'start', completedMessages: compressedMessages,
       totalMessages: compressedMessages + waveMessageCount, beforeTokens, afterTokens: packet.manifest.estimatedTokensAfter,
-      parallelBatchCount: candidates.length }, packet.messages);
+      parallelBatchCount: candidates.length }, packet.messages, packet.system);
     const sourceWindow = active;
     const sourceWindowTokens = packet.manifest.estimatedTokensAfter;
     const outcomes = await Promise.all(candidates.map(async (batch) => {
       try {
         const candidate = await summarizeContextBatch({ currentRequest: pinnedUser, messages: batch.messages,
-          maximumInputTokens, generate: input.generateSummary, onRetry: input.onSummaryRetry, abortSignal: input.abortSignal,
+          maximumInputTokens, maximumSummaryTokens: batch.maximumSummaryTokens,
+          generate: input.generateSummary, onRetry: input.onSummaryRetry, abortSignal: input.abortSignal,
           validate: (message) => {
             const replacement = [...sourceWindow.slice(0, batch.start), message, ...sourceWindow.slice(batch.end)];
             if (assembleRuntimeContext({ ...input, messages: replacement, pinnedUser, observations }).manifest.estimatedTokensAfter >= sourceWindowTokens) {
@@ -191,7 +201,7 @@ export async function prepareRuntimeContext(input: RuntimeContextInput & {
       const nextState = { version: 3 as const, epoch: state.epoch + 1, handoffRef: candidate.segment.ref,
         pinnedUserRef: pinnedUser ? runtimeContextMessageRef(pinnedUser) : undefined };
       // Commit the complete replacement and audit evidence before publishing it in memory.
-      await input.onCheckpoint?.({ messages: nextPacket.messages, activeMessages: replacement,
+      await input.onCheckpoint?.({ system: nextPacket.system, messages: nextPacket.messages, activeMessages: replacement,
         continuationSummary: JSON.stringify(nextState), removedIndexes: [],
         compressedMessages: compressedMessages + batch.messages.length, segmentRecords: [...sourceFileReceipts, candidate.message] });
       active = replacement; state = nextState; compressedMessages += batch.messages.length;
@@ -200,7 +210,7 @@ export async function prepareRuntimeContext(input: RuntimeContextInput & {
       removedBefore += batch.messages.length - 1;
       packet = build();
       await input.onProgress?.({ stage: 'batch', completedMessages: compressedMessages,
-        totalMessages: compressedMessages, beforeTokens, afterTokens: packet.manifest.estimatedTokensAfter }, packet.messages);
+        totalMessages: compressedMessages, beforeTokens, afterTokens: packet.manifest.estimatedTokensAfter }, packet.messages, packet.system);
     }
     if (packet.manifest.estimatedTokensAfter <= input.compressionTargetTokens) break;
   }

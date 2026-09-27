@@ -1,4 +1,4 @@
-import { queryDatabase, queryDatabaseOne } from '@/server/db/database';
+import { databaseDriver, queryDatabase, queryDatabaseOne } from '@/server/db/database';
 import { runtimeMetricsSnapshot } from '@/server/observability/runtime-observability';
 import { databaseWriteQueueSnapshot } from '@/server/storage/database-write-queue';
 import { fileTextExtractionPoolSnapshot } from '@/server/capabilities/webpilot-file-observability';
@@ -372,7 +372,39 @@ function boundedRangeDays(value: number) {
   return 90;
 }
 
-export async function readAiOperationsDashboard(
+/** Keyset pages release raw tool results and logs as soon as they are counted. */
+async function* dashboardRows<T>(sql: string, parameters: unknown[], keys: string[]): AsyncGenerator<T> {
+  let cursor: unknown[] | undefined;
+  for (;;) {
+    const comparison = keys.length === 1 ? `${keys[0]} > ?` : `(${keys.join(', ')}) > (${keys.map(() => '?').join(', ')})`;
+    const rows = await queryDatabase<T & Record<string, unknown>>(
+      `${sql} ${cursor ? `AND ${comparison}` : ''} ORDER BY ${keys.join(', ')} LIMIT 8`,
+      [...parameters, ...(cursor || [])],
+    );
+    if (!rows.length) return;
+    for (const row of rows) yield row;
+    const last = rows[rows.length - 1];
+    cursor = keys.map(key => last[key.split('.').at(-1)!]);
+    if (rows.length < 8) return;
+    // SQLite queries resolve synchronously; let other API requests run between pages.
+    await new Promise<void>(resolve => setImmediate(resolve));
+  }
+}
+
+const pendingDashboards = new Map<string, Promise<AiOperationsDashboardData>>();
+
+export function readAiOperationsDashboard(rangeDaysValue = 30, trendUserIdValue?: unknown): Promise<AiOperationsDashboardData> {
+  const rangeDays = boundedRangeDays(rangeDaysValue);
+  const trendUserId = text(trendUserIdValue) || undefined;
+  const key = JSON.stringify([rangeDays, trendUserId]);
+  const pending = pendingDashboards.get(key);
+  if (pending) return pending;
+  const result = buildAiOperationsDashboard(rangeDays, trendUserId).finally(() => pendingDashboards.delete(key));
+  pendingDashboards.set(key, result);
+  return result;
+}
+
+async function buildAiOperationsDashboard(
   rangeDaysValue = 30,
   trendUserIdValue?: unknown,
 ): Promise<AiOperationsDashboardData> {
@@ -382,8 +414,7 @@ export async function readAiOperationsDashboard(
   const since = new Date(now.getTime() - (rangeDays - 1) * 24 * 60 * 60 * 1000);
   since.setUTCHours(0, 0, 0, 0);
   const sinceIso = since.toISOString();
-  const [sessions, allLiveSessions, archivedChatSessions, messages, steps, logs,
-    automationRuns, automationCases, scheduleCount] = await Promise.all([
+  const [sessions, allLiveSessions, archivedChatSessions, automationCases, scheduleCount] = await Promise.all([
     queryDatabase<SessionRow>(`
     SELECT id, user_id, title, status, summary_json, created_at, updated_at
     FROM browser_chat_session
@@ -393,32 +424,6 @@ export async function readAiOperationsDashboard(
     SELECT id FROM browser_chat_session
   `),
     readArchivedAiOperationsChatSessions(),
-    queryDatabase<MessageRow>(`
-    SELECT message.session_id, message.time, message.record_json, session.user_id
-    FROM browser_chat_message AS message
-    JOIN browser_chat_session AS session ON session.id = message.session_id
-    WHERE message.time >= ?
-    ORDER BY message.time ASC
-  `, [sinceIso]),
-    queryDatabase<StepRow>(`
-    SELECT step.session_id, step.record_json, session.user_id
-    FROM browser_chat_step AS step
-    JOIN browser_chat_session AS session ON session.id = step.session_id
-    WHERE session.updated_at >= ?
-  `, [sinceIso]),
-    queryDatabase<LogRow>(`
-    SELECT log.session_id, log.time, log.record_json, session.user_id
-    FROM browser_chat_log AS log
-    JOIN browser_chat_session AS session ON session.id = log.session_id
-    WHERE log.time >= ?
-    ORDER BY log.time ASC
-  `, [sinceIso]),
-    queryDatabase<AutomationRunRow>(`
-    SELECT id, user_id, case_id, status, record_json, created_at, updated_at
-    FROM automation_run
-    WHERE updated_at >= ?
-    ORDER BY updated_at DESC
-  `, [sinceIso]),
     queryDatabase<AutomationCaseRow>(`
     SELECT id, title, record_json FROM automation_case
   `),
@@ -457,7 +462,12 @@ export async function readAiOperationsDashboard(
   let chatInterrupted = 0;
   let chatRunning = 0;
 
-  for (const row of messages) {
+  for await (const row of dashboardRows<MessageRow>(`
+    SELECT message.id, message.session_id, message.time, message.record_json,
+      (SELECT user_id FROM browser_chat_session WHERE id = message.session_id) AS user_id
+    FROM browser_chat_message AS message
+    WHERE message.time >= ?
+  `, [sinceIso], ['message.session_id', 'message.id'])) {
     const message = parseRecord(row.record_json);
     const role = text(message.role);
     const session = sessionById.get(row.session_id);
@@ -510,7 +520,13 @@ export async function readAiOperationsDashboard(
     }
   }
 
-  for (const row of logs) {
+  const logPhase = databaseDriver() === 'postgres' ? "CAST(log.record_json AS jsonb)->>'phase'" : "json_extract(log.record_json, '$.phase')";
+  for await (const row of dashboardRows<LogRow>(`
+    SELECT log.id, log.session_id, log.time, log.record_json,
+      (SELECT user_id FROM browser_chat_session WHERE id = log.session_id) AS user_id
+    FROM browser_chat_log AS log
+    WHERE log.time >= ? AND ${logPhase} IN ('ai:runtime:object', 'ai:runtime:response')
+  `, [sinceIso], ['log.session_id', 'log.id'])) {
     const usage = usageFromLog(row.record_json);
     if (!usage) continue;
     const session = sessionById.get(row.session_id);
@@ -523,7 +539,11 @@ export async function readAiOperationsDashboard(
   }
 
   let repairs = 0;
-  for (const row of steps) {
+  for await (const row of dashboardRows<StepRow>(`
+    SELECT step.session_id, step.step_index, step.record_json
+    FROM browser_chat_step AS step
+    WHERE EXISTS (SELECT 1 FROM browser_chat_session WHERE id = step.session_id AND updated_at >= ?)
+  `, [sinceIso], ['step.session_id', 'step.step_index'])) {
     const step = parseRecord(row.record_json);
     for (const tool of arrayValue(step.tools)) {
       const record = parseRecord(tool);
@@ -600,7 +620,13 @@ export async function readAiOperationsDashboard(
   let automationBlocked = 0;
   let automationInterrupted = 0;
   let automationRunning = 0;
-  for (const row of automationRuns) {
+  let automationRunCount = 0;
+  for await (const row of dashboardRows<AutomationRunRow>(`
+    SELECT id, user_id, case_id, status, record_json, created_at, updated_at
+    FROM automation_run
+    WHERE updated_at >= ?
+  `, [sinceIso], ['id'])) {
+    automationRunCount += 1;
     const run = parseRecord(row.record_json);
     const automationCase = caseById.get(row.case_id);
     const eventTime = text(run.finishedAt) || text(run.startedAt) || row.updated_at || row.created_at;
@@ -686,7 +712,7 @@ export async function readAiOperationsDashboard(
     ...metric,
     sessionCount: sessionIds.size,
   })).sort((left, right) => right.taskCount - left.taskCount || right.calls - left.calls);
-  const totalTasks = chatTasks + automationRuns.length;
+  const totalTasks = chatTasks + automationRunCount;
   const runningSessions = sessions.filter((row) => normalizedStatus(row.status) === 'running').length;
   const inputTokens = modelRows.reduce((sum, item) => sum + item.inputTokens, 0);
   const outputTokens = modelRows.reduce((sum, item) => sum + item.outputTokens, 0);
@@ -706,7 +732,7 @@ export async function readAiOperationsDashboard(
     models: modelRows.slice(0, 30),
     overview: {
       activeUsers: users.size,
-      automationRuns: automationRuns.length,
+      automationRuns: automationRunCount,
       averageDurationMs: durations.length ? Math.round(durations.reduce((sum, value) => sum + value, 0) / durations.length) : 0,
       blocked,
       chatTasks,

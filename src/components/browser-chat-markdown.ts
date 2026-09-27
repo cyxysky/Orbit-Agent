@@ -129,8 +129,16 @@ function restoreCollapsedNestedLists(value: string) {
   }).join('\n');
 }
 
+function normalizeEnumeratedCatalog(value: string) {
+  return value.split('\n').map((line) => {
+    const items = line.split(/[ \t]*｜[ \t]*/);
+    if (items.length < 3 || !items.every((item) => /^(?:图\d+|表(?:\d+|[A-Za-z])(?:-\d+)?)[ \t]+\S/.test(item))) return line;
+    return items.map((item) => `- ${item}`).join('\n');
+  }).join('\n');
+}
+
 function normalizeMarkdownSegment(value: string) {
-  return normalizeLoosePipeTables(restoreCollapsedMarkdownBlocks(restoreCollapsedNestedLists(value)))
+  return normalizeLoosePipeTables(restoreCollapsedMarkdownBlocks(normalizeEnumeratedCatalog(restoreCollapsedNestedLists(value))))
     .replace(/(^|\n)(#{1,6})(?=[^\s#])/g, '$1$2 ')
     .replace(/\\\*\\\*([^\n]+?)\\\*\\\*/g, '**$1**')
     .replace(/\*\*((?:https?:\/\/)[^\s*<>]+)\*\*/gi, '**<$1>**')
