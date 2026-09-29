@@ -151,6 +151,18 @@ export function aiStreamTimeouts(requestTimeoutMs = aiRequestTimeoutMs()) {
   };
 }
 
+/** Agent prompts and reasoning can need minutes before the first useful output.
+ * Auxiliary-call settings must not prematurely cancel the agent request.
+ * Recovery increases the first-output allowance, bounded by its request timeout. */
+export function aiRuntimeStreamTimeouts(requestTimeoutMs = aiRuntimeRequestTimeoutMs(), retryAttempt = 0) {
+  const baseMs = positiveInteger(process.env.AI_RUNTIME_FIRST_CHUNK_TIMEOUT_MS, 180_000);
+  const exponent = Math.min(10, Math.max(0, Math.floor(retryAttempt) || 0));
+  return {
+    ...aiStreamTimeouts(requestTimeoutMs),
+    firstChunkMs: Math.min(requestTimeoutMs, baseMs * 2 ** exponent),
+  };
+}
+
 export function aiTelemetry(functionId: string): TelemetryOptions {
   return {
     isEnabled: process.env.AI_TELEMETRY_ENABLED !== 'false',

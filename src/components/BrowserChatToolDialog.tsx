@@ -35,6 +35,7 @@ function toolStatusLabel(tool: BrowserChatToolCall, step: StepExecutionResult) {
 }
 
 function toolStatusTone(status: string) {
+  if (status === '部分完成，已保存') return 'warning';
   if (status === '动作未执行' || status === '已返回数据，未操作') return 'warning';
   if (status.includes('校验失败') || status.includes('仍有冲突')) return 'warning';
   if (status === '失败') return 'danger';

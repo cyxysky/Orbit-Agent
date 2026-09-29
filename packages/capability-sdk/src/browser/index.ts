@@ -14,6 +14,7 @@ import { browserCapabilitySettings } from './settings.ts';
 import { browserRuntimeSkill, browserRuntimeReferenceSkills, browserInteractiveQaSkill } from './runtime-skill.ts';
 
 export * from './output-settings.ts';
+export * from './interaction-schema.ts';
 export * from './runtime-skill.ts';
 export * from './settings.ts';
 export * from './session-group.ts';

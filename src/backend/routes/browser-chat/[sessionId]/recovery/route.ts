@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { getBrowserChatSession, requestBrowserChatMemoryExtraction } from '@/server/ai/agents/browser-chat.service';
-import { listMemoryCandidates, reviewMemoryProposal } from '@/server/ai/runtime-memory-lifecycle';
+import { listMemoryCandidates, listMemoryJobs, reviewMemoryProposal } from '@/server/ai/runtime-memory-lifecycle';
+import { personalMemoryExtractionEnabled } from '@/server/ai/personal-memory';
 import { requestApplicationUserId } from '@/server/auth/user-context';
 import { apiError, apiJson, parseJsonRequest, ApiRequestError } from '@/server/http/api-request';
 import type { BrowserChatSessionRouteContext } from '@/server/http/browser-chat-route';
@@ -14,7 +15,9 @@ export async function GET(request: Request, context: BrowserChatSessionRouteCont
   try {
     const { sessionId } = await context.params;
     await sessionFor(request, sessionId);
-    return apiJson(request, { candidates: await listMemoryCandidates(sessionId, String(requestApplicationUserId(request))) });
+    const userId = String(requestApplicationUserId(request));
+    const [candidates, jobs] = await Promise.all([listMemoryCandidates(sessionId, userId), listMemoryJobs(sessionId, userId)]);
+    return apiJson(request, { candidates, jobs, extractionEnabled: personalMemoryExtractionEnabled() });
   } catch (error) { return apiError(request, error, { fallback: '无法读取记忆候选' }); }
 }
 export async function POST(request: Request, context: BrowserChatSessionRouteContext) {

@@ -111,7 +111,12 @@ function localizedOfficeSourceMessage(message: string) {
 }
 
 export function browserChatToolOutcomeLabel(value: unknown) {
-  const record = asRecord(value);
+  const record = asRecord(typeof value === 'string' ? parsedJsonValue(value) : value);
+  const data = asRecord(record?.data);
+  if (data?.kind === 'context-compression' && data.committed === true) {
+    if (data.status === 'partial') return '部分完成，已保存';
+    if (data.status === 'limited') return '已压缩，保留必要内容';
+  }
   if (record?.outcome === 'not-executed' || (typeof value === 'string' && value.startsWith('未执行：'))) return '未执行';
   if (record?.failureCategory === 'missing-tool-receipt') return '无执行记录';
   const failure = officeSourceValidationFailure(value);

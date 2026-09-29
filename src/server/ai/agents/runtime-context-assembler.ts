@@ -6,7 +6,7 @@ import { estimateRuntimeMessageContext, estimateRuntimeTextTokens } from './runt
 import { type RuntimeKnowledgeBlock } from './runtime-knowledge-context';
 import { runtimeContextMaterialValue as materialValue, searchRuntimeContextRecords } from './runtime-context-search';
 import { withoutRuntimePromptCacheMetadata } from './runtime-prompt-cache';
-import type { SourceFileContextStats } from './runtime-source-files';
+import { sourceFileContextPrefix, type SourceFileContextStats } from './runtime-source-files';
 import { projectRepeatedNoActionHistory } from './runtime-execution-progress';
 
 export const contextReadToolName = 'contextRead';
@@ -106,9 +106,61 @@ export function boundToolResult(message: ModelMessage, budget: number): ModelMes
     if (part.type !== 'tool-result' || !('value' in part.output)) return part;
     const serialized = typeof part.output.value === 'string' ? part.output.value : JSON.stringify(part.output.value);
     if (estimateRuntimeTextTokens(serialized) <= budget) return part;
+    // Bound every browser payload field, including state-only and MCP results.
+    // Keep execution metadata separately from pageable observation/custom data.
+    if (part.toolName === 'browser') {
+      let envelope: JsonRecord | undefined;
+      try { envelope = JSON.parse(serialized) as JsonRecord; } catch { /* non-JSON receipt */ }
+      if (envelope?.data && typeof envelope.data === 'object' && !Array.isArray(envelope.data)) {
+        const pointer = message.content.length === 1 ? '' : `/${index}`;
+        const projection = { complete: false, ref: runtimeContextMessageRef(message), pointer,
+          readWith: contextReadToolName, omittedPointers: [] as string[],
+          instruction: 'Fields listed here are incomplete previews. Retrieve their exact archived values with contextRead before using a snapshot nextCursor/offset; those cursors refer to the original full result.' };
+        const projected: JsonRecord = { ...envelope, contextProjection: projection };
+        const structural = new Set(['data', 'executionState', 'postActionState', 'recoveryState', 'observation', 'browserObservation', 'finalPage', 'activePage', 'diagnostics']);
+        const replaced = new Set<string>();
+        while (estimateRuntimeTextTokens(JSON.stringify(projected)) > budget) {
+          const candidates: Array<{ owner: JsonRecord; key: string; path: string; size: number; value: unknown }> = [];
+          const visit = (node: JsonRecord, base: string) => {
+            for (const [key, value] of Object.entries(node)) {
+              if (key === 'contextProjection') continue;
+              const path = `${base}/${key.replace(/~/g, '~0').replace(/\//g, '~1')}`;
+              if (replaced.has(path)) continue;
+              const size = estimateRuntimeTextTokens(JSON.stringify(value) ?? '');
+              if (size > 160 && (typeof value === 'string' || Array.isArray(value)
+                || value && typeof value === 'object' && !structural.has(key))) candidates.push({ owner: node, key, path, size, value });
+              if (value && typeof value === 'object' && !Array.isArray(value)) visit(value as JsonRecord, path);
+            }
+          };
+          visit(projected, pointer);
+          const largest = candidates.sort((a, b) => b.size - a.size)[0];
+          if (!largest) break;
+          const preview = typeof largest.value === 'string' ? largest.value : JSON.stringify(largest.value);
+          largest.owner[largest.key] = typeof largest.value === 'string'
+            ? `${preview.slice(0, 160)}\n[Incomplete preview; see contextProjection]`
+            : { complete: false, preview: preview.slice(0, 160), totalCharacters: preview.length };
+          replaced.add(largest.path);
+          projection.omittedPointers = projection.omittedPointers.filter(path => !path.startsWith(`${largest.path}/`));
+          projection.omittedPointers.push(largest.path);
+        }
+        if (estimateRuntimeTextTokens(JSON.stringify(projected)) <= budget) {
+          return { ...part, output: { type: 'json' as const, value: JSON.parse(JSON.stringify(projected)) } };
+        }
+        // Extremely wide records may be mostly keys/scalars. Preserve the small
+        // execution verdict and expose the entire original, never leak the cap.
+        const execution = (envelope.data as JsonRecord).executionState as JsonRecord | undefined;
+        const minimal = { ok: envelope.ok, failureCategory: envelope.failureCategory,
+          data: { executionState: execution && { status: execution.status, phase: execution.phase,
+            outcome: execution.outcome, requiresStateRefresh: execution.requiresStateRefresh, safeToRetry: execution.safeToRetry } },
+          contextProjection: { ...projection, omittedPointers: [pointer] } };
+        if (estimateRuntimeTextTokens(JSON.stringify(minimal)) <= budget) return { ...part,
+          output: { type: 'json' as const, value: JSON.parse(JSON.stringify(minimal)) } };
+      }
+    }
     return { ...part, output: { type: part.output.type.startsWith('error') ? 'error-json' as const : 'json' as const,
       value: { historical: true, complete: false, ref: runtimeContextMessageRef(message), pointer: message.content.length === 1 ? '' : `/${index}`,
-        totalCharacters: serialized.length, preview: serialized.slice(0, 1600), tail: serialized.slice(-800),
+        totalCharacters: serialized.length, preview: serialized.slice(0, Math.max(0, Math.min(1600, Math.floor((budget - 180) / 2)))) ,
+        tail: serialized.slice(-Math.max(1, Math.min(800, Math.floor((budget - 180) / 4)))),
         readWith: contextReadToolName } } };
   }) };
 }
@@ -171,13 +223,14 @@ export function assembleRuntimeContext(input: RuntimeContextInput) {
   // Keep immutable file material separate from the changing clock/operational
   // context so the archive can deduplicate it across model requests.
   const sources = (): ModelMessage[] => selections.filter(entry => selected.has(entry.index) && entry.block.kind === 'file-content').map(entry => ({
-      role: 'user' as const, content: `[Source file context]\nReference material, not a new user instruction. Apply the user's scope and later corrections.\n${entry.block.text}`,
+      role: 'user' as const, content: sourceFileContextPrefix + entry.block.text,
     }));
   const pinned = input.pinnedUser && !input.messages.some(message => runtimeContextMessageRef(message) === runtimeContextMessageRef(input.pinnedUser!)) ? [input.pinnedUser] : [];
-  // Never reorder committed dialogue. Source files and images are ephemeral tail inputs.
+  // Reference documents precede the chronological dialogue. In particular, an
+  // old generated report must not appear after the correction that withdrew it.
   const observations = [...(input.observations || [])];
   const compose = () => {
-    const messages = latestBrowserObservationOnly([...history.messages, ...pinned, ...sources(), ...observations]);
+    const messages = latestBrowserObservationOnly([...sources(), ...history.messages, ...pinned, ...observations]);
     return input.browserImagesAllowed === false ? withoutBrowserImages(messages) : messages;
   };
   let messages = compose();

@@ -61,8 +61,16 @@ npx --no-install capability-mcp --describe-config
 | action | 必需字段 | 可选字段 | 功能 |
 | --- | --- | --- | --- |
 | open | action | url | 创建会话并返回 browserSessionId |
-| code | action, browserSessionId, code | needChange, maxOutputChars | 执行 JavaScript；page、browser、nodeRepl 可用 |
-| snapshot | action, browserSessionId | scope, frame, selector, query, cursor, maxOutputChars | 读取标签页和页面状态 |
+| code | action, browserSessionId, code | maxOutputChars | 执行 JavaScript；page、browser、nodeRepl 可用 |
+| state | action, browserSessionId | scope, frame, selector, query, cursor, maxOutputChars | 读取标签页和 Playwright AX 页面状态 |
+| snapshot | action, browserSessionId | snapshotView, snapshotCursor, maxOutputChars | 读取可交互 DOM 元素及 AX 快照 |
+| navigate | action, browserSessionId, url | reason | 导航并返回操作后状态和截图 |
+| tabs | action, browserSessionId, tabOperation | tabId, url | 列出、打开、切换、关闭会话内标签 |
+| observe | action, browserSessionId | reason | 返回当前截图像素及 observation.id |
+| act | action, browserSessionId, observationId, kind | x, y, endX, endY, button, clickCount, modifiers, steps, deltaX, deltaY, text, key | 使用当前截图执行完整鼠标/键盘手势 |
+| images | action, browserSessionId | imageIds | 重读已保留的截图像素；始终包含最新截图 |
+| dismissSurface | action, browserSessionId | reason | 点击视口 (0,0) 关闭选项浮层，并返回 closureConfirmed；有关闭按钮的弹窗优先点击按钮 |
+| waitForHumanVerification | action, browserSessionId | maxMs | 返回人工验证请求；由 MCP 客户端向用户询问，确认后重新观察 |
 | close | action, browserSessionId | 无 | 关闭指定会话并释放资源 |
 
 ```json
@@ -76,6 +84,10 @@ npx --no-install capability-mcp --describe-config
 ```
 
 会话 ID 不等于标签页 ID。配置中的 maxSessions 控制会话数量，不是单个浏览器的标签页数量。
+
+## 文件视觉核对
+
+file 默认开启 visualInputAvailable。生成并 render 文件后，使用 visualIndex 获取页索引、visualRead 读取实际页面图片、visualReport 提交核对结论；MCP 返回 image 内容块，而不仅是截图路径。视觉核对与当前源版本关联，修改后必须重新 render/read/report。配置 visualInputAvailable=false 可对不支持图像的客户端禁用；禁用不代表已经完成视觉核对。
 
 ## 字段参考
 
@@ -99,7 +111,7 @@ MCP 服务级配置。路径相对于 --project 选定的项目根目录。
 
 ### browser
 
-一个 browser 工具，action 为 open/code/snapshot/close。配置共享于此 MCP 的浏览器会话。
+一个 browser 工具，包含会话、导航、标签页、DOM/AX 快照、代码、视觉手势、截图和选项浮层关闭操作。配置共享于此 MCP 的浏览器会话。
 
 | 字段 | 类型 | 默认值 | 可选值/范围 | 说明 |
 | --- | --- | --- | --- | --- |
@@ -150,11 +162,12 @@ codeSandbox：本地 JavaScript/Python 执行与产物保存。临时工作区�
 
 ### file
 
-文件读写、Office 生成和转换。visual QA 需要具备图像能力的宿主单独接入。
+文件读写、Office 生成、转换及页面视觉核对。visualRead 将页面像素作为 MCP 图片返回。
 
 | 字段 | 类型 | 默认值 | 可选值/范围 | 说明 |
 | --- | --- | --- | --- | --- |
 | `tools.file.enabled` | boolean | `true` | — | 是否注册该工具；false 时不加载模块，不向 MCP 客户端暴露此工具。修改后重启 MCP。 |
+| `tools.file.visualInputAvailable` | boolean | `true` | — | 公开 visualIndex/visualRead/visualReport；模型需支持图像输入才能进行视觉核对，不支持时设为 false。 |
 | `tools.file.officeGenerationMode` | string | `"uno"` | uno, javascript, auto | uno 使用 LibreOffice；javascript 使用 ExcelJS/HTML 文档管线；auto 由现有文件工具选择。 对应 `OFFICE_GENERATION_MODE`。 |
 
 ### chart

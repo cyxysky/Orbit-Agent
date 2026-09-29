@@ -1,5 +1,5 @@
 import { normalizeBrowserChatInteractionMode, type BrowserChatInteractionMode } from '@/lib/browser-chat-interaction-mode';
-import { enqueueMemoryJob, runMemoryJobs } from '../runtime-memory-lifecycle';
+import { enqueueMemoryJob } from '../runtime-memory-lifecycle';
 import { browserChatHasPendingHumanInput } from '@/lib/browser-chat-tools';
 import { browserChatToolSource } from '@/lib/browser-chat-tool-source';
 import { compareBrowserChatSessionCreation } from '@/lib/browser-chat-session-order';
@@ -121,6 +121,7 @@ import {
   markPersonalMemoryItemsUsed,
   normalizePersonalMemoryDomain,
   personalMemoryEnabled,
+  personalMemoryExtractionEnabled,
   searchPersonalMemory,
 } from '@/server/ai/personal-memory';
 import { createPersonalMemoryTools } from '@/server/ai/personal-memory-tools';
@@ -905,7 +906,7 @@ async function queuePersonalMemoryExtraction(input: {
   userMessageId: string;
   assistantMessageId: string;
 }) {
-  if (!personalMemoryEnabled()) return;
+  if (!personalMemoryExtractionEnabled()) return;
   const sessionId = input.session.id;
   const sessionUserId = input.session.userId;
   const targetUrl = input.session.targetUrl;
@@ -925,6 +926,7 @@ async function queuePersonalMemoryExtraction(input: {
   const extractionSteps = input.result.newSteps.slice(-32).map(compactStepForRealtime);
   return enqueueMemoryJob({ userId: normalizeUserId(sessionUserId), currentUrl, targetUrl, userMessage,
     userMessageId, assistantReply, conversation, steps: extractionSteps, sourceSessionId: sessionId,
+    modelSettings: { sessionId, provider: input.session.modelProvider, model: input.session.model },
     sourceMessageIds: [userMessageId, assistantMessageId] });
 }
 
@@ -1683,13 +1685,16 @@ function browserCodeAttachmentBindingsForSession(
   return [...bindings.values()];
 }
 
+const compactRealtimeStepCache = new WeakMap<StepExecutionResult, StepExecutionResult>();
+
 function compactStepForRealtime(step: StepExecutionResult): StepExecutionResult {
+  const cached = compactRealtimeStepCache.get(step);
+  if (cached) return cached;
   const clientStep = compactStepForClient(step);
-  if (!clientStep.tools?.length) return clientStep;
-  return {
-    ...clientStep,
-    tools: clientStep.tools.map(compactRealtimeTool),
-  };
+  const compacted = clientStep.tools?.length
+    ? { ...clientStep, tools: clientStep.tools.map(compactRealtimeTool) } : clientStep;
+  compactRealtimeStepCache.set(step, compacted);
+  return compacted;
 }
 
 function summaryFromSnapshot(session: BrowserChatSessionSnapshot): BrowserChatSessionSnapshot {
@@ -3609,6 +3614,7 @@ export async function startBrowserChatScreencast(
   sessionId: string,
   userId: string | number | undefined,
   handlers: {
+    getDemand?: Parameters<BrowserSession['startScreencast']>[0]['getDemand'];
     onActivePageChanged?: () => void;
     onError?: (error: unknown) => void;
     onFrame: (frame: BrowserScreencastFrame) => void | Promise<void>;
@@ -3630,6 +3636,7 @@ export async function startBrowserChatScreencast(
   let handle: Awaited<ReturnType<BrowserSession['startScreencast']>>;
   try {
     handle = await browser.startScreencast({
+      getDemand: handlers.getDemand,
       onActivePageChanged: handlers.onActivePageChanged,
       onError: handlers.onError,
       onFrame: (frame) => {
@@ -6115,7 +6122,12 @@ async function runBrowserChatMessage(
       refreshBrowserChatTerminalContextUsage(session);
       session.consoleErrors = result.consoleErrors;
       session.networkErrors = result.networkErrors;
-      if (process.env.AI_PERSONAL_MEMORY_AUTO_EXTRACT === 'true') await queuePersonalMemoryExtraction({ session, browser, text, result, userMessageId, assistantMessageId });
+      try {
+        await queuePersonalMemoryExtraction({ session, browser, text, result, userMessageId, assistantMessageId });
+      } catch (error) {
+        // Memory learning must never turn a completed browser task into a failure.
+        appendLog(session, 'memory:enqueue-failed', '记忆提炼入队失败，可在长期记忆中手动重试。', { details: { error: userFacingErrorMessage(error) } });
+      }
       const finishedAt = now();
       updateAssistantMessage(session, assistantMessageId, (message) => {
         const updated: BrowserChatMessage = {
@@ -6258,6 +6270,7 @@ async function runBrowserChatMessage(
 
 /** Explicit host action; extraction never runs from the context assembler. */
 export async function requestBrowserChatMemoryExtraction(sessionId: string, userId: string) {
+  if (!personalMemoryExtractionEnabled()) throw new ApiRequestError('个性化记忆提炼已关闭，请在运行设置中开启。', { status: 409, code: 'memory_extraction_disabled' });
   // Completed conversations may have been compacted or evicted from the runtime.
   // Read durable evidence without hydrating a browser or resuming queued turns.
   const runtimeSession = sessions.get(sessionId);
@@ -6269,9 +6282,10 @@ export async function requestBrowserChatMemoryExtraction(sessionId: string, user
   const assistant = session.messages.slice(userIndex + 1).findLast(message => message.role === 'assistant'
     && message.status !== 'running' && message.status !== 'queued');
   if (!user || !assistant) throw new ApiRequestError('本轮尚无已结束的回复，请在对话结束后提炼记忆。', { status: 409, code: 'no_completed_turn' });
-  await enqueueMemoryJob({ userId: normalizeUserId(userId), currentUrl: session.targetUrl, targetUrl: session.targetUrl,
+  const jobId = await enqueueMemoryJob({ userId: normalizeUserId(userId), currentUrl: session.targetUrl, targetUrl: session.targetUrl,
     userMessage: user.content, userMessageId: user.id, assistantReply: assistant.content,
     steps: session.steps.filter(step => step.messageId === assistant.id || assistant.stepIndexes?.includes(step.index)),
-    sourceSessionId: sessionId, sourceMessageIds: [user.id, assistant.id] });
-  return runMemoryJobs(sessionId, normalizeUserId(userId));
+    modelSettings: { sessionId, provider: session.modelProvider, model: session.model },
+    sourceSessionId: sessionId, sourceMessageIds: [user.id, assistant.id] }, true);
+  return { jobId };
 }

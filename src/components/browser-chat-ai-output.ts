@@ -89,14 +89,26 @@ export function buildAiCycleToolDetailMap(cycles: BrowserChatAiOutputCycle[], st
     });
   });
 
-  cycles.forEach((cycle, cycleIndex) => {
+  // A suffix index avoids rescanning all later cycles on every streamed token.
+  const laterByAgent = new Map<string, { maxStep: number; hasTools: boolean; unnumberedTools: boolean }>();
+  const supersededCycles = new Set<BrowserChatAiOutputCycle>();
+  for (let index = cycles.length - 1; index >= 0; index -= 1) {
+    const cycle = cycles[index];
+    const key = JSON.stringify([cycle.messageId, cycle.subagentId]);
+    const later = laterByAgent.get(key) || { maxStep: -Infinity, hasTools: false, unnumberedTools: false };
+    if (cycle.agentStepIndex !== undefined
+      ? later.maxStep > cycle.agentStepIndex || later.unnumberedTools
+      : later.hasTools) supersededCycles.add(cycle);
+    later.hasTools ||= cycle.output.tools.length > 0;
+    if (cycle.agentStepIndex !== undefined) later.maxStep = Math.max(later.maxStep, cycle.agentStepIndex);
+    else later.unnumberedTools ||= cycle.output.tools.length > 0;
+    laterByAgent.set(key, later);
+  }
+
+  cycles.forEach((cycle) => {
     // Only the latest model request can still be awaiting an execution trace.
     // Old rejected proposals must not spin for the remainder of the whole turn.
-    const superseded = cycles.slice(cycleIndex + 1).some(next =>
-      next.messageId === cycle.messageId && next.subagentId === cycle.subagentId
-      && (next.agentStepIndex !== undefined && cycle.agentStepIndex !== undefined
-        ? next.agentStepIndex > cycle.agentStepIndex
-        : next.output.tools.length > 0));
+    const superseded = supersededCycles.has(cycle);
     const unmatched: Array<{ aiTool: BrowserChatAiOutputTool; aiToolIndex: number }> = [];
     let matchedInCycle = false;
     cycle.output.tools.forEach((aiTool, aiToolIndex) => {

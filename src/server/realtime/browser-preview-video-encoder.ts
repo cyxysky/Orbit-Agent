@@ -49,20 +49,43 @@ export class FragmentedMp4Chunker {
   private currentFragment: Buffer[] = [];
   private initializationBoxes: Buffer[] = [];
   private initializationSegment?: Buffer;
-  private pending: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+  private readonly header = Buffer.alloc(16);
+  private headerBytes = 0;
+  private pendingBox?: Buffer;
+  private pendingBytes = 0;
 
   constructor(private readonly options: FragmentedMp4ChunkerOptions) {}
 
   push(chunk: Buffer) {
-    if (!chunk.length) return;
-    this.pending = this.pending.length ? Buffer.concat([this.pending, chunk]) : chunk;
-    while (this.pending.length >= 8) {
-      const boxSize = readMp4BoxSize(this.pending);
-      if (boxSize === undefined || this.pending.length < boxSize) return;
-      if (boxSize > 128 * 1024 * 1024) throw new Error(`Fragmented MP4 box is too large: ${boxSize} bytes.`);
-      const box = this.pending.subarray(0, boxSize);
-      this.pending = this.pending.subarray(boxSize);
-      this.acceptBox(Buffer.from(box));
+    let offset = 0;
+    while (offset < chunk.length) {
+      if (!this.pendingBox) {
+        const headerSize = this.headerBytes >= 8 && this.header.readUInt32BE(0) === 1 ? 16 : 8;
+        const count = Math.min(headerSize - this.headerBytes, chunk.length - offset);
+        chunk.copy(this.header, this.headerBytes, offset, offset + count);
+        this.headerBytes += count;
+        offset += count;
+        const boxSize = readMp4BoxSize(this.header.subarray(0, this.headerBytes));
+        if (boxSize === undefined) continue;
+        // Validate the declared size before retaining/allocating the payload.
+        if (boxSize < this.headerBytes || boxSize > 128 * 1024 * 1024) {
+          throw new Error(`Invalid fragmented MP4 box size: ${boxSize} bytes.`);
+        }
+        this.pendingBox = Buffer.allocUnsafe(boxSize);
+        this.header.copy(this.pendingBox, 0, 0, this.headerBytes);
+        this.pendingBytes = this.headerBytes;
+        this.headerBytes = 0;
+      }
+      const count = Math.min(this.pendingBox.length - this.pendingBytes, chunk.length - offset);
+      chunk.copy(this.pendingBox, this.pendingBytes, offset, offset + count);
+      this.pendingBytes += count;
+      offset += count;
+      if (this.pendingBytes === this.pendingBox.length) {
+        const box = this.pendingBox;
+        this.pendingBox = undefined;
+        this.pendingBytes = 0;
+        this.acceptBox(box);
+      }
     }
   }
 
@@ -71,6 +94,11 @@ export class FragmentedMp4Chunker {
     // FFmpeg exits in the middle of a box, never pass that partial fragment to
     // MediaSource because it would poison the rest of the decoder stream.
     this.currentFragment = [];
+    this.pendingBox = undefined;
+    this.pendingBytes = 0;
+    this.headerBytes = 0;
+    this.initializationBoxes = [];
+    this.initializationSegment = undefined;
   }
 
   private acceptBox(box: Buffer) {
@@ -286,9 +314,11 @@ export class BrowserPreviewVideoEncoder {
       '-loglevel', 'warning',
       '-f', 'image2pipe',
       '-framerate', String(framesPerSecond),
+      '-use_wallclock_as_timestamps', '1',
       '-vcodec', inputCodec,
       '-i', 'pipe:0',
       '-an',
+      '-fps_mode', 'vfr',
       '-vf', `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,format=yuv420p`,
       '-c:v', 'libx264',
       '-preset', 'ultrafast',

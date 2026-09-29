@@ -1,6 +1,7 @@
 'use client';
 import { normalizeBrowserChatInteractionMode, type BrowserChatInteractionMode } from '@/lib/browser-chat-interaction-mode';
 import { BrowserChatRecoveryPanel } from './BrowserChatRecoveryPanel';
+import { BrowserChatFailureNotice, isBrowserChatFailureNotice } from './BrowserChatFailureNotice';
 
 import { browserChatSessionListTimestamp, compareBrowserChatSessionCreation, upsertBrowserChatSessionByCreation } from '@/lib/browser-chat-session-order';
 import { browserChatToolSource, type BrowserChatToolSource } from '@/lib/browser-chat-tool-source';
@@ -1843,18 +1844,6 @@ function browserChatUIMessageText(message: BrowserChatUIMessage) {
   }).filter(Boolean).join('\n\n');
 }
 
-function browserChatUIMessageSteps(messages: BrowserChatUIMessage[], sessionId: string) {
-  return messages
-    .filter((message) => message.role === 'assistant' && message.metadata?.sessionId === sessionId)
-    .flatMap((message) => message.parts.flatMap((part) => part.type === 'data-step' ? [part.data] : []));
-}
-
-function browserChatUIMessageOutputCycles(messages: BrowserChatUIMessage[], sessionId: string) {
-  return messages
-    .filter((message) => message.role === 'assistant' && message.metadata?.sessionId === sessionId)
-    .flatMap((message) => message.parts.flatMap((part) => part.type === 'data-outputCycle' ? [part.data] : []));
-}
-
 function mergeBrowserChatOutputCycleStreams(
   current: BrowserChatAiOutputCycle[] | undefined,
   incoming: BrowserChatAiOutputCycle[],
@@ -1866,12 +1855,6 @@ function mergeBrowserChatOutputCycleStreams(
     return !previous || (cycle.revision !== undefined && cycle.revision > (previous.revision || 0));
   });
   return updates.length ? mergeBrowserChatRealtimeRecords(current, updates) : current || emptyBrowserChatOutputCycles;
-}
-
-function browserChatUIMessageSubagents(messages: BrowserChatUIMessage[], sessionId: string) {
-  return messages
-    .filter((message) => message.role === 'assistant' && message.metadata?.sessionId === sessionId)
-    .flatMap((message) => message.parts.flatMap((part) => part.type === 'data-subagent' ? [part.data] : []));
 }
 
 function insertBrowserChatMessageChronologically(
@@ -1937,6 +1920,9 @@ function overlayBrowserChatUIMessages(
     if (previous?.id === streamed.id && previous.updatedAt && streamed.updatedAt
       && previous.updatedAt > streamed.updatedAt) continue;
     if (index >= 0) result[index] = { ...result[index], ...streamed,
+      stepIndexes: streamed.stepIndexes?.length
+        ? [...new Set([...(previous?.stepIndexes || []), ...streamed.stepIndexes])]
+        : previous?.stepIndexes || [],
       activity: streamed.activity && (!previous?.activity?.updatedAt || streamed.activity.updatedAt >= previous.activity.updatedAt)
         ? streamed.activity : previous?.activity,
     };
@@ -2024,16 +2010,20 @@ function mergeBrowserChatRealtimeSubagents(
   current: BrowserChatSubagentRecord[] | undefined,
   incoming: Array<Partial<BrowserChatSubagentRecord> & Pick<BrowserChatSubagentRecord, 'id'>> | undefined,
 ) {
+  if (!incoming?.length) return current || emptyBrowserChatSubagents;
   const currentById = new Map((current || []).map((record) => [record.id, record]));
-  return mergeBrowserChatRealtimeRecords(current, incoming).map((record) => {
+  const merged = mergeBrowserChatRealtimeRecords(current, incoming);
+  if (merged === current) return current;
+  return merged.map((record) => {
     const previous = currentById.get(record.id);
-    if (!previous) return record;
+    if (!previous || record === previous) return record;
     if (record.updatedAt && previous.updatedAt && record.updatedAt < previous.updatedAt) return previous;
     if (
       (previous.status === 'stopped' || previous.status === 'passed' || previous.status === 'failed')
       && (record.status === 'running' || record.status === 'queued')
     ) return previous;
-    return { ...record, toolCount: Math.max(previous.toolCount || 0, record.toolCount || 0) };
+    const toolCount = Math.max(previous.toolCount || 0, record.toolCount || 0);
+    return toolCount === record.toolCount ? record : { ...record, toolCount };
   });
 }
 
@@ -2055,7 +2045,7 @@ function mergeBrowserChatSessionRealtimePatch(
   // continue arriving after a compression checkpoint has advanced updatedAt.
   // Gating them on the session header timestamp recreates the same apparent
   // freeze even when messages/steps are merged correctly.
-  const outputCycles = mergeBrowserChatRealtimeRecords(current.outputCycles, sessionPatch.outputCycles);
+  const outputCycles = mergeBrowserChatOutputCycleStreams(current.outputCycles, sessionPatch.outputCycles || []);
   const subagents = mergeBrowserChatRealtimeSubagents(current.subagents, sessionPatch.subagents);
   const normalized = normalizeSession({
     ...current,
@@ -3382,6 +3372,45 @@ const BrowserChatSubagentToolDisclosure = memo(function BrowserChatSubagentToolD
   );
 });
 
+const BrowserChatResponseDraftContext = createContext<{ id: string; blocks: BrowserChatFinalBlock[] } | undefined>(undefined);
+
+const BrowserChatToolResponseDraft = memo(function BrowserChatToolResponseDraft(props: {
+  tool: BrowserChatToolCall; toolCallId?: string; children: ReactNode;
+}) {
+  // Ordinary tool rows must not subscribe to every final-response draft delta.
+  return props.tool.name === 'finalResponse'
+    ? <BrowserChatFinalResponseDraft {...props} />
+    : <div className="browser-chat-tool-card-row">{props.children}</div>;
+});
+
+const BrowserChatFinalResponseDraft = memo(function BrowserChatFinalResponseDraft({ tool, toolCallId, children }: {
+  tool: BrowserChatToolCall; toolCallId?: string; children: ReactNode;
+}) {
+  const { t } = useI18n();
+  const live = useContext(BrowserChatResponseDraftContext);
+  const [expanded, setExpanded] = useState(false);
+  const bodyId = useId();
+  const input = tool.input && typeof tool.input === 'object' ? tool.input as { blocks?: BrowserChatFinalBlock[] } : undefined;
+  const blocks = tool.name === 'finalResponse'
+    ? live && live.id === (tool.id || toolCallId) ? live.blocks : input?.blocks
+    : undefined;
+  const parts = useMemo(() => expanded && Array.isArray(blocks) ? browserChatFinalBlocksToParts(blocks.filter(block =>
+    block && typeof block.type === 'string' && block.params && typeof block.params === 'object')) : [], [expanded, blocks]);
+  const hasDraft = Array.isArray(blocks) && blocks.length > 0;
+  return <>
+    <div className="browser-chat-tool-card-row">
+      {children}
+      {hasDraft ? <button type="button" className="browser-chat-tool-draft-toggle"
+        aria-expanded={expanded} aria-controls={expanded ? bodyId : undefined}
+        aria-label={t(tool.ok === true ? '回复内容' : '回复草稿 · 尚未通过完成校验')}
+        onClick={() => setExpanded(value => !value)}>{t(expanded ? '收起' : '展开')}</button> : null}
+    </div>
+    {hasDraft && expanded ? <div id={bodyId} className="browser-chat-tool-response-draft browser-chat-answer is-draft">
+      <BrowserChatOrderedResponse fallbackText="" parts={parts} />
+    </div> : null}
+  </>;
+});
+
 const BrowserChatStepToolCards = memo(function BrowserChatStepToolCards({
   logs,
   onLoadSubagentRecords,
@@ -3508,7 +3537,7 @@ const BrowserChatStepToolCards = memo(function BrowserChatStepToolCards({
                 toolResult={tool.rawResult ?? tool.result}
               />
             ) : (
-              <div className="browser-chat-tool-card-row">
+              <BrowserChatToolResponseDraft tool={tool}>
                 <button
                   aria-label={`${displayText}，${translatedStatus}`}
                   className={`browser-chat-tool-card${stateClass}`}
@@ -3520,7 +3549,7 @@ const BrowserChatStepToolCards = memo(function BrowserChatStepToolCards({
                 </button>
                 <BrowserChatToolContextTokenInfo tool={tool} />
                 <BrowserChatToolScreenshotButton tool={tool} />
-              </div>
+              </BrowserChatToolResponseDraft>
             )}
             {pendingManualVerificationToolKey === `${step.index}:${toolIndex}` ? (
               <BrowserChatManualVerificationCard input={tool.input} onResume={!running ? onResumeHumanVerification : undefined} resuming={resumingHumanVerification} />
@@ -3692,7 +3721,7 @@ const BrowserChatAiCycleLine = memo(function BrowserChatAiCycleLine({
                   toolResult={executedTool.rawResult ?? executedTool.result}
                 />
               ) : (
-                <div className="browser-chat-tool-card-row">
+                <BrowserChatToolResponseDraft tool={executedTool} toolCallId={tool.id}>
                   <button
                     aria-label={`${label}${meta ? ` - ${meta}` : ''}`}
                     className={`browser-chat-tool-card browser-chat-ai-call-card${stateClass}`}
@@ -3703,7 +3732,7 @@ const BrowserChatAiCycleLine = memo(function BrowserChatAiCycleLine({
                   </button>
                   <BrowserChatToolContextTokenInfo tool={executedTool} />
                   <BrowserChatToolScreenshotButton tool={executedTool} />
-                </div>
+                </BrowserChatToolResponseDraft>
               )}
               {pendingManualVerificationToolKey === `${toolDetail.stepIndex}:${toolDetail.toolIndex}` ? (
                 <BrowserChatManualVerificationCard input={executedTool.input} onResume={!running ? onResumeHumanVerification : undefined} resuming={resumingHumanVerification} />
@@ -3774,8 +3803,11 @@ const BrowserChatExecutedCycleGroup = memo(function BrowserChatExecutedCycleGrou
   return (
     <section className="browser-chat-ai-line-collapse browser-chat-executed-collapse browser-chat-tool-chips is-expanded">
       <div className="browser-chat-executed-body">
-        {cycles.map((cycle) => (
-          <div className="browser-chat-executed-entry" key={cycle.id}>
+        {cycles.map((cycle, index) => (
+          <div className="browser-chat-executed-entry" key={cycle.id}
+            style={index >= cycles.length - 2 || pendingToolConfirmation ? undefined : {
+              contentVisibility: 'auto', containIntrinsicBlockSize: 'auto 52px',
+            }}>
             <BrowserChatAiCycleLine
               cycle={cycle}
               logs={logs}
@@ -4477,9 +4509,6 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
       ? { ...part, text: t(part.text) }
       : part)
     : message.parts;
-  const draftResponseParts = useMemo(() => message.responseDraft?.blocks.length
-    ? browserChatFinalBlocksToParts(message.responseDraft.blocks)
-    : [], [message.responseDraft]);
   const normalizedFinalText = useMemo(() => finalText.replace(/\s+/g, ' ').trim(), [finalText]);
   const rawAiOutputCycles = useMemo(() => (
     sortBrowserChatAiOutputCycles(outputCycles.filter((cycle) => !cycle.subagentId))
@@ -4721,6 +4750,7 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
 
   return (
     <BrowserChatMarkdownArtifactsContext.Provider value={markdownArtifacts}>
+    <BrowserChatResponseDraftContext.Provider value={running ? message.responseDraft : undefined}>
     <div className="browser-chat-agent-timeline">
       {hasProcessContent ? (
         <BrowserChatProcessDisclosure
@@ -4735,8 +4765,10 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
           onExpand={!running ? loadHistoricalProcessRecords : undefined}
           running={running}
         >
-          {aiOutputCycleEntries.map((entry) => (
-            entry.kind === 'executed' ? (
+          {aiOutputCycleEntries.map((entry, index) => (
+            <BrowserChatHistoryRow key={entry.kind === 'executed' ? entry.id : entry.cycle.id}
+              keepMounted={index >= aiOutputCycleEntries.length - 2 || hasPendingConfirmation}>
+            {entry.kind === 'executed' ? (
               <BrowserChatExecutedCycleGroup
                 {...aiCycleCommonProps}
                 cycles={entry.cycles}
@@ -4748,7 +4780,8 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
                 cycle={entry.cycle}
                 key={entry.cycle.id}
               />
-            )
+            )}
+            </BrowserChatHistoryRow>
           ))}
           {currentTimelineEntries.length ? (
             <div className="browser-chat-tool-stack browser-chat-current-tool-stack">
@@ -4787,16 +4820,14 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
           ) : null}
         </BrowserChatProcessDisclosure>
       ) : null}
-      {running && draftResponseParts.length ? (
-        <div className="browser-chat-answer is-streaming is-draft">
-          <div className="browser-chat-answer-draft-label">{t('回复草稿 · 尚未通过完成校验')}</div>
-          <BrowserChatOrderedResponse fallbackText="" parts={draftResponseParts} />
-        </div>
-      ) : null}
       {/* Show the main answer only after the turn commits its terminal response. */}
       {hasFinalResponse && !running ? (
         <div className="browser-chat-answer">
-          <BrowserChatOrderedResponse fallbackText={hideManualVerificationStatusText ? '' : displayFinalText} parts={displayResponseParts} />
+          {message.status === 'failed' && isBrowserChatFailureNotice(displayFinalText)
+            && !displayResponseParts?.some(part => part.type === 'data-response'
+              && (part.data.type !== 'core.markdown' || part.data.params.text !== displayFinalText))
+            ? <BrowserChatFailureNotice text={displayFinalText} />
+            : <BrowserChatOrderedResponse fallbackText={hideManualVerificationStatusText ? '' : displayFinalText} parts={displayResponseParts} />}
         </div>
       ) : null}
       {!hasFinalResponse && !hasProcessContent && !manualVerificationPaused ? (
@@ -4809,6 +4840,7 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
         />
       ) : null}
     </div>
+    </BrowserChatResponseDraftContext.Provider>
     </BrowserChatMarkdownArtifactsContext.Provider>
   );
 });
@@ -8451,6 +8483,46 @@ export function BrowserChatWorkspace({
       };
     },
   }), [browserChatApiUrl]);
+  // Execution records bypass SDK message state: otherwise every text/metadata
+  // chunk structuredClones all previous tool payloads. Merge once per frame.
+  const pendingUIRecordsRef = useRef(new Map<string, Map<string, BrowserChatUIMessagePart>>());
+  const uiRecordsFrameRef = useRef(0);
+  const uiRecordsMountedRef = useRef(true);
+  const queueUIRecord = useCallback((sessionId: string, part: BrowserChatUIMessagePart) => {
+    if (!uiRecordsMountedRef.current || (part.type !== 'data-step' && part.type !== 'data-outputCycle' && part.type !== 'data-subagent')) return;
+    const records = pendingUIRecordsRef.current.get(sessionId) || new Map<string, BrowserChatUIMessagePart>();
+    records.set(part.type + ':' + part.id, part);
+    pendingUIRecordsRef.current.set(sessionId, records);
+    if (uiRecordsFrameRef.current) return;
+    uiRecordsFrameRef.current = requestAnimationFrame(() => {
+      uiRecordsFrameRef.current = 0;
+      const pending = pendingUIRecordsRef.current;
+      pendingUIRecordsRef.current = new Map();
+      setSession(current => {
+        const batch = current && pending.get(current.id);
+        if (!current || !batch) return current;
+        const parts = [...batch.values()];
+        const merged = mergeBrowserChatRealtimeCollections({ messages: current.messages, steps: current.steps, logs: current.logs || [] }, {
+          steps: parts.flatMap(part => part.type === 'data-step' ? [part.data] : []),
+        });
+        const outputCycles = mergeBrowserChatOutputCycleStreams(current.outputCycles,
+          parts.flatMap(part => part.type === 'data-outputCycle' ? [part.data] : []));
+        const subagents = mergeBrowserChatRealtimeSubagents(current.subagents,
+          parts.flatMap(part => part.type === 'data-subagent' ? [part.data] : []));
+        if (merged.steps === current.steps && outputCycles === current.outputCycles && subagents === current.subagents) return current;
+        return {...current, steps: merged.steps, outputCycles, subagents};
+      });
+    });
+  }, []);
+  useEffect(() => {
+    uiRecordsMountedRef.current = true;
+    return () => {
+      uiRecordsMountedRef.current = false;
+      if (uiRecordsFrameRef.current) cancelAnimationFrame(uiRecordsFrameRef.current);
+      uiRecordsFrameRef.current = 0;
+      pendingUIRecordsRef.current.clear();
+    };
+  }, []);
   const uiChatsRef = useRef(new Map<string, Chat<BrowserChatUIMessage>>());
   const uiChatForSession = useCallback((sessionId: string) => {
     const existing = uiChatsRef.current.get(sessionId);
@@ -8458,11 +8530,12 @@ export function BrowserChatWorkspace({
     const chat = new Chat<BrowserChatUIMessage>({
       id: `browser-chat:${sessionId}`,
       transport: uiChatTransport,
+      onData: part => queueUIRecord(sessionId, part),
       onError: (chatError) => setError(chatError.message),
     });
     uiChatsRef.current.set(sessionId, chat);
     return chat;
-  }, [uiChatTransport]);
+  }, [queueUIRecord, uiChatTransport]);
   const currentUIChat = useMemo(() => uiChatForSession(session?.id || 'unbound'), [session?.id, uiChatForSession]);
   const {
     messages: receivedRequestUIMessages,
@@ -8483,21 +8556,11 @@ export function BrowserChatWorkspace({
     () => new Set((session?.queuedTurns || []).map((turn) => turn.userMessageId)),
     [session?.queuedTurns],
   );
-  const steps = useSharedBrowserChatValue(useMemo(() => {
-    // Received evidence outlives the HTTP stream. A disconnected/finished
-    // transport must not clear tools while the background turn is still active.
-    return mergeBrowserChatRealtimeCollections({ messages: [], logs: [], steps: session?.steps || [] }, {
-      steps: browserChatUIMessageSteps(currentRequestUIMessages, session?.id || ''),
-    }).steps;
-  }, [currentRequestUIMessages, session?.id, session?.steps]));
-  const outputCycles = useSharedBrowserChatValue(useMemo(() => mergeBrowserChatOutputCycleStreams(
-    session?.outputCycles,
-    browserChatUIMessageOutputCycles(currentRequestUIMessages, session?.id || ''),
-  ), [currentRequestUIMessages, session?.id, session?.outputCycles]));
-  const subagents = useSharedBrowserChatValue(useMemo(() => mergeBrowserChatRealtimeSubagents(
-    session?.subagents,
-    browserChatUIMessageSubagents(currentRequestUIMessages, session?.id || ''),
-  ), [currentRequestUIMessages, session?.id, session?.subagents]));
+  // Tool evidence arrives through transient onData/WebSocket records. Text
+  // deltas do not change these collections and must not rebuild their indexes.
+  const steps = session?.steps || emptyBrowserChatSteps;
+  const outputCycles = session?.outputCycles || emptyBrowserChatOutputCycles;
+  const subagents = session?.subagents || emptyBrowserChatSubagents;
   const logs = useMemo(() => session?.logs || [], [session?.logs]);
   const generationSkillsById = useMemo(() => new Map(skills.map((skill) => [skill.id, skill])), [skills]);
   const liveToolDialog = useMemo(() => {
@@ -9404,6 +9467,14 @@ export function BrowserChatWorkspace({
       const optimisticTimestamp = new Date().toISOString();
       const willQueue = isBrowserChatSessionRunning(active)
         || (active.turnState !== 'awaiting_human' && active.messages.some((message) => message.status === 'queued'));
+      const requestChat = uiChatForSession(active.id);
+      const resetTransportHistory = !willQueue && requestChat.status === 'ready';
+      if (resetTransportHistory) {
+        // Archive the last streamed view in session state before pruning the
+        // transport. The server owns history; cloning it again on every future
+        // token makes long conversations progressively more expensive.
+        active = { ...active, messages: overlayBrowserChatUIMessages(active.messages, requestChat.messages, active.id) };
+      }
       const optimisticUserMessage: BrowserChatMessage = {
         id: `${clientMessageId}:user`,
         role: 'user',
@@ -9441,7 +9512,8 @@ export function BrowserChatWorkspace({
       }, { activate: true });
       attachmentsRef.current = [];
       setAttachments([]);
-      void uiChatForSession(active.id).sendMessage({
+      if (resetTransportHistory) requestChat.messages = [];
+      void requestChat.sendMessage({
         id: `${clientMessageId}:user`,
         role: 'user',
         parts: [{ type: 'text', text: trimmedContent }],

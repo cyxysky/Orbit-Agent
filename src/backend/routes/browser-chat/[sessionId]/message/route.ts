@@ -1,4 +1,5 @@
-import { createUIMessageStream, createUIMessageStreamResponse, type DynamicToolUIPart } from 'ai';
+import { createUIMessageStream, createUIMessageStreamResponse } from 'ai';
+import type { StepExecutionResult } from '@/server/ai/schemas/runtime.schema';
 import {
   sendBrowserChatMessage,
   subscribeBrowserChatUIStream,
@@ -27,9 +28,8 @@ export async function POST(request: Request, context: BrowserChatSessionRouteCon
         let started = false;
         let finished = false;
         const textValues = new Map<string, string>();
-        const toolInputs = new Set<string>();
-        const toolOutputs = new Map<string, string>();
         const dataParts = new Map<string, string>();
+        const publishedSteps = new Map<number, StepExecutionResult>();
         let messageMetadataSignature = '';
         let resolveTerminal: () => void = () => undefined;
         const terminal = new Promise<void>((resolve) => { resolveTerminal = resolve; });
@@ -62,10 +62,11 @@ export async function POST(request: Request, context: BrowserChatSessionRouteCon
 
           for (const outputCycle of outputCycles) {
             const key = `data-outputCycle:${outputCycle.id}`;
-            if (dataParts.has(key)) continue;
-            dataParts.set(key, 'published');
+            const signature = String(outputCycle.revision ?? JSON.stringify(outputCycle));
+            if (dataParts.get(key) === signature) continue;
+            dataParts.set(key, signature);
             writer.write({
-              type: 'data-outputCycle',
+              type: 'data-outputCycle', transient: true,
               id: outputCycle.id,
               data: outputCycle,
             });
@@ -77,7 +78,7 @@ export async function POST(request: Request, context: BrowserChatSessionRouteCon
             if (dataParts.get(key) === signature) continue;
             dataParts.set(key, signature);
             writer.write({
-              type: 'data-subagent',
+              type: 'data-subagent', transient: true,
               id: subagent.id,
               data: subagent,
             });
@@ -88,7 +89,11 @@ export async function POST(request: Request, context: BrowserChatSessionRouteCon
           // parts contain complete programs/results and would make the client
           // clone the whole source history on every subsequent stream chunk.
           const parts = [
-            ...browserChatExecutionParts(steps),
+            ...browserChatExecutionParts(steps.filter(step => {
+              if (publishedSteps.get(step.index) === step) return false;
+              publishedSteps.set(step.index, step);
+              return true;
+            })).filter(part => part.type === 'data-step'),
             ...(message.parts || []).filter((part) => part.type !== 'dynamic-tool' && part.type !== 'data-step'),
           ];
           for (const part of parts) {
@@ -105,49 +110,12 @@ export async function POST(request: Request, context: BrowserChatSessionRouteCon
               }
               continue;
             }
-            if (part.type === 'dynamic-tool') {
-              const tool = part as DynamicToolUIPart;
-              if (!toolInputs.has(tool.toolCallId)) {
-                toolInputs.add(tool.toolCallId);
-                writer.write({
-                  type: 'tool-input-available',
-                  toolCallId: tool.toolCallId,
-                  toolName: tool.toolName,
-                  input: tool.input,
-                  dynamic: true,
-                });
-              }
-              if (tool.state === 'output-available') {
-                const signature = JSON.stringify(tool.output);
-                if (toolOutputs.get(tool.toolCallId) !== signature) {
-                  toolOutputs.set(tool.toolCallId, signature);
-                  writer.write({
-                    type: 'tool-output-available',
-                    toolCallId: tool.toolCallId,
-                    output: tool.output,
-                    dynamic: true,
-                  });
-                }
-              } else if (tool.state === 'output-error') {
-                const signature = `error:${tool.errorText}`;
-                if (toolOutputs.get(tool.toolCallId) !== signature) {
-                  toolOutputs.set(tool.toolCallId, signature);
-                  writer.write({
-                    type: 'tool-output-error',
-                    toolCallId: tool.toolCallId,
-                    errorText: tool.errorText,
-                    dynamic: true,
-                  });
-                }
-              }
-              continue;
-            }
             if (part.type === 'data-response' || part.type === 'data-step' || part.type === 'data-activity') {
               const key = `${part.type}:${part.id || ''}`;
               const signature = JSON.stringify(part.data);
               if (dataParts.get(key) === signature) continue;
               dataParts.set(key, signature);
-              writer.write(part);
+              writer.write(part.type === 'data-step' ? {...part, transient: true} : part);
             }
           }
 

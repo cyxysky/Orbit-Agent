@@ -6,7 +6,7 @@ import type {
 import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { nodeArtifactRelativePath, sanitizeNodeArtifactFileName } from './artifacts.ts';
-import { readFileAttachment } from './read.ts';
+import { readFileAttachment, readFileVisuals } from './read.ts';
 import { fileFormatForName } from '../formats.ts';
 import {
   createFileCapability,
@@ -148,6 +148,15 @@ export async function createNodeFileOperations(
   const attachmentBindings = configuredBindings ? [...configuredBindings] : undefined;
   const runId = runContext.runId;
   const includeVisualVerification = options.includeVisualVerification === true;
+  const resolveRunArtifact = async (artifactId: string) => {
+    const root = await realpath(workspaceHost.artifactsRoot);
+    const candidate = path.resolve(root, artifactId);
+    nodeArtifactRelativePath(root, candidate);
+    const absolutePath = await realpath(candidate);
+    const relative = nodeArtifactRelativePath(root, absolutePath).relativePath;
+    if (!relative.startsWith(`${sanitizeNodeArtifactFileName(runId, 'adhoc')}/`)) throw new Error('Artifact does not belong to this run.');
+    return absolutePath;
+  };
 
   const file: FileCapabilityRuntimeOperations['file'] = {
     list: async () => fileOperationToCapabilityResult(
@@ -171,12 +180,7 @@ export async function createNodeFileOperations(
           let name: string;
           if (binding) { absolutePath = binding.path; name = binding.name; }
           else if (input.artifactId && !input.attachmentId) {
-            const root = await realpath(workspaceHost.artifactsRoot);
-            const candidate = path.resolve(root, input.artifactId);
-            nodeArtifactRelativePath(root, candidate);
-            absolutePath = await realpath(candidate);
-            const relative = nodeArtifactRelativePath(root, absolutePath).relativePath;
-            if (!relative.startsWith(`${sanitizeNodeArtifactFileName(runId, 'adhoc')}/`)) throw new Error('Artifact does not belong to this run.');
+            absolutePath = await resolveRunArtifact(input.artifactId);
             name = path.basename(absolutePath);
           } else return unavailable('Use an artifactId from this run or a registered attachmentId.');
           return fileOperationToCapabilityResult(await readFileAttachment({ ...input, absolutePath,
@@ -298,7 +302,7 @@ export async function createNodeFileOperations(
     ? file.readSource!({ ...input, action: 'readSource' }, context)
     : file.readContent!({ ...input, action: 'readContent' }, context);
 
-  const visual = options.visualInputAvailable && options.readFileVisuals ? {
+  const visual = options.visualInputAvailable ? {
     index: executeVisual,
     read: executeVisual,
     report: executeVisual,
@@ -310,7 +314,22 @@ export async function createNodeFileOperations(
       artifactId: input.artifactId,
     });
     if (!current.ok) return fileOperationToCapabilityResult(current, 'file-visual-version-failed');
-    const visualResult = await options.readFileVisuals!(input, context, runContext);
+    context.abortSignal?.throwIfAborted();
+    let visualResult: FileArtifactOperationResult;
+    try {
+      if (options.readFileVisuals) visualResult = await options.readFileVisuals(input, context, runContext);
+      else {
+        const absolutePath = await resolveRunArtifact(input.artifactId);
+        const name = path.basename(absolutePath);
+        visualResult = await readFileVisuals({ absolutePath, request: input,
+          previewRoot: path.join(workspaceHost.artifactsRoot, sanitizeNodeArtifactFileName(runId, 'adhoc'), 'attachment-previews'),
+          attachment: { id: input.artifactId, name, path: absolutePath, type: fileFormatForName(name)?.mimeType || 'application/octet-stream', url: '' },
+        });
+      }
+    } catch (error) {
+      return fileOperationToCapabilityResult({ ok: false, actual: error instanceof Error ? error.message : String(error) }, 'file-visual-read-failed');
+    }
+    context.abortSignal?.throwIfAborted();
     return fileOperationToCapabilityResult(await workspace.recordOfficeVisualQaProgress({
       runId,
       artifactId: input.artifactId,

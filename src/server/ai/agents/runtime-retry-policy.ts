@@ -176,6 +176,12 @@ export function classifyRuntimeRetry(error: unknown, signal?: AbortSignal): Runt
   if (signal?.aborted) {
     return { category: 'aborted', reason: 'request was aborted', retryable: false, statusCode };
   }
+  if (code === 'COMPLETION_REVIEW_UNAVAILABLE') {
+    const retryable = records.some(record => record.code === 'COMPLETION_REVIEW_UNAVAILABLE' && record.retryable === true);
+    return { category: 'protocol', reason: retryable
+      ? 'completion review response failed after internal recovery; retry from preserved evidence without replaying completed actions'
+      : 'completion review has a non-retryable infrastructure failure; execution state is preserved', retryable, statusCode };
+  }
   if (records.some((record) =>
     [record.code, record.type, record.message, record.responseBody].some((value) =>
       typeof value === 'string' && /\bMissingSessionID\b|\bmissing\s+x-opencode-session\b/i.test(value)))

@@ -57,6 +57,7 @@ export class BrowserStateReader {
         const active = allFrames.find((frame) => this.host.framePath(frame) === observation.activeSurface?.framePath) || page.mainFrame();
         const frames = explicit ? [explicit] : options.scope === 'all' ? allFrames : [active];
         const parts = [`[page-state] ${JSON.stringify(observation)}`];
+        let characterCount = parts[0].length;
         for (const frame of frames) {
           options.abortSignal?.throwIfAborted();
           let target = frame.locator(options.selector || 'body');
@@ -69,17 +70,20 @@ export class BrowserStateReader {
             if (!text && options.selector) throw error;
             return text ? `[text-fallback]\n${text}` : '[snapshot unavailable]';
           }), options.abortSignal);
-          let lines = tree.split('\n');
+          let selectedTree = tree;
           if (options.query) {
+            const lines = tree.split('\n');
             const query = options.query.toLocaleLowerCase();
             const retained = new Set<number>();
             lines.forEach((line, index) => {
               if (line.toLocaleLowerCase().includes(query)) for (let i = Math.max(0, index - 2); i <= Math.min(lines.length - 1, index + 2); i++) retained.add(i);
             });
-            lines = [...retained].sort((a, b) => a - b).map((index) => lines[index]);
+            selectedTree = [...retained].sort((a, b) => a - b).map((index) => lines[index]).join('\n');
           }
-          parts.push(`[ax-tree frame=${this.host.framePath(frame)} scope=${options.selector || options.scope || 'active'}]`, lines.join('\n'));
-          if (parts.reduce((sum, part) => sum + part.length, 0) > 2_000_000) throw new Error('State capture exceeds 2 million characters. Narrow frame, selector or query.');
+          const heading = `[ax-tree frame=${this.host.framePath(frame)} scope=${options.selector || options.scope || 'active'}]`;
+          characterCount += heading.length + selectedTree.length + 2;
+          if (characterCount > 2_000_000) throw new Error('State capture exceeds 2 million characters. Narrow frame, selector or query.');
+          parts.push(heading, selectedTree);
         }
         if (page !== this.host.page() || revision !== this.host.revision(page)) throw new Error('Page navigated during capture. Read state again.');
         capture = { id: randomUUID(), page, revision, capturedAt: Date.now(), criteria: {

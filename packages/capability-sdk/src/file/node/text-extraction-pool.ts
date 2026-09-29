@@ -28,7 +28,7 @@ export type FileTextExtractionResult = {
 };
 type Slot = { worker: Worker; busy: boolean; digest?: string; timer?: ReturnType<typeof setTimeout> };
 const slots = new Set<Slot>();
-const cache = new Map<string, FileTextExtractionResult>();
+const cache = new Map<string, { result: FileTextExtractionResult; bytes: number }>();
 let cacheBytes = 0;
 let nextId = 1;
 let disposing: Promise<void> | undefined;
@@ -165,19 +165,22 @@ export function extractFileTextInWorker(input: FileTextExtractionInput): Promise
     if (cached !== undefined) {
       cache.delete(key); cache.set(key, cached);
       observer.incrementMetric?.('cpu_worker_cache_hit_total');
-      return cached;
+      return cached.result;
     }
     const text = await parse(input, digest, signal);
     const budget = integer('CPU_WORKER_TEXT_CACHE_BYTES', 32 * 1024 * 1024, 0, 256 * 1024 * 1024);
-    const size = JSON.stringify(text).length * 2;
+    // Count the retained text directly; serializing it creates another full-size
+    // escaped string merely to decide whether it fits in the cache.
+    const size = (key.length + text.text.length + text.parser.length
+      + JSON.stringify({ scope: text.scope, warnings: text.warnings }).length) * 2 + 128;
     if (size <= budget) {
       const previous = cache.get(key);
-      if (previous !== undefined) { cacheBytes -= JSON.stringify(previous).length * 2; cache.delete(key); }
+      if (previous !== undefined) { cacheBytes -= previous.bytes; cache.delete(key); }
       while (cache.size && (cacheBytes + size > budget || cache.size >= 128)) {
         const oldest = cache.keys().next().value!;
-        cacheBytes -= JSON.stringify(cache.get(oldest)).length * 2; cache.delete(oldest);
+        cacheBytes -= cache.get(oldest)!.bytes; cache.delete(oldest);
       }
-      cache.set(key, text); cacheBytes += size;
+      cache.set(key, { result: text, bytes: size }); cacheBytes += size;
     }
     return text;
   }, { abortSignal: input.abortSignal, executionTimeoutMs: integer('CPU_WORKER_TASK_TIMEOUT_MS', 60_000, 100, 300_000) });

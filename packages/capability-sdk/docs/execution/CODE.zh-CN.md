@@ -234,7 +234,7 @@ try {
 | --- | --- | --- |
 | `AGENT_CODE_SANDBOX_ENABLED` | `false` | `runtime` |
 | `AGENT_CODE_SANDBOX_BACKEND` | `remote` | `runtime` |
-| `AGENT_CODE_SANDBOX_RUNNER_URL` | `http://webpilot-code-sandbox:18100` | `runtime` |
+| `AGENT_CODE_SANDBOX_RUNNER_URL` | `http://127.0.0.1:18100`（Docker Compose：`http://webpilot-code-sandbox:18100`） | `runtime` |
 | `AGENT_CODE_SANDBOX_RUNNER_TOKEN` | `` | `runtime` |
 | `AGENT_CODE_SANDBOX_TIMEOUT_MS` | `300000` | `runtime` |
 | `AGENT_CODE_SANDBOX_INSTALL_TIMEOUT_MS` | `600000` | `runtime` |
@@ -335,6 +335,10 @@ export const provider = createCodeSandboxCapability({
 ```
 
 ## 补充行为参考
+
+Orbit 的 API 后端在加载数据库设置后管理已启用的本机 HTTP Runner，覆盖 `npm run dev`、Electron 和独立后端服务。本机地址默认 `http://127.0.0.1:18100`，未配置认证令牌时自动生成并保存；执行进程共享 Runner，保存设置后同步启停。退出时只关闭本应用启动的进程，已有且认证匹配的 Runner 会被复用。本机 Runner 不提供容器隔离。
+
+Docker Compose 统一启动独立 Runner 容器，等待认证健康检查通过后启动主服务。其他远程地址以及禁止网络的独立 Runner 由部署环境管理。`npm run code-sandbox:start` 保留为可选的独立启动入口，正常本机使用不需要另开终端启动。
 
 本地示例运行可信计算并打印简短结果，不提供操作系统隔离。JavaScript 使用 ESM，应使用 import 而不是裸 require；Python 需要已安装的解释器，可用 `pythonExecutable` 指定。依赖必须固定版本，例如 `lodash@4.17.21` 或 `requests==2.32.3`。
 

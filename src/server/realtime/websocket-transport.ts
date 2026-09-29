@@ -2,8 +2,9 @@ import { createHash } from 'node:crypto';
 import type http from 'node:http';
 import type { Socket } from 'node:net';
 
-function encodeWebSocketFrame(opcode: number, payload: Buffer) {
-  const length = payload.length;
+function encodeWebSocketFrame(opcode: number, payload: Buffer | readonly Buffer[]) {
+  const parts = Buffer.isBuffer(payload) ? [payload] : payload;
+  const length = parts.reduce((total, part) => total + part.length, 0);
   let header: Buffer;
   if (length < 126) {
     header = Buffer.from([0x80 | opcode, length]);
@@ -18,7 +19,7 @@ function encodeWebSocketFrame(opcode: number, payload: Buffer) {
     header[1] = 127;
     header.writeBigUInt64BE(BigInt(length), 2);
   }
-  return Buffer.concat([header, payload]);
+  return Buffer.concat([header, ...parts], header.length + length);
 }
 
 export function encodeWebSocketText(payload: string) {
@@ -27,6 +28,11 @@ export function encodeWebSocketText(payload: string) {
 
 export function encodeWebSocketBinary(payload: Buffer) {
   return encodeWebSocketFrame(0x2, payload);
+}
+
+/** Build the wire frame directly, without first copying a large media payload. */
+export function encodeWebSocketBinaryParts(parts: readonly Buffer[]) {
+  return encodeWebSocketFrame(0x2, parts);
 }
 
 export function encodeWebSocketControl(opcode: 0x8 | 0x9 | 0xA, payload: Uint8Array = new Uint8Array()) {
@@ -61,7 +67,7 @@ export function consumeWebSocketFrames(
     onProtocolError?: () => void;
   },
 ) {
-  let buffer = Buffer.concat([previousBuffer, chunk]);
+  let buffer = previousBuffer.length ? Buffer.concat([previousBuffer, chunk]) : chunk;
   while (buffer.length >= 2) {
     const first = buffer[0];
     const second = buffer[1];
@@ -87,9 +93,12 @@ export function consumeWebSocketFrames(
     if (masked) offset += 4;
     if (buffer.length < offset + length) return buffer;
     const payload = buffer.subarray(offset, offset + length);
-    const decoded = masked
-      ? Buffer.from(payload.map((byte, index) => byte ^ buffer[maskOffset + (index % 4)]))
-      : Buffer.from(payload);
+    // Own the decoded bytes without allocating map()'s intermediate Buffer.
+    // Incoming socket data may contain later frames, so never unmask it in place.
+    const decoded = Buffer.allocUnsafe(length);
+    if (masked) {
+      for (let index = 0; index < length; index += 1) decoded[index] = payload[index] ^ buffer[maskOffset + (index & 3)];
+    } else payload.copy(decoded);
     buffer = buffer.subarray(offset + length);
     if (opcode === 0x8) {
       handlers.onClose();

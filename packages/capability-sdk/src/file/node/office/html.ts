@@ -1,6 +1,6 @@
 import { managedChromiumOptions } from '../../../runtime.ts';
 import { chromium } from 'playwright';
-import { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, ImageRun, ExternalHyperlink, AlignmentType, HeadingLevel, WidthType, ShadingType, LineRuleType } from 'docx';
+import { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, ImageRun, ExternalHyperlink, AlignmentType, HeadingLevel, WidthType, ShadingType, LineRuleType, BorderStyle, VerticalAlign } from 'docx';
 import PptxGenJS from 'pptxgenjs';
 import { copyFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -15,6 +15,34 @@ const queue = new CapabilityTaskQueue({ concurrency: 2, maxQueued: 16, queueTime
 const alignment = (value: string) => value === 'center' ? AlignmentType.CENTER : value === 'right' || value === 'end' ? AlignmentType.RIGHT : value === 'justify' ? AlignmentType.JUSTIFIED : AlignmentType.LEFT;
 type Assets = Map<string, Buffer>;
 
+function tableCellStyle(table: HtmlBlock, cell: NonNullable<HtmlBlock['rows']>[number][number]) {
+  const bounds = (rect: HtmlBlock['rect']) => [rect.y, rect.x + rect.width, rect.y + rect.height, rect.x];
+  const outer = bounds(table.rect), inner = bounds(cell.rect);
+  const style = { ...cell.style, borders: [...cell.style.borders], borderColors: [...cell.style.borderColors], borderStyles: [...cell.style.borderStyles] };
+  outer.forEach((edge, index) => {
+    // A CSS table outer border can be wider than its cell edge. Preserve it
+    // when converting to Office, where cell borders take precedence.
+    if (Math.abs(edge - inner[index]) <= Math.max(2, table.style.borders[index])
+      && table.style.borders[index] > style.borders[index]) {
+      style.borders[index] = table.style.borders[index];
+      style.borderColors[index] = table.style.borderColors[index];
+      style.borderStyles[index] = table.style.borderStyles[index];
+    }
+  });
+  return style;
+}
+
+function wordBorders(style: HtmlBlock['style']) {
+  const edge = (index: number) => ({
+    style: !style.borders[index] || style.borderStyles[index] === 'none' || style.borderStyles[index] === 'hidden' ? BorderStyle.NIL
+      : style.borderStyles[index] === 'double' ? BorderStyle.DOUBLE
+        : style.borderStyles[index] === 'dashed' ? BorderStyle.DASHED
+          : style.borderStyles[index] === 'dotted' ? BorderStyle.DOTTED : BorderStyle.SINGLE,
+    size: Math.round(style.borders[index] * 6), color: style.borderColors[index],
+  });
+  return { top: edge(0), right: edge(1), bottom: edge(2), left: edge(3) };
+}
+
 function wordBlocks(blocks: HtmlBlock[], assets: Assets, maxWidth = 640, maxHeight = 920): Array<Paragraph | Table> {
   return blocks.flatMap((block): Array<Paragraph | Table> => {
     if (block.kind === 'image' && block.image) {
@@ -25,25 +53,34 @@ function wordBlocks(blocks: HtmlBlock[], assets: Assets, maxWidth = 640, maxHeig
     }
     if (block.kind === 'table') {
       const scale = Math.min(1, maxWidth / block.rect.width);
-      return [new Table({ width: { size: Math.round(Math.min(maxWidth, block.rect.width) * 15), type: WidthType.DXA }, rows: (block.rows || []).map((row) => new TableRow({ cantSplit: true, children: row.map((cell) => {
+      return [new Table({ borders: { ...wordBorders(block.style), insideHorizontal: { style: BorderStyle.NIL }, insideVertical: { style: BorderStyle.NIL } },
+        width: { size: Math.round(Math.min(maxWidth, block.rect.width) * 15), type: WidthType.DXA }, rows: (block.rows || []).map((row) => new TableRow({ cantSplit: true, children: row.map((cell) => {
         const content = wordBlocks(cell.blocks, assets, Math.min(maxWidth, cell.width * scale), maxHeight);
         return new TableCell({ columnSpan: cell.colspan, rowSpan: cell.rowspan, width: { size: Math.max(1, Math.round(cell.width * scale * 15)), type: WidthType.DXA },
           shading: cell.style.background ? { type: ShadingType.CLEAR, fill: cell.style.background } : undefined,
+          borders: wordBorders(tableCellStyle(block, cell)),
+          verticalAlign: cell.style.verticalAlign === 'middle' ? VerticalAlign.CENTER
+            : cell.style.verticalAlign === 'bottom' ? VerticalAlign.BOTTOM : VerticalAlign.TOP,
+          margins: { top: Math.round(cell.style.padding[0] * 15), right: Math.round(cell.style.padding[1] * 15),
+            bottom: Math.round(cell.style.padding[2] * 15), left: Math.round(cell.style.padding[3] * 15) },
           children: content.length ? content : [new Paragraph('')],
         });
       }) })) })];
     }
     const children = block.runs.flatMap<TextRun | ExternalHyperlink>((run) => {
       const pieces = run.text.split('\n');
-      const texts = pieces.map((text, index) => new TextRun({ text, break: index ? 1 : undefined, font: run.style.font, size: Math.round(run.style.size * 1.5),
-        color: run.style.color, bold: run.style.bold, italics: run.style.italic, underline: run.style.underline ? {} : undefined }));
+      const texts = pieces.map((text, index) => new TextRun({ text, break: index ? 1 : undefined, font: run.style.font, size: Math.round((run.style.scriptFontSize ?? run.style.size) * 1.5),
+        superScript: run.style.script === 'super', subScript: run.style.script === 'sub',
+        color: run.style.color, bold: run.style.bold, italics: run.style.italic, strike: run.style.strike, underline: run.style.underline ? {} : undefined }));
       return run.href && /^(https?:|mailto:)/i.test(run.href) ? [new ExternalHyperlink({ link: run.href, children: texts })] : texts;
     });
     if (block.list?.ordered) children.unshift(new TextRun(`${block.list.index}. `));
     const headings = [HeadingLevel.HEADING_1, HeadingLevel.HEADING_2, HeadingLevel.HEADING_3, HeadingLevel.HEADING_4, HeadingLevel.HEADING_5, HeadingLevel.HEADING_6];
     return [new Paragraph({ children, alignment: alignment(block.style.align), heading: /^h[1-6]$/.test(block.tag) ? headings[Number(block.tag[1]) - 1] : undefined,
       bullet: block.list && !block.list.ordered ? { level: Math.min(8, block.list.level) } : undefined,
-      indent: block.list?.ordered ? { left: 360 * (block.list.level + 1) } : undefined,
+      indent: block.list?.ordered ? { left: 360 * (block.list.level + 1) }
+        : block.style.textIndent < 0 ? { hanging: Math.round(-block.style.textIndent * 15) }
+          : { firstLine: Math.round(block.style.textIndent * 15) },
       keepNext: block.keepNext || /^h[1-6]$/.test(block.tag), keepLines: block.style.breakInsideAvoid, widowControl: true,
       pageBreakBefore: block.style.breakBefore, spacing: { before: Math.round(block.style.marginTop * 15), after: Math.round(block.style.marginBottom * 15),
         line: Math.round(block.style.lineHeight * 15), lineRule: LineRuleType.AT_LEAST },
@@ -81,11 +118,30 @@ function writeSlides(model: HtmlDocumentModel, assets: Assets) {
       if (block.kind === 'image' && block.image) slide.addImage({ ...g, data: 'data:image/png;base64,' + assets.get(block.image.key)!.toString('base64') });
       else if (block.kind === 'table') {
         if (block.rows?.some((row) => row.some((cell) => cell.blocks.some((b) => b.kind !== 'paragraph')))) throw new Error('PPTX tables support text cells. Place images or nested tables outside the table in the HTML slide.');
-        const rows = (block.rows || []).map((row) => row.map((cell) => ({ text: cell.blocks.flatMap((b) => b.runs.map((r) => r.text)).join('\n'), options: {
+        const rows = (block.rows || []).map((row) => row.map((cell) => {
+          const borders = tableCellStyle(block, cell);
+          const text: PptxGenJS.TextProps[] = cell.blocks.flatMap((paragraph, paragraphIndex) => paragraph.runs.map((run, index) => ({
+            text: (paragraphIndex > 0 && index === 0 ? '\n' : '') + run.text,
+            options: { fontFace: run.style.font, fontSize: (run.style.scriptFontSize ?? run.style.size) * 0.75, color: run.style.color,
+              superscript: run.style.script === 'super', subscript: run.style.script === 'sub',
+              bold: run.style.bold, italic: run.style.italic, strike: run.style.strike,
+              underline: run.style.underline ? { style: 'sng' as const } : undefined,
+              hyperlink: run.href && /^(https?:|mailto:)/i.test(run.href) ? { url: run.href } : undefined },
+          })));
+          return { text: text.length ? text : '', options: {
           colspan: cell.colspan, rowspan: cell.rowspan, fill: cell.style.background ? { color: cell.style.background } : undefined, color: cell.style.color, fontFace: cell.style.font, fontSize: cell.style.size * 0.75,
           bold: cell.style.bold, margin: cell.style.padding.map((p) => p * 0.75) as [number, number, number, number],
-        } })));
-        slide.addTable(rows, { ...g, colW: block.rows?.[0]?.flatMap((c) => Array.from({ length: c.colspan }, () => c.width / c.colspan / 96)), autoPage: false, margin: 0, border: { type: 'solid', pt: 0.5, color: 'BFC5CE' } });
+          align: cell.style.align === 'center' ? 'center' as const
+            : ['right', 'end'].includes(cell.style.align) ? 'right' as const
+              : cell.style.align === 'justify' ? 'justify' as const : 'left' as const,
+          valign: cell.style.verticalAlign === 'middle' ? 'middle' as const
+            : cell.style.verticalAlign === 'bottom' ? 'bottom' as const : 'top' as const,
+          border: borders.borders.map((width, index) => ({
+            type: width ? (borders.borderStyles[index] === 'dashed' ? 'dash' : 'solid') : 'none',
+            pt: width * 0.75, color: borders.borderColors[index],
+          })) as [PptxGenJS.BorderProps, PptxGenJS.BorderProps, PptxGenJS.BorderProps, PptxGenJS.BorderProps],
+        } }; }));
+        slide.addTable(rows, { ...g, colW: block.rows?.[0]?.flatMap((c) => Array.from({ length: c.colspan }, () => c.width / c.colspan / 96)), autoPage: false, margin: 0, border: { type: 'none' } });
       } else {
         // Browser line boxes preserve wrapping and independently positioned
         // inline content. Reflowing a whole DOM block in Office loses both.
@@ -93,6 +149,7 @@ function writeSlides(model: HtmlDocumentModel, assets: Assets) {
           if (!fragment.text.trim()) continue;
           slide.addText(fragment.text, { ...geometry(fragment.rect), margin: 0, wrap: false, valign: 'middle',
             fontFace: run.style.font, fontSize: run.style.size * 0.75, bold: run.style.bold, italic: run.style.italic,
+            strike: run.style.strike,
             color: run.style.color, charSpacing: run.style.letterSpacing * 0.75,
             underline: run.style.underline ? { style: 'sng' } : undefined,
             hyperlink: run.href && /^https?:/i.test(run.href) ? { url: run.href } : undefined, paraSpaceAfter: 0 });
@@ -206,4 +263,4 @@ export async function generateHtmlOfficeDocument(input: {
   }, { abortSignal: input.abortSignal });
 }
 
-export function htmlOfficeRuntimeSource() { return [assertHtmlOfficeSource, collectHtmlDocument, serializeHtmlAsset, inspectHtmlPrintLayout, wordBlocks, writeSlides, generateHtmlOfficeDocument].map((fn) => fn.toString()).join('\n'); }
+export function htmlOfficeRuntimeSource() { return [assertHtmlOfficeSource, collectHtmlDocument, serializeHtmlAsset, inspectHtmlPrintLayout, alignment, tableCellStyle, wordBorders, wordBlocks, writeSlides, generateHtmlOfficeDocument].map((fn) => fn.toString()).join('\n'); }

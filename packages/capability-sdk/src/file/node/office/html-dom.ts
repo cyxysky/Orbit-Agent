@@ -9,6 +9,7 @@ export type HtmlDocumentBlock<Style, Run> = {
   image?: { key: string; x: number; y: number; width: number; height: number };
   rows?: Array<Array<{
     blocks: HtmlDocumentBlock<Style, Run>[];
+    rect: { x: number; y: number; width: number; height: number };
     width: number;
     colspan: number;
     rowspan: number;
@@ -30,12 +31,27 @@ export function collectHtmlDocument(options: { positionedText?: boolean } = {}) 
   const visible = (element: Element) => { const s = getComputedStyle(element); const r = box(element); return s.display !== 'none' && s.visibility !== 'hidden' && r.width > 0 && r.height > 0; };
   const style = (element: Element) => {
     const s = getComputedStyle(element);
+    let script: 'super' | 'sub' | undefined;
+    let scriptFontSize: number | undefined;
+    for (let ancestor: Element | null = element; ancestor; ancestor = ancestor.parentElement) {
+      const alignment = getComputedStyle(ancestor).verticalAlign;
+      if (alignment === 'super' || alignment === 'sub') {
+        script = alignment;
+        scriptFontSize = parseFloat(getComputedStyle(ancestor.parentElement || ancestor).fontSize);
+        break;
+      }
+    }
     return { color: color(s.color) || '000000', background: color(s.backgroundColor), backgroundImage: s.backgroundImage !== 'none', font: s.fontFamily.split(',')[0].replace(/["']/g, ''),
+      script, scriptFontSize,
       size: parseFloat(s.fontSize), bold: Number(s.fontWeight) >= 600, italic: s.fontStyle === 'italic', underline: s.textDecorationLine.includes('underline'),
+      strike: s.textDecorationLine.includes('line-through') || Boolean(element.closest('s,del,strike')),
+      textIndent: parseFloat(s.textIndent) || 0,
+      verticalAlign: s.verticalAlign,
       align: s.textAlign, lineHeight: parseFloat(s.lineHeight) || parseFloat(s.fontSize) * 1.2, marginTop: parseFloat(s.marginTop), marginBottom: parseFloat(s.marginBottom),
       padding: [s.paddingTop, s.paddingRight, s.paddingBottom, s.paddingLeft].map(parseFloat),
       border: Math.max(...[s.borderTopWidth, s.borderRightWidth, s.borderBottomWidth, s.borderLeftWidth].map(parseFloat)),
       borders: [s.borderTopWidth, s.borderRightWidth, s.borderBottomWidth, s.borderLeftWidth].map(parseFloat),
+      borderStyles: [s.borderTopStyle, s.borderRightStyle, s.borderBottomStyle, s.borderLeftStyle],
       borderColors: [s.borderTopColor, s.borderRightColor, s.borderBottomColor, s.borderLeftColor].map((c) => color(c) || '000000'),
       borderColor: color(s.borderTopColor), radius: parseFloat(s.borderTopLeftRadius),
       breakBefore: s.breakBefore === 'page' || s.pageBreakBefore === 'always',
@@ -91,7 +107,7 @@ export function collectHtmlDocument(options: { positionedText?: boolean } = {}) 
       const base = { tag, rect: box(element), style: style(element), runs: runs(element) };
       if (tag === 'img' || tag === 'svg') { result.push({ ...base, kind: 'image', image: visual(element), runs: [] }); return; }
       if (tag === 'table') {
-        const rows = Array.from((element as HTMLTableElement).rows).map((row) => Array.from(row.cells).map((cell) => ({ blocks: blocks(cell), width: box(cell).width, colspan: cell.colSpan, rowspan: cell.rowSpan, style: style(cell) })));
+        const rows = Array.from((element as HTMLTableElement).rows).map((row) => Array.from(row.cells).map((cell) => ({ blocks: blocks(cell), rect: box(cell), width: box(cell).width, colspan: cell.colSpan, rowspan: cell.rowSpan, style: style(cell) })));
         result.push({ ...base, kind: 'table', rows, runs: [] }); return;
       }
       const isParagraph = /^(h[1-6]|p|li|pre|blockquote|dt|dd)$/.test(tag) || !Array.from(element.children).some((child) => !['inline', 'inline-block'].includes(getComputedStyle(child).display) && !['IMG', 'SVG', 'BR'].includes(child.tagName.toUpperCase()));

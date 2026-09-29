@@ -1,6 +1,6 @@
 import { managedChromiumOptions } from '../../../runtime.ts';
 import { constants } from 'node:fs';
-import { access, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { access, copyFile, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -12,6 +12,7 @@ import sharp from 'sharp';
 import * as XLSX from 'xlsx';
 import { fileFormatForName, officePreviewExtensions, readableFileExtensions } from '../../formats.ts';
 import { convertOfficeFile } from '../libreoffice.ts';
+import { sha256NodeFile } from '../artifacts.ts';
 import { inspectRenderedPage, type OfficeArtifactIssue } from './validation.ts';
 import { officeRenderEnvironmentFingerprint } from './runtime-fingerprint.ts';
 
@@ -148,24 +149,24 @@ async function renderPdfPages(buffer: Buffer, directory: string, requestedPages:
       await writeManifest(directory, { automaticChecks, pageCount: info.total, renderer: 'pdf' });
       return { ...(await existingCache(directory, renderedPages))!, renderer };
     }
-    const screenshots = await parser.getScreenshot({
-      desiredWidth: 1_400,
-      imageBuffer: true,
-      imageDataUrl: false,
-      partial: missingPages,
-    });
     await mkdir(directory, { recursive: true });
-    const imagePaths: string[] = [];
-    for (const page of screenshots.pages) {
-      const target = pageImagePath(directory, page.pageNumber);
-      await writeCacheFile(target, Buffer.from(page.data));
-      imagePaths.push(target);
+    const automaticChecks: NonNullable<FilePreviewResult['automaticChecks']> = [];
+    // Keep one rasterized page and one inspection buffer alive at a time.
+    // Reuse the loaded PDF parser and preserve the existing page cache.
+    for (const pageNumber of missingPages) {
+      const screenshots = await parser.getScreenshot({
+        desiredWidth: 1_400,
+        imageBuffer: true,
+        imageDataUrl: false,
+        partial: [pageNumber],
+      });
+      const page = screenshots.pages.find((item) => item.pageNumber === pageNumber);
+      if (!page) throw new Error(`PDF renderer did not produce page ${pageNumber}.`);
+      const target = pageImagePath(directory, pageNumber);
+      await writeCacheFile(target, Buffer.from(page.data.buffer, page.data.byteOffset, page.data.byteLength));
+      automaticChecks.push({ pageNumber, ...await inspectRenderedPage(target) });
     }
-    const automaticChecks = await Promise.all(imagePaths.map(async (imagePath, index) => ({
-      pageNumber: screenshots.pages[index].pageNumber,
-      ...await inspectRenderedPage(imagePath),
-    })));
-    await writeManifest(directory, { automaticChecks, pageCount: screenshots.total, renderer: 'pdf' });
+    await writeManifest(directory, { automaticChecks, pageCount: info.total, renderer: 'pdf' });
     const complete = await existingCache(directory, renderedPages);
     if (!complete) throw new Error('PDF renderer did not produce all requested pages.');
     return { ...complete, renderer };
@@ -301,18 +302,26 @@ export async function registerOfficePreview(input: {
   absolutePath: string; previewPath: string; extension: string; previewRoot?: string;
 }) {
   if (!officeExtensions.has(input.extension.toLowerCase())) return;
-  const [buffer, pdf, environment] = await Promise.all([
-    readFile(input.absolutePath), readFile(input.previewPath), officeRenderEnvironmentFingerprint(),
+  const [sourceDigest, pdfDigest, environment] = await Promise.all([
+    sha256NodeFile(input.absolutePath), sha256NodeFile(input.previewPath), officeRenderEnvironmentFingerprint(),
   ]);
   const directory = previewDirectory({
-    cacheKey: `${createHash('sha256').update(buffer).digest('hex')}:${environment}`,
+    cacheKey: `${sourceDigest}:${environment}`,
     extension: input.extension.toLowerCase(), root: input.previewRoot,
   });
   await withPreviewLock(directory, async () => {
     await mkdir(directory, { recursive: true });
     const cachedPath = path.join(directory, 'office-preview.pdf');
-    if (!(await readFile(cachedPath).catch(() => undefined))?.equals(pdf)) {
-      await writeCacheFile(cachedPath, pdf);
+    if (await sha256NodeFile(cachedPath).catch(() => undefined) !== pdfDigest) {
+      const temporary = `${cachedPath}.${randomUUID()}.tmp`;
+      try {
+        // Copy on disk instead of holding the artifact and two PDFs in JS memory.
+        await copyFile(input.previewPath, temporary);
+        if (await sha256NodeFile(temporary) !== pdfDigest) throw new Error('Office preview changed during cache registration.');
+        await rename(temporary, cachedPath);
+      } finally {
+        await unlink(temporary).catch(() => undefined);
+      }
     }
   });
 }

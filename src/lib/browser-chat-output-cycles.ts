@@ -285,14 +285,16 @@ export function browserChatAiOutputCycleFromDebugEvent(input: {
             estimatedTokensAfter: after,
           },
           name: 'contextCompression',
-          ok: completed,
-          result: !completed
+          ok: true,
+          result: JSON.stringify({ ok: true, data: { kind: 'context-compression', committed: true,
+            status: !completed ? 'partial' : input.phase === 'ai:context-compression:limited' ? 'limited' : 'completed' },
+            summary: !completed
             ? 'Context compression partially completed. Saved summaries and remaining original messages were retained.'
             : input.phase === 'ai:context-compression:limited'
               ? 'Context reduction saved; stopped before the target to preserve remaining interactions.'
             : before !== undefined && after !== undefined
             ? `Context compressed from ${before} to ${after} estimated tokens.`
-            : 'Context compression completed.',
+            : 'Context compression completed.' }),
         }],
       },
       stepIndex: input.stepIndex,

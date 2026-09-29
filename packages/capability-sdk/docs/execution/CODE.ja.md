@@ -234,7 +234,7 @@ try {
 | --- | --- | --- |
 | `AGENT_CODE_SANDBOX_ENABLED` | `false` | `runtime` |
 | `AGENT_CODE_SANDBOX_BACKEND` | `remote` | `runtime` |
-| `AGENT_CODE_SANDBOX_RUNNER_URL` | `http://webpilot-code-sandbox:18100` | `runtime` |
+| `AGENT_CODE_SANDBOX_RUNNER_URL` | `http://127.0.0.1:18100` (Docker Compose: `http://webpilot-code-sandbox:18100`) | `runtime` |
 | `AGENT_CODE_SANDBOX_RUNNER_TOKEN` | `` | `runtime` |
 | `AGENT_CODE_SANDBOX_TIMEOUT_MS` | `300000` | `runtime` |
 | `AGENT_CODE_SANDBOX_INSTALL_TIMEOUT_MS` | `600000` | `runtime` |
@@ -335,6 +335,8 @@ export const provider = createCodeSandboxCapability({
 ```
 
 ## 補足の動作リファレンス
+
+Orbit の API バックエンドは保存済み設定を読み込んでから、有効なローカル HTTP Runner を管理します。`npm run dev`、Electron、単独サーバーで共通です。未設定のローカルトークンは生成して保存し、実行ワーカーは同じ Runner を共有します。設定保存時に起動状態を同期し、終了時には自身が起動したプロセスのみを停止します。Docker Compose は独立 Runner のヘルスチェック成功後にアプリを起動します。`npm run code-sandbox:start` は独立起動用の任意の入口です。
 
 ローカル例は信頼された計算を実行して短い結果を表示し、OS 隔離は提供しません。JavaScript は ESM なので裸の require ではなく import を使います。Python にはインストール済みのインタープリターが必要で、`pythonExecutable` で選択できます。依存は `lodash@4.17.21` や `requests==2.32.3` のように固定します。
 

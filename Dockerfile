@@ -93,6 +93,7 @@ COPY --from=build /app/server ./server
 COPY --from=build /app/.capability-runtime/file ./capability-runtime/file
 COPY --from=build /app/.capability-runtime/browser ./capability-runtime/browser
 COPY --from=build /app/.capability-runtime/computer ./capability-runtime/computer
+COPY --from=build /app/packages/capability-sdk/runtime/execution ./capability-runtime/execution
 
 RUN find ./server -type f -name '*.test.js' -delete \
     && mkdir -p .data artifacts

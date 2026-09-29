@@ -53,6 +53,17 @@ type BrowserChatPreviewDisplayMetrics = BrowserChatPreviewServerMetrics & {
 
 const BROWSER_CHAT_PREVIEW_VIDEO_MIME_TYPE = 'video/mp4; codecs="avc1.42C029"';
 
+function previewTabLabel(address: string, emptyLabel: string) {
+  if (!address || address === 'about:blank') return emptyLabel;
+  try {
+    const url = new URL(address);
+    const route = (url.hash.startsWith('#/') ? url.hash.slice(1) : url.pathname).split('?')[0];
+    const leaf = route.split('/').filter(Boolean).pop();
+    const host = url.hostname || url.protocol.replace(/:$/, '');
+    return leaf ? `${decodeURIComponent(leaf)} · ${host}` : host;
+  } catch { return address; }
+}
+
 type BrowserChatPreviewInput =
   | { kind: 'browserControl'; action: 'navigate' | 'open' | 'close' | 'back' | 'forward' | 'reload'; url?: string; tabId?: string }
   | { kind: 'clipboard'; action: 'copy' | 'cut' }
@@ -149,7 +160,8 @@ export function BrowserChatWebPreviewModal({
   const handledPreviewDownloadIdsRef = useRef(new Set<string>());
   const mediaSourceRef = useRef<MediaSource | null>(null);
   const sourceBufferRef = useRef<SourceBuffer | null>(null);
-  const videoChunkQueueRef = useRef<Uint8Array[]>([]);
+  const videoChunkQueueRef = useRef<Uint8Array<ArrayBuffer>[]>([]);
+  const videoQueuedBytesRef = useRef(0);
   const videoObjectUrlRef = useRef('');
   const forceImageTransportRef = useRef(false);
   const pumpVideoChunksRef = useRef<() => void>(() => undefined);
@@ -263,6 +275,7 @@ export function BrowserChatWebPreviewModal({
     const sourceBuffer = sourceBufferRef.current;
     sourceBufferRef.current = null;
     videoChunkQueueRef.current = [];
+    videoQueuedBytesRef.current = 0;
     if (sourceBuffer?.updating) {
       try { sourceBuffer.abort(); } catch { /* MediaSource may already be closed. */ }
     }
@@ -289,17 +302,19 @@ export function BrowserChatWebPreviewModal({
       const start = sourceBuffer.buffered.start(lastRange);
       const end = sourceBuffer.buffered.end(lastRange);
       if (video.currentTime < start || end - video.currentTime > 0.6) video.currentTime = Math.max(start, end - 0.12);
-      void video.play().catch(() => undefined);
-      if (end - sourceBuffer.buffered.start(0) > 8) {
-        try { sourceBuffer.remove(0, Math.max(0, end - 3)); return; } catch { /* Retry after the next append. */ }
+      if (video.paused) void video.play().catch(() => undefined);
+      if (end - sourceBuffer.buffered.start(0) > 4) {
+        const removeBefore = Math.min(video.currentTime - 1, end - 1.5);
+        if (removeBefore > sourceBuffer.buffered.start(0) + 0.5) {
+          try { sourceBuffer.remove(0, removeBefore); return; } catch { /* Retry after the next append. */ }
+        }
       }
     }
     const next = videoChunkQueueRef.current.shift();
     if (next) {
+      videoQueuedBytesRef.current -= next.byteLength;
       try {
-        const copy = new Uint8Array(next.byteLength);
-        copy.set(next);
-        sourceBuffer.appendBuffer(copy.buffer);
+        sourceBuffer.appendBuffer(next);
       } catch (error) {
         videoPipelineErrorRef.current(error instanceof Error ? error.message : '视频缓冲区写入失败');
       }
@@ -308,7 +323,7 @@ export function BrowserChatWebPreviewModal({
   }, []);
   pumpVideoChunksRef.current = pumpVideoChunks;
 
-  const beginVideoPipeline = useCallback((contentType: string, initialization: Uint8Array) => {
+  const beginVideoPipeline = useCallback((contentType: string, initialization: Uint8Array<ArrayBuffer>) => {
     disposeVideoPipeline();
     if (typeof MediaSource === 'undefined' || !MediaSource.isTypeSupported(contentType)) return false;
     setVideoDisplayReady(false);
@@ -317,6 +332,7 @@ export function BrowserChatWebPreviewModal({
     mediaSourceRef.current = mediaSource;
     videoObjectUrlRef.current = objectUrl;
     videoChunkQueueRef.current = [initialization];
+    videoQueuedBytesRef.current = initialization.byteLength;
     mediaSource.addEventListener('sourceopen', () => {
       if (mediaSourceRef.current !== mediaSource) return;
       try {
@@ -338,13 +354,14 @@ export function BrowserChatWebPreviewModal({
     return true;
   }, [disposeVideoPipeline]);
 
-  const enqueueVideoChunk = useCallback((chunk: Uint8Array) => {
+  const enqueueVideoChunk = useCallback((chunk: Uint8Array<ArrayBuffer>) => {
     if (!mediaSourceRef.current) return;
-    if (videoChunkQueueRef.current.length >= 240) {
+    if (videoChunkQueueRef.current.length >= 64 || videoQueuedBytesRef.current + chunk.byteLength > 8 * 1024 * 1024) {
       videoPipelineErrorRef.current('视频缓冲积压过多，正在回退到图片预览');
       return;
     }
     videoChunkQueueRef.current.push(chunk);
+    videoQueuedBytesRef.current += chunk.byteLength;
     pumpVideoChunksRef.current();
   }, []);
 
@@ -497,6 +514,14 @@ export function BrowserChatWebPreviewModal({
     let lastMessageAt = Date.now();
     let lastMediaAt = 0;
     let playbackResumedAt = 0;
+    const reportDemand = () => {
+      const stream = streamRef.current;
+      const rect = previewStageRef.current?.getBoundingClientRect();
+      if (!rect?.width || !rect.height || stream?.readyState !== WebSocket.OPEN || document.visibilityState !== 'visible') return;
+      const ratio = Math.min(2, window.devicePixelRatio || 1);
+      stream.send(JSON.stringify({ type: 'previewDemand', width: Math.ceil(rect.width * ratio),
+        height: Math.ceil(rect.height * ratio), queuedBytes: videoQueuedBytesRef.current }));
+    };
     reconnectEnabledRef.current = true;
     clearPreviewFrames();
     const disconnect = () => {
@@ -520,7 +545,7 @@ export function BrowserChatWebPreviewModal({
     };
     const connect = async () => {
       disconnect();
-      if (disposed || !reconnectEnabledRef.current) return;
+      if (disposed || !reconnectEnabledRef.current || document.visibilityState !== 'visible') return;
       const attempt = connectionId;
       const isCurrent = () => !disposed && attempt === connectionId;
       requestController = new AbortController();
@@ -549,6 +574,7 @@ export function BrowserChatWebPreviewModal({
         streamRef.current = stream;
         stream.onopen = () => {
           if (!isCurrent()) return;
+          reportDemand();
           lastMessageAt = Date.now();
           const counters = frameCountersRef.current;
           counters.sampledAt = Date.now();
@@ -575,7 +601,7 @@ export function BrowserChatWebPreviewModal({
                 sequence?: number;
                 type?: 'frame' | 'videoChunk' | 'videoInit';
               };
-              const payload = bytes.slice(4 + metadataLength);
+              const payload = bytes.subarray(4 + metadataLength);
               if (metadata.type === 'videoInit') {
                 if (!metadata.contentType || !beginVideoPipeline(metadata.contentType, payload)) {
                   fallbackToImagePreview('当前客户端不支持该 H.264 视频流，正在回退到图片预览');
@@ -628,15 +654,6 @@ export function BrowserChatWebPreviewModal({
             } else if (message.type === 'viewportChanged' && message.viewport) {
               frameStateRef.current = { ...frameStateRef.current, viewport: message.viewport };
               setFrame((current) => current ? { ...current, viewport: message.viewport } : current);
-            } else if (
-              message.type === 'videoReady'
-              && typeof message.width === 'number'
-              && typeof message.height === 'number'
-            ) {
-              frameStateRef.current = {
-                ...frameStateRef.current,
-                viewport: { width: message.width, height: message.height },
-              };
             } else if (message.type === 'frameHeartbeat' && message.metrics) {
               const counters = frameCountersRef.current;
               const sampledAt = Date.now();
@@ -727,20 +744,31 @@ export function BrowserChatWebPreviewModal({
       if (!stream || stream.readyState === WebSocket.CLOSED) scheduleReconnect();
       else checkPlayback();
     };
-    document.addEventListener('visibilitychange', resume);
+    const visibilityChanged = () => {
+      if (document.visibilityState === 'visible') { resume(); return; }
+      // Removing this viewer lets the server stop capture/encoding when there
+      // are no visible viewers. Do not accumulate video in a suspended decoder.
+      disconnect();
+      clearPreviewFrames(true);
+      disposeVideoPipeline();
+      if (reconnectEnabledRef.current) setStatus('reconnecting');
+    };
+    document.addEventListener('visibilitychange', visibilityChanged);
     window.addEventListener('pageshow', resume);
     window.addEventListener('online', resume);
     window.addEventListener('focus', checkPlayback);
     const watchdog = window.setInterval(checkPlayback, 2_000);
+    const demandTimer = window.setInterval(reportDemand, 1_000);
     void connect();
     return () => {
       disposed = true;
       disconnect();
-      document.removeEventListener('visibilitychange', resume);
+      document.removeEventListener('visibilitychange', visibilityChanged);
       window.removeEventListener('pageshow', resume);
       window.removeEventListener('online', resume);
       window.removeEventListener('focus', checkPlayback);
       window.clearInterval(watchdog);
+      window.clearInterval(demandTimer);
     };
   }, [beginVideoPipeline, clearPreviewFrames, deliverPreviewDownload, disposeVideoPipeline, enqueueVideoChunk, fallbackToImagePreview, queuePreviewFrame, sessionId, userId]);
 
@@ -1138,14 +1166,16 @@ export function BrowserChatWebPreviewModal({
 
   return (
     <FloatingWindow title={t('实时界面')} className="browser-chat-web-preview-modal" onClose={onClose}>
+      <div className="browser-chat-web-preview-chrome">
         <div className="browser-chat-web-preview-tabs" aria-label={t('浏览器标签页')}>
           <div className="browser-chat-web-preview-tab-list">
+            {!frame?.tabs.length ? <span className="browser-chat-web-preview-empty-tab"><Globe size={13} aria-hidden="true" />{t('尚未打开网页')}</span> : null}
             {(frame?.tabs || []).map((tab) => (
               <div className={`browser-chat-web-preview-tab${tab.active ? ' active' : ''}`} key={tab.id}>
                 <button aria-pressed={tab.active} className="browser-chat-web-preview-tab-select"
                   onClick={() => void switchPreviewTab(tab.id)} title={tab.url} type="button">
                   <Globe size={13} />
-                  <span>{tab.url && tab.url !== 'about:blank' ? tab.url.replace(/^https?:\/\//, '').replace(/\/$/, '') : t('新标签页')}</span>
+                  <span>{previewTabLabel(tab.url, t('新标签页'))}</span>
                 </button>
                 <button className="browser-chat-web-preview-tab-close" aria-label={t('关闭标签页')}
                   title={t('关闭标签页')} onClick={() => browserControl('close', tab.id)} type="button"><X size={13} /></button>
@@ -1159,10 +1189,13 @@ export function BrowserChatWebPreviewModal({
         <header className="browser-chat-web-preview-header">
           <div className="browser-chat-web-preview-navigation">
             <button className="browser-chat-web-preview-icon-button" aria-label={t('后退')} title={t('后退')}
+              disabled={status !== 'live'}
               onClick={() => browserControl('back')} type="button"><ArrowLeft size={16} /></button>
             <button className="browser-chat-web-preview-icon-button" aria-label={t('前进')} title={t('前进')}
+              disabled={status !== 'live'}
               onClick={() => browserControl('forward')} type="button"><ArrowRight size={16} /></button>
             <button className="browser-chat-web-preview-icon-button" aria-label={t('刷新')} title={t('刷新')}
+              disabled={status !== 'live'}
               onClick={() => browserControl('reload')} type="button"><RotateCw size={15} /></button>
           </div>
           <form className="browser-chat-web-preview-address" onSubmit={event => { event.preventDefault(); navigateAddress(); }}>
@@ -1176,10 +1209,12 @@ export function BrowserChatWebPreviewModal({
                   event.stopPropagation();
                   if (event.key === 'Escape') { setAddressDraft(null); event.currentTarget.blur(); previewStageRef.current?.focus(); }
                 }} />
+              <kbd className="browser-chat-web-preview-address-hint" aria-hidden="true">↵</kbd>
           </form>
-          <span className="browser-chat-web-preview-metrics" title={statusLabel}>{previewMetricsLabel}</span>
+          <span className="browser-chat-web-preview-metrics" data-status={status} title={statusLabel}><i aria-hidden="true" />{previewMetricsLabel || statusLabel}</span>
 
         </header>
+      </div>
 
         <div className="browser-chat-web-preview-body">
           <div

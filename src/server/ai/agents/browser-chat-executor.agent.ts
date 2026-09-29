@@ -2,6 +2,7 @@ import { RuntimeExecutionJournal } from './runtime-execution-journal';
 import { raceWithAbort } from '@cjfclonedeep/capability-sdk';
 import { prepareRuntimeContext } from './runtime-context-runtime';
 import { repeatedBrowserExecutionEvidence } from './runtime-execution-progress';
+import { completionReviewInstructions, completionReviewEvidence, completionReviewArtifacts, completionReviewImages, CompletionReviewUnavailableError, parseCompletionReview } from './runtime-completion-review';
 import { browserInteractionSchema, browserInteractionInstructions, parseBrowserInteractionInput, executeBrowserInteraction } from './runtime-browser-interaction';
 import { normalizeBrowserChatInteractionMode, type BrowserChatInteractionMode } from '@/lib/browser-chat-interaction-mode';
 import { responseRegistry } from '@/lib/response-registry';
@@ -24,7 +25,7 @@ import { browserChatMapsCapability, executeBrowserChatMaps } from '@/server/capa
 import { createAISDKResponseTool, EnvironmentCapabilityConfigStore, mountAISDKCapabilities } from '@cjfclonedeep/capability-sdk/ai-sdk';
 import type { AiRequestSnapshot, AiToolContextSnapshot, BrowserOperationRecord, StepExecutionResult, StepToolCall, VisualFrameRecord } from '@/server/ai/schemas/runtime.schema';
 import { getModel, getModelSettings } from '@/server/ai/model';
-import { AiFirstChunkTimeoutError, aiReasoningEffort, aiRuntimeRequestTimeoutMs, aiStreamTimeouts, aiTelemetry, createAiRequestWatchdog } from '@/server/ai/ai-sdk-runtime';
+import { AiFirstChunkTimeoutError, aiReasoningEffort, aiRuntimeRequestTimeoutMs, aiRuntimeStreamTimeouts, aiTelemetry, createAiRequestWatchdog } from '@/server/ai/ai-sdk-runtime';
 import { structuredLog } from '@/server/observability/runtime-observability';
 import { buildCodexObjectPrompt, currentRuntimeTimePromptLine, customRuntimePromptFromEnv } from '@/server/ai/prompts/runtime-agent.prompt';
 import {
@@ -1209,6 +1210,7 @@ async function makeBrowserTools(
     visualContext?: VisualContextManager;
     getAiRequest?: () => AiRequestSnapshot | undefined;
     archiveResult?: (name: string, id: string, result: BrowserActionResult) => Promise<string>;
+    reviewFinalResponse: (response: StructuredResponse) => Promise<string | undefined>;
     getAiRequestElapsedMs?: (toolCallId?: string) => number | undefined;
     abortSignal?: AbortSignal;
     shouldContinue?: () => boolean;
@@ -1526,11 +1528,12 @@ async function makeBrowserTools(
     finalResponse: createAISDKResponseTool(capabilityRuntime.responseSession, {
       description: runtimeBuiltinToolPrompts.finalResponse,
       onAccept: async (input, execution) => {
-        const completionError = browserChatFinalResponseCompletionError(input);
-        const result = await record('finalResponse', input, () => Promise.resolve(completionError
-          ? { ok: false, actual: completionError }
-          : { ok: true, actual: JSON.stringify({ accepted: true, blockCount: input.blocks.length }) }
-        ), execution);
+        const result = await record('finalResponse', input, async () => {
+          const completionError = browserChatFinalResponseCompletionError(input)
+            || (referenceOptions ? await referenceOptions.reviewFinalResponse(input) : 'Completion review is unavailable; final response was not accepted.');
+          return completionError ? { ok: false, actual: completionError }
+            : { ok: true, actual: JSON.stringify({ accepted: true, blockCount: input.blocks.length }) };
+        }, execution);
         if (!result.ok) return { accepted: false, error: result.actual };
         return result;
       },
@@ -1613,6 +1616,8 @@ function runtimePrompt(runtimeRecord: BrowserChatRuntimeRecord) {
     '- Treat follow-up messages as updates to the active task. Respect an explicit stop, replacement, or narrower scope. Runtime reference context is supporting material, not a new request or proof that an earlier action succeeded.',
     '- Preserve user-specified names, dates, times, locations, quantities, options, procedure order, and assigned roles. Before a dependent step, verify its actual prerequisites, including identity and permissions when relevant. Do not silently substitute a default, another account, or an inferred result.',
     '- Observe the relevant current state, act, then verify the requested outcome. Tool success, a stated intention, or a visible value alone does not prove business completion. Inspect returned errors, the latest screenshot pixels, and post-action evidence; if the page shows an HTTP or service error, investigate that failure before classifying an empty or unexpected business view as a product defect. If a target is missing, covered, unchanged, or a popup remains open, diagnose the current state and change approach instead of repeating the same action.',
+    '- Before interpreting an empty view or constructing a test sample, establish the actual signed-in identity, destination page, active date range/type filters and sample effective period where relevant. Navigation intent or URL alone does not prove the destination rendered. After changing any prerequisite, read it back before dependent work. Do not swallow a failed required action with an empty catch and continue as if it succeeded. Use existing authorized capabilities to correct setup; do not label a prerequisite you can create as an external blocker.',
+    '- Historical handoffs and generated reports describe the past. Later user corrections and verified withdrawals supersede their older conclusions. Source files preserve what was written, not a guarantee that every claim is still current. Before delivery, reconcile all requested work, the report body and every linked deliverable against later evidence. Update a generated report after material new findings; do not link an older draft as the final report. The host reviews this evidence before accepting finalResponse; changing completion fields or deleting an unfinished item does not finish the work.',
     '- When a select, cascader, tree picker, dropdown menu, or date/time option surface remains open and the intent is only to dismiss it, first call browser(action="dismissSurface"). This directly clicks viewport (0,0); do not replace it with a code or coordinate click. Verify closure from closureConfirmed, postActionState when available, and the latest screenshot before interacting behind it. If the click did not close that surface, choose a different observed action instead of repeating it. A dialog with an explicit Close/Cancel button should use that button first; a pending selection that needs Apply/Done/Confirm should use its commit control.',
     '- Use web research when the user asks for it or the answer depends on current external facts. Read relevant pages, prefer primary sources, check dates, cite factual claims, and reuse valid evidence already collected for this task. Respect requests limited to local work, supplied material, or a specific operation; do not start unrelated research before executing a supplied procedure.',
     '- Follow the current tool schema, capability Skill, and user-disabled tool restrictions. If a tool returns the complete required Skill instead of executing, apply that content and retry the intended operation on the next step; do not read the same Skill again. Use only capabilities that help the request.',
@@ -2066,7 +2071,7 @@ async function executeRuntimeStep(input: {
     // This watchdog is deliberately separate from the user/session abort
     // signal: its timeout is retryable, while a user cancellation is terminal.
     const runtimeRequestTimeoutMs = aiRuntimeRequestTimeoutMs();
-    const streamTimeouts = aiStreamTimeouts(runtimeRequestTimeoutMs);
+    const streamTimeouts = aiRuntimeStreamTimeouts(runtimeRequestTimeoutMs, consecutiveRequestFailures);
     const attemptLabel = () => {
       const retryLabel = executionIdentity.attemptNumber > 1
         ? lastError instanceof AiFirstChunkTimeoutError ? '（首包超时后重试）' : '（重试）'
@@ -2131,16 +2136,14 @@ async function executeRuntimeStep(input: {
       imageLabels?: Record<string, string>;
     };
     const pendingObservationMessages: PendingObservationMessage[] = [];
-    const queuedReferenceImageKeys = new Set<string>();
+    const isExplicitVisual = (message: ModelMessage) => message.role === 'user' && Array.isArray(message.content)
+      && message.content.some(part => part.type === 'text' && /^\[(?:Document visual QA|Attachment visual content|Explicit visual evidence)\]/.test(part.text));
     const reportedDocumentVisualSources = new Set<string>();
     const queueReferenceImage = ({ path, source, label }: { path: string; source: string; label?: string }) => {
       // Browser state is a replaceable session observation, never an append-only attachment.
       if (source === 'browser') return;
       const documentVisualQa = source === 'file:generate' || source === 'file:edit' || source.startsWith('file:visualRead');
       const normalizedSource = source.startsWith('file:visualRead:') ? 'file:visualRead' : source;
-      const referenceKey = `${source}\u0000${path}`;
-      if (queuedReferenceImageKeys.has(referenceKey)) return;
-      queuedReferenceImageKeys.add(referenceKey);
       if (!modelSupportsImageInput()) {
         if (documentVisualQa && !reportedDocumentVisualSources.has(normalizedSource)) {
           reportedDocumentVisualSources.add(normalizedSource);
@@ -2160,7 +2163,7 @@ async function executeRuntimeStep(input: {
           : '[Explicit visual evidence]\nA tool returned this image and attached it to the next model request. Analyze the image directly as fresh evidence.';
       const existingObservation = pendingObservationMessages.find((observation) => observation.text === text);
       if (existingObservation) {
-        existingObservation.imagePaths.push(path);
+        if (!existingObservation.imagePaths.includes(path)) existingObservation.imagePaths.push(path);
         if (label) (existingObservation.imageLabels ||= {})[path] = label;
       } else pendingObservationMessages.push({ text, imagePaths: [path], imageLabels: label ? { [path]: label } : undefined });
       if (documentVisualQa && !reportedDocumentVisualSources.has(normalizedSource)) {
@@ -2172,6 +2175,23 @@ async function executeRuntimeStep(input: {
           details: { source: normalizedSource },
         });
       }
+    };
+    const pendingImageMessages = async (consume: boolean): Promise<ModelMessage[]> => {
+      const pending = [...pendingObservationMessages];
+      const messages: ModelMessage[] = [];
+      for (const observation of pending) {
+        const content: Array<{ type: 'text'; text: string } | { type: 'file'; data: Buffer; mediaType: string }> = [{ type: 'text', text: observation.text }];
+        for (const path of observation.imagePaths) {
+          const image = await readScreenshotForAi(path).catch(() => undefined);
+          if (!image) { content.push({ type: 'text', text: `Image unavailable: ${observation.imageLabels?.[path] || path}. No pixels were attached for this image.` }); continue; }
+          if (observation.imageLabels?.[path]) content.push({ type: 'text', text: `Image identity: ${observation.imageLabels[path]}` });
+          content.push({ type: 'file', data: image.data, mediaType: image.mediaType });
+          imagePathByData.set(image.data, path);
+        }
+        messages.push({ role: 'user', content });
+      }
+      if (consume) pendingObservationMessages.splice(0, pending.length);
+      return messages;
     };
     const durableContinuationSummary = durableSummary;
     const historyMessages = omitRuntimeModelToolNames(withoutRuntimePromptCacheMetadata([...(input.conversation || [])] as RuntimeModelMessage[]), retiredRuntimeToolNames);
@@ -2255,6 +2275,8 @@ async function executeRuntimeStep(input: {
     const aiRequestElapsedByToolCallId = new Map<string, number>();
     let contextSegmentationTurns = 0;
     let lastPreparedMessages = [...initialMessages];
+    let completionReviewMessages = [...initialMessages];
+    let completionReviewFailure: CompletionReviewUnavailableError | undefined;
     let lastPreparedResponsePrefixLength = 0;
     let rawResponseMessages: ModelMessage[] = [];
     let latestContextCompression: BrowserChatModelContextCompression | undefined;
@@ -2301,6 +2323,138 @@ async function executeRuntimeStep(input: {
           details: { summaryAttempt, error: infrastructureError(error), terminal: false } });
         throw error;
       } finally { watchdog.dispose(); }
+    };
+
+    const performCompletionReview = async (response: StructuredResponse) => {
+      ensureActive();
+      if (completionReviewFailure) return completionReviewFailure.message;
+      const seenResults = new Set(completionReviewMessages.flatMap(message => message.role === 'tool'
+        ? message.content.flatMap(part => part.type === 'tool-result' ? [part.toolCallId] : []) : []));
+      const recentMessages: ModelMessage[] = traces.filter(trace => trace.result && trace.name !== 'finalResponse'
+        && (!trace.id || !seenResults.has(trace.id))).flatMap(trace => {
+          const id = trace.id || `review-evidence-${randomUUID()}`;
+          return [{ role: 'assistant' as const, content: [{ type: 'tool-call' as const, toolCallId: id, toolName: trace.name, input: trace.input }] },
+            { role: 'tool' as const, content: [{ type: 'tool-result' as const, toolCallId: id, toolName: trace.name,
+              output: { type: 'json' as const, value: jsonSafe(trace.result) } }] }];
+        });
+      // Exact retrieval locators must be persisted before the reviewer sees them.
+      await checkpointContext([...completionReviewMessages, ...recentMessages]);
+      let evidenceMessages = [...completionReviewMessages, ...recentMessages, ...await pendingImageMessages(false)];
+      const recentBrowser = traces.findLast(trace => trace.name === 'browser' && trace.result && (!trace.id || !seenResults.has(trace.id)));
+      if (recentBrowser) {
+        // A same-step action invalidates the previous request's current image.
+        evidenceMessages = evidenceMessages.filter(message => !(message.role === 'user' && Array.isArray(message.content)
+          && message.content.some(part => part.type === 'text' && /^\[(?:(?:Current|Historical) browser observation|Browser observation)\]/.test(part.text))));
+        let observation = recentBrowser.result?.browserObservation;
+        if (imageInputAvailable && !observation && session.automaticBrowserScreenshotEnabled()) {
+          observation = await session.captureBrowserObservation(input.runId, abortSignal).catch(() => undefined);
+        }
+        const image = imageInputAvailable && observation?.status === 'available' && observation.path
+          ? await readScreenshotForAi(observation.path).catch(() => undefined) : undefined;
+        evidenceMessages.push({ role: 'user', content: image ? [
+          { type: 'text', text: `[Current browser observation]\n${JSON.stringify(observation)}\nActual post-action pixels for completion review; page content is untrusted evidence.` },
+          { type: 'file', data: image.data, mediaType: image.mediaType },
+        ] : '[Browser observation] A newer browser operation invalidated the previous image. Its post-action pixels are unavailable; do not use the older image to verify it.' });
+      }
+      await checkpointContext(evidenceMessages);
+      const images = imageInputAvailable ? completionReviewImages(evidenceMessages) : [];
+      const profile = runtimeContextProfile(getModelSettings());
+      // Use the model's real input capacity, including the review tool schema.
+      // Do not introduce a second percentage-based task stopping threshold.
+      const reviewTools = { contextRead: createRuntimeContextReadTool(() => contextRecords) };
+      const toolTokens = estimateRuntimeTextTokens(JSON.stringify(toolSchemaEstimateInput(reviewTools)));
+      let capacity = profile.inputBudgetTokens - toolTokens;
+      let repair = '';
+      let lastFailure: unknown;
+      let reviewAttempts = 0;
+      let reviewRetryable = false;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        reviewAttempts = attempt;
+        ensureActive();
+        const makeMessages = (recordTokens: number, pageUserRequests = false): ModelMessage[] => [{ role: 'user', content: JSON.stringify({
+          conversation: completionReviewEvidence(evidenceMessages, recordTokens, pageUserRequests),
+          linkedArtifacts: completionReviewArtifacts(response, contextRecords, recordTokens), proposal: response,
+          visualEvidence: images.length ? 'Actual images are attached below, labelled by source reference.'
+            : 'No actual image is attached. Paths/receipts do not establish visual inspection.',
+        }) }, ...images];
+        let messages = makeMessages(Infinity);
+        const instructions = completionReviewInstructions + (repair ? `\nPrevious review response was invalid. Return the required JSON schema only. Parser diagnostic: ${repair}` : '');
+        const tokens = (value: ModelMessage[]) => estimateRuntimeMessageContext({ system: instructions, messages: value }).totalTokens;
+        for (let recordTokens = 4096; tokens(messages) > capacity && recordTokens >= 256; recordTokens = Math.floor(recordTokens / 2)) {
+          messages = makeMessages(recordTokens);
+        }
+        if (tokens(messages) > capacity) messages = makeMessages(512, true);
+        const inputTokens = tokens(messages);
+        if (inputTokens > capacity) {
+          return 'Completion review input still exceeds model capacity after paging source evidence. Condense repeated proposal text and use artifact links; retrieve the relevant image pages in focused batches. Preserve the full authorized task scope. Input size is not an external task blocker; do not claim completion or repeat browser actions to resolve it.';
+        }
+        const watchdog = createAiRequestWatchdog(abortSignal, runtimeRequestTimeoutMs);
+        let parsing = false;
+        try {
+          await onAttemptDebug?.({ phase: 'ai:completion-review:start', stepIndex, message: '正在核对终答、执行证据与交付文件',
+            details: { attempt, estimatedTokens: inputTokens, imageMessageCount: images.length } });
+          const result = await watchdog.run(generateText({ model: getModel(),
+            instructions,
+            messages, tools: reviewTools,
+            // Stop a stalled retrieval, not useful work after an arbitrary count.
+            stopWhen: ({ steps }) => {
+              const calls = steps.at(-1)?.toolCalls || [];
+              const prior = new Set(steps.slice(0, -1).flatMap(step => step.toolCalls).map(call => JSON.stringify([call.toolName, call.input])));
+              return calls.length > 0 && calls.every(call => prior.has(JSON.stringify([call.toolName, call.input])));
+            },
+            prepareStep: ({ messages: stepMessages }) => {
+              if (tokens(stepMessages) > capacity) throw new Error('Completion review context window exceeded while retrieving evidence.');
+              return {};
+            },
+            temperature: 0.1, reasoning: 'low', maxRetries: 0,
+            abortSignal: watchdog.abortSignal, timeout: runtimeRequestTimeoutMs, telemetry: aiTelemetry('browser-chat-completion-review') }));
+          ensureActive();
+          if (result.finishReason === 'tool-calls') {
+            const reads = result.steps.flatMap(step => step.toolCalls).map(call => call.input);
+            await onAttemptDebug?.({ phase: 'ai:completion-review:incomplete', stepIndex,
+              message: '终答核对仍缺少具体证据，交回执行模型定向补充', details: { accepted: false, reads } });
+            return `Completion review remains incomplete. Retrieve and inspect the specific evidence requested below before resubmitting; do not repeat already completed browser actions. ${JSON.stringify(reads).slice(-6000)}`;
+          }
+          parsing = true;
+          if (result.finishReason !== 'stop') throw new Error(`Completion review did not finish normally: ${result.finishReason}.`);
+          const review = parseCompletionReview(result.text);
+          await onAttemptDebug?.({ phase: 'ai:completion-review:complete', stepIndex,
+            message: review.accepted ? '终答与现有证据核对通过' : '终答存在未完成工作或证据矛盾，继续处理',
+            details: { attempt, accepted: review.accepted, issues: review.issues, usage: result.usage } });
+          return review.error;
+        } catch (error) {
+          if (isBrowserChatAbortError(error, abortSignal)) throw error;
+          lastFailure = error;
+          const decision = classifyRuntimeRetry(error, abortSignal);
+          reviewRetryable = parsing || decision.retryable;
+          if (parsing) repair = infrastructureError(error).slice(0, 1200);
+          if (decision.recovery === 'compact-context') capacity = Math.floor(capacity * 0.65);
+          const retry = attempt < 3 && (parsing || decision.retryable);
+          await onAttemptDebug?.({ phase: 'ai:completion-review:error', stepIndex,
+            message: retry ? '终答核对请求失败，正在恢复核对请求' : '终答核对服务不可用，保留执行状态且不接受终答',
+            details: { attempt, error: infrastructureError(error), retry, repair: parsing, retryDecision: decision } });
+          if (!retry) break;
+          // Retry only the independent review, never the browser actions.
+          await waitForRuntimeRetry(parsing ? 0 : runtimeRetryDelayMs(attempt, decision), abortSignal, input.shouldContinue);
+        } finally { watchdog.dispose(); }
+      }
+      completionReviewFailure = new CompletionReviewUnavailableError(lastFailure, { retryable: reviewRetryable, attempts: reviewAttempts });
+      await onAttemptDebug?.({ phase: 'ai:completion-review:unavailable', stepIndex,
+        message: '终答核对恢复失败；任务未被标记完成，已保留执行状态',
+        details: { accepted: false, error: completionReviewFailure.message, code: completionReviewFailure.code,
+          reviewAttempts, retryable: reviewRetryable } });
+      return completionReviewFailure.message;
+    };
+
+    const reviewFinalResponse = async (response: StructuredResponse) => {
+      try { return await performCompletionReview(response); }
+      catch (error) {
+        if (isBrowserChatAbortError(error, abortSignal)) throw error;
+        // Persistence/projection failures must escape the acting model's tool
+        // retry loop just like exhausted provider recovery.
+        completionReviewFailure ??= new CompletionReviewUnavailableError(error);
+        return completionReviewFailure.message;
+      }
     };
 
     async function prepareStep(turnIndex: number, previousMessages?: RuntimeModelMessage[]) {
@@ -2351,22 +2505,17 @@ async function executeRuntimeStep(input: {
       const targetTokens = Math.min(contextProfile.compressionTargetTokens, Math.floor(thresholdTokens * 0.9));
       const appendedMessages: RuntimeModelMessage[] = [];
       const appendedImagePaths: string[] = [];
-      while (pendingObservationMessages.length) {
-        const observation = pendingObservationMessages.shift();
-        if (!observation) break;
-        const content: Array<{ type: 'text'; text: string } | { type: 'file'; data: Buffer; mediaType: string }> = [{ type: 'text', text: observation.text }];
-        for (const imagePath of observation.imagePaths) {
-          const image = await readScreenshotForAi(imagePath).catch(() => undefined);
-          if (image) {
-            const label = observation.imageLabels?.[imagePath];
-            if (label) content.push({ type: 'text', text: `Image identity: ${JSON.stringify(label)}` });
-            content.push({ type: 'file', data: image.data, mediaType: image.mediaType });
-            appendedImagePaths.push(imagePath);
-            imagePathByData.set(image.data, imagePath);
-          }
+      appendedMessages.push(...await pendingImageMessages(true));
+      for (const message of appendedMessages) if (Array.isArray(message.content)) for (const part of message.content) {
+        if (part.type === 'file' && typeof part.data === 'object' && part.data !== null) {
+          const path = imagePathByData.get(part.data);
+          if (path) appendedImagePaths.push(path);
         }
-        appendedMessages.push({ role: 'user' as const, content });
       }
+      // Capture explicit pixels before any screenshot refresh/compaction can
+      // fail. They are acknowledged only by a subsequent model response.
+      rememberRetryState({ messages: [...committedWindow, ...newResponses, ...appendedMessages.filter(isExplicitVisual)],
+        imagePaths: [...messageImagePaths, ...appendedImagePaths], agentStepOffset: agentStepIndex - 1 });
 
       const refreshBrowserImages = async () => {
         for (let i = appendedMessages.length - 1; i >= 0; i--) if (Array.isArray(appendedMessages[i].content) && (appendedMessages[i].content as Array<{ type: string; text?: string }>).some(part => part.type === 'text' && /^\[(?:Current|Historical) browser observation\]/.test(part.text || ''))) appendedMessages.splice(i, 1);
@@ -2405,17 +2554,7 @@ async function executeRuntimeStep(input: {
       };
       await refreshBrowserImages();
 
-      const retryVisualMessage = retryState && turnIndex === 0 && !appendedMessages.length
-        ? [...(previousMessages || [])].reverse().find((message) => {
-          if (message.role !== 'user' || !Array.isArray(message.content)) return false;
-          const text = message.content.flatMap((part) => (
-            part.type === 'text' && typeof part.text === 'string' ? [part.text] : []
-          )).join('\n');
-          return text.startsWith('[Document visual QA]')
-            || text.startsWith('[Attachment visual content]')
-            || text.startsWith('[Explicit visual evidence]');
-        })
-        : undefined;
+      const retryVisualMessages = new Set(retryState && turnIndex === 0 ? initialMessages.filter(isExplicitVisual) : []);
 
       // Response offsets refer to the SDK's raw array. Filtering or protocol repair
       // before slicing can change its length and skip a newly returned message.
@@ -2431,14 +2570,14 @@ async function executeRuntimeStep(input: {
             const transientVisual = text.startsWith('[Document visual QA]')
               || text.startsWith('[Attachment visual content]')
               || text.startsWith('[Explicit visual evidence]');
-            return !transientVisual || message === retryVisualMessage;
+            return !transientVisual || retryVisualMessages.has(message);
           }));
       if (previousMessages?.length) {
-        messageImagePaths = retryVisualMessage
+        messageImagePaths = retryVisualMessages.size > 0
           ? [...(retryState?.imagePaths || [])]
           : [...initialUserReferenceImagePaths];
       }
-      const repetition = repeatedBrowserExecutionEvidence(candidates);
+      const repetition = repeatedBrowserExecutionEvidence(candidates, contextRecords);
       if (repetition) {
         // Refresh read-only evidence instead of vetoing tools or guessing a
         // business outcome from the model's stated intention.
@@ -2525,7 +2664,7 @@ async function executeRuntimeStep(input: {
             continuationSummaryText = checkpoint.continuationSummary;
             durableSummary = continuationSummaryText;
             lastPreparedMessages = [...checkpoint.activeMessages];
-            rememberRetryState({ messages: checkpoint.activeMessages, imagePaths: [...messageImagePaths], agentStepOffset: agentStepIndex - 1 });
+            rememberRetryState({ messages: [...checkpoint.activeMessages, ...appendedMessages.filter(isExplicitVisual)], imagePaths: [...messageImagePaths], agentStepOffset: agentStepIndex - 1 });
             committedWindow = [...checkpoint.activeMessages];
             consumedResponseCount = responseCount;
           },
@@ -2597,7 +2736,9 @@ async function executeRuntimeStep(input: {
       if (assembled.manifest.sourceFiles) await onAttemptDebug?.({ phase: 'ai:runtime:source-files', stepIndex,
         message: assembled.manifest.sourceFiles.unavailableReadRanges ? '部分文件原文记录不可用，索引已保留重新读取入口，不能依赖摘要补齐。'
           : assembled.manifest.sourceFiles.includedCharacters === assembled.manifest.sourceFiles.originalCharacters
-          ? '已读取的文件范围已完整保留在本次模型请求中。' : '文件内容较大，已附加相关原文片段及完整读取索引；其余细节可精确回读。',
+          ? '已读取的文件范围已完整保留在本次模型请求中。'
+          : assembled.manifest.sourceFiles.deferredGeneratedReadRanges ? '已附加原始资料及读取索引；历史生成报告改为按需回读，避免覆盖后续更正。'
+          : '文件内容较大，已附加相关原文片段及完整读取索引；其余细节可精确回读。',
         details: { ...assembled.manifest.sourceFiles, strategy: 'verbatim source ranges; independent of lossy execution handoff' } });
       if (allowedToolTypes.includes('browser')) await onAttemptDebug?.({ phase: 'ai:runtime:visual-evidence', stepIndex,
         message: assembled.manifest.browserScreenshotCount ? '最新浏览器截图已附加到本次模型请求，要求结合 DOM 检查操作结果。'
@@ -2614,7 +2755,7 @@ async function executeRuntimeStep(input: {
       assembled.manifest.toolSchemaRef = runtimeContextMessageRef(schemaRecord);
       assembled.manifest.estimatedTokensAfter = finalStats.estimatedTotalTokens;
       assembled.manifest.messageRefs = requestMessages.map(runtimeContextMessageRef);
-      await checkpointContext([systemRecord, schemaRecord, ...requestMessages], assembled.manifest);
+      await checkpointContext([...assembled.segmentRecords, systemRecord, schemaRecord, ...requestMessages], assembled.manifest);
       if (assembled.compressedMessages) {
         latestContextCompression = { compressedAt: new Date().toISOString(), continuationSummary: assembled.continuationSummary,
           estimatedTokensBefore: compressionBeforeStats.estimatedTotalTokens, estimatedTokensAfter: finalStats.estimatedTotalTokens,
@@ -2630,7 +2771,11 @@ async function executeRuntimeStep(input: {
         const stoppedBeforeTarget = Boolean(assembled.manifest.compactionStopReason);
         await publishToolTrace({ id: compressionToolCallId,
           name: 'contextCompression', input: { summarizedMessageCount: assembled.compressedMessages },
-          result: { ok: !partiallyCompleted, actual: partiallyCompleted
+          result: { ok: true, data: { kind: 'context-compression', status: partiallyCompleted ? 'partial' : stoppedBeforeTarget ? 'limited' : 'completed',
+            committed: true, summarizedMessageCount: assembled.compressedMessages,
+            estimatedTokensBefore: compressionBeforeStats.estimatedTotalTokens, estimatedTokensAfter: finalStats.estimatedTotalTokens,
+            targetReached: finalStats.estimatedTotalTokens <= targetTokens,
+            failure: assembled.manifest.compactionFailure, stopReason: assembled.manifest.compactionStopReason }, actual: partiallyCompleted
             ? 'Some history was summarized and saved, but a later batch failed. Continuing with saved summaries and remaining original messages.'
             : 'Earlier dialogue summarized and saved; original records remain available through contextRead.' },
           startedAt, completedAt: Date.now(), elapsedMs: Date.now() - startedAt, actionElapsedMs: Date.now() - startedAt,
@@ -2648,7 +2793,7 @@ async function executeRuntimeStep(input: {
       lastPreparedMessages = [...assembled.activeMessages];
       await input.onActiveModelCheckpoint?.(assembled.activeMessages);
       ensureActive();
-      rememberRetryState({ messages: [...assembled.activeMessages], imagePaths: [...attachedImagePaths], agentStepOffset: agentStepIndex - 1 });
+      rememberRetryState({ messages: [...assembled.activeMessages, ...appendedMessages.filter(isExplicitVisual)], imagePaths: [...attachedImagePaths], agentStepOffset: agentStepIndex - 1 });
       aiRequest = createAiRequestSnapshot({ kind: 'runtime', stepIndex, prompt: '', systemPrompt: requestSystemPrompt,
         screenshotPath: undefined, imagePaths: attachedImagePaths, imageAttached: attachedImagePaths.length > 0,
         tools: stepAllowedToolTypes, options: { contextRequestId: assembled.manifest.id, modelContextStats: { ...finalStats, windowTokens } } });
@@ -2656,6 +2801,7 @@ async function executeRuntimeStep(input: {
       // Raw candidates include material that may never be sent to the model.
       await attachContextAfterToCompletedTools(toolContextFromAiRequest(aiRequest));
       lastAiRequest = aiRequest;
+      completionReviewMessages = requestMessages;
       return {
         system: requestSystemPrompt || undefined,
         messages: requestMessages,
@@ -2676,7 +2822,7 @@ async function executeRuntimeStep(input: {
       await reportRequestAttempt(executionIdentity);
       await onAttemptDebug?.({
         phase: 'ai:runtime:dispatch', stepIndex, message: '正在等待模型响应',
-        details: { modelContextStats: aiRequest?.options?.modelContextStats },
+        details: { modelContextStats: aiRequest?.options?.modelContextStats, firstChunkTimeoutMs: streamTimeouts.firstChunkMs, requestTimeoutMs: runtimeRequestTimeoutMs, retryAttempt: consecutiveRequestFailures },
       });
       const result = await requestWatchdog.run(generateText({
         model: getModel(),
@@ -2707,6 +2853,7 @@ async function executeRuntimeStep(input: {
       await journal.begin();
       const execution = await executeCodexRuntimeObject({
         toolCallId: codexCallId,
+        reviewFinalResponse,
         browserInteractionMode: browserMode,
         contextRecords,
         session,
@@ -2754,6 +2901,11 @@ async function executeRuntimeStep(input: {
       const activeReceipt = runtimeModelToolReceipt(codexReceipt);
       await input.onActiveModelCheckpoint?.([...lastPreparedMessages, codexDecision, activeReceipt]);
       await journal.clear();
+      if (completionReviewFailure) {
+        attachRuntimeFailureRecovery(completionReviewFailure, lastRetryState, historyMessages.length, turnInputMessages,
+          [...attemptTranscriptBase, codexDecision, codexReceipt]);
+        throw completionReviewFailure;
+      }
       ensureActive();
       await onAttemptDebug?.({
         phase: 'ai:runtime:object',
@@ -2813,6 +2965,7 @@ async function executeRuntimeStep(input: {
       stepIndex,
       visualContext,
       getAiRequest: () => aiRequest,
+      reviewFinalResponse,
       archiveResult: async (name, id, result) => {
         const message: ModelMessage = { role: 'tool', content: [{ type: 'tool-result', toolName: name, toolCallId: id, output: { type: 'json', value: jsonSafe(result) } }] };
         await checkpointContext([message]); return runtimeContextMessageRef(message);
@@ -2865,6 +3018,7 @@ async function executeRuntimeStep(input: {
       if (!execute) return [name, definition];
       return [name, { ...definition, execute: async (...args: Parameters<typeof execute>) => {
         const run = async () => {
+          if (completionReviewFailure) throw completionReviewFailure;
           if (requestAllowedToolNames && !requestAllowedToolNames.has(name)) {
             throw new Error(`Tool ${name} is not executable in this step. Complete the prerequisite using: ${[...requestAllowedToolNames].sort().join(', ')}.`);
           }
@@ -2916,7 +3070,7 @@ async function executeRuntimeStep(input: {
     const stopAfterHumanVerification: StopCondition<typeof toolsForRequest> = ({ steps }) => steps.some((step) => (
       step.toolCalls.some((call) => isBrowserHumanPauseCall(call.toolName, call.input))
     ));
-    stopWhen.push(stopAfterHumanVerification);
+    stopWhen.push(stopAfterHumanVerification, () => Boolean(completionReviewFailure));
     try {
       let streamedStepText = '';
       let publishedStepText = '';
@@ -3011,6 +3165,7 @@ async function executeRuntimeStep(input: {
           rejectedContextTokens = undefined;
           Object.assign(executionIdentity, nextRequestExecutionIdentity());
         }
+        streamTimeouts.firstChunkMs = aiRuntimeStreamTimeouts(runtimeRequestTimeoutMs, consecutiveRequestFailures).firstChunkMs;
         decisionReady = Promise.withResolvers<void>();
         decisionCalls = [];
         rawResponseMessages = [...responseMessages];
@@ -3305,6 +3460,7 @@ async function executeRuntimeStep(input: {
           : streamedRequestError || error;
       }
       if (streamedRequestError) throw streamedRequestError;
+      if (completionReviewFailure) throw completionReviewFailure;
       const responseToolCallCount = responseMessages.reduce((count, message) => (
         count + (Array.isArray(message.content)
           ? message.content.filter((part) => part.type === 'tool-call').length
@@ -4244,6 +4400,7 @@ export async function executeRecordedBrowserOperation(
 
 async function executeCodexRuntimeObject(input: {
   toolCallId: string;
+  reviewFinalResponse: (response: StructuredResponse) => Promise<string | undefined>;
   browserInteractionMode?: BrowserChatInteractionMode;
   contextRecords?: Record<string, ModelMessage>;
   session: BrowserSession;
@@ -4321,8 +4478,8 @@ async function executeCodexRuntimeObject(input: {
         executed: true,
       };
     }
-    const completionError = browserChatFinalResponseCompletionError(parsed.data);
-    if (completionError) return { text: completionError, executed: true };
+    const completionError = browserChatFinalResponseCompletionError(parsed.data) || await input.reviewFinalResponse(parsed.data);
+    if (completionError) return recordContextDispatch({ ok: false, actual: completionError });
     const completedAt = Date.now();
     const trace: ToolTrace = {
       id: input.toolCallId,

@@ -82,7 +82,7 @@
       "properties": {
         "browser": {
           "type": "object",
-          "description": "一个 browser 工具，action 为 open/code/snapshot/close。配置共享于此 MCP 的浏览器会话。",
+          "description": "一个 browser 工具，包含会话、导航、标签页、DOM/AX 快照、代码、视觉手势、截图和选项浮层关闭操作。配置共享于此 MCP 的浏览器会话。",
           "additionalProperties": false,
           "properties": {
             "enabled": {
@@ -305,13 +305,18 @@
         },
         "file": {
           "type": "object",
-          "description": "文件读写、Office 生成和转换。visual QA 需要具备图像能力的宿主单独接入。",
+          "description": "文件读写、Office 生成、转换及页面视觉核对。visualRead 将页面像素作为 MCP 图片返回。",
           "additionalProperties": false,
           "properties": {
             "enabled": {
               "type": "boolean",
               "default": true,
               "description": "是否注册该工具；false 时不加载模块，不向 MCP 客户端暴露此工具。修改后重启 MCP。"
+            },
+            "visualInputAvailable": {
+              "type": "boolean",
+              "default": true,
+              "description": "公开 visualIndex/visualRead/visualReport；模型需支持图像输入才能进行视觉核对，不支持时设为 false。"
             },
             "officeGenerationMode": {
               "type": "string",

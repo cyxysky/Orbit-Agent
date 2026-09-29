@@ -13,7 +13,6 @@ const {
 } = require('./webpilot-identity');
 const { createRealtimeRefreshHub } = require('./realtime-refresh-hub');
 const { applyOrbitEnvironment } = require('./orbit-environment');
-const { startDevelopmentCodeSandboxRunner } = require('./development-code-sandbox-runner');
 const { stopProcessTree } = require('./process-tree.cjs');
 const { browserChatStreamPath, createBrowserChatStreamHub } = require('./browser-chat-stream');
 
@@ -520,9 +519,6 @@ async function main() {
   // App modules may bundle another @next/env instance. Route all persisted
   // setting updates to the same snapshot used by this native Next server.
   globalThis[Symbol.for('webpilot.updateInitialRuntimeEnv')] = updateInitialEnv;
-  const codeSandboxRunner = dev && !runtimeChildMode
-    ? await startDevelopmentCodeSandboxRunner({ appDir })
-    : undefined;
   process.env.WEBPILOT_REALTIME_PUBLISH_TOKEN ||= randomBytes(32).toString('base64url');
   process.env.WEBPILOT_IDENTITY_HEADER_SECRET ||= randomBytes(32).toString('base64url');
   process.env.WEBPILOT_IDENTITY_SECRET ||= randomBytes(32).toString('base64url');
@@ -673,7 +669,6 @@ async function main() {
   const close = async () => {
     if (closing) return;
     closing = true;
-    codeSandboxRunner?.stop();
     refreshHub.close();
     chatStreamHub.close();
     server.close();

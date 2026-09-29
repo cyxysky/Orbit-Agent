@@ -4,6 +4,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { register } = require('node:module');
 const { applyOrbitEnvironment } = require('./orbit-environment');
+const { createCodeSandboxRunnerManager } = require('./code-sandbox-lifecycle.cjs');
 
 async function main() {
   const root = path.resolve(process.env.WEBPILOT_APP_DIR || process.cwd());
@@ -23,7 +24,13 @@ async function main() {
   const entry = path.join(root, dev ? 'src/backend/http-server.ts' : 'dist-backend/src/backend/http-server.js');
   if (!fs.existsSync(entry)) throw new Error(`Node backend entry is missing: ${entry}. Run the backend build before packaging.`);
   const { startBackend } = await import(pathToFileURL(entry).href);
-  const backend = await startBackend();
+  // The API owner loads persisted settings before starting the shared Runner.
+  // Execution workers use it; they must not create competing child processes.
+  const codeSandbox = process.env.WEBPILOT_SERVER_ROLE === 'execution' ? undefined
+    : createCodeSandboxRunnerManager({ appDir: root });
+  let backend;
+  try { backend = await startBackend({ codeSandbox }); }
+  catch (error) { await codeSandbox?.close(); throw error; }
   let stopping = false;
   const stop = async () => {
     if (stopping) return;

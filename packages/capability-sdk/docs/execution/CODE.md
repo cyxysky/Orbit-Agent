@@ -234,7 +234,7 @@ The following table lists literal defaults from the package settings; dynamic de
 | --- | --- | --- |
 | `AGENT_CODE_SANDBOX_ENABLED` | `false` | `runtime` |
 | `AGENT_CODE_SANDBOX_BACKEND` | `remote` | `runtime` |
-| `AGENT_CODE_SANDBOX_RUNNER_URL` | `http://webpilot-code-sandbox:18100` | `runtime` |
+| `AGENT_CODE_SANDBOX_RUNNER_URL` | `http://127.0.0.1:18100` (Docker Compose: `http://webpilot-code-sandbox:18100`) | `runtime` |
 | `AGENT_CODE_SANDBOX_RUNNER_TOKEN` | `` | `runtime` |
 | `AGENT_CODE_SANDBOX_TIMEOUT_MS` | `300000` | `runtime` |
 | `AGENT_CODE_SANDBOX_INSTALL_TIMEOUT_MS` | `600000` | `runtime` |
@@ -391,13 +391,16 @@ that kill on output overflow must be restarted/upgraded to use truncation.
 
 ### Production runner
 
-For an existing trusted local HTTP-runner setup, run `npm run code-sandbox:start`
-from the application root. This loads `.env.local` / `.env`, binds to the loopback
-`AGENT_CODE_SANDBOX_RUNNER_URL`, and uses `AGENT_CODE_SANDBOX_RUNNER_TOKEN` (or
-`CODE_SANDBOX_RUNNER_TOKEN`). Keep the runner process running alongside Orbit;
-starting Orbit alone does not start this separate service. A refused connection
-to its port means the runner is unavailable, not that the submitted code failed.
-This local launcher does not provide container isolation.
+Orbit's API backend manages enabled loopback HTTP runners after loading saved
+settings. This applies to `npm run dev`, Electron and the standalone server.
+Missing local authentication tokens are generated and saved; execution workers
+share the runner without starting duplicates. Saving settings reconciles its
+lifecycle, and shutdown stops only a runner owned by this backend. Existing
+authenticated runners are reused. Local managed runners do not provide container
+isolation; remote endpoints and no-network runners retain independent lifecycles.
+
+`npm run code-sandbox:start` remains an optional standalone launcher. It loads
+`.env.local` / `.env` and requires matching URL/token configuration in the app.
 
 Build and start the isolated runner beside the Orbit service:
 
@@ -405,7 +408,8 @@ Build and start the isolated runner beside the Orbit service:
 docker compose up -d --build
 ```
 
-Set `CODE_SANDBOX_RUNNER_TOKEN` to a long random value. The runner has no
+Compose starts the runner and waits for its authenticated health check before
+starting the app. Set `CODE_SANDBOX_RUNNER_TOKEN` to a long random value. The runner has no
 Orbit artifacts or application environment mounted, runs as a non-root user,
 uses a read-only root filesystem, and has container-level CPU, memory, process,
 and temporary-space limits. Its outbound network is enabled so code and package

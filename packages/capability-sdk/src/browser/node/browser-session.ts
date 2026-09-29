@@ -15,7 +15,7 @@ import type { Browser, BrowserContext, BrowserContextOptions, BrowserServer, Con
 import { raceWithAbort, type CapabilityConfiguration } from '../../index.ts';
 import { resolveBrowserOutputPixelRatio, resolveBrowserPreviewImageFormat } from '../output-settings.ts';
 import { browserSessionGroupLabel } from '../session-group.ts';
-import { browserPreviewFrameIntervalMs, browserPreviewFramesPerSecond } from './browser-preview-cadence.ts';
+import { BrowserPreviewAdaptivePolicy, browserPreviewFramesPerSecond, type BrowserPreviewDemand } from './browser-preview-cadence.ts';
 import { BrowserPreviewFramePump, type BrowserPreviewFramePumpMetrics } from './browser-preview-frame-pump.ts';
 import { browserPreviewVideoMaximumDimensions } from './browser-preview-video-settings.ts';
 import { boundedNonNegativeIntegerEnv, boundedPositiveIntegerEnv, browserHeadlessEnabled, browserTabTitlePrefixEnabled, cdpEndpointForPort, electronEmbeddedBrowserCdpEndpoint, electronEmbeddedBrowserEnabled, clearManagedBrowserProfileCaches, normalizePageGroupId, numericLimitFromEnv, positiveIntegerEnv, sessionTabGrouperDebugPort, sessionTabGrouperEnabled, sessionTabGrouperProfileDir, sharedBrowserTabsEnabled, withSessionTabGrouperArgs, type BrowserRuntimeEnvironment } from './browser-session-runtime.ts';
@@ -1020,7 +1020,8 @@ export type BrowserTabRestoreResult = {
 };
 
 export type BrowserScreencastFrame = {
-  data: string;
+  /** Encoded JPEG/PNG bytes; preview transports must not base64 round-trip them. */
+  data: Buffer;
   contentType: 'image/jpeg' | 'image/png';
   capturedAt: string;
   url: string;
@@ -2845,6 +2846,7 @@ export class BrowserSession {
   }
 
   async startScreencast(options: {
+    getDemand?: () => BrowserPreviewDemand | undefined;
     onActivePageChanged?: () => void;
     onError?: (error: unknown) => void;
     onFrame: (frame: BrowserScreencastFrame) => void | Promise<void>;
@@ -2862,8 +2864,9 @@ export class BrowserSession {
     const contentType: BrowserScreencastFrame['contentType'] = format === 'png' ? 'image/png' : 'image/jpeg';
     const rawQuality = Number(environment.BROWSER_SCREENCAST_QUALITY ?? 90);
     const quality = Math.min(100, Math.max(40, Math.floor(Number.isFinite(rawQuality) ? rawQuality : 90)));
-    const currentFrameIntervalMs = () => browserPreviewFrameIntervalMs(environment.BROWSER_PREVIEW_FPS);
     const targetFps = browserPreviewFramesPerSecond(environment.BROWSER_PREVIEW_FPS);
+    const adaptive = new BrowserPreviewAdaptivePolicy(targetFps);
+    const currentFrameIntervalMs = () => Math.ceil(1000 / adaptive.fps);
     const maximumDimensions = browserPreviewVideoMaximumDimensions(environment);
     let stopped = false;
     let stopPromise: Promise<void> | undefined;
@@ -2907,7 +2910,7 @@ export class BrowserSession {
 
     const pushOutputFrame = (
       capturedPage: Page,
-      data: string,
+      data: Buffer,
       cssViewport: { width: number; height: number },
       outputViewport: { width: number; height: number },
       metadata?: { deviceHeight?: number; deviceWidth?: number },
@@ -3023,11 +3026,7 @@ export class BrowserSession {
           width: Math.max(1, source.clientWidth),
           height: Math.max(1, source.clientHeight),
         };
-        const scale = Math.min(1, maximumDimensions.width / cssViewport.width, maximumDimensions.height / cssViewport.height);
-        const outputViewport = {
-          width: Math.max(1, Math.round(cssViewport.width * scale)),
-          height: Math.max(1, Math.round(cssViewport.height * scale)),
-        };
+        const outputViewport = adaptive.output(cssViewport, maximumDimensions, options.getDemand?.());
         // Sample the current surface on every tick, including an unchanged
         // page. Change-driven screencast events starve the fixed-rate encoder.
         const result = await binding.client.send('Page.captureScreenshot', {
@@ -3041,6 +3040,15 @@ export class BrowserSession {
         // Resize pixels outside Chromium, just like automatic observations. CDP
         // clip scaling can disturb the shared surface while another capture runs.
         const captured = Buffer.from(result.data, 'base64');
+        if (options.video) {
+          // FFmpeg already decodes and scales to the encoder dimensions. Avoid
+          // a second decode/resize/JPEG encode in Sharp on every video frame.
+          pushOutputFrame(binding.page, captured, cssViewport, outputViewport, {
+            deviceHeight: outputViewport.height,
+            deviceWidth: outputViewport.width,
+          });
+          return;
+        }
         const pixels = sharp(captured);
         const capturedDimensions = await pixels.metadata();
         const resized = capturedDimensions.width === outputViewport.width
@@ -3050,7 +3058,7 @@ export class BrowserSession {
             ? pixels.resize(outputViewport.width, outputViewport.height).jpeg({ quality }).toBuffer()
             : pixels.resize(outputViewport.width, outputViewport.height).png().toBuffer());
         if (!isCurrentPage()) return;
-        pushOutputFrame(binding.page, resized === captured ? result.data : resized.toString('base64'), cssViewport, outputViewport, {
+        pushOutputFrame(binding.page, resized, cssViewport, outputViewport, {
           deviceHeight: outputViewport.height,
           deviceWidth: outputViewport.width,
         });
@@ -3058,6 +3066,7 @@ export class BrowserSession {
         clearTimeout(captureTimeout);
         activeCaptures = 0;
         captureDurationMs = performance.now() - startedAt;
+        adaptive.observe(captureDurationMs, options.getDemand?.()?.pressured === true);
         totalCaptureDurationMs += captureDurationMs;
         completedCaptures += 1;
       }
@@ -3125,7 +3134,7 @@ export class BrowserSession {
           imageFormat: format,
           ...(format === 'jpeg' ? { imageQuality: quality } : {}),
           maxConcurrentCaptures: 1,
-          targetFps,
+          targetFps: adaptive.fps,
         };
       },
       stop: async () => {
@@ -4361,11 +4370,18 @@ export class BrowserSession {
             } } : {}),
             format: 'png', fromSurface: true, optimizeForSpeed: false,
           });
-          const png = await sharp(Buffer.from(result.data, 'base64'))
-            .resize({ width: Math.max(1, Math.round(width * outputPixelRatio)),
-              height: Math.max(1, Math.round(height * outputPixelRatio)), fit: 'fill' })
-            .png().toBuffer();
-          await writeFile(input.filePath, png);
+          const png = Buffer.from(result.data, 'base64');
+          const targetWidth = Math.max(1, Math.round(width * outputPixelRatio));
+          const targetHeight = Math.max(1, Math.round(height * outputPixelRatio));
+          const nativeSize = await this.readPngSizeFromBuffer(png);
+          if (nativeSize.width === targetWidth && nativeSize.height === targetHeight) {
+            // The browser already produced the required pixels. Avoid decoding,
+            // recompressing and allocating another full-resolution PNG.
+            await writeFile(input.filePath, png);
+          } else {
+            await sharp(png).resize({ width: targetWidth, height: targetHeight, fit: 'fill' })
+              .png().toFile(input.filePath);
+          }
         })(),
         new Promise<never>((_, reject) => {
           timeout = setTimeout(() => {

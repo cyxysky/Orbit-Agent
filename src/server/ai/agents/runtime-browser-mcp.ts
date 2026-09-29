@@ -95,10 +95,11 @@ export async function executePlaywrightMcpOperation(session: BrowserSession, inp
     }
   }
   const actual = texts.join('\n').trim();
-  const limit = 24000;
   return { ok: result.isError !== true,
-    actual: actual.length > limit ? `${actual.slice(0, limit)}\n[Snapshot truncated in model receipt; full MCP result is archived for contextRead.]` : actual || `Playwright MCP ${input.tool} returned no text.`,
+    // The host archives this exact result before producing its bounded receipt.
+    actual: actual || `Playwright MCP ${input.tool} returned no text.`,
     data: { mcp: { tool: input.tool, isError: result.isError === true, textCharacters: actual.length,
+      readOnly: tools.find(tool => tool.name === input.tool)?.annotations?.readOnlyHint === true,
       imageCount: imagePaths.length } },
     ...(imagePaths.length ? { referenceImagePaths: imagePaths } : {}),
   };

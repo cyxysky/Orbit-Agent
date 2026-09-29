@@ -47,6 +47,15 @@ def property_value(name, value):
     return item
 
 
+def paragraph_alignment(value):
+    """Normalize public alignment names before constructing a native UNO enum."""
+    key = str(value).strip().upper()
+    key = {'JUSTIFY': 'BLOCK', 'JUSTIFIED': 'BLOCK', 'START': 'LEFT', 'END': 'RIGHT'}.get(key, key)
+    if key not in {'LEFT', 'RIGHT', 'CENTER', 'BLOCK', 'STRETCH'}:
+        raise ValueError(f'Unsupported paragraph alignment {value!r}; use left, center, right, justify (BLOCK), or stretch.')
+    return uno.Enum('com.sun.star.style.ParagraphAdjust', key)
+
+
 def point(x, y):
     value = uno.createUnoStruct('com.sun.star.awt.Point')
     value.X, value.Y = int(x), int(y)
@@ -103,9 +112,383 @@ def apply_text_font(target, font_name=None, font_size=None, bold=None, italic=No
     info = target.getPropertySetInfo()
     if info is None:
         return
-    for name, value in properties.items():
-        if info.hasPropertyByName(name):
-            setattr(target, name, value)
+    supported = {name: value for name, value in properties.items() if info.hasPropertyByName(name)}
+    apply_office_property_plan(target, supported)
+
+
+# One registry drives aliases, conversion, validation and the public cookbook.
+# Native property names remain available via `properties`, with their actual
+# installed UNO types, so this list is a convenience layer, not a capability cap.
+OFFICE_PROPERTY_MAP = {
+    'font_name': ('character', ('CharFontName', 'CharFontNameAsian', 'CharFontNameComplex'), 'font'),
+    'font_size': ('character', ('CharHeight', 'CharHeightAsian', 'CharHeightComplex'), 'positive'),
+    'bold': ('character', ('CharWeight', 'CharWeightAsian', 'CharWeightComplex'), 'bold'),
+    'italic': ('character', ('CharPosture', 'CharPostureAsian', 'CharPostureComplex'), 'italic'),
+    'underline': ('character', ('CharUnderline',), 'underline'),
+    'strike': ('character', ('CharStrikeout',), 'strike'),
+    'color': ('character', ('CharColor',), 'color'),
+    'highlight': ('character', ('CharBackColor',), 'optional-color'),
+    'superscript': ('character', ('CharEscapement', 'CharEscapementHeight'), 'superscript'),
+    'subscript': ('character', ('CharEscapement', 'CharEscapementHeight'), 'subscript'),
+    'character_spacing': ('character', ('CharKerning',), 'integer'),
+    'auto_kerning': ('character', ('CharAutoKerning',), 'boolean'),
+    'case_map': ('character', ('CharCaseMap',), 'case-map'),
+    'shadow': ('character', ('CharShadowed',), 'boolean'),
+    'outline': ('character', ('CharContoured',), 'boolean'),
+    'hidden': ('character', ('CharHidden',), 'boolean'),
+    'character_scale': ('character', ('CharScaleWidth',), 'positive-integer'),
+    'character_rotation': ('character', ('CharRotation',), 'tenths-degree'),
+    'locale': ('character', ('CharLocale', 'CharLocaleAsian', 'CharLocaleComplex'), 'native'),
+    'underline_color': ('character', ('CharUnderlineColor', 'CharUnderlineHasColor'), 'underline-color'),
+    'align': ('paragraph', ('ParaAdjust',), 'paragraph-align'),
+    'line_spacing': ('paragraph', ('ParaLineSpacing',), 'line-spacing'),
+    'space_before': ('paragraph', ('ParaTopMargin',), 'integer'),
+    'space_after': ('paragraph', ('ParaBottomMargin',), 'integer'),
+    'first_line_indent': ('paragraph', ('ParaFirstLineIndent',), 'integer'),
+    'left_indent': ('paragraph', ('ParaLeftMargin',), 'integer'),
+    'right_indent': ('paragraph', ('ParaRightMargin',), 'integer'),
+    'keep_with_next': ('paragraph', ('ParaKeepTogether',), 'boolean'),
+    'keep_lines': ('paragraph', ('ParaSplit',), 'inverse-boolean'),
+    'widows': ('paragraph', ('ParaWidows',), 'integer'),
+    'orphans': ('paragraph', ('ParaOrphans',), 'integer'),
+    'hyphenation': ('paragraph', ('ParaIsHyphenation',), 'boolean'),
+    'tab_stops': ('paragraph', ('ParaTabStops',), 'native'),
+    'break_type': ('paragraph', ('BreakType',), 'native'),
+    'paragraph_background': ('paragraph', ('ParaBackColor',), 'optional-color'),
+    'horizontal': ('cell', ('HoriJustify',), 'cell-horizontal'),
+    'vertical': ('cell', ('VertJustify',), 'cell-vertical'),
+    'wrap': ('cell', ('IsTextWrapped',), 'boolean'),
+    'shrink_to_fit': ('cell', ('ShrinkToFit',), 'boolean'),
+    'cell_background': ('cell', ('CellBackColor',), 'optional-color'),
+    'cell_protection': ('cell', ('CellProtection',), 'native'),
+    'number_format_id': ('cell', ('NumberFormat',), 'integer'),
+    'rotation': ('drawing', ('RotateAngle',), 'hundredths-degree'),
+    'fill_color': ('drawing', ('FillColor',), 'color'),
+    'fill_style': ('drawing', ('FillStyle',), 'native'),
+    'fill_transparency': ('drawing', ('FillTransparence',), 'integer'),
+    'line_color': ('drawing', ('LineColor',), 'color'),
+    'line_style': ('drawing', ('LineStyle',), 'native'),
+    'line_width': ('drawing', ('LineWidth',), 'integer'),
+    'text_left_margin': ('drawing', ('TextLeftDistance',), 'integer'),
+    'text_right_margin': ('drawing', ('TextRightDistance',), 'integer'),
+    'text_top_margin': ('drawing', ('TextUpperDistance',), 'integer'),
+    'text_bottom_margin': ('drawing', ('TextLowerDistance',), 'integer'),
+    'page_width': ('page', ('Width',), 'positive-integer'),
+    'page_height': ('page', ('Height',), 'positive-integer'),
+    'margin_left': ('page', ('LeftMargin',), 'integer'),
+    'margin_right': ('page', ('RightMargin',), 'integer'),
+    'margin_top': ('page', ('TopMargin',), 'integer'),
+    'margin_bottom': ('page', ('BottomMargin',), 'integer'),
+    'landscape': ('page', ('IsLandscape',), 'boolean'),
+    'header_enabled': ('page', ('HeaderIsOn',), 'boolean'),
+    'footer_enabled': ('page', ('FooterIsOn',), 'boolean'),
+}
+OFFICE_MAPPING_CONTEXT = None
+OFFICE_TYPE_SCHEMAS = {}
+OFFICE_CONSTANT_SCHEMAS = {}
+OFFICE_PROPERTY_CONSTANTS = {
+    'CharUnderline': 'com.sun.star.awt.FontUnderline',
+    'CharStrikeout': 'com.sun.star.awt.FontStrikeout',
+    'CharWeight': 'com.sun.star.awt.FontWeight',
+    'CharWeightAsian': 'com.sun.star.awt.FontWeight',
+    'CharWeightComplex': 'com.sun.star.awt.FontWeight',
+    'CharCaseMap': 'com.sun.star.style.CaseMap',
+    'CharRelief': 'com.sun.star.text.FontRelief',
+    'CharEmphasis': 'com.sun.star.text.FontEmphasis',
+    'ParaAdjust': 'com.sun.star.style.ParagraphAdjust',
+}
+OFFICE_PROPERTY_EXPORT_NOTES = {
+    'ParaWidows': 'DOCX stores widow/orphan control as an on/off setting, not an exact line count. Use ODT to preserve counts above two.',
+    'ParaOrphans': 'DOCX stores widow/orphan control as an on/off setting, not an exact line count. Use ODT to preserve counts above two.',
+    'IsLandscape': 'This is the native orientation flag. Set page_width/page_height as well when changing physical page dimensions.',
+}
+
+
+def office_property_schema(prop):
+    schema = dict(office_type_schema(prop.Type.typeName))
+    if prop.Name in OFFICE_PROPERTY_EXPORT_NOTES:
+        schema['exportNote'] = OFFICE_PROPERTY_EXPORT_NOTES[prop.Name]
+    group = OFFICE_PROPERTY_CONSTANTS.get(prop.Name)
+    if group:
+        if group not in OFFICE_CONSTANT_SCHEMAS:
+            manager = OFFICE_MAPPING_CONTEXT.getValueByName('/singletons/com.sun.star.reflection.theTypeDescriptionManager')
+            description = manager.getByHierarchicalName(group)
+            if description.getTypeClass().value == 'ENUM':
+                OFFICE_CONSTANT_SCHEMAS[group] = dict(zip(description.getEnumNames(), description.getEnumValues()))
+            else:
+                OFFICE_CONSTANT_SCHEMAS[group] = {item.getName().rsplit('.', 1)[-1]: item.getConstantValue() for item in description.getConstants()}
+        schema['constants'] = OFFICE_CONSTANT_SCHEMAS[group]
+    return schema
+
+
+def office_type_schema(type_name):
+    """Discover enum/struct/sequence vocabulary from the installed type library."""
+    if type_name in OFFICE_TYPE_SCHEMAS:
+        return OFFICE_TYPE_SCHEMAS[type_name]
+    primitive = {'boolean', 'byte', 'short', 'unsigned short', 'long', 'unsigned long',
+                 'hyper', 'unsigned hyper', 'float', 'double', 'string', 'char'}
+    if type_name in primitive:
+        result = {'type': type_name, 'writableValue': True}
+    elif type_name.startswith('[]'):
+        child = office_type_schema(type_name[2:])
+        result = {'type': type_name, 'items': child, 'writableValue': child['writableValue']}
+        if not child['writableValue']:
+            result['reason'] = f'Sequence requires unsupported element type {child["type"]}'
+    else:
+        reflection = OFFICE_MAPPING_CONTEXT.ServiceManager.createInstanceWithContext(
+            'com.sun.star.reflection.CoreReflection', OFFICE_MAPPING_CONTEXT)
+        reflected = reflection.forName(type_name)
+        kind = reflected.getTypeClass().value if reflected else 'UNKNOWN'
+        if kind == 'ENUM':
+            manager = OFFICE_MAPPING_CONTEXT.getValueByName('/singletons/com.sun.star.reflection.theTypeDescriptionManager')
+            result = {'type': type_name, 'values': list(manager.getByHierarchicalName(type_name).getEnumNames()), 'writableValue': True}
+        elif kind == 'STRUCT':
+            # Break recursive object/any graphs explicitly, not by pretending support.
+            OFFICE_TYPE_SCHEMAS[type_name] = {'type': type_name, 'writableValue': False}
+            fields = {item.getName(): office_type_schema(item.getType().getName()) for item in reflected.getFields()}
+            result = {'type': type_name, 'fields': fields, 'writableValue': all(v['writableValue'] for v in fields.values())}
+            if not result['writableValue']:
+                result['reason'] = 'Requires unsupported fields: ' + ', '.join(key for key, value in fields.items() if not value['writableValue'])
+        else:
+            result = {'type': type_name, 'writableValue': False,
+                      'reason': 'Requires an object/interface or untyped value; use the corresponding creation/content facade.'}
+    OFFICE_TYPE_SCHEMAS[type_name] = result
+    return result
+
+
+def office_property_value(value, schema, path, current=None):
+    """Convert JSON-shaped values, rejecting unknown fields and wrong types."""
+    if not schema['writableValue']:
+        raise ValueError(f'{path}: {schema.get("reason", "unsupported property value type")}')
+    name = schema['type']
+    if 'constants' in schema and isinstance(value, str):
+        key = value.upper()
+        if key not in schema['constants']:
+            raise ValueError(f'{path}: expected one of {list(schema["constants"])}')
+        value = schema['constants'][key]
+    if 'values' in schema:
+        key = str(value).strip().upper()
+        if key not in schema['values']:
+            raise ValueError(f'{path}: expected one of {schema["values"]}, got {value!r}')
+        return uno.Enum(name, key)
+    if 'fields' in schema:
+        if not isinstance(value, dict):
+            raise ValueError(f'{path}: expected a dictionary of {list(schema["fields"])}')
+        unknown = set(value) - set(schema['fields'])
+        if unknown:
+            raise ValueError(f'{path}: unknown structure fields {sorted(unknown)}')
+        result = uno.createUnoStruct(name)
+        if current is not None:
+            for key in schema['fields']:
+                setattr(result, key, getattr(current, key))
+        for key, child in value.items():
+            setattr(result, key, office_property_value(child, schema['fields'][key], f'{path}.{key}',
+                                                       getattr(current, key) if current is not None else None))
+        return result
+    if 'items' in schema:
+        if not isinstance(value, (list, tuple)):
+            raise ValueError(f'{path}: expected a list')
+        return tuple(office_property_value(item, schema['items'], f'{path}[{i}]') for i, item in enumerate(value))
+    if name == 'boolean':
+        if not isinstance(value, bool):
+            raise ValueError(f'{path}: expected a boolean')
+    elif name in ('string', 'char'):
+        if not isinstance(value, str) or (name == 'char' and len(value) != 1):
+            raise ValueError(f'{path}: expected {name}')
+    elif name in ('float', 'double'):
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise ValueError(f'{path}: expected a finite number')
+        value = float(value)
+    else:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f'{path}: expected an integer')
+        bits = {'byte': 8, 'short': 16, 'long': 32, 'hyper': 64}[name.replace('unsigned ', '')]
+        minimum, maximum = (0, 2 ** bits - 1) if name.startswith('unsigned ') else (-2 ** (bits - 1), 2 ** (bits - 1) - 1)
+        if not minimum <= value <= maximum:
+            raise ValueError(f'{path}: value outside {name} range')
+    return value
+
+
+def office_alias_values(key, value):
+    _, names, conversion = OFFICE_PROPERTY_MAP[key]
+    if conversion in ('boolean', 'inverse-boolean', 'bold', 'italic', 'underline', 'strike', 'superscript', 'subscript'):
+        if not isinstance(value, bool):
+            raise ValueError(f'{key} must be a boolean')
+        converted = {'inverse-boolean': not value, 'bold': 150.0 if value else 100.0,
+                     'italic': 'ITALIC' if value else 'NONE', 'underline': 1 if value else 0,
+                     'strike': 1 if value else 0}.get(conversion, value)
+        if conversion in ('superscript', 'subscript'):
+            return {names[0]: (14000 if conversion == 'superscript' else -14000) if value else 0,
+                    names[1]: 58 if value else 100}
+    elif conversion in ('color', 'optional-color', 'underline-color'):
+        converted = -1 if value is None and conversion == 'optional-color' else office_color(value, key)
+        if conversion == 'underline-color':
+            return {names[0]: converted, names[1]: True}
+    elif conversion in ('positive', 'positive-integer', 'integer', 'tenths-degree', 'hundredths-degree', 'line-spacing'):
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise ValueError(f'{key} must be a finite number')
+        if conversion in ('positive', 'positive-integer', 'line-spacing') and value <= 0:
+            raise ValueError(f'{key} must be positive')
+        if conversion in ('integer', 'positive-integer') and int(value) != value:
+            raise ValueError(f'{key} must be an integer')
+        converted = int(value) if conversion in ('integer', 'positive-integer') else float(value)
+        if conversion.endswith('degree'):
+            converted = int(round(value * (10 if conversion == 'tenths-degree' else 100)))
+        if conversion == 'line-spacing':
+            converted = {'Mode': 0, 'Height': int(round(value * 100))}
+    elif conversion in ('paragraph-align', 'cell-horizontal', 'cell-vertical'):
+        converted = str(value).upper()
+        converted = {'JUSTIFY': 'BLOCK', 'JUSTIFIED': 'BLOCK', 'START': 'LEFT', 'END': 'RIGHT', 'MIDDLE': 'CENTER'}.get(converted, converted)
+        if conversion == 'paragraph-align':
+            converted = {'LEFT': 0, 'RIGHT': 1, 'BLOCK': 2, 'CENTER': 3, 'STRETCH': 4}.get(converted)
+            if converted is None:
+                raise ValueError('align must be left, right, justify, center or stretch')
+    elif conversion == 'case-map':
+        converted = {'none': 0, 'uppercase': 1, 'lowercase': 2, 'title': 3, 'small-caps': 4}.get(str(value).lower())
+        if converted is None:
+            raise ValueError('case_map must be none, uppercase, lowercase, title or small-caps')
+    else:
+        converted = value
+    values = {name: converted for name in names}
+    if conversion == 'font' and isinstance(value, str) and not _CJK_FONT_PATTERN.search(value):
+        values['CharFontNameAsian'] = _CJK_FONT
+    return values
+
+
+def office_property_plan(target, styles, groups=None, read_current=True):
+    """Resolve and validate all input before invoking any property setter."""
+    styles = dict(styles or {})
+    native = styles.pop('properties', {})
+    if not isinstance(native, dict):
+        raise ValueError('properties must be a dictionary of native property names and typed values')
+    if styles.get('superscript') and styles.get('subscript'):
+        raise ValueError('superscript and subscript cannot both be true')
+    properties = {p.Name: p for p in target.getPropertySetInfo().getProperties()}
+    pending = {}
+    def add(name, value):
+        if name in pending:
+            raise ValueError(f'Conflicting mappings for {name}; supply the property once')
+        prop = properties.get(name)
+        if prop is None:
+            raise ValueError(f'Property {name} is not supported by this target; inspect job.property_schema first')
+        if prop.Attributes & 16:
+            raise ValueError(f'Property {name} is read-only')
+        schema = office_property_schema(prop)
+        current = target.getPropertyValue(name) if read_current and 'fields' in schema else None
+        pending[name] = office_property_value(value, schema, name, current)
+    for key, value in styles.items():
+        mapping = OFFICE_PROPERTY_MAP.get(key)
+        if mapping is None or (groups and mapping[0] not in groups):
+            raise ValueError(f'Unknown formatting parameter {key!r}; query office.properties for the installed mapping')
+        for name, converted in office_alias_values(key, value).items():
+            add(name, converted)
+    for name, value in native.items():
+        if groups == {'character'} and not name.startswith('Char'):
+            raise ValueError(f'Run property {name} is not a character property')
+        add(name, value)
+    return pending
+
+
+def apply_office_property_plan(target, plan):
+    # Setter rejection is never swallowed or reported as success. Roll back
+    # earlier setters where possible, and state explicitly if rollback fails.
+    if not plan:
+        return
+    names = tuple(plan)
+    multi = hasattr(target, 'getPropertyValues') and hasattr(target, 'setPropertyValues')
+    old = dict(zip(names, target.getPropertyValues(names))) if multi else {name: target.getPropertyValue(name) for name in plan}
+    info = target.getPropertySetInfo()
+    types = {name: info.getPropertyByName(name).Type.typeName for name in names}
+    def typed(name, value):
+        return uno.Any(types[name], value) if value is not None else None
+    applied = []
+    try:
+        if multi:
+            applied.extend(names)
+            uno.invoke(target, 'setPropertyValues', (names, tuple(typed(name, plan[name]) for name in names)))
+            return
+        for name, value in plan.items():
+            applied.append(name)
+            uno.invoke(target, 'setPropertyValue', (name, typed(name, value)))
+    except Exception as error:
+        rollback_errors = []
+        for name in reversed(applied):
+            try:
+                uno.invoke(target, 'setPropertyValue', (name, typed(name, old[name])))
+            except Exception:
+                rollback_errors.append(name)
+        raise ValueError(f'Property application failed: {error}; rollback failures: {rollback_errors}') from error
+
+
+def office_mapping_schema():
+    rules = {
+        'font': 'font family string; Asian font follows the selected CJK family or installed CJK fallback',
+        'positive': 'positive number; font sizes use points',
+        'positive-integer': 'positive integer; geometry uses 1/100 mm, character_scale uses percent',
+        'integer': 'integer; spacing, margins, indents, character_spacing and line widths use 1/100 mm; widows/orphans are counts',
+        'native': 'native typed value; see the actual target property schema (enums, nested dictionaries, arrays)',
+        'color': 'RGB integer or #RRGGBB', 'optional-color': 'RGB integer, #RRGGBB or None to clear',
+        'underline-color': 'RGB integer or #RRGGBB; enables custom underline color',
+        'paragraph-align': 'left, right, center, justify/block, stretch',
+        'cell-horizontal': 'standard, left, center, right, justify/block, repeat',
+        'cell-vertical': 'standard, top, center/middle, bottom, block',
+        'line-spacing': 'positive multiplier; native ParaLineSpacing supports fixed/minimum/leading spacing',
+        'case-map': 'none, uppercase, lowercase, title, small-caps',
+        'tenths-degree': 'angle in degrees, converted to native 1/10 degree',
+        'hundredths-degree': 'angle in degrees, converted to native 1/100 degree',
+    }
+    return {key: {'group': group, 'properties': list(names), 'conversion': conversion,
+                  'input': rules.get(conversion, 'boolean'), 'default': 'preserve current property when omitted',
+                  'exportNotes': [OFFICE_PROPERTY_EXPORT_NOTES[name] for name in names if name in OFFICE_PROPERTY_EXPORT_NOTES]}
+            for key, (group, names, conversion) in OFFICE_PROPERTY_MAP.items()}
+
+
+def office_target_schema(target, query=''):
+    props = list(target.getPropertySetInfo().getProperties())
+    names = {p.Name for p in props}
+    aliases = {key: value for key, value in office_mapping_schema().items()
+               if set(value['properties']).issubset(names)}
+    records = []
+    for prop in props:
+        schema = office_property_schema(prop)
+        readonly = bool(prop.Attributes & 16)
+        records.append({'name': prop.Name, 'readOnly': readonly, 'acceptsNull': False,
+                        'supported': not readonly and schema['writableValue'],
+                        'reason': 'read-only' if readonly else schema.get('reason'), 'value': schema})
+    needle = str(query).casefold()
+    selected = [record for record in records if not needle or needle in record['name'].casefold()
+                or any(needle in key.casefold() and record['name'] in value['properties'] for key, value in aliases.items())]
+    return {'properties': selected,
+            'aliases': {key: value for key, value in aliases.items() if not needle or needle in key.casefold()
+                        or any(needle in name.casefold() for name in value['properties'])},
+            'coverage': {'totalProperties': len(records), 'writableProperties': sum(not r['readOnly'] for r in records),
+                         'mappedProperties': sum(r['supported'] for r in records), 'returnedProperties': len(selected)},
+            'rule': 'Writable scalar/enum/struct/sequence properties use the installed type schema. Partial struct dictionaries preserve other current fields; sequence values replace the sequence and omitted fields in new sequence items use native defaults. Unsupported object/any properties are explicit. This is API support, not a guarantee of preservation by every export format.'}
+
+
+RICH_TEXT_RUN_KEYS = {'text', 'link', 'url', 'properties'} | {
+    key for key, spec in OFFICE_PROPERTY_MAP.items() if spec[0] == 'character'}
+
+
+def rich_text_runs(runs):
+    """Validate the entire run sequence before changing the document."""
+    values = [dict(item) if isinstance(item, dict) else {'text': str(item)} for item in (runs or [])]
+    for run in values:
+        unknown = set(run) - RICH_TEXT_RUN_KEYS
+        if unknown:
+            raise ValueError(f'Unsupported rich-text run keys: {sorted(unknown)}. Supported: {sorted(RICH_TEXT_RUN_KEYS)}')
+        run['text'] = str(run.get('text', ''))
+    if not any(run['text'] for run in values):
+        raise ValueError('Rich text requires at least one non-empty text run.')
+    return values
+
+
+def rich_text_property_plans(cursor, runs, defaults=None):
+    base_plan = office_property_plan(cursor, defaults or {}, groups={'character'})
+    plans = [{**base_plan, **office_property_plan(cursor, {key: value for key, value in run.items()
+             if key not in {'text', 'link', 'url'}}, groups={'character'})} for run in runs]
+    baseline = {name: cursor.getPropertyValue(name) for name in {name for plan in plans for name in plan}}
+    return [{**baseline, **plan} for plan in plans]
 
 
 def office_color(value, name='color'):
@@ -1203,13 +1586,74 @@ class DocumentJob:
     source_path: Path
     opened_documents: set = field(default_factory=set, compare=False)
     element_records: dict = field(default_factory=dict, compare=False)
+    property_targets: dict = field(default_factory=dict, compare=False, repr=False)
+    property_documents: dict = field(default_factory=dict, compare=False, repr=False)
     layout_issues: list = field(default_factory=list, compare=False)
     runtime_diagnostics: list = field(default_factory=list, compare=False)
     feature_counts: dict = field(default_factory=dict, compare=False)
     ooxml_patches: dict = field(default_factory=dict, compare=False)
 
     def __post_init__(self):
+        global OFFICE_MAPPING_CONTEXT
+        OFFICE_MAPPING_CONTEXT = self.context
+        OFFICE_TYPE_SCHEMAS.clear()
         configure_cjk_font(self)
+
+    def _property_target(self, target_id, scope='object'):
+        record = self.element_records.get(str(target_id))
+        if record is None:
+            raise ValueError(f'Unknown element ID {target_id!r}; use an ID returned by element_map()')
+        target = self.property_targets.get(str(target_id))
+        if target is None:
+            for document in self.property_documents.values():
+                if hasattr(document, 'Bookmarks') and document.Bookmarks.hasByName(record['artifactName']):
+                    anchor = document.Bookmarks.getByName(record['artifactName']).Anchor
+                    target = anchor.Text.createTextCursorByRange(anchor)
+                    break
+        if target is None:
+            raise ValueError(f'Element {target_id!r} has no editable property target')
+        if scope == 'object':
+            return target
+        if scope == 'text':
+            cursor = target.Text.createTextCursor()
+            cursor.gotoEnd(True)
+            return cursor
+        kind, _, name = str(scope).partition(':')
+        if kind in ('cell', 'range'):
+            return target.getCellRangeByName(name) if kind == 'range' else target.getCellByName(name) if hasattr(target, 'getCellByName') else target.getCellRangeByName(name)
+        if kind in ('row', 'column'):
+            return (target.Rows if kind == 'row' else target.Columns).getByIndex(int(name))
+        if scope == 'chart':
+            return target.Model
+        families = {'page-style': 'PageStyles', 'paragraph-style': 'ParagraphStyles',
+                    'character-style': 'CharacterStyles', 'cell-style': 'CellStyles'}
+        if kind in families:
+            # A job exports one Office document. Never select an unrelated open document.
+            documents = list(self.property_documents.values())
+            if len(documents) != 1:
+                raise ValueError('Style scope requires exactly one open document in the job')
+            family = documents[0].StyleFamilies.getByName(families[kind])
+            if not name and kind == 'page-style':
+                name = str(getattr(target, 'PageStyle', '') or '')
+                if not name and self.document_type == 'word':
+                    name = str(documents[0].Text.createTextCursor().PageStyleName)
+            if not name:
+                raise ValueError(f'{kind} requires an explicit style name: {list(family.getElementNames())}')
+            return family.getByName(name)
+        raise ValueError(f'Unsupported property scope {scope!r}')
+
+    def property_schema(self, target_id, scope='object', query=''):
+        """Return actual target types, aliases, read-only flags and unsupported reasons."""
+        return office_target_schema(self._property_target(target_id, scope), query)
+
+    def set_properties(self, element_id, target_id, values, scope='object'):
+        """Apply mapped aliases or properties={native_name: typed_value}."""
+        target = self._property_target(target_id, scope)
+        plan = office_property_plan(target, values)
+        apply_office_property_plan(target, plan)
+        self.register_element(element_id, 'property-format', target,
+                              {'targetId': str(target_id), 'scope': scope, 'properties': list(plan)})
+        return {'appliedProperties': list(plan), 'targetId': str(target_id), 'scope': scope}
 
     @property
     def output_url(self):
@@ -1325,6 +1769,9 @@ class DocumentJob:
         raise RuntimeError("Direct job.open_document() is worker-owned. Pass source_name to the matching high-level facade.")
 
     def close(self, component):
+        for key, document in list(self.property_documents.items()):
+            if document == component:
+                del self.property_documents[key]
         close_component(component)
         if self.output_path.exists():
             postprocess_ooxml(self)
@@ -1412,6 +1859,7 @@ class DocumentJob:
         }
         self.element_records[value] = record
         if target is not None:
+            self.property_targets[value] = target
             for property_name in ('Name', 'Title'):
                 try:
                     if hasattr(target, property_name) and (force_artifact_name or not str(getattr(target, property_name, '') or '')):
@@ -1431,6 +1879,7 @@ class DocumentJob:
         if not target.supportsService('com.sun.star.text.TextDocument'):
             raise ValueError('job.writer() requires a Writer document')
         self.register_element(element_id, 'word-document', target, {'role': 'document'})
+        self.property_documents[str(element_id)] = target
         return WriterLayout(self, target)
 
     def presentation(self, element_id, component=None, source_name=None):
@@ -1438,6 +1887,7 @@ class DocumentJob:
         if not target.supportsService('com.sun.star.presentation.PresentationDocument'):
             raise ValueError('job.presentation() requires an Impress document')
         self.register_element(element_id, 'presentation', target, {'role': 'document'})
+        self.property_documents[str(element_id)] = target
         return PresentationLayout(
             self, target,
             normalize_wide=component is None and source_name is None,
@@ -1448,6 +1898,7 @@ class DocumentJob:
         if not target.supportsService('com.sun.star.sheet.SpreadsheetDocument'):
             raise ValueError('job.spreadsheet() requires a Calc document')
         self.register_element(element_id, 'workbook', target, {'role': 'document'})
+        self.property_documents[str(element_id)] = target
         return SpreadsheetLayout(self, target)
 
     def expert(self, reason):
@@ -1560,11 +2011,14 @@ class WriterLayout(OfficeUnitConversion):
         cursor = self._end_cursor()
         # Keep explicit page breaks and inline fields, but do not inherit the
         # preceding heading/list/hyperlink's direct formatting.
-        for name in ('CharStyleName', 'CharFontName', 'CharFontNameAsian', 'CharFontNameComplex',
-                     'CharHeight', 'CharHeightAsian', 'CharHeightComplex', 'CharWeight',
-                     'CharWeightAsian', 'CharWeightComplex', 'CharPosture', 'CharPostureAsian',
-                     'CharPostureComplex', 'CharColor', 'CharUnderline', 'HyperLinkURL',
-                     'ParaKeepTogether', 'ParaSplit', 'ParaLeftMargin', 'ParaRightMargin',
+        character_properties = tuple(prop.Name for prop in cursor.getPropertySetInfo().getProperties()
+                                     if prop.Name.startswith('Char') and not (prop.Attributes & 16))
+        if hasattr(cursor, 'setPropertiesToDefault'):
+            cursor.setPropertiesToDefault(character_properties)
+        else:
+            for name in character_properties:
+                cursor.setPropertyToDefault(name)
+        for name in ('HyperLinkURL', 'ParaKeepTogether', 'ParaSplit', 'ParaLeftMargin', 'ParaRightMargin',
                      'ParaFirstLineIndent', 'ParaAdjust', 'ParaLineSpacing', 'ParaTopMargin',
                      'ParaBottomMargin', 'ParaBackColor'):
             cursor.setPropertyToDefault(name)
@@ -1637,12 +2091,14 @@ class WriterLayout(OfficeUnitConversion):
         return self
 
     def set_header_footer(self, header='', footer='', header_element_id=None, footer_element_id=None):
+        if header and not header_element_id:
+            raise ValueError('header_element_id is required when header text is present')
+        if footer and not footer_element_id:
+            raise ValueError('footer_element_id is required when footer text is present')
         style = self._page_style()
-        style.HeaderIsOn = bool(header)
-        style.FooterIsOn = bool(footer)
-        if header:
-            if not header_element_id:
-                raise ValueError('header_element_id is required when header text is present')
+        style.HeaderIsOn = bool(header or header_element_id)
+        style.FooterIsOn = bool(footer or footer_element_id)
+        if style.HeaderIsOn:
             style.HeaderIsShared = True
             style.HeaderIsDynamicHeight = False
             style.HeaderHeight = 700
@@ -1655,9 +2111,7 @@ class WriterLayout(OfficeUnitConversion):
             bookmark = self._component.createInstance('com.sun.star.text.Bookmark')
             bookmark.Name = record['artifactName']
             style.HeaderText.insertTextContent(cursor, bookmark, True)
-        if footer:
-            if not footer_element_id:
-                raise ValueError('footer_element_id is required when footer text is present')
+        if style.FooterIsOn:
             style.FooterIsShared = True
             style.FooterIsDynamicHeight = False
             style.FooterHeight = 700
@@ -1674,8 +2128,16 @@ class WriterLayout(OfficeUnitConversion):
 
     def add_paragraph(self, element_id, value='', font_size=None, bold=None, italic=None, color=None,
                       align=None, line_spacing=None, space_before=None, space_after=None,
-                      paragraph_style=None, font_name=None, keep_with_next=None):
+                      paragraph_style=None, font_name=None, keep_with_next=None,
+                      first_line_indent=None, left_indent=None, right_indent=None, **formatting):
         cursor = self._paragraph_cursor(paragraph_style)
+        supplied = {key: value for key, value in {
+            'font_name': font_name, 'font_size': font_size, 'bold': bold, 'italic': italic,
+            'color': color, 'align': align, 'line_spacing': line_spacing,
+            'space_before': space_before, 'space_after': space_after,
+            'first_line_indent': first_line_indent, 'left_indent': left_indent,
+            'right_indent': right_indent, 'keep_with_next': keep_with_next}.items() if value is not None}
+        explicit_plan = office_property_plan(cursor, {**supplied, **formatting})
         if not paragraph_style:
             font_size = 11 if font_size is None else font_size
             bold, italic = bool(bold), bool(italic)
@@ -1684,22 +2146,13 @@ class WriterLayout(OfficeUnitConversion):
             line_spacing = 1.3 if line_spacing is None else line_spacing
             space_before = 0 if space_before is None else space_before
             space_after = 180 if space_after is None else space_after
-        apply_text_font(cursor, font_name=font_name, font_size=font_size, bold=bold, italic=italic)
-        if color is not None:
-            cursor.CharColor = office_color(color, 'Writer text color')
-        if align is not None:
-            cursor.ParaAdjust = uno.Enum('com.sun.star.style.ParagraphAdjust', str(align).upper())
-        if line_spacing is not None:
-            spacing = uno.createUnoStruct('com.sun.star.style.LineSpacing')
-            spacing.Mode, spacing.Height = 0, max(100, int(float(line_spacing) * 100))
-            cursor.ParaLineSpacing = spacing
-        if space_before is not None:
-            cursor.ParaTopMargin = max(0, int(space_before))
-        if space_after is not None:
-            cursor.ParaBottomMargin = max(0, int(space_after))
-        if keep_with_next is not None:
-            cursor.ParaKeepTogether = bool(keep_with_next)
-            cursor.ParaSplit = not bool(keep_with_next)
+        values = {'font_name': font_name, 'font_size': font_size, 'bold': bold, 'italic': italic,
+                  'color': color, 'align': align, 'line_spacing': line_spacing,
+                  'space_before': space_before, 'space_after': space_after,
+                  'first_line_indent': first_line_indent, 'left_indent': left_indent,
+                  'right_indent': right_indent, 'keep_with_next': keep_with_next}
+        plan = {**office_property_plan(cursor, {key: value for key, value in values.items() if value is not None}), **explicit_plan}
+        apply_office_property_plan(cursor, plan)
         self._paragraph_count += 1
         record = self.job.register_element(element_id, 'paragraph', None, {'paragraph': self._paragraph_count})
         self._insert_bookmarked_text(self._component.Text, cursor, record, value)
@@ -1800,13 +2253,26 @@ class WriterLayout(OfficeUnitConversion):
 
     def add_table(self, element_id, rows, column_widths=None, header=True, font_size=10,
                   font_name=None, header_fill=0xE8EEF7, header_color=0x0F172A,
-                  body_color=0x1E293B):
+                  body_color=0x1E293B, border_style='grid', border_color=0x000000,
+                  border_width=20, header_border_width=10):
         data = [list(row) for row in rows]
         if not data or not data[0]:
             raise ValueError('Writer table requires at least one row and one column')
         column_count = len(data[0])
         if any(len(row) != column_count for row in data):
             raise ValueError('Writer table rows must all have the same column count')
+        border_style = str(border_style).strip().lower().replace('_', '-')
+        if border_style not in {'grid', 'none', 'three-line', 'horizontal'}:
+            raise ValueError('border_style must be grid, none, three-line, or horizontal')
+        if float(border_width) <= 0 or float(header_border_width) <= 0:
+            raise ValueError('border_width and header_border_width must be positive (1/100 mm)')
+        line_color = office_color(border_color, 'Writer table border color')
+        def border(width=0):
+            line = uno.createUnoStruct('com.sun.star.table.BorderLine2')
+            line.Color, line.LineWidth = line_color, max(0, int(width))
+            line.OuterLineWidth = line.LineWidth
+            line.LineStyle = 0
+            return line
         cursor = self._end_cursor()
         cursor.CharHidden = False
         record = self.job.register_element(element_id, 'table', None, {'table': len(self._component.TextTables.ElementNames) + 1})
@@ -1815,6 +2281,13 @@ class WriterLayout(OfficeUnitConversion):
         table.initialize(len(data), column_count)
         self._component.Text.insertTextContent(cursor, table, False)
         table.RelativeWidth = 100
+        # Clear table defaults before assigning exact cell edges, including
+        # internal vertical/horizontal lines. This survives DOCX export.
+        table_border = uno.createUnoStruct('com.sun.star.table.TableBorder2')
+        for edge in ('Top', 'Bottom', 'Left', 'Right', 'Horizontal', 'Vertical'):
+            setattr(table_border, edge + 'Line', border())
+            setattr(table_border, 'Is' + edge + 'LineValid', True)
+        table.TableBorder2 = table_border
         if header:
             table.RepeatHeadline = True
             table.HeaderRowCount = 1
@@ -1829,21 +2302,40 @@ class WriterLayout(OfficeUnitConversion):
                 cumulative += widths[index]
                 separator.Position = int(table.TableColumnRelativeSum * cumulative / total)
             table.TableColumnSeparators = tuple(separators)
+        # Transfer bounded rectangular arrays instead of one remote String
+        # setter per cell. All values remain strings, including numeric text.
+        for column_start in range(0, column_count, 4096):
+            column_end = min(column_count, column_start + 4096)
+            batch_rows = max(1, 4096 // (column_end - column_start))
+            for start in range(0, len(data), batch_rows):
+                end = min(len(data), start + batch_rows)
+                block = table.getCellRangeByName(
+                    f'{self._column_name(column_start)}{start + 1}:{self._column_name(column_end - 1)}{end}')
+                block.setDataArray(tuple(tuple('' if value is None else str(value)
+                                              for value in row[column_start:column_end]) for row in data[start:end]))
+        all_cells = table.getCellRangeByName(f'A1:{self._column_name(column_count - 1)}{len(data)}')
+        apply_text_font(all_cells, font_name=font_name, font_size=font_size, bold=False, italic=False)
+        all_cells.CharColor = office_color(body_color, 'Writer table text color')
+        if header:
+            heading = table.getCellRangeByName(f'A1:{self._column_name(column_count - 1)}1')
+            apply_text_font(heading, bold=True)
+            heading.CharColor = office_color(header_color, 'Writer table text color')
+            if header_fill is not None:
+                heading.BackColor = office_color(header_fill, 'Writer table header fill')
         for row_index, row in enumerate(data):
             for column_index, value in enumerate(row):
                 name = f'{self._column_name(column_index)}{row_index + 1}'
                 cell = table.getCellByName(name)
-                cell.String = '' if value is None else str(value)
-                cell_cursor = cell.createTextCursor()
-                cell_cursor.gotoEnd(True)
-                apply_text_font(cell_cursor, font_name=font_name, font_size=font_size,
-                                bold=bool(header and row_index == 0), italic=False)
-                cell_cursor.CharColor = office_color(
-                    header_color if header and row_index == 0 else body_color,
-                    'Writer table text color',
-                )
-                if header and row_index == 0:
-                    cell.BackColor = office_color(header_fill, 'Writer table header fill')
+                top = border_width if border_style != 'none' and row_index == 0 else 0
+                bottom = 0
+                if border_style in {'grid', 'horizontal'} or (border_style == 'three-line' and row_index == len(data) - 1):
+                    bottom = border_width
+                elif border_style == 'three-line' and header and row_index == 0:
+                    bottom = header_border_width
+                cell.TopBorder = border(top)
+                cell.BottomBorder = border(bottom)
+                cell.LeftBorder = border(border_width if border_style == 'grid' else 0)
+                cell.RightBorder = border(border_width if border_style == 'grid' else 0)
         # Establish an ordinary flow paragraph after the table. Without this,
         # Writer can anchor the next inline object to the table's terminal row
         # and export it with a one-line height in DOCX.
@@ -1859,7 +2351,7 @@ class WriterLayout(OfficeUnitConversion):
     def add_inline_image(self, element_id, asset_name, width=None, height=None, align='CENTER', space_after=180,
                          alt_text=None, title=None):
         cursor = self._paragraph_cursor()
-        cursor.ParaAdjust = uno.Enum('com.sun.star.style.ParagraphAdjust', str(align).upper())
+        cursor.ParaAdjust = paragraph_alignment(align)
         cursor.ParaBottomMargin = max(0, int(space_after))
         image = self._component.createInstance('com.sun.star.text.TextGraphicObject')
         self.job.register_element(element_id, 'image', image, {'image': len(self.job.element_records)})
@@ -1975,22 +2467,33 @@ class WriterLayout(OfficeUnitConversion):
         self.job.register_element(element_id, 'text-replacement', self._component.Text, {'replacements': count})
         return count
 
-    def add_rich_paragraph(self, element_id, runs, align='LEFT', line_spacing=1.3,
-                           space_before=0, space_after=180, paragraph_style=None):
-        values = list(runs or [])
-        if not values:
-            raise ValueError('Writer rich paragraph requires at least one run.')
+    def add_rich_paragraph(self, element_id, runs, align=None, line_spacing=None,
+                           space_before=None, space_after=None, paragraph_style=None,
+                           first_line_indent=None, left_indent=None, right_indent=None):
+        values = rich_text_runs(runs)
         text = self._component.Text
         cursor = self._paragraph_cursor(paragraph_style)
-        cursor.ParaAdjust = uno.Enum('com.sun.star.style.ParagraphAdjust', str(align).upper())
-        spacing = uno.createUnoStruct('com.sun.star.style.LineSpacing')
-        spacing.Mode, spacing.Height = 0, max(100, int(float(line_spacing) * 100))
-        cursor.ParaLineSpacing = spacing
-        cursor.ParaTopMargin, cursor.ParaBottomMargin = max(0, int(space_before)), max(0, int(space_after))
+        if align is not None or not paragraph_style:
+            cursor.ParaAdjust = paragraph_alignment(align or 'LEFT')
+        if line_spacing is not None or not paragraph_style:
+            spacing = uno.createUnoStruct('com.sun.star.style.LineSpacing')
+            spacing.Mode, spacing.Height = 0, max(100, int(float(line_spacing if line_spacing is not None else 1.3) * 100))
+            cursor.ParaLineSpacing = spacing
+        if space_before is not None or not paragraph_style:
+            cursor.ParaTopMargin = max(0, int(space_before or 0))
+        if space_after is not None or not paragraph_style:
+            cursor.ParaBottomMargin = max(0, int(space_after if space_after is not None else 180))
+        for name, indent_value in (('ParaFirstLineIndent', first_line_indent),
+                            ('ParaLeftMargin', left_indent), ('ParaRightMargin', right_indent)):
+            if indent_value is not None:
+                setattr(cursor, name, int(indent_value))
         base_font = cursor.CharFontName
         base_size, base_weight, base_posture, base_color = cursor.CharHeight, cursor.CharWeight, cursor.CharPosture, cursor.CharColor
+        plans = rich_text_property_plans(cursor, values, {'font_name': base_font,
+            'font_size': base_size, 'bold': base_weight > 100, 'italic': base_posture.value != 'NONE',
+            'color': base_color if base_color >= 0 else 0})
         inserted = 0
-        for item in values:
+        for item, plan in zip(values, plans):
             run = dict(item) if isinstance(item, dict) else {'text': str(item)}
             value = str(run.get('text', ''))
             if not value:
@@ -1999,16 +2502,15 @@ class WriterLayout(OfficeUnitConversion):
             text.insertString(cursor, value, False)
             run_cursor = text.createTextCursorByRange(cursor)
             run_cursor.goLeft(len(value), True)
-            run_cursor.HyperLinkURL = str(link or '')
             if link:
+                run_cursor.HyperLinkURL = str(link)
                 run_cursor.HyperLinkTarget = '_blank'
                 self.job.record_feature('externalHyperlink')
-            apply_text_font(run_cursor, font_name=run.get('font_name') or base_font,
-                            font_size=run.get('font_size', base_size), bold=run.get('bold', base_weight > 100),
-                            italic=run.get('italic', base_posture.value != 'NONE'))
-            run_cursor.CharColor = office_color(run.get('color', base_color if base_color >= 0 else 0), 'Writer rich-text color')
-            run_cursor.CharUnderline = uno.getConstantByName(
-                'com.sun.star.awt.FontUnderline.SINGLE' if run.get('underline') else 'com.sun.star.awt.FontUnderline.NONE')
+            else:
+                # Setting an empty URL explicitly exports empty external links.
+                run_cursor.setPropertyToDefault('HyperLinkURL')
+                run_cursor.setPropertyToDefault('CharStyleName')
+            apply_office_property_plan(run_cursor, plan)
             inserted += len(value)
         if inserted <= 0:
             raise ValueError('Writer rich paragraph contains no visible text.')
@@ -2025,35 +2527,20 @@ class WriterLayout(OfficeUnitConversion):
 
     def define_paragraph_style(self, element_id, name, parent='Standard', **style):
         family = self._component.StyleFamilies.getByName('ParagraphStyles')
-        if family.hasByName(str(name)):
-            target = family.getByName(str(name))
-        else:
-            target = self._component.createInstance('com.sun.star.style.ParagraphStyle')
+        exists = family.hasByName(str(name))
+        target = family.getByName(str(name)) if exists else self._component.createInstance('com.sun.star.style.ParagraphStyle')
+        if 'background' in style:
+            if 'paragraph_background' in style:
+                raise ValueError('Use background or paragraph_background, not both')
+            style['paragraph_background'] = style.pop('background')
+        plan = office_property_plan(target, style)
+        if parent and not family.hasByName(str(parent)):
+            raise ValueError(f'Unknown parent paragraph style {parent!r}')
+        if not exists:
             family.insertByName(str(name), target)
         if parent:
-            try:
-                target.ParentStyle = str(parent)
-            except Exception:
-                pass
-        mapping = {
-            'space_before': ('ParaTopMargin', int), 'space_after': ('ParaBottomMargin', int),
-            'keep_with_next': ('ParaKeepTogether', bool),
-        }
-        apply_text_font(target, font_name=style.get('font_name'), font_size=style.get('font_size'),
-                        bold=style.get('bold'), italic=style.get('italic'))
-        for key, (property_name, converter) in mapping.items():
-            if key in style:
-                setattr(target, property_name, converter(style[key]))
-        if 'color' in style:
-            target.CharColor = office_color(style['color'], 'Writer paragraph-style color')
-        if 'background' in style:
-            target.ParaBackColor = office_color(style['background'], 'Writer paragraph-style background')
-        if 'line_spacing' in style:
-            spacing = uno.createUnoStruct('com.sun.star.style.LineSpacing')
-            spacing.Mode, spacing.Height = 0, max(100, int(float(style['line_spacing']) * 100))
-            target.ParaLineSpacing = spacing
-        if 'align' in style:
-            target.ParaAdjust = uno.Enum('com.sun.star.style.ParagraphAdjust', str(style['align']).upper())
+            target.ParentStyle = str(parent)
+        apply_office_property_plan(target, plan)
         self.job.register_element(element_id, 'paragraph-style', target, {'style': str(name)})
         self.job.record_feature('paragraphStyle')
         return self
@@ -2091,7 +2578,8 @@ class WriterLayout(OfficeUnitConversion):
         self.job.record_feature('bookmark')
         return self
 
-    def add_field(self, element_id, field_type='page-number', text_before='', text_after=''):
+    def add_field(self, element_id, field_type='page-number', text_before='', text_after='',
+                  target='body', align=None):
         services = {
             'page-number': 'com.sun.star.text.TextField.PageNumber',
             'page-count': 'com.sun.star.text.TextField.PageCount',
@@ -2102,19 +2590,32 @@ class WriterLayout(OfficeUnitConversion):
         key = str(field_type).strip().lower().replace('_', '-')
         if key not in services:
             raise ValueError(f'Unsupported Writer field {field_type!r}; expected one of {sorted(services)}.')
-        cursor = self._end_cursor()
+        target = str(target).strip().lower()
+        if target not in {'body', 'header', 'footer'}:
+            raise ValueError('Writer field target must be body, header, or footer')
+        alignment = paragraph_alignment(align) if align is not None else None
+        if target == 'body':
+            text, cursor = self._component.Text, self._end_cursor()
+        else:
+            style = self._page_style()
+            setattr(style, target.title() + 'IsOn', True)
+            text = getattr(style, target.title() + 'Text')
+            cursor = text.createTextCursor()
+            cursor.gotoEnd(False)
+        if alignment is not None:
+            cursor.ParaAdjust = alignment
         if text_before:
-            self._component.Text.insertString(cursor, str(text_before), False)
+            text.insertString(cursor, str(text_before), False)
         field = self._component.createInstance(services[key])
         if key in {'page-number', 'page-count'} and hasattr(field, 'NumberingType'):
             # Force Arabic digits for portable DOCX output. Otherwise the field
             # can inherit a section/page-style Roman numbering format even when
             # it appears inline in ordinary report body text.
             field.NumberingType = uno.getConstantByName('com.sun.star.style.NumberingType.ARABIC')
-        self._component.Text.insertTextContent(cursor, field, False)
+        text.insertTextContent(cursor, field, False)
         if text_after:
-            self._component.Text.insertString(cursor, str(text_after), False)
-        self.job.register_element(element_id, 'field', field, {'fieldType': key})
+            text.insertString(cursor, str(text_after), False)
+        self.job.register_element(element_id, 'field', field, {'fieldType': key, 'target': target})
         self.job.record_feature('field')
         return self
 
@@ -2604,7 +3105,7 @@ class PresentationTable(PresentationShape):
         if 'background' in style:
             cell.FillColor = office_color(style['background'], 'table background')
         if 'align' in style:
-            cursor.ParaAdjust = uno.Enum('com.sun.star.style.ParagraphAdjust', str(style['align']).upper())
+            cursor.ParaAdjust = paragraph_alignment(style['align'])
         return self
 
     def merge(self, start_cell, end_cell):
@@ -2936,17 +3437,27 @@ class PresentationSlide:
         return PresentationShape(self, shape, scoped_id)
 
     def add_rich_text(self, element_id, runs, slot=None, box=None, style=None):
-        values = list(runs or [])
-        if not values:
-            raise ValueError('Presentation rich text requires at least one run.')
+        values = rich_text_runs(runs)
         base = self.deck._normalized_text_options(style or {})
-        plain = ''.join(str(item.get('text', '')) if isinstance(item, dict) else str(item) for item in values)
+        # Validate all run types against a detached shape before adding a slide object.
+        probe = self.deck._component.createInstance('com.sun.star.drawing.TextShape')
+        probe_cursor = probe.Text.createTextCursor()
+        defaults = {key: value for key, value in base.items()
+                    if key in OFFICE_PROPERTY_MAP and OFFICE_PROPERTY_MAP[key][0] == 'character'}
+        office_property_plan(probe_cursor, defaults, groups={'character'}, read_current=False)
+        for run in values:
+            office_property_plan(probe_cursor, {key: value for key, value in run.items()
+                                 if key not in {'text', 'link', 'url'}}, groups={'character'}, read_current=False)
+        plain = ''.join(item['text'] for item in values)
         shape = self.deck.add_text_box(self._id(element_id), self._page, plain, self._box(slot, box), **base)
         shape.String = ''
         cursor = shape.Text.createTextCursor()
-        for item in values:
-            run = dict(item) if isinstance(item, dict) else {'text': str(item)}
-            value = str(run.get('text', ''))
+        defaults = {'font_name': cursor.CharFontName or _CJK_FONT, 'font_size': cursor.CharHeight,
+                    'bold': cursor.CharWeight > 100, 'italic': cursor.CharPosture.value != 'NONE',
+                    'color': cursor.CharColor if cursor.CharColor >= 0 else 0, **defaults}
+        plans = rich_text_property_plans(cursor, values, defaults)
+        for run, plan in zip(values, plans):
+            value = run['text']
             if not value:
                 continue
             link = run.get('link') or run.get('url')
@@ -2958,14 +3469,8 @@ class PresentationSlide:
             else:
                 shape.Text.insertString(cursor, value, False)
             run_cursor = shape.Text.createTextCursorByRange(cursor)
-            run_cursor.goLeft(len(value), True)
-            options = self.deck._normalized_text_options({**base, **run})
-            apply_text_font(run_cursor, font_name=options.get('font_name') or _CJK_FONT,
-                            font_size=options.get('font_size'), bold=bool(options.get('bold')), italic=bool(options.get('italic')))
-            if 'color' in options:
-                run_cursor.CharColor = office_color(options['color'], 'rich-text color')
-            run_cursor.CharUnderline = uno.getConstantByName(
-                'com.sun.star.awt.FontUnderline.SINGLE' if options.get('underline') else 'com.sun.star.awt.FontUnderline.NONE')
+            run_cursor.goLeft(1 if link else len(value), True)
+            apply_office_property_plan(run_cursor, plan)
         return shape
 
     def add_bullets(self, element_id, items, slot=None, box=None, level=0, style=None):
@@ -3339,7 +3844,7 @@ class PresentationLayout(OfficeUnitConversion):
                 'com.sun.star.awt.FontStrikeout.SINGLE' if strike else 'com.sun.star.awt.FontStrikeout.NONE'
             )
         if align is not None:
-            cursor.ParaAdjust = uno.Enum('com.sun.star.style.ParagraphAdjust', str(align).upper())
+            cursor.ParaAdjust = paragraph_alignment(align)
         if line_spacing is not None:
             spacing = uno.createUnoStruct('com.sun.star.style.LineSpacing')
             spacing.Mode, spacing.Height = 0, max(100, int(float(line_spacing) * 100))
@@ -4506,7 +5011,7 @@ class PresentationLayout(OfficeUnitConversion):
                 apply_text_font(cursor, font_name=font_name or _CJK_FONT, font_size=font_size, bold=is_header)
                 cursor.CharColor = office_color(header_color if is_header else body_color, 'table text color')
                 alignment = 'CENTER' if is_header or column_index > 0 else str(first_column_align).upper()
-                cursor.ParaAdjust = uno.Enum('com.sun.star.style.ParagraphAdjust', alignment)
+                cursor.ParaAdjust = paragraph_alignment(alignment)
                 try:
                     cell.TextVerticalAdjust = uno.Enum('com.sun.star.drawing.TextVerticalAdjust', 'CENTER')
                 except Exception:
@@ -5947,6 +6452,7 @@ class SpreadsheetLayout(OfficeUnitConversion):
 
     def __init__(self, job, component):
         self.job, self._component = job, component
+        self._cell_value_formats = None
 
     def set_doc_info(self, title=None, subject=None, author=None, description=None, keywords=None):
         properties = self._component.DocumentProperties
@@ -6058,16 +6564,72 @@ class SpreadsheetLayout(OfficeUnitConversion):
         self._component.Sheets.moveByName(str(name), max(0, int(index) - 1))
         return self
 
-    def set_cell(self, element_id, sheet, column, row, value):
-        cell = sheet.getCellByPosition(int(column), int(row))
+    def _value_formats(self):
+        if self._cell_value_formats is None:
+            formats = self._component.NumberFormats
+            locale = uno.createUnoStruct('com.sun.star.lang.Locale')
+            logical = uno.getConstantByName('com.sun.star.util.NumberFormat.LOGICAL')
+            logical_format = formats.getStandardFormat(logical, locale)
+            standard_format = formats.getStandardIndex(locale)
+            self._cell_value_formats = (formats, logical, logical_format, standard_format,
+                                        {logical_format: logical, standard_format: 0})
+        return self._cell_value_formats
+
+    def _write_cell_value(self, cell, value):
+        formats, logical, logical_format, standard_format, format_types = self._value_formats()
         if isinstance(value, bool):
             cell.Value = 1 if value else 0
-        elif isinstance(value, (int, float)):
+            cell.NumberFormat = logical_format
+            return
+        # Replacing a logical cell with a numeric/formula value must not retain
+        # BOOLEAN formatting: XLSX export would coerce any nonzero number to 1.
+        number_format = cell.NumberFormat
+        if number_format not in format_types:
+            format_types[number_format] = formats.getByKey(number_format).getPropertyValue('Type')
+        if format_types[number_format] & logical:
+            cell.NumberFormat = standard_format
+        if isinstance(value, (int, float)):
             cell.Value = float(value)
         elif isinstance(value, str) and value.startswith('='):
             cell.Formula = value
         else:
             cell.String = '' if value is None else str(value)
+
+    def _write_range_block(self, sheet, column, row, values):
+        target = sheet.getCellRangeByPosition(column, row, column + len(values[0]) - 1, row + len(values) - 1)
+        formats, logical, _, _, format_types = self._value_formats()
+        uniform = target.getPropertyState('NumberFormat').value != 'AMBIGUOUS_VALUE'
+        if uniform:
+            number_format = target.NumberFormat
+            if number_format not in format_types:
+                format_types[number_format] = formats.getByKey(number_format).getPropertyValue('Type')
+            uniform = not (format_types[number_format] & logical)
+        if not uniform:
+            # Mixed/logical formats need per-cell handling to preserve styles
+            # and avoid exporting numeric replacements as XLSX booleans.
+            for y, source_row in enumerate(values):
+                for x, value in enumerate(source_row):
+                    self._write_cell_value(sheet.getCellByPosition(column + x, row + y), value)
+            return
+        data, special = [], []
+        for y, source_row in enumerate(values):
+            converted = []
+            for x, value in enumerate(source_row):
+                if isinstance(value, bool) or (isinstance(value, str) and value.startswith('=')):
+                    special.append((x, y, value))
+                    converted.append('')
+                elif isinstance(value, (int, float)):
+                    converted.append(float(value))
+                else:
+                    converted.append('' if value is None else str(value))
+            data.append(tuple(converted))
+        target.setDataArray(tuple(data))
+        for x, y, value in special:
+            self._write_cell_value(sheet.getCellByPosition(column + x, row + y), value)
+
+    def set_cell(self, element_id, sheet, column, row, value):
+        cell = sheet.getCellByPosition(int(column), int(row))
+        self._write_cell_value(cell, value)
         record = self.job.register_element(element_id, 'cell', cell, {'sheet': str(sheet.Name), 'row': int(row) + 1, 'column': int(column) + 1}, update_existing=True)
         try:
             self._component.NamedRanges.addNewByName(record['artifactName'], cell.AbsoluteName, cell.CellAddress, 0)
@@ -6090,23 +6652,32 @@ class SpreadsheetLayout(OfficeUnitConversion):
                                                      sheet.getCellByPosition(int(start_column), int(start_row)).CellAddress, 0)
         except Exception:
             pass
-        for row_offset, values in enumerate(rows):
-            for column_offset, value in enumerate(values):
-                cell = sheet.getCellByPosition(int(start_column) + column_offset, int(start_row) + row_offset)
-                if isinstance(value, (int, float)) and not isinstance(value, bool):
-                    cell.Value = float(value)
-                elif isinstance(value, str) and value.startswith('='):
-                    cell.Formula = value
-                else:
-                    cell.String = '' if value is None else str(value)
+        row_offset = 0
+        while row_offset < len(rows):
+            width = len(rows[row_offset])
+            if not width:
+                row_offset += 1
+                continue
+            # Equal-width runs preserve ragged-row semantics: omitted cells
+            # must not be cleared. Bound each temporary UNO array to 4096 cells.
+            end = row_offset + 1
+            max_rows = max(1, 4096 // min(width, 4096))
+            while end < len(rows) and end - row_offset < max_rows and len(rows[end]) == width:
+                end += 1
+            for column_offset in range(0, width, 4096):
+                values = [source_row[column_offset:column_offset + 4096] for source_row in rows[row_offset:end]]
+                self._write_range_block(sheet, int(start_column) + column_offset,
+                                        int(start_row) + row_offset, values)
+            row_offset = end
         return self
 
     def format_range(self, element_id, sheet, cell_range, font_size=None, bold=None,
                      color=None, background=None, horizontal=None, vertical=None, wrap=None,
                      italic=None, underline=None, font_name=None, number_format=None,
                      top_border=None, bottom_border=None, left_border=None, right_border=None,
-                     border_width=25, rotation=None, shrink_to_fit=None):
+                     border_width=25, rotation=None, shrink_to_fit=None, **formatting):
         target = sheet.getCellRangeByName(str(cell_range))
+        extra_plan = office_property_plan(target, formatting)
         record = self.job.register_element(element_id, 'cell-format', target, {
             'sheet': str(sheet.Name), 'range': str(cell_range),
         }, update_existing=True)
@@ -6130,10 +6701,14 @@ class SpreadsheetLayout(OfficeUnitConversion):
         if background is not None:
             target.CellBackColor = office_color(background, 'cell background')
         if horizontal is not None:
+            horizontal = str(horizontal).strip().upper()
+            horizontal = {'JUSTIFY': 'BLOCK', 'JUSTIFIED': 'BLOCK', 'START': 'LEFT', 'END': 'RIGHT'}.get(horizontal, horizontal)
             target.HoriJustify = uno.Enum(
-                'com.sun.star.table.CellHoriJustify', str(horizontal).strip().upper(),
+                'com.sun.star.table.CellHoriJustify', horizontal,
             )
         if vertical is not None:
+            vertical = str(vertical).strip().upper()
+            vertical = {'MIDDLE': 'CENTER', 'JUSTIFY': 'BLOCK', 'JUSTIFIED': 'BLOCK'}.get(vertical, vertical)
             target.VertJustify = uno.Enum(
                 'com.sun.star.table.CellVertJustify', str(vertical).strip().upper(),
             )
@@ -6162,8 +6737,10 @@ class SpreadsheetLayout(OfficeUnitConversion):
             border = uno.createUnoStruct('com.sun.star.table.BorderLine2')
             border.Color = office_color(border_color, 'cell border color')
             border.LineWidth = max(1, int(border_width))
+            border.OuterLineWidth = border.LineWidth
             border.LineStyle = 0
             setattr(target, property_name, border)
+        apply_office_property_plan(target, extra_plan)
         return self
 
     def set_column_width(self, element_id, sheet, column, width):
@@ -6500,14 +7077,40 @@ class SpreadsheetLayout(OfficeUnitConversion):
 
     def set_print_setup(self, element_id, sheet, orientation=None, paper_size=None,
                         margins=None, repeat_rows=None, repeat_columns=None, print_area=None,
-                        scale=None, fit_to_pages=None):
+                        scale=None, fit_to_pages=None, fit_to_width=None, fit_to_height=None):
+        orientation = str(orientation).strip().lower() if orientation is not None else None
+        if orientation is not None and orientation not in {'landscape', 'portrait'}:
+            raise ValueError('orientation must be landscape or portrait')
+        if sum((scale is not None, fit_to_pages is not None,
+                fit_to_width is not None or fit_to_height is not None)) > 1:
+            raise ValueError('Choose scale, fit_to_pages, or fit_to_width/fit_to_height, not multiple scaling modes')
         family = self._component.StyleFamilies.getByName('PageStyles')
         style = family.getByName(sheet.PageStyle)
+        # New sheets share Default. Editing it changes every sheet's PDF/print
+        # layout; clone only when another sheet currently references the style.
+        sheets = self._component.Sheets
+        if sum(sheets.getByIndex(i).PageStyle == sheet.PageStyle for i in range(sheets.Count)) > 1:
+            isolated = self._component.createInstance('com.sun.star.style.PageStyle')
+            name = 'WebPilotPage_' + uuid.uuid4().hex
+            family.insertByName(name, isolated)
+            for prop in style.getPropertySetInfo().Properties:
+                if prop.Attributes & uno.getConstantByName('com.sun.star.beans.PropertyAttribute.READONLY'):
+                    continue
+                try:
+                    isolated.setPropertyValue(prop.Name, style.getPropertyValue(prop.Name))
+                except Exception:
+                    # Some service-specific properties are not copyable.
+                    pass
+            sheet.PageStyle = name
+            style = isolated
         if orientation is not None:
-            style.IsLandscape = str(orientation).strip().lower() == 'landscape'
+            style.IsLandscape = orientation == 'landscape'
         if paper_size is not None:
             width, height = paper_size
             style.Width, style.Height = int(width), int(height)
+        if orientation is not None:
+            short, long = sorted((style.Width, style.Height))
+            style.Width, style.Height = (long, short) if orientation == 'landscape' else (short, long)
         if margins is not None:
             values = dict(margins) if isinstance(margins, dict) else dict(zip(('left', 'right', 'top', 'bottom'), margins))
             for key, property_name in (
@@ -6516,17 +7119,24 @@ class SpreadsheetLayout(OfficeUnitConversion):
                 if key in values:
                     setattr(style, property_name, int(values[key]))
         if scale is not None:
+            style.ScaleToPages = style.ScaleToPagesX = style.ScaleToPagesY = 0
             style.PageScale = int(scale)
         if fit_to_pages is not None:
+            style.PageScale = style.ScaleToPagesX = style.ScaleToPagesY = 0
             style.ScaleToPages = int(fit_to_pages)
-        if print_area:
-            sheet.setPrintAreas((sheet.getCellRangeByName(str(print_area)).RangeAddress,))
-        if repeat_rows:
-            sheet.setTitleRows(sheet.getCellRangeByName(str(repeat_rows)).RangeAddress)
-            sheet.setPrintTitleRows(True)
-        if repeat_columns:
-            sheet.setTitleColumns(sheet.getCellRangeByName(str(repeat_columns)).RangeAddress)
-            sheet.setPrintTitleColumns(True)
+        if fit_to_width is not None or fit_to_height is not None:
+            style.PageScale = style.ScaleToPages = 0
+            style.ScaleToPagesX, style.ScaleToPagesY = int(fit_to_width or 0), int(fit_to_height or 0)
+        if print_area is not None:
+            sheet.setPrintAreas((sheet.getCellRangeByName(str(print_area)).RangeAddress,) if print_area else ())
+        if repeat_rows is not None:
+            if repeat_rows:
+                sheet.setTitleRows(sheet.getCellRangeByName(str(repeat_rows)).RangeAddress)
+            sheet.setPrintTitleRows(bool(repeat_rows))
+        if repeat_columns is not None:
+            if repeat_columns:
+                sheet.setTitleColumns(sheet.getCellRangeByName(str(repeat_columns)).RangeAddress)
+            sheet.setPrintTitleColumns(bool(repeat_columns))
         self.job.register_element(element_id, 'print-setup', style, {'sheet': str(sheet.Name)})
         self.job.record_feature('printSetup')
         return self
@@ -6838,6 +7448,14 @@ def inspect_target(document, document_type, target):
         return document.Text
     if target == 'cursor' and document_type == 'word':
         return document.Text.createTextCursor()
+    if target == 'page-style' and document_type in ('word', 'spreadsheet'):
+        name = document.Text.createTextCursor().PageStyleName if document_type == 'word' else document.Sheets.getByIndex(0).PageStyle
+        return document.StyleFamilies.getByName('PageStyles').getByName(name)
+    if target == 'table' and document_type == 'word':
+        table = document.createInstance('com.sun.star.text.TextTable')
+        table.initialize(2, 2)
+        document.Text.insertTextContent(document.Text.createTextCursor(), table, False)
+        return table
     if target == 'shape' and document_type == 'word':
         shape = document.createInstance('com.sun.star.drawing.RectangleShape')
         document.DrawPage.add(shape)
@@ -6874,8 +7492,8 @@ def inspect_target(document, document_type, target):
 
 def targets_for_document_type(document_type):
     return {
-        'word': ('document', 'text', 'cursor', 'shape'),
-        'spreadsheet': ('document', 'sheet', 'cell'),
+        'word': ('document', 'text', 'cursor', 'shape', 'table', 'page-style'),
+        'spreadsheet': ('document', 'sheet', 'cell', 'page-style'),
         'presentation': ('document', 'page', 'shape', 'table', 'table-column', 'table-row', 'chart', 'chart-data'),
     }[document_type]
 
@@ -6963,6 +7581,47 @@ def facade_value_schemas(document_type):
             'rejected': ['named CSS colors', '3-digit hex', '8-digit alpha hex'],
         },
     }
+    if document_type in {'word', 'presentation'}:
+        shared['richTextRun'] = {
+            'keys': sorted(RICH_TEXT_RUN_KEYS),
+            'mapping': {key: value for key, value in office_mapping_schema().items() if value['group'] == 'character'},
+            'rule': 'Each run is a text string or dictionary. bold/italic/underline/strike/superscript/subscript are booleans. superscript and subscript are mutually exclusive native character formats; omitted values reset to the normal baseline. highlight is an RGB color or None (clear). font_size is positive pt. link/url is a hyperlink. Unknown run keys fail before insertion. Writer paragraph_style alignment/spacing are inherited unless explicitly overridden.',
+            'example': [{'text': 'H'}, {'text': '2', 'subscript': True}, {'text': 'O; reference'},
+                        {'text': '[1]', 'superscript': True}, {'text': ' revised', 'strike': True},
+                        {'text': ' note', 'highlight': '#FFF2CC'}],
+        }
+        shared['paragraphAlignment'] = {
+            'values': ['left', 'center', 'right', 'justify', 'block', 'stretch'],
+            'rule': 'Case-insensitive. justify/JUSTIFY/justified map to native UNO BLOCK (two-sided alignment).',
+        }
+    if document_type == 'word':
+        shared['writerParagraphStyle'] = {
+            'keys': ['background', 'properties'] + [key for key, value in OFFICE_PROPERTY_MAP.items()
+                     if value[0] in {'character', 'paragraph'}],
+            'units': 'Font size is pt; line_spacing is a multiplier; spacing and indents are 1/100 mm. Negative first_line_indent produces a hanging indent. Unknown style keys raise an error.',
+        }
+        shared['writerTableBorders'] = {
+            'border_style': ['grid', 'none', 'three-line', 'horizontal'],
+            'rule': 'three-line draws only the table top, header bottom (when header=True), and table bottom. No vertical or body-internal lines. header_fill=None disables header shading.',
+            'units': 'border_width and header_border_width are positive 1/100 mm, e.g. 50 and 25.',
+        }
+        shared['writerFieldTarget'] = {
+            'target': ['body', 'header', 'footer'],
+            'rule': 'Native dynamic field, not literal page text. Header/footer is enabled automatically; fields append to that area. Call set_header_footer before add_field if also setting static text (it replaces existing contents). align controls the containing paragraph.',
+        }
+    if document_type == 'spreadsheet':
+        shared['cellValues'] = {
+            'rule': 'set_cell and set_range preserve numbers, booleans, text, blank None values, and formulas beginning with =. Booleans are native logical cells, not text.',
+        }
+        shared['cellAlignment'] = {
+            'horizontal': ['standard', 'left', 'center', 'right', 'justify', 'block', 'repeat'],
+            'vertical': ['standard', 'top', 'center', 'middle', 'bottom'],
+            'rule': 'Case-insensitive; justify maps to BLOCK and middle to CENTER.',
+        }
+        shared['printSetup'] = {
+            'rule': 'Print settings are isolated per sheet. Choose scale (percentage), fit_to_pages (total), or fit_to_width/fit_to_height (0 = unconstrained); do not mix modes. fit_to_width=1, fit_to_height=0 keeps all columns on one page with as many vertical pages as needed. Empty print_area/repeat_rows/repeat_columns clears that setting.',
+            'orientation': ['portrait', 'landscape'],
+        }
     if document_type == 'presentation':
         shared.update({
             'canvas': {
@@ -7098,6 +7757,8 @@ slide.add_text('row-1', 'Auto-height text', box={'x': 0.8, 'y': 1.6, 'w': 5.6},
             'richTextBulletsAndLink': """slide.add_rich_text('rich', [
     {'text': 'Strong ', 'bold': True, 'color': '#0F172A'},
     {'text': 'evidence', 'italic': True, 'link': 'https://example.com'},
+    {'text': '[1]', 'superscript': True},
+    {'text': ' H'}, {'text': '2', 'subscript': True}, {'text': 'O'},
 ], box=(0.8, 2.7, 5.2, 0.7), style={'font_size': 18})
 slide.add_bullets('actions', ['Approve scope', 'Publish result'], slot='body', style={'font_size': 18})
 slide.add_link('source-link', 'Open source', box=(0.8, 6.6, 2.0, 0.35), url='https://example.com')""",
@@ -7271,23 +7932,29 @@ document.set_page('page', width=document.mm(210), height=document.mm(297),
     margins=(document.mm(20), document.mm(20), document.mm(18), document.mm(18)))
 document.set_header_footer(header='Quarterly report', footer='Confidential',
     header_element_id='header', footer_element_id='footer')
+document.add_field('footer-page', 'page-number', target='footer', align='center', text_before=' | Page ')
+document.add_field('footer-total', 'page-count', target='footer', text_before=' of ')
 document.add_title('title', 'Quarterly report')
 document.save()
 document.close()""",
             'flowAndStyles': """document.define_paragraph_style('callout-style', 'Callout', parent='Standard',
-    font_size=12, color='#1E3A8A', background='#EFF6FF')
+    font_size=12, color='#1E3A8A', background='#EFF6FF', align='justify', first_line_indent=850)
 document.add_heading('overview', 'Overview', level=2)
 document.add_paragraph('summary', 'Native Writer flow paginates automatically.',
-    font_size=11, color='#0F172A', line_spacing=1.3)
+    font_size=11, color='#0F172A', line_spacing=1.3, align='justify')
 document.add_rich_paragraph('evidence', [
     {'text': 'Source: ', 'bold': True},
     {'text': 'Open report', 'link': 'https://example.com', 'color': '#2563EB'},
+    {'text': '[1]', 'superscript': True},
+    {'text': ' H'}, {'text': '2', 'subscript': True}, {'text': 'O'},
+    {'text': 'removed', 'strike': True}, {'text': 'note', 'highlight': '#FFF2CC'},
 ])
 document.add_bullets('benefits', ['Readable', 'Editable'])
 document.add_numbered_list('steps', ['Review', 'Approve', 'Publish'])""",
             'tableAndMerge': """document.add_table('metrics', [
-    ['Metric', 'Actual', 'Plan'], ['Revenue', '190', '180'], ['Margin', '31%', '29%'],
-], column_widths=[40, 30, 30], header=True, font_size=10)
+    ['Metric', 'Actual', 'Plan'], ['Revenue', '190', '180'], ['Margin', '31%', '29%'], ['', '', ''],
+], column_widths=[40, 30, 30], header=True, font_size=10,
+    border_style='three-line', border_width=50, header_border_width=25, header_fill=None)
 document.merge_table_cells('metrics-merge', 'metrics', 'A4', 'C4')""",
             'imageAndFrame': """document.add_inline_image('diagram', 'diagram.png', width=document.mm(150),
     align='CENTER', space_after=document.mm(4))
@@ -7296,7 +7963,8 @@ document.add_text_frame('callout', 'Key finding', width=document.mm(70), height=
             'navigationAndReview': """document.add_bookmark('scope-bookmark', 'scope', 'Scope')
 document.add_hyperlink('source', 'Open source', 'https://example.com')
 document.add_cross_reference('scope-ref', 'scope', part='text')
-document.add_field('page-number', 'page-number', text_before='Page ')
+document.add_field('page-number', 'page-number', target='footer', align='center', text_before='Page ')
+document.add_field('page-count', 'page-count', target='footer', text_before=' of ')
 document.add_toc('toc', title='Contents')
 document.add_note('footnote-1', 'Methodology source.', kind='footnote')
 document.add_comment('comment-1', 'Verify this figure.', author='Reviewer')""",
@@ -7354,7 +8022,7 @@ sheet.conditional_format('late-items', 'E4:E100', 'greater', '0',
 sheet.add_image('logo', 'logo.png', (500, 500, 4000, 1400))
 sheet.add_comment('review-note', 'B4', 'Verify source.', author='Reviewer')
 sheet.add_hyperlink('source-link', 'A20', 'Open source', 'https://example.com')""",
-        'printProtectionAndAnalysis': """sheet.print_setup('print', orientation='landscape', fit_to_pages=1,
+        'printProtectionAndAnalysis': """sheet.print_setup('print', orientation='landscape', fit_to_width=1, fit_to_height=0,
     repeat_rows='A1:XFD3')
 sheet.protect('sheet-password')
 sheet.add_pivot('sales-pivot', 'A3:C100', 'F3', row_fields=[0], data_fields=[1])
@@ -7457,7 +8125,7 @@ def office_facade_cookbook(document_type, query=''):
             {'id': 'presentation.slide@2', 'support': 'full', 'kind': 'core', 'keywords': ['slide', 'layout', 'slot', 'grid', 'stack', 'header', 'footer'], 'signature': "deck.slide(element_id, layout='title-content', title=None, title_style=None); slide.grid(columns,rows,slot='body',box=None,gap=0.24,...); slide.stack(count,slot='body',box=None,direction='vertical',gap=0.18,...); slide.add_header(element_id,left='',center='',right='',accent=None,...); slide.add_footer(element_id,left='',center='',right='',accent=None,...); layouts: blank, cover/title-cover, section/title-section, title-only, title-content, title-two-column/comparison, title-three-column/dashboard", 'validation': ['bounds', 'overlap', 'text-fit']},
             {'id': 'presentation.existing-slide@1', 'support': 'full', 'kind': 'edit', 'keywords': ['select', 'remove', 'move', 'duplicate'], 'signature': "deck.select_slide(element_id, index=None, name=None, text=None); deck.remove_slide(index); deck.move_slide(from_index, to_index); deck.duplicate_slide(element_id, index)", 'validation': ['slide-count', 'preservation']},
             {'id': 'presentation.existing-shape@1', 'support': 'full', 'kind': 'edit', 'keywords': ['shape', 'replace', 'resize', 'z-order'], 'signature': "slide.select_shape(element_id, index=None, name=None, text=None) -> shape.set_text/replace_text/set_box/set_style/remove/bring_to_front/send_to_back; slide.replace_text(...) ", 'validation': ['bounds', 'overlap', 'content']},
-            {'id': 'presentation.text@2', 'support': 'full', 'kind': 'core', 'keywords': ['text', 'rich-text', 'bullets', 'link', 'auto-height'], 'signature': "slide.add_text(element_id,text,slot=None,box=None,style=None,auto_height=False); omit box h/height or set auto_height=True to derive measured height; slide.add_rich_text(...); slide.add_bullets(...); exact style keys: font_size,min_font_size,bold,italic,underline,strike,color,font_name,align,valign,padding,line_spacing,background,border,link,rotation; unsupported: letter_spacing,tracking,margin,autofit,word_wrap", 'validation': ['bounds', 'overlap', 'text-fit']},
+            {'id': 'presentation.text@2', 'support': 'full', 'kind': 'core', 'keywords': ['text', 'rich-text', 'bullets', 'link', 'auto-height'], 'signature': "slide.add_text(element_id,text,slot=None,box=None,style=None,auto_height=False); omit box h/height or set auto_height=True to derive measured height; slide.add_rich_text(...), runs use valueSchemas.richTextRun including superscript/subscript/strike/highlight; slide.add_bullets(...); exact style keys: font_size,min_font_size,bold,italic,underline,strike,color,font_name,align,valign,padding,line_spacing,background,border,link,rotation; unsupported: letter_spacing,tracking,margin,autofit,word_wrap", 'validation': ['bounds', 'overlap', 'text-fit']},
             {'id': 'presentation.image@2', 'support': 'full', 'kind': 'core', 'keywords': ['image', 'crop', 'rotate', 'contain', 'caption', 'alt', 'source'], 'signature': "slide.add_image(element_id, asset_name, slot=None, box=None, contain=True, padding=0, crop=None, rotation=0, transparency=0, alt_text=None, title=None, source=None); slide.add_captioned_image(element_id, asset_name, caption, source=None, alt_text=None, ..., caption_height=0.62)", 'validation': ['bounds', 'aspect-ratio', 'embedded-media', 'accessibility-metadata', 'visible-identification']},
             {'id': 'presentation.shape@2', 'support': 'full', 'kind': 'native', 'keywords': ['shape', 'connector', 'caption', 'measure', 'background', 'gradient', 'group'], 'signature': "slide.add_shape(element_id,slot=None,box=None,shape_type='rectangle|round-rectangle|ellipse|line|diamond|triangle|right-triangle|parallelogram|trapezoid|pentagon|hexagon|octagon|star|caption|measure',fill=None,line=None,gradient=None,rotation=0,...); slide.connect(element_id, source_box_or_child_id, target_box_or_child_id, end_arrow=True, start_arrow_width=None, end_arrow_width=None, ...); never emulate an arrowhead with a separate triangle because the triangle box touching a target does not place its apex on the connector endpoint; slide.set_background(color, transparency=0); slide.set_background(style,start_color,end_color,angle=0); slide.group(element_id, shapes)", 'validation': ['bounds', 'overlap', 'featureCounts']},
             {'id': 'presentation.table@1', 'support': 'full', 'kind': 'native', 'keywords': ['table', 'editable'], 'signature': "slide.add_table(element_id, rows, slot=None, box=None, column_weights=None, header=True, header_fill=0x0F172A, header_color=0xFFFFFF, body_fill=0xF8FAFC, alternate_fill=0xFFFFFF, body_color=0x1E293B, font_size=11, font_name=None, first_column_align='LEFT'); col_widths is accepted as an alias for column_weights", 'validation': ['native-object', 'bounds', 'overlap']},
@@ -7497,14 +8165,14 @@ def office_facade_cookbook(document_type, query=''):
         signatures = [item['signature'] for item in capabilities if item.get('signature')]
     elif document_type == 'word':
         capabilities = [
-            {'id': 'writer.flow@2', 'support': 'full', 'kind': 'core', 'keywords': ['paragraph', 'heading', 'title', 'flow', 'rich-text'], 'signature': "document.add_paragraph(...); document.add_heading(element_id,value,level=1,color=0x1F2937,align='LEFT',font_name=None,font_size=None); document.add_title(element_id,value,color=0x1F2937,align='LEFT',font_name=None,font_size=None); document.add_rich_paragraph(element_id, runs,...); document.replace_text(element_id, old_text, new_text, replace_all=True)", 'validation': ['pagination', 'content']},
-            {'id': 'writer.styles@1', 'support': 'full', 'kind': 'native', 'keywords': ['style', 'format'], 'signature': "document.define_paragraph_style(element_id, name, parent='Standard', **style)", 'validation': ['styles', 'reopen']},
+            {'id': 'writer.flow@2', 'support': 'full', 'kind': 'core', 'keywords': ['paragraph', 'heading', 'title', 'flow', 'rich-text'], 'signature': "document.add_paragraph(...); document.add_heading(element_id,value,level=1,color=0x1F2937,align='LEFT',font_name=None,font_size=None); document.add_title(element_id,value,color=0x1F2937,align='LEFT',font_name=None,font_size=None); document.add_rich_paragraph(element_id, runs,...), runs use valueSchemas.richTextRun including superscript/subscript/strike/highlight; document.replace_text(element_id, old_text, new_text, replace_all=True)", 'validation': ['pagination', 'content']},
+            {'id': 'writer.styles@1', 'support': 'full', 'kind': 'native', 'keywords': ['style', 'format', 'alignment', 'justify'], 'signature': "document.define_paragraph_style(element_id, name, parent='Standard', **style); align='justify' maps to UNO BLOCK", 'validation': ['styles', 'reopen']},
             {'id': 'writer.list@1', 'support': 'full', 'kind': 'core', 'keywords': ['bullet', 'numbered', 'list'], 'signature': "document.add_bullets(element_id, values, **style); document.add_numbered_list(element_id, values, **style)", 'validation': ['pagination', 'content']},
-            {'id': 'writer.table@2', 'support': 'full', 'kind': 'native', 'keywords': ['table', 'repeat-header', 'merge'], 'signature': "document.add_table(element_id, rows, column_widths=None, header=True, font_size=10, font_name=None, header_fill=0xE8EEF7, header_color=0x0F172A, body_color=0x1E293B); document.merge_table_cells(element_id, table_element_id, start_cell, end_cell)", 'validation': ['native-table', 'pagination']},
+            {'id': 'writer.table@2', 'support': 'full', 'kind': 'native', 'keywords': ['table', 'repeat-header', 'merge', 'border', 'three-line'], 'signature': "document.add_table(element_id, rows, column_widths=None, header=True, font_size=10, font_name=None, header_fill=0xE8EEF7, header_color=0x0F172A, body_color=0x1E293B, border_style='grid', border_color=0x000000, border_width=20, header_border_width=10); border_style: grid/none/three-line/horizontal; header_fill=None disables shading; document.merge_table_cells(element_id, table_element_id, start_cell, end_cell)", 'validation': ['native-table', 'pagination']},
             {'id': 'writer.image-frame@1', 'support': 'full', 'kind': 'native', 'keywords': ['image', 'picture', 'inline', 'frame'], 'signature': "document.add_inline_image(...); document.add_text_frame(element_id,text,width,height,anchor='AS_CHARACTER',background=None)", 'validation': ['embedded-media', 'bounds', 'anchors']},
             {'id': 'writer.page-style@1', 'support': 'full', 'kind': 'recipe', 'keywords': ['page', 'margin', 'size', 'section'], 'signature': "document.feature('writer.page-style@1',...); document.add_section(element_id,name,columns=1,protected=False); document.add_page_break(element_id)", 'validation': ['page-geometry', 'sections']},
-            {'id': 'writer.header-footer@1', 'support': 'full', 'kind': 'recipe', 'keywords': ['header', 'footer'], 'signature': "document.feature('writer.header-footer@1', element_id, header='...', footer='...')", 'validation': ['reopen', 'content']},
-            {'id': 'writer.fields-navigation@1', 'support': 'full', 'kind': 'native', 'keywords': ['field', 'page-number', 'toc', 'index', 'bookmark', 'cross-reference', 'hyperlink'], 'signature': "document.add_field(...); document.add_toc(...); document.add_index(...); document.add_bookmark(...); document.add_cross_reference(...); document.add_hyperlink(...) ", 'validation': ['fields', 'bookmarks', 'hyperlinks']},
+            {'id': 'writer.header-footer@1', 'support': 'full', 'kind': 'recipe', 'keywords': ['header', 'footer'], 'signature': "document.feature('writer.header-footer@1', element_id, header='...', footer='...'); document.add_field(element_id, 'page-number', target='footer', align='center')", 'validation': ['reopen', 'content']},
+            {'id': 'writer.fields-navigation@1', 'support': 'full', 'kind': 'native', 'keywords': ['field', 'page-number', 'toc', 'index', 'bookmark', 'cross-reference', 'hyperlink'], 'signature': "document.add_field(element_id, field_type='page-number', text_before='', text_after='', target='body', align=None); target: body/header/footer; document.add_toc(...); document.add_index(...); document.add_bookmark(...); document.add_cross_reference(...); document.add_hyperlink(...) ", 'validation': ['fields', 'bookmarks', 'hyperlinks']},
             {'id': 'writer.notes-review@1', 'support': 'full', 'kind': 'native', 'keywords': ['footnote', 'endnote', 'comment'], 'signature': "document.add_note(element_id,text,kind='footnote'); document.add_comment(element_id,text,author='User')", 'validation': ['footnotes', 'endnotes', 'comments']},
             {'id': 'writer.content-control@1', 'support': 'partial', 'kind': 'native', 'keywords': ['content-control', 'form'], 'signature': "document.add_content_control(element_id,text='',tag=None,title=None,locked=False)", 'validation': ['content-controls', 'reopen']},
             {'id': 'writer.objects@1', 'support': 'partial', 'kind': 'native', 'keywords': ['chart', 'formula', 'equation', 'ole'], 'signature': "document.add_chart(...); document.add_formula(element_id,formula,width=5000,height=1800)", 'validation': ['charts', 'embedded-objects', 'render']},
@@ -7580,6 +8248,36 @@ def office_facade_cookbook(document_type, query=''):
     normalized_query = str(query or '').strip().lower()
     example_library = facade_example_library(document_type)
     module_examples = facade_module_example_keys(document_type)
+    capabilities.append({'id': 'office.properties@1', 'support': 'full', 'kind': 'core',
+        'keywords': ['properties', 'formatting', 'mapping', 'native', 'schema', 'character', 'paragraph', 'page', 'cell'],
+        'signature': "job.property_schema(target_id, scope='object', query=''); job.set_properties(element_id, target_id, values, scope='object'); job.element_map()",
+        'validation': ['installed-type-schema', 'writable-property', 'preflight', 'export-reopen']})
+    module_examples['office.properties@1'] = ['unifiedProperties']
+    example_library['unifiedProperties'] = {
+        'word': """document.add_paragraph('body', 'Reference and body text')
+job.set_properties('body-format', 'body', {'align': 'justify', 'keep_lines': True,
+    'widows': 2, 'character_spacing': 10, 'case_map': 'none',
+    'tab_stops': [{'Position': 1270, 'Alignment': 'LEFT', 'DecimalChar': '.', 'FillChar': '.'}]})
+job.set_properties('page-format', 'document', {'margin_left': 2200}, scope='page-style')
+# Query office.properties for installed native names, types, enums and structures.
+# The document ID is the one passed to job.writer; use job.element_map() to resolve IDs.
+schema = job.property_schema('body', query='Char')
+document.add_rich_paragraph('citation', [{'text': 'Reference'},
+    {'text': '[1]', 'superscript': True, 'properties': {'CharUnderline': 2}}])""",
+        'presentation': """slide = deck.slide('slide', layout='blank')
+slide.add_text('title', 'Editable text', box=(1, 1, 10, 1))
+job.set_properties('text-format', 'slide/title', {'character_spacing': 15,
+    'case_map': 'small-caps', 'properties': {'CharUnderline': 2}}, scope='text')
+job.set_properties('shape-format', 'slide/title', {'fill_style': 'SOLID', 'fill_color': '#EFF6FF'})
+schema = job.property_schema('slide/title')""",
+        'spreadsheet': """sheet = workbook.sheet('sheet', 'Data')
+sheet.set_cell('value', 'A1', 42)
+job.set_properties('cell-format', 'sheet', {'wrap': True,
+    'cell_protection': {'IsLocked': False, 'IsFormulaHidden': True},
+    'properties': {'CharUnderline': 2}}, scope='range:A1:B5')
+job.set_properties('row-format', 'sheet', {'properties': {'Height': 900}}, scope='row:0')
+schema = job.property_schema('sheet', scope='cell:A1')""",
+    }[document_type]
     missing_example_modules = [
         item['id'] for item in capabilities
         if not module_examples.get(item['id'])
@@ -7602,7 +8300,7 @@ def office_facade_cookbook(document_type, query=''):
     selected = [item for item in capabilities if normalized_query and normalized_query in {
         str(item.get('id', '')).lower(), str(item.get('id', '')).lower().split('@', 1)[0],
     }]
-    module_query = bool(re.fullmatch(r'(?:presentation|spreadsheet|calc|writer)\.[a-z0-9_.-]+(?:@\d+)?', normalized_query))
+    module_query = bool(re.fullmatch(r'(?:office|presentation|spreadsheet|calc|writer)\.[a-z0-9_.-]+(?:@\d+)?', normalized_query))
     query_terms = [term for term in re.split(r'[^a-z0-9_.-]+', re.sub(r'@\d+\b', '', normalized_query)) if term and not term.isdigit()]
     query_match_mode = 'exact-module' if selected else 'module-not-found' if module_query else 'keyword' if query_terms else 'index'
     if not selected and not module_query and query_terms:
@@ -7629,6 +8327,10 @@ def office_facade_cookbook(document_type, query=''):
         receiver_methods.update(re.findall(r'\b(job|document|workbook|sheet|deck|slide|shape|table)\.([A-Za-z_]\w*)\s*\(', text))
     api_reference = [item for item in facade_api_reference(document_type) if (item['receiver'], item['method']) in receiver_methods]
     value_schemas = facade_value_schemas(document_type)
+    if any(item['id'] == 'office.properties@1' for item in selected):
+        value_schemas['propertyMappings'] = office_mapping_schema()
+        value_schemas['propertyScopes'] = ['object', 'text', 'page-style[:name]', 'paragraph-style:name',
+            'character-style:name', 'cell-style:name', 'cell:A1', 'range:A1:B5', 'row:0', 'column:0', 'chart']
     if document_type == 'presentation':
         # Keep common geometry/text contracts, but do not repeat unrelated
         # chart roles and shape/timeline options in every module response.
@@ -7646,7 +8348,7 @@ def office_facade_cookbook(document_type, query=''):
     }
     if not selected:
         return {
-            'status': 'Choose one query from moduleIndex. Raw UNO reflection is intentionally not model-facing.',
+            'status': 'Choose a module from moduleIndex. office.properties provides typed native property discovery; raw UNO objects stay worker-owned.',
             'delivery': 'module-index',
             'query': normalized_query or None,
             'queryMatched': False,
@@ -7655,7 +8357,7 @@ def office_facade_cookbook(document_type, query=''):
             'moduleIndex': module_index,
         }
     return {
-        'status': 'Use only this installed high-level facade. Raw UNO reflection is intentionally not model-facing.',
+        'status': 'Use installed facade methods and typed property mappings; raw UNO objects stay worker-owned.',
         'delivery': 'module-executable-cookbook',
         'query': normalized_query,
         'queryMatched': True,
@@ -8103,7 +8805,26 @@ def inspect_target_api(subject, query, offset, limit, complete=False):
 def inspect_uno_api(soffice, profile, document_type, target, query='', offset=0, limit=120):
     normalized_query = str(query or '').strip().lower()
     if target == 'facade':
-        cookbook = office_facade_cookbook(document_type, normalized_query)
+        mapping_query = normalized_query == 'office.properties' or normalized_query == 'office.properties@1' or normalized_query.startswith('office.properties.')
+        cookbook = office_facade_cookbook(document_type, 'office.properties' if mapping_query else normalized_query)
+        if mapping_query:
+            parts = str(query).split('.', 3)
+            scopes = list(targets_for_document_type(document_type))
+            cookbook['propertyTargets'] = scopes
+            cookbook['propertyDiscovery'] = 'Query office.properties.<target>[.<property-name-filter>] for installed typed properties; target is one of propertyTargets. Use job.property_schema for a specific created element. Native property values go under properties={...}.'
+            if len(parts) >= 3:
+                process = desktop = document = None
+                try:
+                    process, context, desktop = connect_office(soffice, profile)
+                    global OFFICE_MAPPING_CONTEXT
+                    OFFICE_MAPPING_CONTEXT = context
+                    OFFICE_TYPE_SCHEMAS.clear()
+                    document = desktop.loadComponentFromURL(factory_url(document_type), '_blank', 0, (property_value('Hidden', True),))
+                    subject = inspect_target(document, document_type, parts[2])
+                    cookbook['installedProperties'] = office_target_schema(subject, parts[3] if len(parts) > 3 else '')
+                finally:
+                    close_component(document)
+                    shutdown_office(process, desktop)
         return {
             'renderer': 'libreoffice-uno-facade',
             'documentType': document_type,

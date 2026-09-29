@@ -28,7 +28,7 @@ export const configSchema = {
       }),
     }),
     tools: object('只配置需要调整的字段，其余使用默认值。业务 Provider 仍可通过显式 .mjs 扩展。', {
-      browser: object('一个 browser 工具，action 为 open/code/snapshot/close。配置共享于此 MCP 的浏览器会话。', {
+      browser: object('一个 browser 工具，包含会话、导航、标签页、DOM/AX 快照、代码、视觉手势、截图和选项浮层关闭操作。配置共享于此 MCP 的浏览器会话。', {
         enabled,
         headless: boolean(true, 'true 隐藏浏览器窗口；false 显示窗口。覆盖 HEADLESS_BROWSER/BROWSER_HEADLESS。'),
         isolated: boolean(true, 'true 使用隔离会话与随包 Chromium，忽略外部 CDP 和用户配置目录。使用 cdpEndpoint/userDataDir 时必须设为 false。'),
@@ -65,8 +65,9 @@ export const configSchema = {
         allowPackageInstall: boolean(true, '是否允许代码任务安装固定版本的 npm/Python 包。'),
         maxPackages: integer(16, 0, 32, '单次任务最多安装的依赖数量。'),
       }),
-      file: object('文件读写、Office 生成和转换。visual QA 需要具备图像能力的宿主单独接入。', {
+      file: object('文件读写、Office 生成、转换及页面视觉核对。visualRead 将页面像素作为 MCP 图片返回。', {
         enabled,
+        visualInputAvailable: boolean(true, '公开 visualIndex/visualRead/visualReport；模型需支持图像输入才能进行视觉核对，不支持时设为 false。'),
         officeGenerationMode: string('uno', 'uno 使用 LibreOffice；javascript 使用 ExcelJS/HTML 文档管线；auto 由现有文件工具选择。', ['uno', 'javascript', 'auto']),
       }),
       chart: object('图表创建、读取和更新；产物保存在 server.stateDirectory/artifacts/charts。', {

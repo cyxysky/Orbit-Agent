@@ -2,7 +2,7 @@
 const path = require('node:path');
 const { loadEnvConfig } = require('@next/env');
 
-// Manual startup for a standalone runner; npm run dev manages enabled local runners.
+// Optional standalone Runner entry. The application backend normally manages local runners.
 // Reuse the application's local connection settings without printing secrets.
 loadEnvConfig(path.resolve(__dirname, '..'), true);
 const runnerUrl = new URL(process.env.AGENT_CODE_SANDBOX_RUNNER_URL || 'http://127.0.0.1:18100');

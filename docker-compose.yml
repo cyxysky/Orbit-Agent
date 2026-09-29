@@ -10,6 +10,9 @@ services:
         GLINER_CHINESE_NER_MODEL: uer/roberta-base-finetuned-cluener2020-chinese
         GLINER_PII_MODEL: LiquidAI/LFM2.5-Encoder-350M-PII-Detector
     image: orbit:latest
+    depends_on:
+      webpilot-code-sandbox:
+        condition: service_healthy
     ports:
       - "3000:3000"
     env_file:
@@ -42,6 +45,12 @@ services:
       context: .
       dockerfile: Dockerfile.code-sandbox
     image: orbit-code-sandbox:latest
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:18100/health',{headers:{authorization:'Bearer '+process.env.CODE_SANDBOX_RUNNER_TOKEN},signal:AbortSignal.timeout(2000)}).then(async r=>{if(!r.ok||(await r.json()).status!=='healthy')process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
     environment:
       CODE_SANDBOX_RUNNER_TOKEN: "${CODE_SANDBOX_RUNNER_TOKEN:?CODE_SANDBOX_RUNNER_TOKEN must be set}"
       CODE_SANDBOX_RUNNER_CONCURRENCY: "${CODE_SANDBOX_RUNNER_CONCURRENCY:-2}"
@@ -56,6 +65,7 @@ services:
     cap_add:
       - SETUID
       - SETGID
+      - KILL
     security_opt:
       - no-new-privileges:true
     restart: unless-stopped

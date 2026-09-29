@@ -54,7 +54,7 @@ export async function createLocalProviders({ projectRoot, stateDirectory, groups
     },
     async file() {
       const { createNodeFileCapability } = await import('../dist/file/node/capability.js');
-      return createNodeFileCapability({ workspace: { artifactsRoot }, visualInputAvailable: false });
+      return createNodeFileCapability({ workspace: { artifactsRoot }, visualInputAvailable: config.tools?.file?.visualInputAvailable !== false });
     },
     async chart() {
       const { createNodeChartCapability } = await import('../dist/chart/node.js');

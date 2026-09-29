@@ -15,7 +15,8 @@ function relativeFile(value) {
 
 function decodeFile(file) {
   if (typeof file.base64 !== 'string' || file.base64.length > Math.ceil(MAX_FILE_BYTES / 3) * 4
-    || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(file.base64)) {
+    || file.base64.length % 4 !== 0
+    || !/^[A-Za-z0-9+/]*={0,2}$/.test(file.base64)) {
     throw new Error('Invalid or oversized file payload (maximum 10 MB per file).');
   }
   const bytes = Buffer.from(file.base64, 'base64');

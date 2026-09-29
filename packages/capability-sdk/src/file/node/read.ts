@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import sharp from 'sharp';
 import { fileFormatForName, normalizedFileExtension } from '../formats.ts';
@@ -8,6 +7,7 @@ import type {
   OfficeVisualQaPageChecks,
 } from '../office/types.ts';
 import { renderFilePreview } from './office/preview.ts';
+import { sha256NodeFile } from './artifacts.ts';
 import { createFileVisualIndex, fileVisualScreenshotId as screenshotId } from './visual-index.ts';
 import { extractFileTextInWorker, type FileTextSelection, type FileTextExtractionResult } from './text-extraction.ts';
 
@@ -118,8 +118,8 @@ async function extractAttachmentText(attachment: FileReadableAttachment, absolut
   const kind = attachmentKind(attachment);
   if (kind === 'image') {
     if (!absolutePath) throw new Error('Could not locate the saved image artifact.');
-    const buffer = reusableBuffer || await readFile(absolutePath);
-    const metadata = await sharp(buffer, { failOn: 'none' }).metadata();
+    const metadata = await sharp(reusableBuffer || absolutePath, { failOn: 'none' }).metadata();
+    const savedBytes = reusableBuffer?.byteLength ?? attachment.size ?? (await stat(absolutePath)).size;
     const rawWidth = metadata.width || 0;
     const rawHeight = metadata.height || 0;
     const swapsAxes = [5, 6, 7, 8].includes(metadata.orientation || 0);
@@ -128,7 +128,7 @@ async function extractAttachmentText(attachment: FileReadableAttachment, absolut
     return { parser: 'image-metadata', truncated: false, warnings: [], text: [
       '[Image artifact metadata]',
       `Name: ${attachment.name}`,
-      `Saved bytes: ${buffer.byteLength}`,
+      `Saved bytes: ${savedBytes}`,
       `Format: ${metadata.format || extensionOf(attachment).replace(/^\./, '') || 'unknown'}`,
       `Dimensions: ${width || 'unknown'} x ${height || 'unknown'} px`,
       `Aspect ratio: ${width && height ? (width / height).toFixed(6) : 'unknown'}`,
@@ -348,7 +348,7 @@ export async function readFileVisuals(input: {
       return {
         screenshotId: screenshotId(pageNumber),
         pageNumber,
-        screenshotDigest: createHash('sha256').update(await readFile(imagePath)).digest('hex'),
+        screenshotDigest: await sha256NodeFile(imagePath),
       };
     }));
     return {

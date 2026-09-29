@@ -15,6 +15,24 @@ async function fileStamp(filePath: string) {
   return [filePath, value?.size, value?.mtimeMs, value?.ctimeMs];
 }
 
+const fingerprintFlights = new Map<string, Promise<string>>();
+
+async function fontInventory(root: string) {
+  const entries = await readdir(root, { recursive: true }).catch(() => [] as string[]);
+  const files = entries.filter((entry) => /\.(ttf|ttc|otf|otc)$/i.test(entry)).sort();
+  const inventory: Awaited<ReturnType<typeof fileStamp>>[] = new Array(files.length);
+  let next = 0;
+  // Avoid issuing hundreds of stat operations and allocating all their promises
+  // at once. Keep ordering stable so identical environments retain their digest.
+  await Promise.all(Array.from({ length: Math.min(8, files.length) }, async () => {
+    while (next < files.length) {
+      const index = next++;
+      inventory[index] = await fileStamp(path.join(root, files[index]));
+    }
+  }));
+  return inventory;
+}
+
 /** Invalidate conversions when the renderer or installed fonts change. */
 export async function officeRenderEnvironmentFingerprint() {
   const executable = await resolveLibreOfficeExecutable();
@@ -25,18 +43,21 @@ export async function officeRenderEnvironmentFingerprint() {
       ? ['/System/Library/Fonts', '/Library/Fonts', path.join(os.homedir(), 'Library', 'Fonts')]
       : ['/usr/share/fonts', '/usr/local/share/fonts', path.join(os.homedir(), '.fonts'), path.join(os.homedir(), '.local', 'share', 'fonts')];
   if (executable) fontRoots.push(path.resolve(path.dirname(executable), '..', 'share', 'fonts'));
-  const inventories = await Promise.all(fontRoots.map(async (root) => {
-    const entries = await readdir(root, { recursive: true }).catch(() => [] as string[]);
-    const files = entries.filter((entry) => /\.(ttf|ttc|otf|otc)$/i.test(entry)).sort();
-    return Promise.all(files.map((entry) => fileStamp(path.join(root, entry))));
-  }));
-  const runtime = executable ? await Promise.all([
-    fileStamp(executable), fileStamp(path.join(path.dirname(executable), 'version.ini')),
-    fileStamp(path.join(path.dirname(executable), 'versionrc')),
-  ]) : [];
-  return createHash('sha256').update(JSON.stringify({ runtime, fontRoots, inventories,
-    fontconfig: [process.env.FONTCONFIG_FILE, process.env.FONTCONFIG_PATH],
-  })).digest('hex');
+  const fontconfig = [process.env.FONTCONFIG_FILE, process.env.FONTCONFIG_PATH];
+  const key = JSON.stringify({ executable, fontRoots, fontconfig });
+  const existing = fingerprintFlights.get(key);
+  if (existing) return existing;
+  const pending = (async () => {
+    const inventories = await Promise.all(fontRoots.map(fontInventory));
+    const runtime = executable ? await Promise.all([
+      fileStamp(executable), fileStamp(path.join(path.dirname(executable), 'version.ini')),
+      fileStamp(path.join(path.dirname(executable), 'versionrc')),
+    ]) : [];
+    return createHash('sha256').update(JSON.stringify({ runtime, fontRoots, inventories, fontconfig })).digest('hex');
+  })();
+  fingerprintFlights.set(key, pending);
+  try { return await pending; }
+  finally { if (fingerprintFlights.get(key) === pending) fingerprintFlights.delete(key); }
 }
 
 export async function officeGenerationRuntimeFingerprint(generator: OfficeDocumentDraft['generator'] = 'uno') {

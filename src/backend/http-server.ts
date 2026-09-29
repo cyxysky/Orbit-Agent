@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { timingSafeEqual } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { routes } from './route-manifest';
 import { createRouter, sendWebResponse, webRequest } from './http-adapter';
 import { createExecutionSupervisor, executionRequest } from './execution-supervisor';
@@ -11,10 +11,38 @@ function authorized(value: unknown) {
   return expected.length > 0 && supplied.length === expected.length && timingSafeEqual(expected, supplied);
 }
 
-export async function startBackend() {
+type CodeSandboxLifecycle = {
+  managedRunnerUrl(environment: NodeJS.ProcessEnv): URL | undefined;
+  sync(environment: NodeJS.ProcessEnv): Promise<void>;
+  close(): Promise<void>;
+};
+
+export async function startBackend({ codeSandbox }: { codeSandbox?: CodeSandboxLifecycle } = {}) {
   // Complete migrations before the execution child opens the same database.
   const { store } = await import('@/server/db/store');
-  await store.applyRuntimeEnv();
+  let refreshing: Promise<void> = Promise.resolve();
+  const refreshRuntime = () => {
+    const operation = refreshing.then(async () => {
+      await store.applyRuntimeEnv();
+      if (!codeSandbox) return;
+      try {
+        if (codeSandbox.managedRunnerUrl(process.env) && !process.env.AGENT_CODE_SANDBOX_RUNNER_TOKEN?.trim()) {
+          const items = await store.listRuntimeEnv();
+          await store.saveRuntimeEnv([...items.filter(item => item.key !== 'AGENT_CODE_SANDBOX_RUNNER_TOKEN'), {
+            key: 'AGENT_CODE_SANDBOX_RUNNER_TOKEN', value: randomBytes(32).toString('base64url'), enabled: true, secret: true,
+          }]);
+          await store.applyRuntimeEnv();
+        }
+        await codeSandbox.sync(process.env);
+      } catch (error) {
+        // A misconfigured sandbox must not prevent opening Settings to repair it.
+        console.error('[code-sandbox] Runner startup failed', error);
+      }
+    });
+    refreshing = operation.catch(() => undefined);
+    return operation;
+  };
+  await refreshRuntime();
   const execution = process.env.WEBPILOT_SERVER_ROLE === 'execution';
   const supervisor = execution ? undefined : createExecutionSupervisor();
   const route = createRouter(routes);
@@ -32,12 +60,13 @@ export async function startBackend() {
       if (pathname === '/api/health') {
         await sendWebResponse(Response.json({ ok: !closing, role: execution ? 'execution' : 'api', pid: process.pid, execution: supervisor?.status() }), outgoing); return;
       }
-      if (supervisor && executionRequest(pathname, incoming.method)) { await supervisor.proxy(incoming, outgoing, pathname); return; }
-      const request = webRequest(incoming, outgoing);
       // Settings are persisted in the shared database; each process refreshes
       // its own environment before serving the next request.
-      await store.applyRuntimeEnv();
+      await refreshRuntime();
+      if (supervisor && executionRequest(pathname, incoming.method)) { await supervisor.proxy(incoming, outgoing, pathname); return; }
+      const request = webRequest(incoming, outgoing);
       const response = await route(request, pathname);
+      if (pathname === '/api/settings/env' && incoming.method === 'POST' && response.ok) await refreshRuntime();
       await sendWebResponse(response, outgoing, request.method === 'HEAD');
     })().catch(error => {
       if (outgoing.destroyed) return;
@@ -67,9 +96,14 @@ export async function startBackend() {
   return { port, async close() {
     closing = true;
     server.close();
-    await supervisor?.close();
-    await starting;
-    await stopServices?.();
-    server.closeAllConnections();
+    try {
+      await supervisor?.close();
+      await starting;
+      await stopServices?.();
+    } finally {
+      await refreshing;
+      await codeSandbox?.close();
+      server.closeAllConnections();
+    }
   } };
 }

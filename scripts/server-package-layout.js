@@ -99,6 +99,16 @@ function copyServerRuntime(projectRoot, target) {
     fs.mkdirSync(path.dirname(destination), { recursive: true });
     fs.cpSync(path.join(sourceRoot, relativePath), destination);
   }
+  // Runner launchers are flattened into the package root; ship their file
+  // transport and npm CLI alongside them for desktop/server installations.
+  const executionTarget = path.join(target, 'capability-runtime', 'execution');
+  fs.cpSync(path.join(projectRoot, 'packages', 'capability-sdk', 'runtime', 'execution'), executionTarget, { recursive: true });
+  const npmCli = [process.env.npm_execpath,
+    path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+    path.resolve(path.dirname(process.execPath), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js')]
+    .find(file => file && path.basename(file) === 'npm-cli.js' && fs.existsSync(file));
+  if (!npmCli) throw new Error('npm CLI is required to package the code Runner. Invoke packaging through npm.');
+  fs.cpSync(path.resolve(npmCli, '..', '..'), path.join(executionTarget, 'npm'), { recursive: true });
   return runtimeFiles;
 }
 

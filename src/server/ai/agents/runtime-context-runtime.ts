@@ -24,7 +24,7 @@ export async function prepareRuntimeContext(input: RuntimeContextInput & {
     query: JSON.stringify([input.pinnedUser?.content || input.messages[input.currentUserIndex]?.content,
       input.messages.filter(message => message.role === 'assistant').slice(-3).map(message => message.content)]) });
   input = { ...input, knowledge: [...input.knowledge, ...files.knowledge] };
-  const sourceFileReceipts = files.messages.filter(hasSourceFileReceipt);
+  const sourceFileReceipts = [...files.archiveRecords, ...files.messages.filter(hasSourceFileReceipt)];
   let active = [...files.messages];
   let state = parseContextSummary(input.continuationSummary) || { version: 3 as const, epoch: 0 };
   let observations = input.observations;
@@ -65,9 +65,17 @@ export async function prepareRuntimeContext(input: RuntimeContextInput & {
     const protectedSkillBlocks = new Set(blocks
       .filter(block => skillBodyKeysForPreservation(block.messages).size > 0)
       .map(block => block.messages));
-    type SourceBatch = { start: number; end: number; messages: ModelMessage[]; sourceTokens: number; key: string };
+    type SourceBatch = { start: number; end: number; messages: ModelMessage[]; removeIndexes: number[]; sourceTokens: number; key: string };
     const batches: SourceBatch[] = [];
-    let pending: { start: number; end: number; messages: ModelMessage[] } | undefined;
+    let pending: { start: number; end: number; messages: ModelMessage[]; removeIndexes: number[] } | undefined;
+    const replaceBatch = (window: ModelMessage[], batch: SourceBatch, handoff: ModelMessage) => {
+      const removed = new Set(batch.removeIndexes);
+      // Exact user instructions stay in order. Place the handoff AFTER its last
+      // source, so an observation never moves ahead of an intervening correction.
+      return window.flatMap((message, index) => [
+        ...(!removed.has(index) ? [message] : []), ...(index === batch.end - 1 ? [handoff] : []),
+      ]);
+    };
     const emptyPromptTokens = contextSummaryInputTokens(pinnedUser, []);
     const flush = () => {
       if (!pending) return;
@@ -85,18 +93,19 @@ export async function prepareRuntimeContext(input: RuntimeContextInput & {
       const calls = messages.flatMap(message => message.role === 'assistant' && Array.isArray(message.content) ? message.content.filter(part => part.type === 'tool-call').map(part => part.toolCallId) : []);
       const results = new Set(messages.flatMap(message => Array.isArray(message.content) ? message.content.filter(part => part.type === 'tool-result').map(part => part.toolCallId) : []));
       const incomplete = messages[0]?.role === 'tool' || calls.some(id => !results.has(id));
-      // A handoff cannot cross an exact user instruction or Skill body. Doing so
-      // moves later history ahead of that instruction and changes its meaning.
-      const protectedBlock = messages.some(message => isOriginalBrowserChatUserMessage(message)
-        || (pinnedRef && runtimeContextMessageRef(message) === pinnedRef))
-        || protectedSkillBlocks.has(messages)
+      const userAnchor = messages.some(message => isOriginalBrowserChatUserMessage(message)
+        || (pinnedRef && runtimeContextMessageRef(message) === pinnedRef));
+      const protectedBlock = protectedSkillBlocks.has(messages)
         || messages.some(message => createdHandoffs.has(runtimeContextMessageRef(message)));
       if (incomplete || protectedBlock) {
         flush();
         if (incomplete) incompleteBlocks++;
         continue;
       }
-      const proposed = [...(pending?.messages || []), ...messages];
+      // User text is an exact chronological anchor, not a batch boundary. The
+      // old split-at-every-user strategy produced dozens of competing handoffs.
+      if (userAnchor) continue;
+      const proposed = pending ? active.slice(pending.start, block.end) : messages;
       if (contextSummaryInputTokens(pinnedUser, proposed) > maximumInputTokens) {
         flush();
         if (contextSummaryInputTokens(pinnedUser, messages) > maximumInputTokens) {
@@ -104,8 +113,9 @@ export async function prepareRuntimeContext(input: RuntimeContextInput & {
           continue;
         }
       }
-      if (!pending) pending = { start: block.start, end: block.end, messages: [...messages] };
-      else { pending.end = block.end; pending.messages.push(...messages); }
+      const indexes = Array.from({ length: block.end - block.start }, (_, index) => block.start + index);
+      if (!pending) pending = { start: block.start, end: block.end, messages: [...messages], removeIndexes: indexes };
+      else { pending.end = block.end; pending.messages = active.slice(pending.start, block.end); pending.removeIndexes.push(...indexes); }
     }
     flush();
     // A short isolated exchange can cost more as a handoff once its source
@@ -114,7 +124,7 @@ export async function prepareRuntimeContext(input: RuntimeContextInput & {
     const eligible = batches.filter(batch => batch.sourceTokens >= Math.max(600, batch.messages.length * 75))
       .map(batch => {
         const emptyHandoff = historicalContextHandoff(batch.messages, '').message;
-        const replacement = [...active.slice(0, batch.start), emptyHandoff, ...active.slice(batch.end)];
+        const replacement = replaceBatch(active, batch, emptyHandoff);
         const fixedCost = assembleRuntimeContext({ ...input, messages: replacement, pinnedUser, observations }).manifest.estimatedTokensAfter;
         return { ...batch, maximumSummaryTokens: packet.manifest.estimatedTokensAfter - fixedCost - 128 };
       })
@@ -141,19 +151,19 @@ export async function prepareRuntimeContext(input: RuntimeContextInput & {
       break;
     }
     attemptedCompaction = true;
-    const waveMessageCount = candidates.reduce((count, candidate) => count + candidate.messages.length, 0);
+    const waveMessageCount = candidates.reduce((count, candidate) => count + candidate.removeIndexes.length, 0);
     await input.onProgress?.({ stage: 'start', completedMessages: compressedMessages,
       totalMessages: compressedMessages + waveMessageCount, beforeTokens, afterTokens: packet.manifest.estimatedTokensAfter,
       parallelBatchCount: candidates.length }, packet.messages, packet.system);
     const sourceWindow = active;
     const sourceWindowTokens = packet.manifest.estimatedTokensAfter;
-    const outcomes = await Promise.all(candidates.map(async (batch) => {
+    const pendingSummaries = new Map(candidates.map(batch => [batch.key, (async () => {
       try {
         const candidate = await summarizeContextBatch({ currentRequest: pinnedUser, messages: batch.messages,
           maximumInputTokens, maximumSummaryTokens: batch.maximumSummaryTokens,
           generate: input.generateSummary, onRetry: input.onSummaryRetry, abortSignal: input.abortSignal,
           validate: (message) => {
-            const replacement = [...sourceWindow.slice(0, batch.start), message, ...sourceWindow.slice(batch.end)];
+            const replacement = replaceBatch(sourceWindow, batch, message);
             if (assembleRuntimeContext({ ...input, messages: replacement, pinnedUser, observations }).manifest.estimatedTokensAfter >= sourceWindowTokens) {
               throw new ContextSummaryError('Handoff did not reduce the context window. Summarize more concisely without copying source payloads.');
             }
@@ -162,13 +172,15 @@ export async function prepareRuntimeContext(input: RuntimeContextInput & {
       } catch (error) {
         return { batch, error } as const;
       }
-    }));
-    input.abortSignal?.throwIfAborted();
-    let removedBefore = 0;
-    // Model calls above are independent. Checkpoints below stay serial and in
-    // source order so a crash always leaves a valid chronological transcript.
-    for (const outcome of outcomes.sort((left, right) => left.batch.start - right.batch.start)) {
-      if (packet.manifest.estimatedTokensAfter <= input.compressionTargetTokens) break;
+    })()]));
+    const committed: Array<{ batch: SourceBatch; message: ModelMessage }> = [];
+    // Commit each completed result immediately, without waiting for a slow
+    // sibling. Rebuild from immutable source indexes so out-of-order completion
+    // cannot replace the wrong messages. Drain every already-started request.
+    while (pendingSummaries.size) {
+      const outcome = await Promise.race(pendingSummaries.values());
+      pendingSummaries.delete(outcome.batch.key);
+      input.abortSignal?.throwIfAborted();
       const { batch } = outcome;
       if ('error' in outcome) {
         const error = outcome.error;
@@ -184,9 +196,12 @@ export async function prepareRuntimeContext(input: RuntimeContextInput & {
         continue;
       }
       const { candidate } = outcome;
-      const start = batch.start - removedBefore;
-      const end = batch.end - removedBefore;
-      const replacement = [...active.slice(0, start), candidate.message, ...active.slice(end)];
+      const nextCommitted = [...committed, { batch, message: candidate.message }];
+      const removed = new Set(nextCommitted.flatMap(item => item.batch.removeIndexes));
+      const insertions = new Map(nextCommitted.map(item => [item.batch.end - 1, item.message]));
+      const replacement = sourceWindow.flatMap((message, index) => [
+        ...(!removed.has(index) ? [message] : []), ...(insertions.has(index) ? [insertions.get(index)!] : []),
+      ]);
       const nextPacket = assembleRuntimeContext({ ...input, messages: replacement, pinnedUser, observations });
       if (nextPacket.manifest.estimatedTokensAfter >= packet.manifest.estimatedTokensAfter) {
         const failure = new ContextSummaryError('Handoff did not reduce the current context window. Original batch preserved.', {
@@ -203,11 +218,11 @@ export async function prepareRuntimeContext(input: RuntimeContextInput & {
       // Commit the complete replacement and audit evidence before publishing it in memory.
       await input.onCheckpoint?.({ system: nextPacket.system, messages: nextPacket.messages, activeMessages: replacement,
         continuationSummary: JSON.stringify(nextState), removedIndexes: [],
-        compressedMessages: compressedMessages + batch.messages.length, segmentRecords: [...sourceFileReceipts, candidate.message] });
-      active = replacement; state = nextState; compressedMessages += batch.messages.length;
+        compressedMessages: compressedMessages + batch.removeIndexes.length, segmentRecords: [...sourceFileReceipts, candidate.message] });
+      active = replacement; state = nextState; compressedMessages += batch.removeIndexes.length;
+      committed.push({ batch, message: candidate.message });
       segmentRecords.push(candidate.message);
       createdHandoffs.add(runtimeContextMessageRef(candidate.message));
-      removedBefore += batch.messages.length - 1;
       packet = build();
       await input.onProgress?.({ stage: 'batch', completedMessages: compressedMessages,
         totalMessages: compressedMessages, beforeTokens, afterTokens: packet.manifest.estimatedTokensAfter }, packet.messages, packet.system);

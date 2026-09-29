@@ -1,4 +1,5 @@
 export * from './node/ax-snapshot.ts';
+export * from './node/interaction.ts';
 export * from './node/browser-code-runner.ts';
 export * from './node/browser-state-reader.ts';
 export * from './node/browser-downloads.ts';

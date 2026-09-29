@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { queryDatabase, queryDatabaseOne, executeDatabase } from '@/server/db/database';
 import { commitPersonalMemoryReview } from '@/server/storage/database-record-store';
-import type { PersonalMemoryItem } from './personal-memory';
+import { personalMemoryExtractionEnabled, type PersonalMemoryItem, type PersonalMemoryExtractionResult } from './personal-memory';
+import { withModelSettings, type ModelSettingsOverride } from './model';
 
 type Candidate = { userId: string; sourceKey: string; expectedItems: PersonalMemoryItem[]; items: PersonalMemoryItem[]; report: unknown };
 export async function proposeReviewedMemory(sessionId: string, candidate: Candidate) {
@@ -25,25 +26,72 @@ export async function reviewMemoryProposal(sessionId: string, userId: string, id
   } });
   if (result === 'conflict') throw new Error('Memory changed since this proposal. Request a new proposal.');
 }
-export type MemoryJobPayload = Omit<Parameters<typeof import('./personal-memory-learning').extractPersonalMemoryFromTurn>[0], 'abortSignal'>;
-export async function enqueueMemoryJob(payload: MemoryJobPayload) {
+export type MemoryJobPayload = Omit<Parameters<typeof import('./personal-memory-learning').extractPersonalMemoryFromTurn>[0], 'abortSignal'> & {
+  modelSettings?: ModelSettingsOverride;
+};
+export async function enqueueMemoryJob(payload: MemoryJobPayload, retryFailed = false) {
   const userId = String(payload.userId), id = createHash('sha256').update(`${userId}:${payload.sourceSessionId}:${payload.sourceMessageIds.join(':')}`).digest('hex');
   await executeDatabase('INSERT INTO agent_memory_job (id, user_id, session_id, status, attempts, available_at, lease_until, payload_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING', [id, userId, payload.sourceSessionId, 'queued', 0, Date.now(), 0, JSON.stringify(payload)]);
+  if (retryFailed) await executeDatabase("UPDATE agent_memory_job SET status = 'queued', attempts = 0, available_at = ?, error = NULL, result_json = NULL, payload_json = ? WHERE id = ? AND status = 'failed'", [Date.now(), JSON.stringify(payload), id]);
   return id;
 }
+export async function listMemoryJobs(sessionId: string, userId: string) {
+  const rows = await queryDatabase<{ id: string; status: string; attempts: number; error: string | null; result_json: string | null }>(
+    'SELECT id, status, attempts, error, result_json FROM agent_memory_job WHERE session_id = ? AND user_id = ? ORDER BY available_at DESC LIMIT 20', [sessionId, userId]);
+  return rows.map(({ result_json, ...row }) => ({ ...row, result: result_json ? JSON.parse(result_json) as PersonalMemoryExtractionResult : undefined }));
+}
 /** Host invokes workers explicitly. Leases survive process death; retries never run in model assembly. */
-export async function runMemoryJobs(sessionId: string, userId: string) {
+export async function runMemoryJobs(sessionId: string, userId: string, abortSignal?: AbortSignal) {
   const now = Date.now(), leaseId = randomUUID();
   const rows = await queryDatabase<{ id: string; attempts: number; payload_json: string }>("UPDATE agent_memory_job SET status = 'running', attempts = attempts + 1, lease_id = ?, lease_until = ? WHERE id = (SELECT id FROM agent_memory_job WHERE session_id = ? AND user_id = ? AND attempts < 4 AND available_at <= ? AND (status = 'queued' OR (status = 'running' AND lease_until < ?)) ORDER BY available_at LIMIT 1) AND (status = 'queued' OR (status = 'running' AND lease_until < ?)) RETURNING id, attempts, payload_json", [leaseId, now + 360000, sessionId, userId, now, now, now]);
   if (!rows.length) return { processed: false };
   const job = rows[0];
   try {
     const { extractPersonalMemoryFromTurn } = await import('./personal-memory-learning');
-    await extractPersonalMemoryFromTurn({ ...JSON.parse(job.payload_json), abortSignal: AbortSignal.timeout(300000) });
-    await executeDatabase("UPDATE agent_memory_job SET status = 'completed', lease_until = 0 WHERE id = ? AND lease_id = ?", [job.id, leaseId]);
-    return { processed: true, id: job.id };
+    const { modelSettings, ...payload } = JSON.parse(job.payload_json) as MemoryJobPayload;
+    const signal = AbortSignal.any([AbortSignal.timeout(300000), ...(abortSignal ? [abortSignal] : [])]);
+    const result = await withModelSettings(modelSettings || {}, () => extractPersonalMemoryFromTurn({ ...payload, abortSignal: signal }));
+    await executeDatabase("UPDATE agent_memory_job SET status = 'completed', lease_until = 0, error = NULL, result_json = ? WHERE id = ? AND lease_id = ?", [JSON.stringify(result), job.id, leaseId]);
+    return { processed: true, id: job.id, result };
   } catch (error) {
     await executeDatabase("UPDATE agent_memory_job SET status = ?, available_at = ?, lease_until = 0, error = ? WHERE id = ? AND lease_id = ?", [job.attempts >= 4 ? 'failed' : 'queued', Date.now() + 1000 * 2 ** job.attempts, String(error), job.id, leaseId]);
     throw error;
   }
+}
+
+/** One execution-process worker, bounded across users and serialized per user. */
+export function startMemoryExtractionWorker() {
+  const controller = new AbortController();
+  const active = new Map<string, Promise<unknown>>();
+  let polling = false;
+  const poll = async () => {
+    if (polling || controller.signal.aborted || !personalMemoryExtractionEnabled()) return;
+    polling = true;
+    try {
+      const configured = Number(process.env.AI_PERSONAL_MEMORY_EXTRACTION_CONCURRENCY || 2);
+      const concurrency = Number.isFinite(configured) ? Math.min(8, Math.max(1, Math.floor(configured))) : 2;
+      const now = Date.now();
+      await executeDatabase("UPDATE agent_memory_job SET status = 'failed', lease_until = 0, error = 'Memory extraction worker was interrupted after the final attempt.' WHERE status = 'running' AND lease_until < ? AND attempts >= 4", [now]);
+      const jobs = await queryDatabase<{ session_id: string; user_id: string }>(
+        "SELECT session_id, user_id FROM agent_memory_job j WHERE attempts < 4 AND available_at <= ? AND (status = 'queued' OR (status = 'running' AND lease_until < ?)) AND NOT EXISTS (SELECT 1 FROM agent_memory_job running WHERE running.user_id = j.user_id AND running.status = 'running' AND running.lease_until >= ?) ORDER BY available_at LIMIT 100", [now, now, now]);
+      for (const job of jobs) {
+        if (controller.signal.aborted || active.size >= concurrency) break;
+        if (active.has(job.user_id)) continue;
+        const operation = runMemoryJobs(job.session_id, job.user_id, controller.signal)
+          .catch(error => { if (!controller.signal.aborted) console.error('[memory-extraction] Attempt failed; persisted for bounded retry.', error); })
+          .finally(() => { active.delete(job.user_id); });
+        active.set(job.user_id, operation);
+      }
+    } catch (error) {
+      if (!controller.signal.aborted) console.error('[memory-extraction] Queue polling failed.', error);
+    } finally { polling = false; }
+  };
+  const timer = setInterval(() => { void poll(); }, 3000);
+  timer.unref();
+  void poll();
+  return async () => {
+    clearInterval(timer);
+    controller.abort();
+    await Promise.allSettled(active.values());
+  };
 }

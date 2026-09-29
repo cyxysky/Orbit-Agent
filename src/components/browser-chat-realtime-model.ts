@@ -47,6 +47,7 @@ export function mergeBrowserChatRealtimeRecords<T extends { id: string; revision
   incoming: Array<Partial<T> & Pick<T, 'id'>> | undefined,
 ) {
   const original = current || [];
+  if (!incoming?.length) return original;
   let records = original;
   const indexes = new Map(records.map((record, index) => [record.id, index]));
   for (const record of incoming || []) {
@@ -90,6 +91,7 @@ function insertRealtimeRecord<T>(
 }
 
 function mergeRealtimeStepTools(current: unknown[] = [], incoming: unknown[] = []) {
+  if (current === incoming || !incoming.length) return current;
   const merged = [...current];
   const indexes = new Map<string, number>();
   current.forEach((tool, index) => {
@@ -113,6 +115,7 @@ function mergeRealtimeStepTools(current: unknown[] = [], incoming: unknown[] = [
       return;
     }
     const previous = merged[index] as Record<string, unknown>;
+    if (previous === record) return;
     const next = { ...previous, ...record };
     // Realtime events may arrive out of order. Once a tool is terminal, a stale
     // "started" snapshot must never erase its result and make it look active again.
@@ -168,6 +171,7 @@ export function mergeBrowserChatRealtimeCollections<
     const index = steps.findIndex((item) => item.index === step.index);
     const existing = (index >= 0 ? steps[index] : undefined) as (TStep & { status?: string; tools?: unknown[] }) | undefined;
     const incoming = step as TStep & { status?: string; tools?: unknown[] };
+    if (existing === incoming) continue;
     const wouldRegressCompletedStep = existing
       && existing.status && !['queued', 'running'].includes(existing.status)
       && incoming.status === 'running';

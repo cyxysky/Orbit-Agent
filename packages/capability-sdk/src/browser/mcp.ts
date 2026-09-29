@@ -1,3 +1,6 @@
+import { browserRuntimeSkill } from './runtime-skill.ts';
+import { validateBrowserVisualInput } from './interaction-schema.ts';
+import { browserSessionCommandShape, executeBrowserSessionOperation, type BrowserSessionCommand } from './node/interaction.ts';
 import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import {
@@ -23,44 +26,17 @@ import {
 } from './node/browser-session.ts';
 
 const browserSessionId = z.string().uuid();
-const openParser = z.object({
-  url: z.string().url().max(8_000).optional(),
-}).strict();
-const codeParser = z.object({
-  browserSessionId,
-  code: z.string().min(1).max(40_000),
-  maxOutputChars: z.number().int().min(1_000).max(200_000).optional(),
-}).strict();
-const snapshotParser = z.object({
-  browserSessionId,
-  scope: z.enum(['active', 'all']).optional(),
-  frame: z.string().trim().min(1).max(200).optional(),
-  selector: z.string().trim().min(1).max(2000).optional(),
-  query: z.string().trim().min(1).max(300).optional(),
-  cursor: z.string().min(1).max(1000).optional(),
-  maxOutputChars: z.number().int().min(1_000).max(200_000).optional(),
-}).strict();
-const closeParser = z.object({ browserSessionId }).strict();
-const browserParser = z.discriminatedUnion('action', [
-  openParser.extend({ action: z.literal('open') }),
-  codeParser.extend({ action: z.literal('code') }),
-  snapshotParser.extend({ action: z.literal('snapshot') }),
-  closeParser.extend({ action: z.literal('close') }),
-]);
-
-// Keep a plain object schema for MCP/model clients; the discriminated parser
-// remains authoritative for action-specific required and forbidden fields.
-const browserInput = defineCapabilityInput(
-  z.toJSONSchema(z.object({
-    ...snapshotParser.shape,
-    ...codeParser.shape,
-    ...openParser.shape,
-    action: z.enum(['open', 'code', 'snapshot', 'close']),
-    browserSessionId: browserSessionId.optional().describe('Required for code, snapshot and close. Copy the id returned by open.'),
-    code: codeParser.shape.code.optional().describe('Required only for action=code. JavaScript using page, browser and nodeRepl.'),
-  }).strict()),
-  (value) => browserParser.parse(value),
-);
+const browserParser = z.object({
+  ...browserSessionCommandShape,
+  action: z.enum(['open','close',...browserSessionCommandShape.action.options]),
+  browserSessionId: browserSessionId.optional().describe('Required except open. Use the exact id returned by open.'),
+}).strict().superRefine((input, ctx) => {
+  if (input.action !== 'open' && !input.browserSessionId) ctx.addIssue({code:'custom',path:['browserSessionId'],message:'This action requires browserSessionId from open.'});
+  if (input.action === 'code' && !input.code) ctx.addIssue({code:'custom',path:['code'],message:'code requires JavaScript.'});
+  validateBrowserVisualInput(input, ctx);
+});
+const browserInput = defineCapabilityInput(z.toJSONSchema(browserParser), (value) => browserParser.parse(value));
+type BrowserObservation = Awaited<ReturnType<BrowserSession['captureBrowserObservation']>>;
 
 type ManagedBrowserSession = {
   runId: string;
@@ -69,6 +45,7 @@ type ManagedBrowserSession = {
   queue: Promise<void>;
   idleTimer?: ReturnType<typeof setTimeout>;
   closing: boolean;
+  observations: Map<string, BrowserObservation>;
 };
 
 export type BrowserMcpSessionManagerOptions = {
@@ -84,13 +61,18 @@ async function browserResult(
 ): Promise<CapabilityResult> {
   const data = {
     browserSessionId: id,
-    result: result.data ?? result.actual,
+    ...(result.data && typeof result.data === 'object' && !Array.isArray(result.data)
+      ? result.data : {result: result.data ?? result.actual}),
+    ...(result.manualVerification ? { manualVerification: result.manualVerification, waitingForClient: true } : {}),
+    ...(result.browserObservation ? { observation: result.browserObservation } : {}),
   };
-  const imagePath = result.browserObservation?.path;
-  const content = imagePath ? [{ type: 'image' as const, artifactId: imagePath, mediaType: 'image/png',
-    data: (await readFile(imagePath)).toString('base64') }] : undefined;
+  const imagePaths = [...new Set([...(result.referenceImagePaths || []), result.referenceImagePath, result.browserObservation?.path].filter((value): value is string => Boolean(value)))];
+  const content = await Promise.all(imagePaths.map(async imagePath => {
+    try { return { type: 'image' as const, artifactId: imagePath, mediaType: /\.jpe?g$/i.test(imagePath) ? 'image/jpeg' : /\.webp$/i.test(imagePath) ? 'image/webp' : 'image/png', data: (await readFile(imagePath)).toString('base64') }; }
+    catch { return { type: 'text' as const, text: 'Screenshot unavailable. No image pixels were attached for this observation; inspect current state before continuing.' }; }
+  }));
   return result.ok
-    ? { ok: true, summary: browserOperationSummary(result), data, content }
+    ? { ok: true, summary: (result.manualVerification ? 'Human verification requested. The MCP client must ask the user to complete verification in the browser, then observe the current state before resuming; this response does not confirm verification.' : browserOperationSummary(result)), data, content }
     : {
         ok: false,
         content,
@@ -120,7 +102,7 @@ export class BrowserMcpSessionManager {
       : 15 * 60_000;
   }
 
-  async open(inputValue: z.infer<typeof openParser>, abortSignal?: AbortSignal): Promise<CapabilityResult> {
+  async open(inputValue: {url?: string}, abortSignal?: AbortSignal): Promise<CapabilityResult> {
     if (this.#sessions.size + this.#openingSessions >= this.#maxSessions) {
       return {
         ok: false,
@@ -155,19 +137,16 @@ export class BrowserMcpSessionManager {
         stepIndex: 0,
         queue: Promise.resolve(),
         closing: false,
+        observations: new Map(),
       };
       this.#sessions.set(id, managed);
       this.#armIdleTimer(id, managed);
-      return {
-        ok: true,
-        summary: inputValue.url
-          ? `Opened browser session ${id} at ${inputValue.url}.`
-          : `Opened browser session ${id}.`,
-        data: {
-          browserSessionId: id,
-          url: session.currentUrl(),
-        },
-      };
+      const observation = await session.captureBrowserObservation(runId, abortSignal).catch(() => undefined);
+      if (observation?.id) managed.observations.set(observation.id, observation);
+      const postActionState = await session.readBrowserState({scope:'active', maxOutputChars:4000, abortSignal})
+        .catch(() => undefined);
+      return browserResult(id, {ok:true, summary: 'Opened browser session ' + id + '.',
+        data: {url:session.currentUrl(), postActionState}, ...(observation ? {browserObservation:observation} : {})});
     } catch (error) {
       await session.close({ force: true }).catch(() => undefined);
       return {
@@ -182,34 +161,31 @@ export class BrowserMcpSessionManager {
     }
   }
 
-  async code(
-    inputValue: z.infer<typeof codeParser>,
-    abortSignal?: AbortSignal,
-  ): Promise<CapabilityResult> {
-    return this.#enqueue(inputValue.browserSessionId, async (managed) => {
+  async operate(input: z.infer<typeof browserParser>, abortSignal?: AbortSignal): Promise<CapabilityResult> {
+    return this.#enqueue(input.browserSessionId!, async managed => {
       managed.stepIndex += 1;
-      return browserResult(inputValue.browserSessionId, await managed.session.executeBrowserCode({
-        code: inputValue.code,
-        maxOutputChars: inputValue.maxOutputChars,
-        runId: managed.runId,
-        stepIndex: managed.stepIndex,
-        abortSignal,
-      }));
+      if (input.action === 'images') {
+        const requested = input.imageIds || [];
+        const missing = requested.filter(id => !managed.observations.has(id));
+        if (missing.length) return {ok:false,error:{code:'browser-image-not-found',message:'Unknown or expired image IDs: '+missing.join(', ')}};
+        const latest = [...managed.observations.values()].at(-1);
+        const images = [...new Set([...requested, ...(latest?.id ? [latest.id] : [])])].map(id => managed.observations.get(id)!);
+        return browserResult(input.browserSessionId!, {ok:true, actual:'Selected browser image evidence; only the latest observation can authorize interaction.',
+          data:{observations:images}, referenceImagePaths:images.flatMap(image => image.path ? [image.path] : [])});
+      }
+      let result = await executeBrowserSessionOperation(managed.session, input as BrowserSessionCommand, {
+        mode:'hybrid', runId:managed.runId, stepIndex:managed.stepIndex, abortSignal,
+      });
+      if (['navigate','tabs'].includes(input.action) && !(input.action === 'tabs' && input.tabOperation === 'list')) {
+        const observation = await managed.session.captureBrowserObservation(managed.runId, abortSignal).catch(() => undefined);
+        if (observation) result = {...result, browserObservation:observation};
+      }
+      if (result.browserObservation?.id) {
+        managed.observations.set(result.browserObservation.id, result.browserObservation);
+        while(managed.observations.size > 12) managed.observations.delete(managed.observations.keys().next().value!);
+      }
+      return browserResult(input.browserSessionId!, result);
     });
-  }
-
-  snapshot(
-    inputValue: z.infer<typeof snapshotParser>,
-    abortSignal?: AbortSignal,
-  ) {
-    return this.#enqueue(inputValue.browserSessionId, async (managed) => browserResult(
-      inputValue.browserSessionId,
-      await managed.session.readBrowserState({
-        ...inputValue,
-        abortSignal,
-        maxOutputChars: inputValue.maxOutputChars,
-      }),
-    ));
   }
 
   async close(id: string): Promise<CapabilityResult> {
@@ -300,7 +276,7 @@ export function createBrowserMcpCapability(options: BrowserMcpOptions = {}): Cap
     title: 'Explicit browser sessions',
     summary: '<system_skill><id>com.webpilot.browser.mcp/runtime</id><title>Explicit browser sessions</title><required>true</required></system_skill>',
     required: true,
-    content: 'Use the browser tool with action="open" first. Pass its exact browserSessionId to action="code", "snapshot", or "close". code executes JavaScript with page, browser and nodeRepl. snapshot reads page/tabs without running code. close releases the session. Do not invent or reuse closed session ids.',
+    content: 'Inspect returned DOM and actual screenshot images after actions. Use dismissSurface first for selector/menu option surfaces; it clicks (0,0), and closureConfirmed must be checked. Use Close/Cancel buttons first for dialogs. observe returns observationId for act; coordinates use CSS viewport pixels. act supports complete clicks, drags, scrolls, typing and key chords. state reads AX; snapshot reads interactive DOM plus AX. navigate/tabs manage pages through browser controls. images rereads known observations. Only actions listed in this schema are available. Use the browser tool with action="open" first. Pass its exact browserSessionId to every subsequent action. code executes JavaScript with page, browser and nodeRepl. snapshot reads page/tabs without running code. close releases the session. Do not invent or reuse closed session ids.',
   } as const;
   return {
     manifest: {
@@ -311,7 +287,7 @@ export function createBrowserMcpCapability(options: BrowserMcpOptions = {}): Cap
       description: 'Explicit, isolated Playwright browser sessions for MCP clients.',
       permissions: ['browser:launch', 'browser:cdp', 'network:access', 'artifact:write'],
       runtimeRequirements: { node: '>=22.16', playwright: '>=1.60' },
-      skills: [runtimeSkill],
+      skills: [browserRuntimeSkill, runtimeSkill],
     },
     async createRuntime(context) {
       const sessionOptions = typeof options.sessionOptions === 'function'
@@ -332,14 +308,13 @@ export function createBrowserMcpCapability(options: BrowserMcpOptions = {}): Cap
         tools: {
           browser: defineCapabilityTool({
             name: 'browser',
-            description: 'Manage browser sessions. action=open creates a session (optional url); code runs JavaScript; snapshot reads page/tabs; close releases a session. All actions except open require the returned browserSessionId.',
+            description: 'Browser sessions with open/close, code, state (AX), snapshot (interactive DOM), navigate, tabs, observe, act, images, dismissSurface and waitForHumanVerification. All except open require browserSessionId. Inspect returned postActionState and actual image content. dismissSurface clicks (0,0) for option popups; use explicit Close/Cancel first for dialogs and verify closureConfirmed.',
             input: browserInput,
             execute: (value, execution) => {
               switch (value.action) {
                 case 'open': return manager.open(value, execution.abortSignal);
-                case 'code': return manager.code(value, execution.abortSignal);
-                case 'snapshot': return manager.snapshot(value, execution.abortSignal);
-                case 'close': return manager.close(value.browserSessionId);
+                case 'close': return manager.close(value.browserSessionId!);
+                default: return manager.operate(value, execution.abortSignal);
               }
             },
           }),

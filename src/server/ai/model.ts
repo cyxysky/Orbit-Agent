@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
+import { aiFetch } from './ai-fetch';
 import { resolveCodexCliPath } from './codex-cli';
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import type { generateText } from 'ai';
@@ -163,6 +164,7 @@ function openAiCompatibleModel(
     if (/minimax/i.test(`${modelId} ${baseURL}`)) {
       const { createMiniMaxOpenAIV4 } = await import('@/server/ai/providers/minimax-openai-v4-provider');
       return createMiniMaxOpenAIV4({
+        fetch: aiFetch,
         apiKey: optionalEnvironmentValue(apiKeyEnvironmentName) || '',
         baseURL,
         headers: openCodeHeaders(baseURL, sessionId),
@@ -171,6 +173,7 @@ function openAiCompatibleModel(
     }
     const { createOpenAICompatible } = await import('@ai-sdk/openai-compatible');
     return createOpenAICompatible({
+      fetch: aiFetch,
       name: provider,
       baseURL,
       headers: openCodeHeaders(baseURL, sessionId),
@@ -191,6 +194,7 @@ export function getModel(): GenerateTextModel {
     const baseURL = optionalEnvironmentValue('AI_GATEWAY_BASE_URL');
     const { createGateway } = await import('@ai-sdk/gateway');
     return createGateway({
+      fetch: aiFetch,
       apiKey: process.env.AI_GATEWAY_API_KEY || process.env.VERCEL_AI_GATEWAY_API_KEY || '',
       baseURL,
     })(model) as unknown as LoadedLanguageModel;
@@ -198,16 +202,17 @@ export function getModel(): GenerateTextModel {
   if (provider === 'alibaba') return lazyLanguageModel(provider, model, async () => {
     const baseURL = optionalEnvironmentValue('ALIBABA_BASE_URL');
     const { createAlibaba } = await import('@ai-sdk/alibaba');
-    return createAlibaba({ apiKey: process.env.ALIBABA_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
+    return createAlibaba({ fetch: aiFetch, apiKey: process.env.ALIBABA_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
   });
   if (provider === 'anthropic') return lazyLanguageModel(provider, model, async (sessionId) => {
     const baseURL = optionalEnvironmentValue('ANTHROPIC_BASE_URL');
     const { createAnthropic } = await import('@ai-sdk/anthropic');
-    return createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY || '', baseURL, headers: openCodeHeaders(baseURL, sessionId) })(model) as unknown as LoadedLanguageModel;
+    return createAnthropic({ fetch: aiFetch, apiKey: process.env.ANTHROPIC_API_KEY || '', baseURL, headers: openCodeHeaders(baseURL, sessionId) })(model) as unknown as LoadedLanguageModel;
   });
   if (provider === 'bedrock') return lazyLanguageModel(provider, model, async () => {
     const { createAmazonBedrock } = await import('@ai-sdk/amazon-bedrock');
     return createAmazonBedrock({
+      fetch: aiFetch,
       apiKey: process.env.AWS_BEARER_TOKEN_BEDROCK || undefined,
       region: process.env.AWS_REGION || 'us-east-1',
     })(model) as unknown as LoadedLanguageModel;
@@ -215,44 +220,45 @@ export function getModel(): GenerateTextModel {
   if (provider === 'cerebras') return lazyLanguageModel(provider, model, async () => {
     const baseURL = optionalEnvironmentValue('CEREBRAS_BASE_URL');
     const { createCerebras } = await import('@ai-sdk/cerebras');
-    return createCerebras({ apiKey: process.env.CEREBRAS_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
+    return createCerebras({ fetch: aiFetch, apiKey: process.env.CEREBRAS_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
   });
   if (provider === 'cohere') return lazyLanguageModel(provider, model, async () => {
     const baseURL = optionalEnvironmentValue('COHERE_BASE_URL');
     const { createCohere } = await import('@ai-sdk/cohere');
-    return createCohere({ apiKey: process.env.COHERE_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
+    return createCohere({ fetch: aiFetch, apiKey: process.env.COHERE_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
   });
   if (provider === 'codex') return getCodexModel(model);
   if (provider === 'deepseek') return lazyLanguageModel(provider, model, async (sessionId) => {
     const baseURL = optionalEnvironmentValue('DEEPSEEK_BASE_URL');
     const { createDeepSeek } = await import('@ai-sdk/deepseek');
-    return createDeepSeek({ apiKey: process.env.DEEPSEEK_API_KEY || '', baseURL, headers: openCodeHeaders(baseURL, sessionId) })(model) as unknown as LoadedLanguageModel;
+    return createDeepSeek({ fetch: aiFetch, apiKey: process.env.DEEPSEEK_API_KEY || '', baseURL, headers: openCodeHeaders(baseURL, sessionId) })(model) as unknown as LoadedLanguageModel;
   });
   if (provider === 'deepinfra') return lazyLanguageModel(provider, model, async () => {
     const baseURL = optionalEnvironmentValue('DEEPINFRA_BASE_URL');
     const { createDeepInfra } = await import('@ai-sdk/deepinfra');
-    return createDeepInfra({ apiKey: process.env.DEEPINFRA_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
+    return createDeepInfra({ fetch: aiFetch, apiKey: process.env.DEEPINFRA_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
   });
   if (provider === 'fireworks') return lazyLanguageModel(provider, model, async () => {
     const baseURL = optionalEnvironmentValue('FIREWORKS_BASE_URL');
     const { createFireworks } = await import('@ai-sdk/fireworks');
-    return createFireworks({ apiKey: process.env.FIREWORKS_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
+    return createFireworks({ fetch: aiFetch, apiKey: process.env.FIREWORKS_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
   });
   if (provider === 'google') return lazyLanguageModel(provider, model, async () => {
     const { createGoogleGenerativeAI } = await import('@ai-sdk/google');
     return createGoogleGenerativeAI({
+      fetch: aiFetch,
       apiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.GOOGLE_API_KEY || '',
     })(model) as unknown as LoadedLanguageModel;
   });
   if (provider === 'groq') return lazyLanguageModel(provider, model, async () => {
     const baseURL = optionalEnvironmentValue('GROQ_BASE_URL');
     const { createGroq } = await import('@ai-sdk/groq');
-    return createGroq({ apiKey: process.env.GROQ_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
+    return createGroq({ fetch: aiFetch, apiKey: process.env.GROQ_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
   });
   if (provider === 'huggingface') return lazyLanguageModel(provider, model, async () => {
     const baseURL = optionalEnvironmentValue('HUGGINGFACE_BASE_URL');
     const { createHuggingFace } = await import('@ai-sdk/huggingface');
-    return createHuggingFace({ apiKey: process.env.HUGGINGFACE_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
+    return createHuggingFace({ fetch: aiFetch, apiKey: process.env.HUGGINGFACE_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
   });
   if (provider === 'lmstudio') return openAiCompatibleModel(provider, model, 'LMSTUDIO_BASE_URL', 'http://localhost:1234/v1', 'LMSTUDIO_API_KEY', 'LMSTUDIO_EXTRA_REQUEST_PARAMETERS');
   if (provider === 'llama-cpp') return openAiCompatibleModel(provider, model, 'LLAMA_CPP_BASE_URL', 'http://localhost:8080/v1', 'LLAMA_CPP_API_KEY', 'LLAMA_CPP_EXTRA_REQUEST_PARAMETERS');
@@ -275,6 +281,7 @@ export function getModel(): GenerateTextModel {
     const baseURL = miniMaxOpenAIBaseURL();
     const { createMiniMaxOpenAIV4 } = await import('@/server/ai/providers/minimax-openai-v4-provider');
     return createMiniMaxOpenAIV4({
+      fetch: aiFetch,
       apiKey: process.env.MINIMAX_API_KEY || '',
       baseURL: baseURL || 'https://api.minimax.io/v1',
       headers: openCodeHeaders(baseURL, sessionId),
@@ -284,41 +291,41 @@ export function getModel(): GenerateTextModel {
   if (provider === 'openai') return lazyLanguageModel(provider, model, async (sessionId) => {
     const baseURL = optionalEnvironmentValue('OPENAI_BASE_URL');
     const { createOpenAI } = await import('@ai-sdk/openai');
-    return createOpenAI({ apiKey: process.env.OPENAI_API_KEY || '', baseURL, headers: openCodeHeaders(baseURL, sessionId) })(model) as unknown as LoadedLanguageModel;
+    return createOpenAI({ fetch: aiFetch, apiKey: process.env.OPENAI_API_KEY || '', baseURL, headers: openCodeHeaders(baseURL, sessionId) })(model) as unknown as LoadedLanguageModel;
   });
   if (provider === 'azure-openai') return lazyLanguageModel(provider, model, async () => {
     const baseURL = optionalEnvironmentValue('AZURE_OPENAI_BASE_URL') || 'http://mirrors.shterm.com:4000';
     const { createAzure } = await import('@ai-sdk/azure');
-    return createAzure({ baseURL, apiKey: process.env.AZURE_OPENAI_API_KEY || '-' }).chat(model) as unknown as LoadedLanguageModel;
+    return createAzure({ fetch: aiFetch, baseURL, apiKey: process.env.AZURE_OPENAI_API_KEY || '-' }).chat(model) as unknown as LoadedLanguageModel;
   });
   if (provider === 'mistral') return lazyLanguageModel(provider, model, async () => {
     const baseURL = optionalEnvironmentValue('MISTRAL_BASE_URL');
     const { createMistral } = await import('@ai-sdk/mistral');
-    return createMistral({ apiKey: process.env.MISTRAL_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
+    return createMistral({ fetch: aiFetch, apiKey: process.env.MISTRAL_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
   });
   if (provider === 'perplexity') return lazyLanguageModel(provider, model, async () => {
     const baseURL = optionalEnvironmentValue('PERPLEXITY_BASE_URL');
     const { createPerplexity } = await import('@ai-sdk/perplexity');
-    return createPerplexity({ apiKey: process.env.PERPLEXITY_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
+    return createPerplexity({ fetch: aiFetch, apiKey: process.env.PERPLEXITY_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
   });
   if (provider === 'togetherai') return lazyLanguageModel(provider, model, async () => {
     const baseURL = optionalEnvironmentValue('TOGETHERAI_BASE_URL');
     const { createTogetherAI } = await import('@ai-sdk/togetherai');
-    return createTogetherAI({ apiKey: process.env.TOGETHERAI_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
+    return createTogetherAI({ fetch: aiFetch, apiKey: process.env.TOGETHERAI_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
   });
   if (provider === 'vercel') return lazyLanguageModel(provider, model, async () => {
     const baseURL = optionalEnvironmentValue('VERCEL_BASE_URL');
     const { createVercel } = await import('@ai-sdk/vercel');
-    return createVercel({ apiKey: process.env.VERCEL_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
+    return createVercel({ fetch: aiFetch, apiKey: process.env.VERCEL_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
   });
   if (provider === 'xai') return lazyLanguageModel(provider, model, async () => {
     const baseURL = optionalEnvironmentValue('XAI_BASE_URL');
     const { createXai } = await import('@ai-sdk/xai');
-    return createXai({ apiKey: process.env.XAI_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
+    return createXai({ fetch: aiFetch, apiKey: process.env.XAI_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
   });
   return lazyLanguageModel('openrouter', model, async () => {
     const { createOpenRouter } = await import('@openrouter/ai-sdk-provider');
-    return createOpenRouter({ apiKey: process.env.OPENROUTER_API_KEY || '' }).chat(model) as unknown as LoadedLanguageModel;
+    return createOpenRouter({ fetch: aiFetch, apiKey: process.env.OPENROUTER_API_KEY || '' }).chat(model) as unknown as LoadedLanguageModel;
   });
 }
 

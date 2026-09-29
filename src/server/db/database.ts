@@ -1,4 +1,5 @@
 import { HybridRuntime1790000200000 } from './migrations/1790000200000-hybrid-runtime';
+import { MemoryJobResults1790600000000 } from './migrations/1790600000000-memory-job-results';
 import { CommunicationConversations1788832800000 } from './migrations/1788832800000-communication-conversations';
 import 'reflect-metadata';
 
@@ -77,7 +78,7 @@ function dataSourceOptions(): DataSourceOptions {
     synchronize: false,
     migrationsRun: true,
     migrationsTableName: 'typeorm_migration',
-    migrations: [InitialBackendSchema1788307200000, BrowserChatContextRecords1788566400000, RuntimeReadIndexes1788652800000, CommunicationConversations1788832800000, PersonalMemoryReceipts1789084800000, HybridRuntime1790000200000],
+    migrations: [InitialBackendSchema1788307200000, BrowserChatContextRecords1788566400000, RuntimeReadIndexes1788652800000, CommunicationConversations1788832800000, PersonalMemoryReceipts1789084800000, HybridRuntime1790000200000, MemoryJobResults1790600000000],
     logging: booleanEnv('DATABASE_LOGGING'),
   };
   if (driver === 'postgres') {
