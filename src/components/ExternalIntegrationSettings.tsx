@@ -16,6 +16,7 @@ import {
   X,
 } from 'lucide-react';
 import { AppInput } from '@/components/ui/app-input';
+import { SecretInput } from '@/components/ui/secret-input';
 import { AppModal } from '@/components/ui/app-modal';
 import { ConfirmDeleteModal } from '@/components/ConfirmDeleteModal';
 import { CustomSelect } from '@/components/CustomSelect';
@@ -57,6 +58,7 @@ type IntegrationSummary = {
   name: string;
   detailPreview: string;
   configuredFields: string[];
+  secretPreviews: Record<string, string>;
   publicConfiguration: Record<string, string>;
   enabled: boolean;
   updatedAt: string;
@@ -627,7 +629,15 @@ export function ExternalIntegrationSettings({
                       <button className="external-integration-clear-field" onClick={() => clearConfiguration(field.key)} type="button">{t('清除')}</button>
                     ) : null}
                   </span>
-                  {field.control === 'select' ? (
+                  {field.secret || field.control === 'password' ? (
+                    <SecretInput key={`${editor.id || 'new'}:${field.key}:${hasStoredValue}`}
+                      label={t(field.label)} disabled={saving || testing}
+                      value={editor.configuration[field.key] || ''}
+                      onChange={value => updateConfiguration(field.key, value)}
+                      storedPreview={hasStoredValue ? items.find(item => item.id === editor.id)?.secretPreviews[field.key] || '••••••••••••' : undefined}
+                      source={editor.id ? { kind: 'integration', id: editor.id, field: field.key } : undefined}
+                      headers={headers} placeholder={t(field.placeholder || '未设置')} />
+                  ) : field.control === 'select' ? (
                     <CustomSelect
                       className="settings-control"
                       disabled={saving || testing}
@@ -666,7 +676,7 @@ export function ExternalIntegrationSettings({
                       disabled={saving || testing}
                       onChange={(event) => updateConfiguration(field.key, event.target.value)}
                       placeholder={t(hasStoredValue ? '已安全保存，留空则不修改' : field.placeholder || '')}
-                      type={field.control === 'password' ? 'password' : field.control === 'url' ? 'url' : 'text'}
+                      type={field.control === 'url' ? 'url' : 'text'}
                       value={editor.configuration[field.key] || ''}
                     />
                   )}

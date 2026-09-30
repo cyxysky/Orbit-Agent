@@ -1,7 +1,39 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+const http = require('node:http');
 const { setTimeout: delay } = require('node:timers/promises');
+
+function retryableProbeError(error) {
+  return ['ECONNRESET', 'ETIMEDOUT', 'EPIPE', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT'].includes(error?.code);
+}
+
+// Managed runners are loopback-only. Do not route their health probes through
+// an application's global fetch proxy/dispatcher.
+function probeRunner(url, token) {
+  return new Promise((resolve, reject) => {
+    const request = http.get(new URL('/health', url), { headers: { authorization: `Bearer ${token}` } }, response => {
+      const chunks = []; let size = 0;
+      response.on('data', chunk => {
+        size += chunk.length;
+        if (size > 8192) { response.destroy(); reject(new Error('Runner health response exceeded 8 KB.')); return; }
+        chunks.push(chunk);
+      });
+      response.once('error', reject);
+      response.once('end', () => {
+        try {
+          if (response.statusCode !== 200 || JSON.parse(Buffer.concat(chunks).toString('utf8')).status !== 'healthy') {
+            throw new Error(`本机 Runner ${url.origin} 健康检查失败（HTTP ${response.statusCode}），请检查端口占用和 Runner Token。`);
+          }
+          resolve(true);
+        } catch (error) { reject(error); }
+      });
+    });
+    const deadline = setTimeout(() => request.destroy(Object.assign(new Error('Runner health probe timed out.'), { code: 'ETIMEDOUT' })), 2000);
+    request.once('close', () => clearTimeout(deadline));
+    request.once('error', error => error.code === 'ECONNREFUSED' ? resolve(false) : reject(error));
+  });
+}
 
 function managedRunnerUrl(environment) {
   if (environment.AGENT_CODE_SANDBOX_ENABLED !== 'true'
@@ -25,20 +57,13 @@ async function startManagedRunner({ appDir, environment, url }) {
   if (!token) throw new Error('请先配置 AGENT_CODE_SANDBOX_RUNNER_TOKEN，再启动本机代码沙箱 Runner。');
 
   const healthy = async () => {
-    let response;
-    try {
-      response = await fetch(new URL('/health', url), {
-        headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(1_000),
-      });
-    } catch (error) {
-      const causes = error.cause?.errors || [error.cause];
-      if (causes.length && causes.every((cause) => cause?.code === 'ECONNREFUSED')) return false;
-      throw new Error(`无法检查本机代码沙箱 Runner ${url.origin}，请检查地址和端口。`, { cause: error });
+    for (let attempt = 0; ; attempt++) {
+      try { return await probeRunner(url, token); }
+      catch (error) {
+        if (retryableProbeError(error) && attempt < 2) { await delay(150 * (attempt + 1)); continue; }
+        throw new Error(`无法检查本机代码沙箱 Runner ${url.origin}，请检查地址和端口。`, { cause: error });
+      }
     }
-    if (!response.ok || (await response.json()).status !== 'healthy') {
-      throw new Error(`本机 Runner ${url.origin} 健康检查失败（HTTP ${response.status}），请检查端口占用和 Runner Token。`);
-    }
-    return true;
   };
   if (await healthy()) {
     console.log(`[code-sandbox] Reusing Runner at ${url.origin}`);
@@ -85,7 +110,10 @@ async function startManagedRunner({ appDir, environment, url }) {
     const deadline = Date.now() + 10_000;
     while (Date.now() < deadline) {
       if (failure) throw failure;
-      if (await healthy()) {
+      let ready = false;
+      try { ready = await healthy(); }
+      catch (error) { if (!retryableProbeError(error.cause)) throw error; }
+      if (ready) {
         console.log(`[code-sandbox] Managed Runner ready at ${url.origin}`);
         return { stop, healthy, running: () => !failure && !stopped };
       }

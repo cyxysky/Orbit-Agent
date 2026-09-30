@@ -3461,6 +3461,7 @@ async function stopBrowserChatRuntime(
   options: { forceBrowser?: boolean } = {},
 ) {
   revokeRegisteredBrowserChatTurn(activeTurns, session.id, reason);
+  const terminalCleanup = import('@/server/capabilities/terminal-manager').then(({ conversationTerminals }) => conversationTerminals.stop({ ownerId: normalizeApplicationUserId(session.userId), workspaceId: session.id }));
   if (session.activeAbortController && !session.activeAbortController.signal.aborted) {
     session.activeAbortController.abort(reason);
   }
@@ -3498,7 +3499,7 @@ async function stopBrowserChatRuntime(
   await Promise.all([...browsers].map((browser) => (
     browser.close({ closePages: true, force: options.forceBrowser }).catch(() => undefined)
   )));
-  await closeBlockedBrowserChatSubagents(session.id, undefined, { force: true });
+  await Promise.all([terminalCleanup, closeBlockedBrowserChatSubagents(session.id, undefined, { force: true })]);
   scheduleBrowserChatUserIdleClose(session.userId);
 }
 
@@ -3614,7 +3615,6 @@ export async function startBrowserChatScreencast(
   sessionId: string,
   userId: string | number | undefined,
   handlers: {
-    getDemand?: Parameters<BrowserSession['startScreencast']>[0]['getDemand'];
     onActivePageChanged?: () => void;
     onError?: (error: unknown) => void;
     onFrame: (frame: BrowserScreencastFrame) => void | Promise<void>;
@@ -3636,7 +3636,6 @@ export async function startBrowserChatScreencast(
   let handle: Awaited<ReturnType<BrowserSession['startScreencast']>>;
   try {
     handle = await browser.startScreencast({
-      getDemand: handlers.getDemand,
       onActivePageChanged: handlers.onActivePageChanged,
       onError: handlers.onError,
       onFrame: (frame) => {
@@ -4937,6 +4936,9 @@ export async function interruptBrowserChatSession(
   // this finalized snapshot immediately after the response; if the database is
   // briefly unavailable, keep retrying the current in-memory snapshot.
   persistInterruptedSessionInBackground(session.id);
+  await (await import('@/server/capabilities/terminal-manager')).conversationTerminals.stop({
+    ownerId: normalizeApplicationUserId(session.userId), workspaceId: session.id,
+  });
   return clientSnapshot(session);
 }
 
@@ -5375,6 +5377,7 @@ async function executeBrowserChatSubagentBatch(input: {
       const executeChildAttempt = (attemptNumber: number, retryReason = '') => executeInteractiveBrowserTurn({
         session: activeChild,
         runId: `${session.id}_${task.id}`,
+        sessionId: session.id,
         userId: session.userId,
         turnId: `${assistantMessageId}:subagent:${task.id}:attempt:${attemptNumber}`,
         targetUrl: task.url || session.targetUrl || activeChild.currentUrl() || 'about:blank',
@@ -5628,6 +5631,7 @@ async function resumeBlockedBrowserChatSubagent(input: {
     const result = await withModelSettings(modelSettings, () => executeInteractiveBrowserTurn({
       session: binding.browser,
       runId: `${session.id}_${binding.id}_verification_resume`,
+      sessionId: session.id,
       userId: session.userId,
       turnId: `${assistantMessageId}:subagent:${binding.id}:verification-resume`,
       targetUrl: binding.task.url || binding.browser.currentUrl() || session.targetUrl || 'about:blank',
@@ -5853,6 +5857,7 @@ async function runBrowserChatMessage(
       const result = await executeInteractiveBrowserTurn({
         session: browser,
         runId: session.id,
+        sessionId: session.id,
         userId: session.userId,
         turnId: assistantMessageId,
         targetUrl: session.targetUrl || 'about:blank',

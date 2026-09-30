@@ -1,0 +1,835 @@
+import http from 'node:http';
+import type { Socket } from 'node:net';
+import type { BrowserSession } from '../node/browser-session.ts';
+import type { BrowserLiveInput, BrowserScreencastFrame, BrowserTabSnapshot } from '../node.ts';
+import { browserPreviewFramesPerSecond, type BrowserPreviewFramePumpMetrics } from '../node.ts';
+import {
+  acceptWebSocketUpgrade,
+  consumeWebSocketFrames,
+  encodeWebSocketBinaryParts,
+  encodeWebSocketControl,
+  encodeWebSocketText,
+  listenWebSocketServer,
+} from '../../host/websocket-transport.ts';
+import {
+  BrowserPreviewVideoEncoder,
+  browserPreviewVideoDimensions,
+} from './video-encoder.ts';
+
+
+type BrowserPreviewTransport = 'image' | 'video';
+
+type BrowserPreviewWebSocketInfo = {
+  port: number;
+  url: string;
+};
+
+type BrowserPreviewClient = {
+  actionChain: Promise<void>;
+  buffer: Buffer;
+  frameBlocked: boolean;
+  pendingFrame?: Buffer;
+  pendingVideo: Buffer[];
+  pendingVideoBytes: number;
+  pendingVideoSince?: number;
+  pendingMove?: Extract<BrowserLiveInput, { kind: 'move' }>;
+  moveActive: boolean;
+  sessionId: string;
+  socket: Socket;
+  streamKey: string;
+  transport: BrowserPreviewTransport;
+  userId: string;
+};
+
+type BrowserPreviewStream = {
+  backpressureDrops: number;
+  clients: Set<BrowserPreviewClient>;
+  generation: number;
+  key: string;
+  lastTabs?: BrowserTabSnapshot[];
+  lastTabsKey?: string;
+  lastFrame?: BrowserScreencastFrame;
+  lastUrl?: string;
+  lastViewport?: BrowserScreencastFrame['viewport'];
+  lastViewportKey?: string;
+  metrics?: () => BrowserPreviewFramePumpMetrics;
+  metricsTimer?: ReturnType<typeof setInterval>;
+  networkBytes: number;
+  payloadBuildMs: number;
+  reattachTimer?: ReturnType<typeof setTimeout>;
+  sequence: number;
+  sessionId: string;
+  starting?: Promise<void>;
+  restarting?: Promise<void>;
+  stop?: () => Promise<void>;
+  transport: BrowserPreviewTransport;
+  videoEncoder?: BrowserPreviewVideoEncoder;
+  videoInitialization?: Buffer;
+  videoMimeType?: string;
+  wireFrames: number;
+  userId: string;
+};
+
+type BrowserPreviewWebSocketState = {
+  clients: Set<BrowserPreviewClient>;
+  heartbeat?: ReturnType<typeof setInterval>;
+  port?: number;
+  server?: http.Server;
+  starting?: Promise<BrowserPreviewWebSocketInfo>;
+  streams: Map<string, BrowserPreviewStream>;
+};
+
+export type BrowserPreviewServerOptions = {
+  port?: number;
+  authorize: (input: { origin: string; scope: 'browser-preview'; sessionId: string; ticket: string }) => Promise<{ userId: string } | undefined>;
+  startScreencast: (sessionId: string, userId: string, handlers: Parameters<BrowserSession['startScreencast']>[0]) => Promise<Awaited<ReturnType<BrowserSession['startScreencast']>> | undefined>;
+  dispatchInput: (sessionId: string, userId: string, input: BrowserLiveInput) => Promise<Awaited<ReturnType<BrowserSession['dispatchLiveInput']>> | undefined>;
+};
+export function browserPreviewPreferredTransport(value = process.env.BROWSER_PREVIEW_TRANSPORT): BrowserPreviewTransport {
+  return String(value || '').trim().toLowerCase() === 'image' ? 'image' : 'video';
+}
+export function createBrowserPreviewServer(options: BrowserPreviewServerOptions) {
+  let closed = false;
+  let closing: Promise<void> | undefined;
+  const currentState: BrowserPreviewWebSocketState = { clients: new Set(), streams: new Map() };
+  const state = () => currentState;
+  const startScreencast = options.startScreencast;
+  const dispatchPreviewInput = options.dispatchInput;
+  const authorize = options.authorize;
+  const previewWebSocketPortStart = () => options.port ?? 18021;
+function sendToClient(client: BrowserPreviewClient, payload: unknown) {
+  if (client.socket.destroyed) return false;
+  try {
+    return client.socket.write(encodeWebSocketText(JSON.stringify(payload)));
+  } catch {
+    void removeClient(client);
+    return false;
+  }
+}
+
+async function removeClient(client: BrowserPreviewClient) {
+  if (!state().clients.delete(client)) return;
+  client.pendingFrame = undefined;
+  client.pendingVideo = [];
+  client.pendingVideoBytes = 0;
+  client.pendingMove = undefined;
+  const stream = state().streams.get(client.streamKey);
+  stream?.clients.delete(client);
+  client.socket.destroy();
+  if (stream && stream.clients.size === 0) await stopStream(stream);
+}
+
+function flushPendingFrame(client: BrowserPreviewClient) {
+  client.frameBlocked = false;
+  const frame = client.pendingFrame;
+  client.pendingFrame = undefined;
+  if (frame !== undefined) sendFrameToClient(client, frame);
+  while (!client.frameBlocked && !client.socket.destroyed && client.pendingVideo.length) {
+    const video = client.pendingVideo.shift()!;
+    client.pendingVideoBytes -= video.length;
+    sendVideoToClient(client, video);
+  }
+  if (!client.pendingVideo.length) client.pendingVideoSince = undefined;
+}
+
+
+
+function sendVideoToClient(client: BrowserPreviewClient, payload: Buffer): 'blocked' | 'closed' | 'sent' {
+  if (client.frameBlocked) {
+    // Preserve codec order through short network stalls. A bounded backlog
+    // absorbs brief stalls without retaining an unlimited stream.
+    client.pendingVideoSince ??= Date.now();
+    if (client.pendingVideoBytes + payload.length > 2 * 1024 * 1024
+      || Date.now() - client.pendingVideoSince > 2_000) {
+      void removeClient(client);
+      return 'closed';
+    }
+    client.pendingVideo.push(payload);
+    client.pendingVideoBytes += payload.length;
+    return 'blocked';
+  }
+  try {
+    if (client.socket.destroyed) return 'closed';
+    if (client.socket.write(payload)) return 'sent';
+    client.frameBlocked = true;
+    client.socket.once('drain', () => flushPendingFrame(client));
+    return 'blocked';
+  } catch {
+    void removeClient(client);
+    return 'closed';
+  }
+}
+
+function sendFrameToClient(client: BrowserPreviewClient, payload: Buffer): 'closed' | 'pending' | 'replaced' | 'sent' {
+  if (client.frameBlocked) {
+    const replaced = client.pendingFrame !== undefined;
+    client.pendingFrame = payload;
+    return replaced ? 'replaced' : 'pending';
+  }
+  try {
+    if (!client.socket.destroyed && client.socket.write(payload)) return 'sent';
+  } catch {
+    void removeClient(client);
+    return 'closed';
+  }
+  if (client.socket.destroyed) return 'closed';
+  client.frameBlocked = true;
+  client.pendingFrame = undefined;
+  client.socket.once('drain', () => flushPendingFrame(client));
+  return 'sent';
+}
+
+function binaryFramePayload(frame: BrowserScreencastFrame, sequence: number) {
+  const image = frame.data;
+  const metadata = Buffer.from(JSON.stringify({
+    capturedAt: frame.capturedAt,
+    contentType: frame.contentType,
+    sequence,
+    type: 'frame',
+  }), 'utf8');
+  const header = Buffer.alloc(4);
+  header.writeUInt32BE(metadata.length, 0);
+  return encodeWebSocketBinaryParts([header, metadata, image]);
+}
+
+function binaryVideoPayload(type: 'videoChunk' | 'videoInit', data: Buffer, sequence: number, contentType: string) {
+  const metadata = Buffer.from(JSON.stringify({
+    contentType,
+    sequence,
+    type,
+  }), 'utf8');
+  const header = Buffer.alloc(4);
+  header.writeUInt32BE(metadata.length, 0);
+  return encodeWebSocketBinaryParts([header, metadata, data]);
+}
+
+function broadcastText(stream: BrowserPreviewStream, payload: unknown) {
+  for (const client of [...stream.clients]) sendToClient(client, payload);
+}
+
+function sendLatestFrameState(client: BrowserPreviewClient, stream: BrowserPreviewStream) {
+  sendToClient(client, { type: 'transportChanged', transport: stream.transport });
+  if (stream.lastTabs) sendToClient(client, { type: 'tabsChanged', tabs: stream.lastTabs, sequence: stream.sequence });
+  if (stream.lastUrl !== undefined) sendToClient(client, { type: 'navigationChanged', url: stream.lastUrl, sequence: stream.sequence });
+  if (stream.lastViewport) sendToClient(client, { type: 'viewportChanged', viewport: stream.lastViewport, sequence: stream.sequence });
+  if (stream.lastFrame) {
+    sendFrameToClient(client, binaryFramePayload(stream.lastFrame, ++stream.sequence));
+  }
+  if (stream.transport === 'video' && stream.videoInitialization && stream.videoMimeType) {
+    const payload = binaryVideoPayload('videoInit', stream.videoInitialization, ++stream.sequence, stream.videoMimeType);
+    const result = sendVideoToClient(client, payload);
+    if (result !== 'closed') stream.networkBytes += payload.length;
+  }
+}
+
+function broadcastTabsChanged(stream: BrowserPreviewStream, tabs: BrowserTabSnapshot[]) {
+  const nextSequence = stream.sequence + 1;
+  const tabsKey = JSON.stringify(tabs);
+  if (tabsKey !== stream.lastTabsKey) {
+    stream.lastTabs = tabs;
+    stream.lastTabsKey = tabsKey;
+    broadcastText(stream, { type: 'tabsChanged', tabs, sequence: nextSequence });
+  }
+}
+
+function broadcastFrameStateChanges(stream: BrowserPreviewStream, frame: BrowserScreencastFrame) {
+  const nextSequence = stream.sequence + 1;
+  if (frame.url !== stream.lastUrl) {
+    stream.lastUrl = frame.url;
+    broadcastText(stream, { type: 'navigationChanged', url: frame.url, sequence: nextSequence });
+  }
+  const viewportKey = `${frame.viewport.width}x${frame.viewport.height}`;
+  if (viewportKey !== stream.lastViewportKey) {
+    stream.lastViewport = frame.viewport;
+    stream.lastViewportKey = viewportKey;
+    broadcastText(stream, { type: 'viewportChanged', viewport: frame.viewport, sequence: nextSequence });
+  }
+}
+
+function broadcastFrame(stream: BrowserPreviewStream, frame: BrowserScreencastFrame) {
+  broadcastFrameStateChanges(stream, frame);
+  const payloadStartedAt = performance.now();
+  const payload = binaryFramePayload(frame, ++stream.sequence);
+  stream.payloadBuildMs += performance.now() - payloadStartedAt;
+  let recipients = 0;
+  for (const client of [...stream.clients]) {
+    const result = sendFrameToClient(client, payload);
+    if (result !== 'closed') recipients += 1;
+    if (result === 'replaced') stream.backpressureDrops += 1;
+  }
+  stream.wireFrames += 1;
+  stream.networkBytes += payload.length * recipients;
+}
+
+function broadcastVideoData(stream: BrowserPreviewStream, type: 'videoChunk' | 'videoInit', data: Buffer) {
+  if (!stream.videoMimeType) return;
+  const payloadStartedAt = performance.now();
+  const payload = binaryVideoPayload(type, data, ++stream.sequence, stream.videoMimeType);
+  stream.payloadBuildMs += performance.now() - payloadStartedAt;
+  let recipients = 0;
+  for (const client of [...stream.clients]) {
+    const result = sendVideoToClient(client, payload);
+    if (result !== 'closed') recipients += 1;
+    if (result === 'blocked') stream.backpressureDrops += 1;
+  }
+  if (type === 'videoChunk') stream.wireFrames += 1;
+  stream.networkBytes += payload.length * recipients;
+}
+
+function fallbackStreamToImages(stream: BrowserPreviewStream, error: unknown) {
+  const encoder = stream.videoEncoder;
+  stream.videoEncoder = undefined;
+  stream.videoInitialization = undefined;
+  stream.videoMimeType = undefined;
+  stream.transport = 'image';
+  broadcastText(stream, {
+    type: 'transportChanged',
+    transport: 'image',
+    error: error instanceof Error ? error.message : String(error || 'Video encoder unavailable'),
+  });
+  void encoder?.stop().catch(() => undefined);
+}
+
+function pushVideoFrame(stream: BrowserPreviewStream, frame: BrowserScreencastFrame) {
+  broadcastFrameStateChanges(stream, frame);
+  const dimensions = browserPreviewVideoDimensions({
+    height: frame.metadata?.deviceHeight || frame.viewport.height,
+    width: frame.metadata?.deviceWidth || frame.viewport.width,
+  });
+  const current = stream.videoEncoder?.metrics();
+  if (current && (current.width !== dimensions.width || current.height !== dimensions.height)) {
+    const encoder = stream.videoEncoder;
+    stream.videoEncoder = undefined;
+    stream.videoInitialization = undefined;
+    stream.videoMimeType = undefined;
+    void encoder?.stop().catch(() => undefined);
+  }
+  if (!stream.videoEncoder) {
+    // Show the captured page immediately while FFmpeg is still producing the
+    // fragmented-MP4 initialization segment. This removes the blank startup
+    // interval without changing the selected video transport.
+    broadcastFrame(stream, frame);
+    let encoder!: BrowserPreviewVideoEncoder;
+    try {
+      encoder = new BrowserPreviewVideoEncoder({
+        contentType: frame.contentType,
+        framesPerSecond: browserPreviewFramesPerSecond(process.env.BROWSER_PREVIEW_FPS),
+        height: dimensions.height,
+        onError: (error) => {
+          if (stream.videoEncoder === encoder) fallbackStreamToImages(stream, error);
+        },
+        onFragment: (fragment) => {
+          if (stream.videoEncoder === encoder && stream.transport === 'video') {
+            broadcastVideoData(stream, 'videoChunk', fragment);
+          }
+        },
+        onInitialization: (initialization, mimeType) => {
+          if (stream.videoEncoder !== encoder || stream.transport !== 'video') return;
+          stream.videoInitialization = initialization;
+          stream.videoMimeType = mimeType;
+          broadcastText(stream, {
+            type: 'videoReady',
+            contentType: mimeType,
+            height: dimensions.height,
+            transport: 'video',
+            width: dimensions.width,
+          });
+          broadcastVideoData(stream, 'videoInit', initialization);
+        },
+        width: dimensions.width,
+      });
+      stream.videoEncoder = encoder;
+    } catch (error) {
+      fallbackStreamToImages(stream, error);
+    }
+  }
+  if (stream.transport === 'video' && stream.videoEncoder) {
+    stream.videoEncoder.pushFrame(frame.data);
+  } else {
+    broadcastFrame(stream, frame);
+  }
+}
+
+function handlePreviewFrame(stream: BrowserPreviewStream, frame: BrowserScreencastFrame) {
+  stream.lastFrame = frame;
+  if (stream.transport === 'video') pushVideoFrame(stream, frame);
+  else broadcastFrame(stream, frame);
+}
+
+function stopStreamMetrics(stream: BrowserPreviewStream) {
+  if (stream.metricsTimer) clearInterval(stream.metricsTimer);
+  stream.metricsTimer = undefined;
+  stream.metrics = undefined;
+}
+
+function startStreamMetrics(stream: BrowserPreviewStream, metrics: () => BrowserPreviewFramePumpMetrics) {
+  stopStreamMetrics(stream);
+  stream.metrics = metrics;
+  const initialMetrics = metrics();
+  let previousSample = {
+    at: performance.now(),
+    backpressureDrops: stream.backpressureDrops,
+    nativeFrames: initialMetrics.nativeFrames,
+    networkBytes: stream.networkBytes,
+    transmittedFrames: initialMetrics.transmittedFrames,
+    wireFrames: stream.wireFrames,
+  };
+  stream.metricsTimer = setInterval(() => {
+    const pumpMetrics = stream.metrics?.();
+    if (!pumpMetrics) return;
+    const sampledAt = performance.now();
+    const sampleSeconds = Math.max(0.001, (sampledAt - previousSample.at) / 1_000);
+    const elapsedSeconds = Math.max(0.001, pumpMetrics?.elapsedSeconds || 0.001);
+    broadcastText(stream, {
+      type: 'frameHeartbeat',
+      sequence: stream.sequence,
+      time: new Date().toISOString(),
+      metrics: {
+        ...pumpMetrics,
+        ...(stream.videoEncoder?.metrics() || {}),
+        backpressureDrops: stream.backpressureDrops,
+        backpressureDropsPerSecond: (stream.backpressureDrops - previousSample.backpressureDrops) / sampleSeconds,
+        captureFps: (pumpMetrics.nativeFrames - previousSample.nativeFrames) / sampleSeconds,
+        duplicateFrames: pumpMetrics.duplicateFrames || 0,
+        networkBytes: stream.networkBytes,
+        networkBytesPerSecond: stream.networkBytes / elapsedSeconds,
+        recentNetworkBytesPerSecond: (stream.networkBytes - previousSample.networkBytes) / sampleSeconds,
+        payloadBuildMs: stream.payloadBuildMs,
+        payloadBuildMsPerFrame: stream.wireFrames ? stream.payloadBuildMs / stream.wireFrames : 0,
+        pendingClientFrames: [...stream.clients].filter((client) => client.pendingFrame !== undefined).length,
+        sendFps: (stream.wireFrames - previousSample.wireFrames) / sampleSeconds,
+        transmittedFpsRecent: (pumpMetrics.transmittedFrames - previousSample.transmittedFrames) / sampleSeconds,
+        transport: stream.transport,
+        wireFrames: stream.wireFrames,
+      },
+    });
+    previousSample = {
+      at: sampledAt,
+      backpressureDrops: stream.backpressureDrops,
+      nativeFrames: pumpMetrics.nativeFrames,
+      networkBytes: stream.networkBytes,
+      transmittedFrames: pumpMetrics.transmittedFrames,
+      wireFrames: stream.wireFrames,
+    };
+  }, 1_000);
+  stream.metricsTimer.unref?.();
+}
+
+function readLiveInput(value: unknown): BrowserLiveInput | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const input = value as Record<string, unknown>;
+  if (input.kind === 'browserControl' && typeof input.action === 'string'
+    && ['navigate', 'open', 'close', 'back', 'forward', 'reload'].includes(input.action)) {
+    if (input.action === 'navigate' && (typeof input.url !== 'string' || input.url.length > 16000)) return undefined;
+    if (input.action === 'close' && (typeof input.tabId !== 'string' || !input.tabId.trim())) return undefined;
+    return { kind: 'browserControl', action: input.action as Extract<BrowserLiveInput, { kind: 'browserControl' }>['action'],
+      ...(typeof input.url === 'string' ? { url: input.url } : {}),
+      ...(typeof input.tabId === 'string' ? { tabId: input.tabId } : {}) };
+  }
+  if (input.kind === 'clipboard' && (input.action === 'copy' || input.action === 'cut')) return { kind: 'clipboard', action: input.action };
+  if (input.kind === 'tab' && typeof input.tabId === 'string' && input.tabId.trim()) {
+    return { kind: 'tab', tabId: input.tabId.trim() };
+  }
+  if (input.kind === 'move') {
+    return { kind: 'move', xRatio: Number(input.xRatio), yRatio: Number(input.yRatio) };
+  }
+  if (input.kind === 'click') {
+    return {
+      kind: 'click',
+      xRatio: Number(input.xRatio),
+      yRatio: Number(input.yRatio),
+      button: input.button === 'right' || input.button === 'middle' ? input.button : 'left',
+      clickCount: Number(input.clickCount),
+    };
+  }
+  if (input.kind === 'drag') {
+    return {
+      kind: 'drag',
+      xRatio: Number(input.xRatio),
+      yRatio: Number(input.yRatio),
+      toXRatio: Number(input.toXRatio),
+      toYRatio: Number(input.toYRatio),
+      button: input.button === 'right' || input.button === 'middle' ? input.button : 'left',
+    };
+  }
+  if (input.kind === 'scroll') {
+    return {
+      kind: 'scroll',
+      xRatio: Number(input.xRatio),
+      yRatio: Number(input.yRatio),
+      deltaX: Number(input.deltaX),
+      deltaY: Number(input.deltaY),
+    };
+  }
+  if (input.kind === 'key' && typeof input.key === 'string') return { kind: 'key', key: input.key };
+  if (input.kind === 'text' && typeof input.text === 'string') return { kind: 'text', text: input.text };
+  if (input.kind === 'select' && typeof input.value === 'string') {
+    return {
+      kind: 'select',
+      xRatio: Number(input.xRatio),
+      yRatio: Number(input.yRatio),
+      value: input.value,
+    };
+  }
+  if (
+    input.kind === 'controlValue'
+    && (input.controlKind === 'datalist' || input.controlKind === 'picker')
+    && typeof input.value === 'string'
+  ) {
+    return {
+      controlKind: input.controlKind,
+      kind: 'controlValue',
+      value: input.value,
+      xRatio: Number(input.xRatio),
+      yRatio: Number(input.yRatio),
+    };
+  }
+  if (input.kind === 'files' && typeof input.controlId === 'string' && Array.isArray(input.files)) {
+    const files = input.files.slice(0, 8).map((file) => {
+      if (!file || typeof file !== 'object') return undefined;
+      const record = file as Record<string, unknown>;
+      if (typeof record.path !== 'string' || typeof record.name !== 'string') return undefined;
+      return {
+        mimeType: typeof record.mimeType === 'string' ? record.mimeType.slice(0, 160) : 'application/octet-stream',
+        name: record.name.slice(0, 180),
+        path: record.path.slice(0, 2_048),
+      };
+    }).filter((file): file is NonNullable<typeof file> => Boolean(file));
+    if (!files.length || files.length !== input.files.length) return undefined;
+    return { controlId: input.controlId.slice(0, 160), files, kind: 'files' };
+  }
+  if (input.kind === 'dialog' && typeof input.dialogId === 'string' && typeof input.accept === 'boolean') {
+    return {
+      accept: input.accept,
+      dialogId: input.dialogId.slice(0, 160),
+      kind: 'dialog',
+      ...(typeof input.promptText === 'string' ? { promptText: input.promptText.slice(0, 10_000) } : {}),
+    };
+  }
+  return undefined;
+}
+
+async function dispatchLatestMove(client: BrowserPreviewClient) {
+  if (client.moveActive) return;
+  client.moveActive = true;
+  try {
+    while (client.pendingMove && !client.socket.destroyed) {
+      const input = client.pendingMove;
+      client.pendingMove = undefined;
+      const result = await dispatchPreviewInput(client.sessionId, client.userId, input);
+      if (result?.ok === false) sendToClient(client, { type: 'inputError', error: result.actual });
+    }
+  } catch (error) {
+    sendToClient(client, {
+      type: 'inputError',
+      error: error instanceof Error ? error.message : 'Live browser input failed',
+    });
+  } finally {
+    client.moveActive = false;
+    if (client.pendingMove && !client.socket.destroyed) void dispatchLatestMove(client);
+  }
+}
+
+function handleClientMessage(client: BrowserPreviewClient, text: string) {
+  let message: { event?: unknown; requestId?: unknown; type?: unknown };
+  try {
+    message = JSON.parse(text) as typeof message;
+  } catch {
+    sendToClient(client, { type: 'inputError', error: 'Invalid browser preview message' });
+    return;
+  }
+  if (message.type !== 'input') return;
+  const input = readLiveInput(message.event);
+  if (!input) {
+    sendToClient(client, { type: 'inputError', error: 'Invalid live browser input' });
+    return;
+  }
+  if (input.kind === 'move') {
+    client.pendingMove = input;
+    void dispatchLatestMove(client);
+    return;
+  }
+
+  client.pendingMove = undefined;
+  const requestId = typeof message.requestId === 'string' ? message.requestId : undefined;
+  client.actionChain = client.actionChain.then(async () => {
+    try {
+      const result = await dispatchPreviewInput(client.sessionId, client.userId, input);
+      if (!result || result.ok === false) {
+        sendToClient(client, {
+          type: 'inputError',
+          requestId,
+          error: result?.actual || 'Browser session not found',
+        });
+      } else if (input.kind === 'clipboard') {
+        sendToClient(client, { type: 'clipboard', requestId, text: (result.data as { clipboardText?: string } | undefined)?.clipboardText || '' });
+      } else if (input.kind === 'tab' || input.kind === 'browserControl') {
+        // The active-page listener handles tab changes from every source.
+        // Restarting here too races that listener and resets the decoder twice.
+      } else if (result.liveControl || result.liveSelect) {
+        sendToClient(client, { type: 'nativeControlOpened', requestId, control: result.liveControl || result.liveSelect });
+      } else if (input.kind === 'select' || input.kind === 'controlValue' || input.kind === 'files') {
+        sendToClient(client, { type: 'nativeControlClosed', requestId });
+      }
+    } catch (error) {
+      sendToClient(client, {
+        type: 'inputError',
+        requestId,
+        error: error instanceof Error ? error.message : 'Live browser input failed',
+      });
+    }
+  });
+}
+
+function handleClientData(client: BrowserPreviewClient, chunk: Buffer) {
+  client.buffer = Buffer.from(consumeWebSocketFrames(client.buffer, chunk, {
+    onClose: () => void removeClient(client),
+    onProtocolError: () => void removeClient(client),
+    onPing: (payload) => client.socket.write(encodeWebSocketControl(0xA, payload)),
+    onText: (payload) => handleClientMessage(client, payload),
+  }));
+}
+
+async function attachStream(stream: BrowserPreviewStream) {
+  if (stream.starting) return stream.starting;
+  if (stream.stop || stream.clients.size === 0) return;
+  const { sessionId, userId } = stream;
+  if (!sessionId) {
+    broadcastText(stream, { type: 'error', error: 'Missing browser sessionId' });
+    return;
+  }
+  const generation = ++stream.generation;
+  stream.starting = (async () => {
+    try {
+      broadcastText(stream, { type: 'transportChanged', transport: stream.transport });
+      const handle = await startScreencast(sessionId, userId, {
+        onActivePageChanged: () => {
+          if (generation !== stream.generation || stream.clients.size === 0) return;
+          broadcastText(stream, { type: 'activeTabChanged', sessionId });
+          if (stream.reattachTimer) clearTimeout(stream.reattachTimer);
+          stream.reattachTimer = setTimeout(() => {
+            stream.reattachTimer = undefined;
+            if (generation === stream.generation && stream.clients.size > 0) void restartStream(stream);
+          }, 0);
+        },
+        onError: (error) => broadcastText(stream, {
+          type: 'error',
+          error: error instanceof Error ? error.message : 'Browser screencast failed',
+        }),
+        onFrame: (frame) => { if (generation === stream.generation) handlePreviewFrame(stream, frame); },
+        onNativeEvent: (event) => {
+          if (event.kind === 'dialogOpened') {
+            broadcastText(stream, { type: 'nativeDialogOpened', dialog: event.dialog });
+          } else if (event.kind === 'dialogClosed') {
+            broadcastText(stream, { type: 'nativeDialogClosed', dialogId: event.dialogId });
+          } else if (event.kind === 'downloadStarted') {
+            broadcastText(stream, { type: 'browserDownloadStarted', download: event.download });
+          } else if (event.kind === 'downloadReady') {
+            broadcastText(stream, { type: 'browserDownloadReady', download: event.download });
+          } else if (event.kind === 'downloadFailed') {
+            broadcastText(stream, { type: 'browserDownloadFailed', download: event.download });
+          } else if (event.kind === 'controlOpened') {
+            broadcastText(stream, { type: 'nativeControlOpened', control: event.control });
+          }
+        },
+        onTabsChanged: (tabs) => { if (generation === stream.generation) broadcastTabsChanged(stream, tabs); },
+        video: stream.transport === 'video',
+      });
+      if (!handle) {
+        broadcastText(stream, { type: 'unavailable', error: 'Browser session or its browser is not available' });
+        return;
+      }
+      if (generation !== stream.generation || stream.clients.size === 0) {
+        await handle.stop().catch(() => undefined);
+        return;
+      }
+      stream.stop = async () => {
+        const encoder = stream.videoEncoder;
+        stream.videoEncoder = undefined;
+        stream.videoInitialization = undefined;
+        stream.videoMimeType = undefined;
+        await Promise.all([
+          handle.stop().catch(() => undefined),
+          encoder?.stop().catch(() => undefined),
+        ]);
+      };
+      startStreamMetrics(stream, handle.metrics);
+      broadcastText(stream, { type: 'ready', sessionId });
+    } catch (error) {
+      broadcastText(stream, {
+        type: 'unavailable',
+        error: error instanceof Error ? error.message : 'Failed to start browser screencast',
+      });
+    }
+  })().finally(() => {
+    stream.starting = undefined;
+  });
+  return stream.starting;
+}
+
+function restartStream(stream: BrowserPreviewStream) {
+  // Tab selection and visibility notifications can request the same restart.
+  // Serialize teardown/attach so one restart cannot stop the other's encoder.
+  if (stream.restarting) return stream.restarting;
+  stream.restarting = (async () => {
+    stream.generation += 1;
+    if (stream.reattachTimer) clearTimeout(stream.reattachTimer);
+    stream.reattachTimer = undefined;
+    await stream.starting?.catch(() => undefined);
+    const stop = stream.stop;
+    stream.stop = undefined;
+    stopStreamMetrics(stream);
+    await stop?.().catch(() => undefined);
+    stream.lastFrame = undefined;
+    stream.lastTabs = undefined;
+    stream.lastTabsKey = undefined;
+    stream.lastUrl = undefined;
+    stream.lastViewport = undefined;
+    stream.lastViewportKey = undefined;
+    if (stream.clients.size > 0) await attachStream(stream);
+  })().finally(() => { stream.restarting = undefined; });
+  return stream.restarting;
+}
+
+async function stopStream(stream: BrowserPreviewStream) {
+  await restartStream(stream);
+  if (stream.clients.size === 0 && state().streams.get(stream.key) === stream) state().streams.delete(stream.key);
+}
+
+function subscribeClient(client: BrowserPreviewClient) {
+  let stream = state().streams.get(client.streamKey);
+  if (!stream) {
+    stream = {
+      backpressureDrops: 0,
+      clients: new Set(),
+      generation: 0,
+      key: client.streamKey,
+      networkBytes: 0,
+      payloadBuildMs: 0,
+      sequence: 0,
+      sessionId: client.sessionId,
+      transport: client.transport,
+      userId: client.userId,
+      wireFrames: 0,
+    };
+    state().streams.set(client.streamKey, stream);
+  }
+  stream.clients.add(client);
+  // A client may reconnect before the last subscriber's teardown completes.
+  // restartStream will include it in the fresh stream; never replay stale data.
+  if (stream.restarting) return;
+  if (stream.stop) {
+    sendToClient(client, { type: 'ready', sessionId: client.sessionId });
+    sendLatestFrameState(client, stream);
+  }
+  else void attachStream(stream);
+}
+
+function createServer() {
+  const server = http.createServer((_request, response) => {
+    response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    response.end(JSON.stringify({ ok: true }));
+  });
+
+  server.on('upgrade', async (request, socket) => {
+    const netSocket = socket as Socket;
+    const url = new URL(request.url || '/', 'http://127.0.0.1');
+    if (url.pathname !== '/browser-preview') {
+      netSocket.destroy();
+      return;
+    }
+    const sessionId = (url.searchParams.get('sessionId') || '').trim();
+    const auth = await authorize({
+      origin: String(request.headers.origin || '').trim(),
+      scope: 'browser-preview',
+      sessionId,
+      ticket: (url.searchParams.get('ticket') || '').trim(),
+    }).catch(() => undefined);
+    if (!auth || closed || netSocket.destroyed) {
+      netSocket.destroy();
+      return;
+    }
+    if (!acceptWebSocketUpgrade(request, netSocket)) {
+      netSocket.destroy();
+      return;
+    }
+
+    const client: BrowserPreviewClient = {
+      actionChain: Promise.resolve(),
+      buffer: Buffer.alloc(0),
+      frameBlocked: false,
+      pendingVideo: [],
+      pendingVideoBytes: 0,
+      moveActive: false,
+      sessionId,
+      socket: netSocket,
+      streamKey: '',
+      transport: browserPreviewPreferredTransport(url.searchParams.get('transport') || undefined),
+      userId: auth.userId,
+    };
+    client.streamKey = `${client.userId}\u0000${client.sessionId}\u0000${client.transport}`;
+    state().clients.add(client);
+    netSocket.setNoDelay(true);
+    netSocket.on('data', (chunk) => handleClientData(client, chunk));
+    netSocket.on('close', () => void removeClient(client));
+    netSocket.on('error', () => void removeClient(client));
+    sendToClient(client, { type: 'hello', connectedAt: new Date().toISOString() });
+    subscribeClient(client);
+  });
+
+  return server;
+}
+
+async function closePreviewServer(current: BrowserPreviewWebSocketState) {
+  if (!current.server) return;
+  const clients = [...current.clients];
+  await Promise.all(clients.map((client) => removeClient(client)));
+  await Promise.all([...current.streams.values()].map((stream) => stopStream(stream)));
+  if (current.heartbeat) clearInterval(current.heartbeat);
+  current.heartbeat = undefined;
+  const server = current.server;
+  current.server = undefined;
+  current.port = undefined;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+}
+
+async function ensureBrowserPreviewWebSocketServer(): Promise<BrowserPreviewWebSocketInfo> {
+  if (closed) throw new Error('Browser preview server is closed.');
+  const current = state();
+  if (
+    current.server
+    && current.port
+  ) {
+    return { port: current.port, url: `ws://127.0.0.1:${current.port}/browser-preview` };
+  }
+  if (current.starting) return current.starting;
+
+  current.starting = (async () => {
+    await closePreviewServer(current);
+    const server = createServer();
+    const port = await listenWebSocketServer(server, previewWebSocketPortStart(), {
+      host: '127.0.0.1',
+      addressInUseMessage: (port) => `Browser preview WebSocket port ${port} is already in use. Configure an available internal port.`,
+    });
+    current.server = server;
+    current.port = port;
+    current.heartbeat = setInterval(() => {
+      for (const client of [...current.clients]) sendToClient(client, { type: 'heartbeat', time: new Date().toISOString() });
+    }, 25_000);
+    current.heartbeat.unref?.();
+    return { port, url: `ws://127.0.0.1:${port}/browser-preview` };
+  })().finally(() => {
+    current.starting = undefined;
+  });
+
+  return current.starting;
+}
+
+return { ensure: ensureBrowserPreviewWebSocketServer, close() {
+  closed = true;
+  return closing ||= (async () => {
+    await currentState.starting?.catch(() => undefined);
+    await closePreviewServer(currentState);
+  })();
+} };
+}

@@ -9,6 +9,7 @@ import {
 import type { ModelProvider, ModelProviderSettings } from '@/server/ai/schemas/runtime.schema';
 import { normalizedModelCapabilities } from '@/lib/model-capabilities';
 import { store } from '@/server/db/store';
+import { maskSecret } from '@/lib/secret-input';
 
 function completeProviders(input?: Partial<Record<ModelProvider, ModelProviderSettings>>) {
   const result: Partial<Record<ModelProvider, ModelProviderSettings>> = {};
@@ -42,6 +43,7 @@ export async function readRuntimeSettingsItems() {
       key: definition.key,
       value: secret ? '' : value,
       hasValue: secret ? Boolean(value) : undefined,
+      secretPreview: secret ? maskSecret(value) : undefined,
       enabled: true,
       secret,
       updatedAt: saved?.updatedAt,
@@ -59,6 +61,7 @@ export async function readModelSettingsState() {
       ...current,
       apiKey: '',
       hasApiKey: Boolean(current.apiKey),
+      apiKeyPreview: maskSecret(current.apiKey || ''),
     };
   }
   return {

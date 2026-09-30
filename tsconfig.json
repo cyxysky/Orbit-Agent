@@ -332,6 +332,33 @@
       ],
       "@cjfclonedeep/capability-sdk/runtime": [
         "./packages/capability-sdk/src/runtime.ts"
+      ],
+      "@cjfclonedeep/capability-sdk/execution/terminal/workspaces": [
+        "./packages/capability-sdk/src/execution/terminal/workspaces.ts"
+      ],
+      "@cjfclonedeep/capability-sdk/execution/terminal/http": [
+        "./packages/capability-sdk/src/execution/terminal/http.ts"
+      ],
+      "@cjfclonedeep/capability-sdk/execution/terminal/client": [
+        "./packages/capability-sdk/src/execution/terminal/client.ts"
+      ],
+      "@cjfclonedeep/capability-sdk/execution/terminal/react": [
+        "./packages/capability-sdk/src/execution/terminal/react.tsx"
+      ],
+      "@cjfclonedeep/capability-sdk/browser/preview/server": [
+        "./packages/capability-sdk/src/browser/preview/server.ts"
+      ],
+      "@cjfclonedeep/capability-sdk/browser/preview/video-encoder": [
+        "./packages/capability-sdk/src/browser/preview/video-encoder.ts"
+      ],
+      "@cjfclonedeep/capability-sdk/browser/preview/react": [
+        "./packages/capability-sdk/src/browser/preview/react.tsx"
+      ],
+      "@cjfclonedeep/capability-sdk/host/websocket-transport": [
+        "./packages/capability-sdk/src/host/websocket-transport.ts"
+      ],
+      "@cjfclonedeep/capability-sdk/ui/floating-window": [
+        "./packages/capability-sdk/src/ui/floating-window.tsx"
       ]
     }
   },

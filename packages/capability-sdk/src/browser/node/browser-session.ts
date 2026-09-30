@@ -15,7 +15,7 @@ import type { Browser, BrowserContext, BrowserContextOptions, BrowserServer, Con
 import { raceWithAbort, type CapabilityConfiguration } from '../../index.ts';
 import { resolveBrowserOutputPixelRatio, resolveBrowserPreviewImageFormat } from '../output-settings.ts';
 import { browserSessionGroupLabel } from '../session-group.ts';
-import { BrowserPreviewAdaptivePolicy, browserPreviewFramesPerSecond, type BrowserPreviewDemand } from './browser-preview-cadence.ts';
+import { browserPreviewFrameIntervalMs, browserPreviewFramesPerSecond } from './browser-preview-cadence.ts';
 import { BrowserPreviewFramePump, type BrowserPreviewFramePumpMetrics } from './browser-preview-frame-pump.ts';
 import { browserPreviewVideoMaximumDimensions } from './browser-preview-video-settings.ts';
 import { boundedNonNegativeIntegerEnv, boundedPositiveIntegerEnv, browserHeadlessEnabled, browserTabTitlePrefixEnabled, cdpEndpointForPort, electronEmbeddedBrowserCdpEndpoint, electronEmbeddedBrowserEnabled, clearManagedBrowserProfileCaches, normalizePageGroupId, numericLimitFromEnv, positiveIntegerEnv, sessionTabGrouperDebugPort, sessionTabGrouperEnabled, sessionTabGrouperProfileDir, sharedBrowserTabsEnabled, withSessionTabGrouperArgs, type BrowserRuntimeEnvironment } from './browser-session-runtime.ts';
@@ -2846,7 +2846,6 @@ export class BrowserSession {
   }
 
   async startScreencast(options: {
-    getDemand?: () => BrowserPreviewDemand | undefined;
     onActivePageChanged?: () => void;
     onError?: (error: unknown) => void;
     onFrame: (frame: BrowserScreencastFrame) => void | Promise<void>;
@@ -2865,8 +2864,7 @@ export class BrowserSession {
     const rawQuality = Number(environment.BROWSER_SCREENCAST_QUALITY ?? 90);
     const quality = Math.min(100, Math.max(40, Math.floor(Number.isFinite(rawQuality) ? rawQuality : 90)));
     const targetFps = browserPreviewFramesPerSecond(environment.BROWSER_PREVIEW_FPS);
-    const adaptive = new BrowserPreviewAdaptivePolicy(targetFps);
-    const currentFrameIntervalMs = () => Math.ceil(1000 / adaptive.fps);
+    const frameIntervalMs = browserPreviewFrameIntervalMs(targetFps);
     const maximumDimensions = browserPreviewVideoMaximumDimensions(environment);
     let stopped = false;
     let stopPromise: Promise<void> | undefined;
@@ -2879,6 +2877,14 @@ export class BrowserSession {
     let captureDurationMs = 0;
     let totalCaptureDurationMs = 0;
     let completedCaptures = 0;
+    let nativeCapture = false;
+    let removeNativeFrameListener: (() => void) | undefined;
+    let nativeStartedAt = 0;
+    let sourceFrames = 0;
+    let coalescedNativeFrames = 0;
+    let duplicateFrames = 0;
+    let deliveredNativeFrame = 0;
+    let latestNativeFrame: { data: Buffer; width: number; height: number; capturedAt: string; sequence: number } | undefined;
     let outputTimer: ReturnType<typeof setTimeout> | undefined;
     let nextOutputAt = Date.now();
     let nextPageRefreshAt = 0;
@@ -2914,10 +2920,11 @@ export class BrowserSession {
       cssViewport: { width: number; height: number },
       outputViewport: { width: number; height: number },
       metadata?: { deviceHeight?: number; deviceWidth?: number },
+      capturedAt = new Date().toISOString(),
     ) => {
       if (stopped || capturedPage.isClosed() || this.activePage !== capturedPage) return;
       framePump.push({
-        capturedAt: new Date().toISOString(),
+        capturedAt,
         contentType,
         data,
         metadata: metadata ? {
@@ -2953,6 +2960,10 @@ export class BrowserSession {
       const currentClient = client;
       const currentPage = page;
       client = undefined;
+      nativeCapture = false;
+      latestNativeFrame = undefined;
+      removeNativeFrameListener?.();
+      removeNativeFrameListener = undefined;
       if (currentPage && fileChooserListener) currentPage.off('filechooser', fileChooserListener);
       fileChooserListener = undefined;
       if (!currentClient) return;
@@ -2999,6 +3010,42 @@ export class BrowserSession {
             nextClient.send('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => undefined),
           ]);
         } finally { clearTimeout(setupTimeout); }
+        if (options.video && !stopped && client === nextClient) {
+          const onNativeFrame = (event: { sessionId: number; data: string; metadata: { deviceWidth: number; deviceHeight: number } }) => {
+            // Always acknowledge, including frames from a tab being detached.
+            void nextClient.send('Page.screencastFrameAck', { sessionId: event.sessionId }).catch(() => undefined);
+            if (stopped || client !== nextClient || this.activePage !== nextActivePage) return;
+            if (latestNativeFrame && latestNativeFrame.sequence !== deliveredNativeFrame) coalescedNativeFrames += 1;
+            sourceFrames += 1;
+            latestNativeFrame = {
+              data: Buffer.from(event.data, 'base64'),
+              width: event.metadata.deviceWidth,
+              height: event.metadata.deviceHeight,
+              capturedAt: new Date().toISOString(),
+              sequence: sourceFrames,
+            };
+          };
+          nextClient.on('Page.screencastFrame', onNativeFrame);
+          removeNativeFrameListener = () => nextClient.off('Page.screencastFrame', onNativeFrame);
+          const startTimeout = setTimeout(() => {
+            if (client === nextClient) void detachCurrentPage();
+          }, 2_500);
+          try {
+            await nextClient.send('Page.startScreencast', {
+              format,
+              ...(format === 'jpeg' ? { quality } : {}),
+              maxWidth: maximumDimensions.width,
+              maxHeight: maximumDimensions.height,
+              everyNthFrame: 1,
+            });
+            nativeCapture = client === nextClient && !stopped;
+            nativeStartedAt = Date.now();
+          } catch {
+            nextClient.off('Page.screencastFrame', onNativeFrame);
+            // Screenshot capture remains available when native streaming is unsupported.
+            nativeCapture = false;
+          } finally { clearTimeout(startTimeout); }
+        }
         return { client: nextClient, page: nextActivePage };
       })();
       try {
@@ -3013,6 +3060,25 @@ export class BrowserSession {
       const isCurrentPage = () => !stopped && client === binding.client
         && this.activePage === binding.page && !binding.page.isClosed();
       if (!isCurrentPage()) return;
+      if (nativeCapture) {
+        const latest = latestNativeFrame;
+        if (latest) {
+          const scale = Math.min(1, maximumDimensions.width / latest.width, maximumDimensions.height / latest.height);
+          const outputViewport = { width: Math.max(1, Math.round(latest.width * scale)), height: Math.max(1, Math.round(latest.height * scale)) };
+          if (deliveredNativeFrame === latest.sequence) duplicateFrames += 1;
+          deliveredNativeFrame = latest.sequence;
+          // Keep the fixed-rate encoder supplied on static pages without another
+          // screenshot. Repeated frames retain the original observation time.
+          pushOutputFrame(binding.page, latest.data, { width: latest.width, height: latest.height }, outputViewport,
+            { deviceWidth: outputViewport.width, deviceHeight: outputViewport.height }, latest.capturedAt);
+          return;
+        }
+        if (Date.now() - nativeStartedAt < 1_000) return;
+        nativeCapture = false;
+        removeNativeFrameListener?.();
+        removeNativeFrameListener = undefined;
+        await binding.client.send('Page.stopScreencast').catch(() => undefined);
+      }
       const startedAt = performance.now();
       activeCaptures = 1;
       const captureTimeout = setTimeout(() => {
@@ -3026,7 +3092,12 @@ export class BrowserSession {
           width: Math.max(1, source.clientWidth),
           height: Math.max(1, source.clientHeight),
         };
-        const outputViewport = adaptive.output(cssViewport, maximumDimensions, options.getDemand?.());
+        // Preview window size and transport load must not change encoder dimensions.
+        const scale = Math.min(1, maximumDimensions.width / cssViewport.width, maximumDimensions.height / cssViewport.height);
+        const outputViewport = {
+          width: Math.max(1, Math.round(cssViewport.width * scale)),
+          height: Math.max(1, Math.round(cssViewport.height * scale)),
+        };
         // Sample the current surface on every tick, including an unchanged
         // page. Change-driven screencast events starve the fixed-rate encoder.
         const result = await binding.client.send('Page.captureScreenshot', {
@@ -3040,6 +3111,7 @@ export class BrowserSession {
         // Resize pixels outside Chromium, just like automatic observations. CDP
         // clip scaling can disturb the shared surface while another capture runs.
         const captured = Buffer.from(result.data, 'base64');
+        sourceFrames += 1;
         if (options.video) {
           // FFmpeg already decodes and scales to the encoder dimensions. Avoid
           // a second decode/resize/JPEG encode in Sharp on every video frame.
@@ -3066,7 +3138,6 @@ export class BrowserSession {
         clearTimeout(captureTimeout);
         activeCaptures = 0;
         captureDurationMs = performance.now() - startedAt;
-        adaptive.observe(captureDurationMs, options.getDemand?.()?.pressured === true);
         totalCaptureDurationMs += captureDurationMs;
         completedCaptures += 1;
       }
@@ -3077,15 +3148,16 @@ export class BrowserSession {
       outputTimer = setTimeout(() => {
         outputTimer = undefined;
         if (stopped) return;
-        const startedAt = Date.now();
         captureTask = captureFrame()
           .catch((error) => {
             if (!stopped) options.onError?.(error);
           })
           .finally(() => {
             captureTask = undefined;
-            // Do not overlap captures or replay missed ticks after a slow frame.
-            nextOutputAt = Math.max(startedAt + currentFrameIntervalMs(), Date.now());
+            // Keep the fixed clock phase when a Windows timer fires late; using
+            // its actual start time would accumulate delay on every frame.
+            // Skip missed deadlines rather than overlapping slow captures.
+            nextOutputAt = Math.max(nextOutputAt + frameIntervalMs, Date.now());
             scheduleOutput();
           });
       }, delay);
@@ -3115,7 +3187,7 @@ export class BrowserSession {
     try {
       await captureFrame();
       if (!stopped) await framePump.flushLatest();
-      nextOutputAt = Date.now() + currentFrameIntervalMs();
+      nextOutputAt = Date.now() + frameIntervalMs;
       scheduleOutput();
     } catch (error) {
       if (tabsListener) this.livePreviewStateListeners.delete(tabsListener);
@@ -3128,13 +3200,19 @@ export class BrowserSession {
         const metrics = framePump.metrics();
         return {
           ...metrics,
+          coalescedFrames: coalescedNativeFrames + metrics.coalescedFrames,
+          coalescedRatio: sourceFrames ? (coalescedNativeFrames + metrics.coalescedFrames) / sourceFrames : 0,
+          nativeFrames: sourceFrames,
+          nativeFps: sourceFrames / metrics.elapsedSeconds,
+          duplicateFrames,
+          captureMode: nativeCapture ? 'screencast' : 'screenshot',
           activeCaptures,
           captureDurationMs,
           captureDurationMsAverage: completedCaptures ? totalCaptureDurationMs / completedCaptures : 0,
           imageFormat: format,
           ...(format === 'jpeg' ? { imageQuality: quality } : {}),
           maxConcurrentCaptures: 1,
-          targetFps: adaptive.fps,
+          targetFps,
         };
       },
       stop: async () => {

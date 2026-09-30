@@ -13,6 +13,8 @@ export async function startExecutionServices() {
     stopCommunicationRuntime();
     await stopMemoryWorker();
     const { closeAllBrowserSessions } = await import('@cjfclonedeep/capability-sdk/browser/node');
-    await closeAllBrowserSessions();
+    const { conversationTerminals } = await import('@/server/capabilities/terminal-manager');
+    const { closeBrowserPreviewWebSocketServer } = await import('@/server/realtime/browser-preview-ws');
+    await Promise.all([closeAllBrowserSessions(), conversationTerminals.dispose(), closeBrowserPreviewWebSocketServer()]);
   };
 }

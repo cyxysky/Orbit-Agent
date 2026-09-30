@@ -55,7 +55,7 @@ export function markdownBlock(text: string): ResponseBlock { return { type: mark
 
 export const htmlParams = z.object({
   html: z.string().min(1).max(100_000).describe('HTML fragment to render directly, without Markdown fences. Use semantic HTML, inline SVG, links and native details/summary interactions. Scripts, event handlers, forms, embeds and remote assets are unavailable.'),
-  css: z.string().max(40_000).optional().describe('Optional CSS scoped to this isolated HTML document. Style tags and inline styles in html are also supported. Use responsive layouts with natural content height, system fonts, inline SVG or data images; no external assets. The conversation owns vertical scrolling: do not use viewport heights (vh/dvh), fixed heights, max-height or overflow:auto/scroll on the page or its outer content wrapper.'),
+  css: z.string().max(40_000).optional().describe('Optional CSS scoped to this isolated HTML document. Style tags and inline styles in html are also supported. Keep html, body and the outer content wrapper transparent so the response blends into the conversation; reserve background fills for meaningful inner elements such as cards or diagrams. Use responsive layouts with natural content height, system fonts, inline SVG or data images; no external assets. The conversation owns vertical scrolling: do not use viewport heights (vh/dvh), fixed heights, max-height or overflow:auto/scroll on the page or its outer content wrapper.'),
   title: z.string().min(1).max(200).describe('Short accessible title for this UI block.'),
   text: z.string().min(1).max(20_000).describe('Plain-text equivalent including important facts and download URLs, for history, copying and clients without HTML rendering.'),
 }).strict();

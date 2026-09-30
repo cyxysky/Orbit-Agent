@@ -1204,6 +1204,7 @@ async function makeBrowserTools(
   referenceOptions?: {
   browserInteractionMode?: BrowserChatInteractionMode;
     runId?: string;
+    sessionId?: string;
     userId?: string;
     stepIndex?: number;
     allowedToolTypes?: string[];
@@ -1410,6 +1411,7 @@ async function makeBrowserTools(
     ],
     context: {
       runId: referenceOptions?.runId || '',
+      sessionId: referenceOptions?.sessionId,
       userId: referenceOptions?.userId,
       abortSignal: referenceOptions?.abortSignal,
     },
@@ -1925,6 +1927,7 @@ async function executeRuntimeStep(input: {
   session: BrowserSession;
   runtimeRecord: BrowserChatRuntimeRecord;
   runId: string;
+  sessionId?: string;
   userId?: string;
   turnId?: string;
   stepIndex: number;
@@ -2961,6 +2964,7 @@ async function executeRuntimeStep(input: {
     }, {
       allowedToolTypes,
       runId: input.runId,
+      sessionId: input.sessionId,
       userId: input.userId,
       stepIndex,
       visualContext,
@@ -3809,6 +3813,7 @@ function upsertStep(steps: StepExecutionResult[], step: StepExecutionResult) {
 export async function executeInteractiveBrowserTurn(input: {
   session: BrowserSession;
   runId: string;
+  sessionId?: string;
   userId?: string;
   turnId?: string;
   initialStepIndex?: number;
@@ -3907,6 +3912,7 @@ export async function executeInteractiveBrowserTurn(input: {
         browserInteractionMode: input.browserInteractionMode,
         runtimeRecord,
         runId: input.runId,
+        sessionId: input.sessionId,
         userId: input.userId,
         turnId: input.turnId || input.runId,
         stepIndex,

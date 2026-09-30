@@ -31,6 +31,7 @@ import { DataTransferButtons } from '@/components/DataTransferButtons';
 import { ManagementDataTable } from '@/components/ManagementDataTable';
 import { ModelBrandIcon } from '@/components/ModelBrandIcon';
 import { AppInput } from '@/components/ui/app-input';
+import { SecretInput } from '@/components/ui/secret-input';
 import { AppModal } from '@/components/ui/app-modal';
 import { ModelCapabilitiesModal } from '@/components/ModelCapabilitiesModal';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
@@ -70,6 +71,7 @@ export {
 
 export type EnvRow = Pick<RuntimeEnvRecord, 'key' | 'value' | 'enabled' | 'secret'> & {
   hasValue?: boolean;
+  secretPreview?: string;
   updatedAt?: string;
 };
 
@@ -553,6 +555,7 @@ function createModelConfig(input?: Partial<ModelConfig>): ModelConfig {
       modelCapabilities: normalizedModelCapabilities(definition.value, models, current?.modelCapabilities),
       apiKey: current?.apiKey || '',
       hasApiKey: Boolean(current?.hasApiKey || current?.apiKey),
+      apiKeyPreview: current?.apiKeyPreview,
       baseURL: current?.baseURL ?? definition.defaultBaseURL ?? '',
       extraRequestParameters: current?.extraRequestParameters || '',
       updatedAt: current?.updatedAt,
@@ -1798,6 +1801,14 @@ export function EnvironmentSettings({
       );
     }
 
+    if (isSecret(item)) {
+      return <SecretInput key={`${item.key}:${item.updatedAt || ''}`} label={t(definition?.label || item.key)}
+        value={item.value} onChange={value => update(index, { value })}
+        storedPreview={item.secretPreview || (item.hasValue ? '••••••••••••' : undefined)}
+        source={{ kind: 'environment', key: item.key }} headers={adminSettingsAuthorizationHeaders}
+        placeholder={t('未设置')} />;
+    }
+
     if (definition?.control === 'textarea') {
       return (
         <div className="settings-prompt-control">
@@ -1841,7 +1852,7 @@ export function EnvironmentSettings({
         min={definition?.min}
         max={definition?.max}
         placeholder={item.hasValue ? t('已配置，留空表示不修改') : t('未设置')}
-        type={definition?.control === 'number' ? 'number' : isSecret(item) ? 'password' : 'text'}
+        type={definition?.control === 'number' ? 'number' : 'text'}
         step={definition?.step}
         value={item.value}
         onChange={(event) => update(index, { value: event.target.value })}
@@ -2867,11 +2878,15 @@ export function EnvironmentSettings({
                     <strong>{t('访问密钥')}</strong>
                     <span>{t(activeProviderOption.keyLabel)}</span>
                   </div>
-                  <AppInput
+                  <SecretInput
+                    key={`${activeProvider}:${editingModelConfig.updatedAt || ''}`}
+                    label={t('访问密钥')}
                     disabled={Boolean(activeProviderOption.localAuth)}
-                    type="password"
                     value={activeProviderSettings.apiKey || ''}
-                    onChange={(event) => updateActiveProviderSettings({ apiKey: event.target.value, hasApiKey: Boolean(event.target.value) || activeProviderSettings.hasApiKey })}
+                    onChange={(value) => updateActiveProviderSettings({ apiKey: value, hasApiKey: Boolean(value) || activeProviderSettings.hasApiKey })}
+                    storedPreview={activeProviderSettings.apiKeyPreview || (activeProviderSettings.hasApiKey ? '••••••••••••' : undefined)}
+                    source={{ kind: 'provider', provider: activeProvider }}
+                    headers={adminSettingsAuthorizationHeaders}
                     placeholder={activeProviderOption.localAuth
                       ? t('本地登录，无需 Key')
                       : activeProviderSettings.hasApiKey

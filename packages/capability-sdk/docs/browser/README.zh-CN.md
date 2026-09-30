@@ -294,3 +294,11 @@ try {
 专用 `/mcp` 入口通过 `browser(action=open)`、`browser(action=code)`、`browser(action=snapshot)`、`browser(action=close)` 和显式 `browserSessionId` 管理会话；本教程的通用 Provider 暴露单个 `browser` 工具，两套参数不能混用。跨请求的远程浏览器会话应使用 MCP.md 中的有状态 HTTP 示例或 stdio；便捷的按请求 HTTP Handler 不会跨请求保留这个内存会话管理器。
 
 可选 system-browser-interactive-qa Skill 随 manifest 发布，主 Skill 会把 UI 调试和验收任务路由到该参考，覆盖持久会话迭代、功能后置条件、视觉检查和视口证据。state/browser(action=snapshot) 支持 scope=active/all、准确 frame、唯一 selector、query、maxOutputChars。nextCursor 继续同一份不可变观察，保持选择条件不变；两分钟、导航、新观察或 code 操作后过期。capturedAt 是历史时间，操作前重新核实实时定位器。失败结果包含 executionState 和 requiresStateRefresh；超时/取消/崩溃可能已执行部分动作，kernelReset 会清空 JavaScript 变量。
+
+## 实时预览包
+
+实时预览的编码、WebSocket 传输、播放器、原生弹窗、文件选择、浏览器输入和浮动窗口均由浏览器包提供。
+
+/server 的 createBrowserPreviewServer 接收 authorize、startScreencast、dispatchInput 和可选 port；调用 ensure() 启动监听，close() 释放连接、采集句柄和编码器。/react 的 BrowserPreviewWindow 接收 client（connect、uploadFile、可选 resolveDownloadUrl 和 download）以及 onClose 和可选 translate。/video-encoder 提供视频编码器。所有入口以 @cjfclonedeep/capability-sdk/browser/preview 为前缀。
+
+宿主负责认证票据、对话与 BrowserSession 的绑定、数据库/文件存储授权及桌面下载适配。播放器不依赖宿主组件、API 路径或全局样式；不传 download 时，网页下载由用户点击触发。

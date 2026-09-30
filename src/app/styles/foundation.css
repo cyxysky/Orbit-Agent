@@ -602,8 +602,7 @@ input[type="checkbox"]:not([data-slot], [data-slot] *):focus-visible {
 
 
 .error,
-.browser-chat-download-location-error,
-.browser-chat-web-preview-alert {
+.browser-chat-download-location-error {
   background: color-mix(in srgb, var(--danger) 9%, var(--panel));
   border: 1px solid color-mix(in srgb, var(--danger) 22%, var(--border));
   border-radius: var(--app-radius-sm);

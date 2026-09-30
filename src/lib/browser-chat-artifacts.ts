@@ -15,6 +15,17 @@ export type BrowserChatArtifactSummary = {
   url?: string;
 };
 
+export type BrowserChatMessageFileGroup = {
+  messageId: string;
+  title: string;
+  createdAt: string;
+  files: BrowserChatArtifactSummary[];
+};
+
+export function browserChatArtifactOpenUrl(artifact: BrowserChatArtifactSummary) {
+  return artifact.url || artifactApiUrl(artifact.path) || artifact.downloadUrl;
+}
+
 export function browserChatArtifactIdFromUrl(value: string) {
   try {
     const url = new URL(value, 'http://artifact.invalid');
@@ -26,6 +37,14 @@ export function browserChatArtifactIdFromUrl(value: string) {
   } catch {
     return undefined;
   }
+}
+
+/** A document can produce multiple physical files and revisions. */
+export function browserChatArtifactKey(artifact: BrowserChatArtifactSummary) {
+  const url = browserChatArtifactOpenUrl(artifact);
+  const identity = (url && browserChatArtifactIdFromUrl(url))
+    || artifact.path?.replace(/\\/g, '/') || url;
+  return identity ? `${artifact.kind === 'screenshot' ? 'screenshot' : 'file'}:${identity}` : artifact.id;
 }
 
 /** Resolve references only against artifacts delivered with this message. */
@@ -147,9 +166,7 @@ function browserChatFileArtifacts(tool: StepToolCall): BrowserChatArtifactSummar
       documentId: documentId || undefined,
       downloadUrl: downloadUrl || undefined,
       fileName,
-      id: documentId
-        ? `file:document:${documentId}`
-        : `file:${artifactId || path || url || downloadUrl}`,
+      id: `file:${artifactId || path || url || downloadUrl}`,
       kind: browserChatArtifactIsImage(fileName) ? 'image' : 'file',
       pageCount,
       path: path || undefined,
@@ -186,8 +203,11 @@ export function mergeBrowserChatArtifactSummaries(
       artifact.kind === 'screenshot'
       && browserChatScreenshotIsInternalDocumentPreview(artifact)
     ) continue;
-    const previous = byId.get(artifact.id);
-    byId.set(artifact.id, previous ? { ...previous, ...artifact } : artifact);
+    const key = browserChatArtifactKey(artifact);
+    const previous = byId.get(key);
+    // Metadata-only observations must not erase an already delivered URL.
+    const defined = Object.fromEntries(Object.entries(artifact).filter(([, value]) => value !== undefined));
+    byId.set(key, previous ? { ...previous, ...defined } : artifact);
   }
   return [...byId.values()];
 }

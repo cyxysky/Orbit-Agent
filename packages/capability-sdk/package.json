@@ -429,6 +429,42 @@
     "./runtime": {
       "types": "./dist/runtime.d.ts",
       "import": "./dist/runtime.js"
+    },
+    "./execution/terminal/workspaces": {
+      "types": "./dist/execution/terminal/workspaces.d.ts",
+      "import": "./dist/execution/terminal/workspaces.js"
+    },
+    "./execution/terminal/http": {
+      "types": "./dist/execution/terminal/http.d.ts",
+      "import": "./dist/execution/terminal/http.js"
+    },
+    "./execution/terminal/client": {
+      "types": "./dist/execution/terminal/client.d.ts",
+      "import": "./dist/execution/terminal/client.js"
+    },
+    "./execution/terminal/react": {
+      "types": "./dist/execution/terminal/react.d.ts",
+      "import": "./dist/execution/terminal/react.js"
+    },
+    "./browser/preview/server": {
+      "types": "./dist/browser/preview/server.d.ts",
+      "import": "./dist/browser/preview/server.js"
+    },
+    "./browser/preview/video-encoder": {
+      "types": "./dist/browser/preview/video-encoder.d.ts",
+      "import": "./dist/browser/preview/video-encoder.js"
+    },
+    "./browser/preview/react": {
+      "types": "./dist/browser/preview/react.d.ts",
+      "import": "./dist/browser/preview/react.js"
+    },
+    "./host/websocket-transport": {
+      "types": "./dist/host/websocket-transport.d.ts",
+      "import": "./dist/host/websocket-transport.js"
+    },
+    "./ui/floating-window": {
+      "types": "./dist/ui/floating-window.d.ts",
+      "import": "./dist/ui/floating-window.js"
     }
   },
   "scripts": {
@@ -489,7 +525,11 @@
     "@ai-sdk/provider": "^4.0.7",
     "ffmpeg-static": "^5.3.0",
     "undici": "^7.29.0",
-    "ws": "8.21.3"
+    "ws": "8.21.3",
+    "node-pty": "^1.1.0",
+    "@xterm/xterm": "^6.0.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "lucide-react": "^0.511.0"
   },
   "bin": {
     "capability-mcp": "scripts/mcp.mjs",

@@ -284,7 +284,7 @@ try {
 - 只有少数工具：检查 `--tools`、JSON 的 `enabled`、平台支持和客户端缓存；检查连接后 `tools/list` 的实际输出。
 - Office 超时：检查运行环境是否 ready、工具配置和客户端请求超时；不要每次连接都重新安装运行环境。
 - `file download` 不能读操作系统路径：下载操作接受 HTTP(S)/页面相对 URL；本地文件由宿主绑定附件，或通过终端/代码工具读取。`file write` 用于发布精确文本，`readContent` 使用返回的 artifactId。
-- `terminal read/write` 输出是增量；`stop` 返回 `terminal-cancelled` 表示主机取消成功。JavaScript 代码运行环境是 ESM。图表 update 需要 option 和 expectedRevision。
+- `terminal` 先 create/list 获取 terminalId，再在同一终端 run；read/wait 使用独立 cursor，write 发送原始输入，interrupt 中断前台命令，close/delete 管理终端寿命。JavaScript 代码运行环境是 ESM。图表 update 需要 option 和 expectedRevision。
 - chart/maps 已提供 MCP Apps 页面和本机浏览器预览链接，二维 ECharts 还返回 PNG；是否内嵌显示由客户端决定。配置、生命周期和地图密钥见 [MCP 可视化说明](MCP-UI.zh-CN.md)。原生 function adapter 的展示仍需业务 UI 接入 renderer。
 
 本地 Windows 验证覆盖默认 8 工具、Office/UNO/Python/FFmpeg/三模型运行、真实 SQLite、MCP 通信以及官方 Agents SDK 0.18.0 的本地工具循环。Google、企业 webhook、外部 MCP 和模型响应使用模拟接口验证；未完成真实外部服务、Linux 实机以及各客户端 UI 的端到端验证。详细证据见 consumer 项目的 `artifacts/tools-audit/`，不能把协议测试理解为所有业务集成已在生产服务通过。

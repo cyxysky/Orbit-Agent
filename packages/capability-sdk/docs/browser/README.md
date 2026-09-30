@@ -375,3 +375,11 @@ creation.
 `browser(action=open)` to obtain a `browserSessionId`, then pass it to
 `browser(action=code)`, `browser(action=snapshot)`, and `browser(action=close)`. The included
 `webpilot-browser-mcp` executable serves this interface over stdio.
+
+## Live preview package
+
+The browser package owns encoding, WebSocket transport, playback, native dialogs, file selection, browser input and the floating window.
+
+createBrowserPreviewServer from /server accepts authorize, startScreencast, dispatchInput and optional port; ensure() starts listening and close() releases connections, capture handles and encoders. BrowserPreviewWindow from /react accepts client (connect, uploadFile, optional resolveDownloadUrl and download), onClose and optional translate. /video-encoder exposes video encoding. Entry prefixes are @cjfclonedeep/capability-sdk/browser/preview.
+
+Hosts supply authentication tickets, conversation-to-BrowserSession binding, database/file-storage authorization and desktop download adapters. The player has no host component, API-route or global-style dependency. Without download, web downloads require a user click.

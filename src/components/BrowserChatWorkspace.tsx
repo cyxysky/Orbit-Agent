@@ -1,6 +1,7 @@
 'use client';
 import { normalizeBrowserChatInteractionMode, type BrowserChatInteractionMode } from '@/lib/browser-chat-interaction-mode';
 import { BrowserChatRecoveryPanel } from './BrowserChatRecoveryPanel';
+import { BrowserChatFilesPanel } from './BrowserChatFilesPanel';
 import { BrowserChatFailureNotice, isBrowserChatFailureNotice } from './BrowserChatFailureNotice';
 
 import { browserChatSessionListTimestamp, compareBrowserChatSessionCreation, upsertBrowserChatSessionByCreation } from '@/lib/browser-chat-session-order';
@@ -209,6 +210,7 @@ import {
 import { WorkspaceOverflowMenu } from '@/components/WorkspaceOverflowMenu';
 import { BrowserChatOnboarding } from '@/components/BrowserChatOnboarding';
 import { BrowserChatRuntimeStateControl } from '@/components/BrowserChatRuntimeStateControl';
+import { BrowserChatTerminalPanel } from '@/components/BrowserChatTerminalPanel';
 import { BeautifulLoadingState } from '@/components/BeautifulLoadingState';
 import { useFilePreview } from '@/components/FilePreviewProvider';
 import {
@@ -228,6 +230,9 @@ import {
 import { sortBrowserChatAiOutputCycles } from '@/lib/browser-chat-output-cycles';
 import {
   browserChatArtifactExtension,
+  browserChatArtifactOpenUrl,
+  browserChatArtifactKey,
+  mergeBrowserChatArtifactSummaries,
   browserChatArtifactIsImage,
   browserChatScreenshotIsInternalDocumentPreview,
   browserChatToolScreenshots,
@@ -2959,10 +2964,6 @@ function BrowserChatToolContextTokenInfo({ tool }: { tool: BrowserChatToolCall }
   );
 }
 
-function browserChatArtifactOpenUrl(artifact: BrowserChatArtifactSummary) {
-  return artifact.url || artifactApiUrl(artifact.path) || artifact.downloadUrl;
-}
-
 function browserChatArtifactFileIcon(fileName: string, openUrl: string) {
   if (browserChatArtifactIsImage(fileName)) {
     return <img alt="" loading="lazy" src={openUrl} />;
@@ -3051,7 +3052,7 @@ function BrowserChatMessageArtifactCards({
   const { t } = useI18n();
   const { openFilePreview } = useFilePreview();
   const files = useMemo(() => {
-    return (artifacts || []).flatMap((artifact) => {
+    return mergeBrowserChatArtifactSummaries(artifacts).flatMap((artifact) => {
       // Browser observations belong to their tool records, not the deliverable list.
       if (artifact.kind === 'screenshot') return [];
       const openUrl = browserChatArtifactOpenUrl(artifact);
@@ -3085,7 +3086,7 @@ function BrowserChatMessageArtifactCards({
           {files.map((file) => {
             const openPreview = () => openFilePreview({ fileName: file.fileName, source: file.openUrl });
             return (
-              <article className="browser-chat-output-file-row" key={file.id}>
+              <article className="browser-chat-output-file-row" key={browserChatArtifactKey(file)}>
                 <button className="browser-chat-output-file-main" onClick={openPreview} type="button" title={file.fileName}>
                   <span className={`browser-chat-output-file-icon${file.isImage ? ' is-image' : ''}`} aria-hidden="true">
                     {file.isImage ? <img alt="" loading="lazy" src={file.openUrl} /> : browserChatArtifactFileIcon(file.fileName, file.openUrl)}
@@ -10345,20 +10346,25 @@ export function BrowserChatWorkspace({
         </form>
       </div>
       <div className="browser-chat-conversation-header-actions">
-        <BrowserChatRecoveryPanel key={`recovery-${session.id}`} sessionId={session.id} busy={currentBusy} />
-        {webPreviewRuntime ? (
-          <button
-            aria-label={t('打开实时界面')}
-            className="browser-chat-conversation-direct-action"
-            disabled={session.status === 'closed'}
-            onClick={() => setWebPreviewOpen(true)}
-            title={session.status === 'closed' ? t('当前对话已结束') : t('打开实时界面')}
-            type="button"
-          >
-            <AppWindow aria-hidden="true" size={17} />
-            <span>{t('实时界面')}</span>
-          </button>
-        ) : null}
+        <div className="browser-chat-conversation-tools" role="group" aria-label={t('对话工具')}>
+          <BrowserChatRecoveryPanel key={`recovery-${session.id}`} sessionId={session.id} busy={currentBusy} />
+          <BrowserChatFilesPanel key={`files-${session.id}`} sessionId={session.id} busy={currentBusy} />
+          <BrowserChatTerminalPanel key={`terminals-${session.id}`} sessionId={session.id} closed={session.status === 'closed'} />
+          {webPreviewRuntime ? (
+            <button
+              aria-label={t('打开实时界面')}
+              aria-pressed={webPreviewOpen}
+              className="browser-chat-conversation-direct-action"
+              disabled={session.status === 'closed'}
+              onClick={() => setWebPreviewOpen(true)}
+              title={session.status === 'closed' ? t('当前对话已结束') : t('打开实时界面')}
+              type="button"
+            >
+              <AppWindow aria-hidden="true" size={17} />
+              <span>{t('实时界面')}</span>
+            </button>
+          ) : null}
+        </div>
         <BrowserChatRuntimeStateControl active={currentBusy} sessionId={session.id}>
           <button
             aria-label={t('结束会话并关闭浏览器')}

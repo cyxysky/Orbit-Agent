@@ -279,6 +279,7 @@ export type ModelProviderSettings = {
   }>;
   apiKey?: string;
   hasApiKey?: boolean;
+  apiKeyPreview?: string;
   baseURL?: string;
   /** JSON object merged into OpenAI-compatible chat-completion request bodies. */
   extraRequestParameters?: string;

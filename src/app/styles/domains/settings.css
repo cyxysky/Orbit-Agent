@@ -1605,3 +1605,22 @@
     padding-inline: 6px;
   }
 }
+.settings-secret-control { width: 100%; min-width: 0; }
+.settings-secret-control [data-slot="input-group"] { gap: 2px; }
+.settings-secret-control [data-slot="input-group-input"] { font-family: var(--app-font-mono, monospace); font-size: 12px; }
+.settings-secret-control [data-slot="input-group-input"]::placeholder { color: var(--muted); opacity: 1; }
+.settings-secret-control [data-slot="input-group-suffix"] { padding-inline: 0 5px; }
+.settings-secret-actions { display: flex; gap: 3px; align-items: center; }
+.settings-secret-actions button {
+  display: inline-flex; align-items: center; justify-content: center; flex: 0 0 28px;
+  width: 28px; min-width: 28px; height: 28px; padding: 0; line-height: 1;
+  border: 0; border-radius: 7px; background: transparent; box-shadow: none;
+  color: var(--muted); cursor: pointer; transition: color 120ms;
+}
+.settings-secret-actions button:hover:not(:disabled) { background: transparent; color: var(--foreground); }
+.settings-secret-actions button > svg { display: block; flex: 0 0 15px; width: 15px; height: 15px; margin: 0; transform-origin: center; }
+.settings-secret-actions button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.settings-secret-actions button[aria-busy="true"]:disabled { opacity: 1; }
+.settings-secret-actions button[aria-pressed="true"] { color: var(--accent-strong); }
+.settings-secret-actions button:disabled { opacity: .4; cursor: default; }
+.settings-secret-error { display: block; margin-top: 6px; color: var(--danger); font-size: 12px; }

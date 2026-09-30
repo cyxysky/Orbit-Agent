@@ -1,5 +1,7 @@
 export type BrowserPreviewFramePumpMetrics = {
   activeCaptures?: number;
+  captureMode?: 'screencast' | 'screenshot';
+  duplicateFrames?: number;
   captureDurationMs?: number;
   captureDurationMsAverage?: number;
   coalescedFrames: number;

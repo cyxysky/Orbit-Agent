@@ -145,32 +145,32 @@ export function AppModal({
   const heroSize = size === 'wide' || size === 'management' || size === 'log' || size === 'media' || size === 'preview' ? 'lg' : size;
   const dialogStyle = modalDialogStyle(size);
 
+  // Controlled overlays have an external opener, so do not mount DialogTrigger.
+  // Backdrop supplies both the overlay state and the component style context.
   return (
-    <Modal>
-      <Modal.Backdrop
-        className={backdropClassName}
-        isDismissable={dismissable}
-        isKeyboardDismissDisabled={!keyboardDismissable}
-        isOpen={open}
-        onOpenChange={(nextOpen) => {
-          if (!nextOpen) onClose();
-        }}
+    <Modal.Backdrop
+      className={backdropClassName}
+      isDismissable={dismissable}
+      isKeyboardDismissDisabled={!keyboardDismissable}
+      isOpen={open}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) onClose();
+      }}
+    >
+      <Modal.Container
+        placement={placement}
+        scroll={scroll}
+        size={heroSize}
       >
-        <Modal.Container
-          placement={placement}
-          scroll={scroll}
-          size={heroSize}
+        <Modal.Dialog
+          aria-label={ariaLabel}
+          aria-labelledby={ariaLabelledBy}
+          className={dialogClassName}
+          style={dialogStyle}
         >
-          <Modal.Dialog
-            aria-label={ariaLabel}
-            aria-labelledby={ariaLabelledBy}
-            className={dialogClassName}
-            style={dialogStyle}
-          >
-            {renderModalSections(children)}
-          </Modal.Dialog>
-        </Modal.Container>
-      </Modal.Backdrop>
-    </Modal>
+          {renderModalSections(children)}
+        </Modal.Dialog>
+      </Modal.Container>
+    </Modal.Backdrop>
   );
 }

@@ -42,6 +42,6 @@ npx tsx server.ts
 
 クライアントの cwd をプロジェクトに設定し、server.ts は絶対パスを指定します。Windows で実行ファイル名が必要なら npx.cmd を使用します。stdout は MCP 専用とし、ログは stderr に出力します。
 
-terminal の run/read/write/stop を公開します。サーバー指示と構造化結果全体をモデルへ渡し、プロセス操作全体で同じサーバー/ランタイムを維持してください。run/write はクライアントの操作承認へ接続します。権限フックはコマンド引数を検査しません。共有サービスでは認証済みユーザーとサーバー側の操作認可も必要です。
+terminal の create/list/run/read/wait/write/interrupt/resize/rename/close/delete を公開します。サーバー指示と構造化結果全体をモデルへ渡し、プロセス操作全体で同じサーバー/ランタイムを維持してください。run/write はクライアントの操作承認へ接続します。権限フックはコマンド引数を検査しません。共有サービスでは認証済みユーザーとサーバー側の操作認可も必要です。
 
 createTerminalMcpServer は未接続のサーバー、createTerminalMcpHandler は待ち受けを開始しない HTTP Handler を返します。簡易 HTTP Handler はリクエストごとの寿命のためプロセス状態を維持できません。状態付き HTTP では認証済み MCP セッションごとにサーバーを保持し、切断時の close でプロセスを停止します。[状態付き HTTP の例](../../../capability-sdk/docs/adapters/MCP-ADAPTER-MCP.ja.md) を参照してください。認証、OS 隔離、ファイル公開は自動提供されません。

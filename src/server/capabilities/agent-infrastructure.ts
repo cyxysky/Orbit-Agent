@@ -19,7 +19,7 @@ import { createAiSdkMediaGenerationOperations } from '@cjfclonedeep/capability-s
 import { store } from '@/server/db/store';
 import { createNodeCommunicationCapability } from '@cjfclonedeep/capability-sdk/integrations/communication/node';
 import type { CommunicationChannel } from '@cjfclonedeep/capability-sdk/integrations/communication';
-import { createNodeTerminalCapability } from '@cjfclonedeep/capability-sdk/execution/terminal/node';
+import { conversationTerminals } from './terminal-manager';
 import { createNodeComputerCapability } from '@cjfclonedeep/capability-sdk/computer/node';
 import type { BrowserCodeAttachmentBinding } from '@cjfclonedeep/capability-sdk/browser/node';
 import { artifactApiUrl } from '@/lib/artifacts';
@@ -156,7 +156,7 @@ export function createAgentInfrastructureProviders(input: {
     createDataCapability({ createRegistry: async () => createDataSourceRegistry(await configuredDataSources()) }),
     createMediaCapability({ createOperations: (context) => createConfiguredMediaOperations({ context, attachments: input.attachmentBindings || [] }) }),
     createNodeCommunicationCapability({ channels: configuredCommunicationChannels, draftDirectory: (context) => artifactPath('agent-infrastructure', 'communication', safeSegment(context.userId, 'shared')) }),
-    createNodeTerminalCapability(),
+    conversationTerminals.capability(),
     createNodeComputerCapability({
       screenshotDirectory: (context) => artifactPath(
         safeSegment(context.runId, 'shared'),

@@ -292,3 +292,11 @@ try {
 専用の `/mcp` は `browser(action=open)`、`browser(action=code)`、`browser(action=snapshot)`、`browser(action=close)` と明示的な `browserSessionId` を使います。このチュートリアルの汎用 Provider は単一の `browser` ツールを公開します。両者のスキーマを混在させないでください。複数リクエストにまたがるリモートセッションには MCP.md のステートフル HTTP 例または stdio を使います。リクエスト単位の簡易 HTTP Handler はメモリ内のセッション管理を保持しません。
 
 任意の system-browser-interactive-qa Skill が manifest に含まれ、主 Skill は UI デバッグ・受入確認をその参照に誘導します。永続セッションでの反復、機能の事後条件、画像確認、viewport 証拠を扱います。state/browser(action=snapshot) は scope=active/all、正確な frame、一意 selector、query、maxOutputChars に対応します。nextCursor は同じ不変観測を継続し、選択条件を変えず、2 分・遷移・新観測・code 操作で失効します。capturedAt は過去の時刻なので操作前に現在の locator を確認します。失敗結果は executionState と requiresStateRefresh を含み、中断/タイムアウト/クラッシュでは一部実行済みの場合があり、kernelReset で JavaScript 変数は失われます。
+
+## リアルタイムプレビューパッケージ
+
+ブラウザパッケージはエンコード、WebSocket 通信、再生、ネイティブダイアログ、ファイル選択、ブラウザ入力とフローティングウィンドウを提供します。
+
+/server の createBrowserPreviewServer は authorize、startScreencast、dispatchInput と任意の port を受け取ります。ensure() で起動し、close() で接続・キャプチャ・エンコーダーを解放します。/react の BrowserPreviewWindow は client（connect、uploadFile、任意の resolveDownloadUrl と download）、onClose と任意の translate を受け取ります。/video-encoder はエンコーダーを公開します。入口の接頭辞は @cjfclonedeep/capability-sdk/browser/preview です。
+
+ホストは認証チケット、会話と BrowserSession の関連付け、データベースとファイル保存の認可、デスクトップのダウンロード連携を担当します。プレーヤーはホストのコンポーネント、API パス、グローバル CSS に依存しません。download が未指定の場合、ダウンロードにはユーザーのクリックが必要です。

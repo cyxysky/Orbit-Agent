@@ -12,7 +12,7 @@ export function executionRequest(pathname: string, method = 'GET') {
   // Keep preview, selection and mutations with their live execution registry.
   if (method === 'GET' || method === 'HEAD') {
     if (['/api/browser-chat', '/api/browser-chat/bootstrap', '/api/browser-chat/tools'].includes(pathname)) return false;
-    if (/^\/api\/browser-chat\/[^/]+\/(?:state|history|logs|context)$/.test(pathname)) return false;
+    if (/^\/api\/browser-chat\/[^/]+\/(?:state|history|logs|context|files)$/.test(pathname)) return false;
   }
   return executionPrefixes.some(prefix => pathname === prefix || pathname.startsWith(`${prefix}/`) || prefix === '/api/settings/sensitive-data' && pathname.startsWith(prefix));
 }

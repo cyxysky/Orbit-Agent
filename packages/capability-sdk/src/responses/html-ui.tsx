@@ -46,7 +46,7 @@ export function HTMLResponseView({ params, locale }: { params: HTMLResponseParam
       sandbox={HTML_FRAME_SANDBOX}
       referrerPolicy="no-referrer"
       srcDoc={source}
-      style={{ display: 'block', width: '100%', height, border: 0, background: 'transparent', colorScheme: 'normal' }}
+      style={{ display: 'block', width: '100%', height, border: 0, background: 'transparent', colorScheme: 'inherit' }}
     /> : <div style={{ whiteSpace: 'pre-wrap' }}>{params.text}</div>}
   </div>;
 }

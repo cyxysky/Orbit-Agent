@@ -42,6 +42,6 @@ npx tsx server.ts
 
 Configure the client's process cwd as your project directory, and use an absolute server path. On Windows use npx.cmd if the client requires an executable name. Keep stdout reserved for MCP; diagnostic logs go to stderr.
 
-The server publishes terminal with run/read/write/stop. Forward server instructions and full structured results to the model. Keep one server/runtime for the whole process interaction. Configure client operation approval for run/write; permission hooks do not inspect command arguments. A shared server needs authenticated user identity and server-side action authorization.
+The server publishes terminal with create/list/run/read/wait/write/interrupt/resize/rename/close/delete. Forward server instructions and full structured results to the model. Keep one server/runtime for the whole process interaction. Configure client operation approval for run/write; permission hooks do not inspect command arguments. A shared server needs authenticated user identity and server-side action authorization.
 
 createTerminalMcpServer returns an unconnected server; createTerminalMcpHandler returns an HTTP handler, not a listening server. The convenience HTTP handler has a per-request lifecycle and cannot retain process sessions. For stateful HTTP, create one server per authenticated MCP session, keep it until disconnection, and close it to terminate processes. See the [listening stateful HTTP example](../../../capability-sdk/docs/adapters/MCP-ADAPTER-MCP.md). No helper provides authentication, isolation or file hosting automatically.

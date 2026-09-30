@@ -88,6 +88,7 @@ export function createHTMLResponseDocument(
       height: 'auto', 'min-height': '0', 'max-height': 'none',
       width: '100%', 'min-width': '0', 'max-width': '100%',
       margin: '0',
+      background: 'transparent',
       overflow: root === frameDocument.body ? 'visible' : 'hidden',
     })) root.style.setProperty(name, value, 'important');
   }

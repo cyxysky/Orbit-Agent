@@ -24,13 +24,44 @@ function sourceResolver(root, paths) {
   };
 }
 
-function backendCompilerOptions(root, ts) {
+function backendConfigPath(root) {
   const configName = process.env.WEBPILOT_CAPABILITY_SOURCE === 'npm' || process.env.ORBIT_CAPABILITY_SOURCE === 'npm' ? 'tsconfig.npm.json' : 'tsconfig.json';
-  const config = ts.readConfigFile(path.join(root, configName), ts.sys.readFile);
+  return path.join(root, configName);
+}
+
+function readBackendConfiguration(root, ts, readFile = ts.sys.readFile) {
+  const config = ts.readConfigFile(backendConfigPath(root), readFile);
   if (config.error) throw new Error(ts.flattenDiagnosticMessageText(config.error.messageText, '\n'));
-  const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, root);
+  const parsed = ts.parseJsonConfigFileContent(config.config, { ...ts.sys, readFile }, root);
   return { ...parsed.options, plugins: [], incremental: false, noEmit: false, declaration: false,
     module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022, sourceMap: true,
     inlineSources: true, rewriteRelativeImportExtensions: false };
 }
-module.exports = { sourceResolver, backendCompilerOptions };
+
+function backendCompilerOptions(root, ts) {
+  return readBackendConfiguration(root, ts);
+}
+
+// Long-lived development loaders must see newly declared aliases. Track the
+// configuration and its extends chain; do not reparse it on every module load.
+function backendSourceConfiguration(root, ts) {
+  let cached;
+  const revision = (filename) => {
+    const stat = fs.statSync(filename, { throwIfNoEntry: false });
+    return stat ? `${stat.mtimeMs}:${stat.ctimeMs}:${stat.size}` : '';
+  };
+  return () => {
+    const configPath = backendConfigPath(root);
+    if (cached?.configPath === configPath
+      && [...cached.revisions].every(([filename, value]) => revision(filename) === value)) return cached;
+    const revisions = new Map();
+    const options = readBackendConfiguration(root, ts, filename => {
+      revisions.set(filename, revision(filename));
+      return ts.sys.readFile(filename);
+    });
+    cached = { configPath, revisions, options, resolve: sourceResolver(root, options.paths || {}) };
+    return cached;
+  };
+}
+
+module.exports = { sourceResolver, backendCompilerOptions, backendSourceConfiguration };

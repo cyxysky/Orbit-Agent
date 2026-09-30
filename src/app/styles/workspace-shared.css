@@ -1454,7 +1454,7 @@
     padding: max(8px, env(safe-area-inset-top)) 0 0;
   }
 
-  .ui-modal:not(.browser-chat-web-preview-modal) {
+  .ui-modal {
     border-bottom: 0;
     border-radius: var(--modal-radius) var(--modal-radius) 0 0;
     height: auto;

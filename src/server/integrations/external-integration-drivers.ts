@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { maskSecret } from '@/lib/secret-input';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { DataSource } from 'typeorm';
@@ -54,6 +55,7 @@ export type ExternalIntegrationPublicSummary = {
   name: string;
   detailPreview: string;
   configuredFields: string[];
+  secretPreviews: Record<string, string>;
   publicConfiguration: ExternalIntegrationConfiguration;
   enabled: boolean;
   updatedAt: string;
@@ -905,6 +907,8 @@ export function publicExternalIntegrationSummary(integration: ResolvedExternalIn
     name: integration.name,
     detailPreview: driver.summarize(integration.configuration) + (bot ? ` · ${bot.error || (bot.connected ? '机器人已连接' : '机器人连接中')}${bot.lastMessageError ? ` · ${bot.lastMessageError}` : ''}` : ''),
     configuredFields: driver.fields.filter((field) => Boolean(integration.configuration[field.key])).map((field) => field.key),
+    secretPreviews: Object.fromEntries(driver.fields.filter(field => field.secret && integration.configuration[field.key])
+      .map(field => [field.key, maskSecret(integration.configuration[field.key])])),
     publicConfiguration: Object.fromEntries(driver.fields
       .filter((field) => !field.secret && integration.configuration[field.key])
       .map((field) => [field.key, integration.configuration[field.key]])),

@@ -2,13 +2,13 @@
 
 [English](TERMINAL.md) | [简体中文](TERMINAL.zh-CN.md) | [日本語](TERMINAL.ja.md)
 
-このガイドは独立した npm パッケージではなく、`@cjfclonedeep/capability-sdk@0.2.1` のサブパスを説明します。例で使うツールの依存は同梱されています。
+このガイドは独立した npm パッケージではなく、`@cjfclonedeep/capability-sdk@0.3.0` のサブパスを説明します。例で使うツールの依存は同梱されています。
 
 フレームワークに依存しないローカル端末の CapabilityProvider です。モデル、クラウドサンドボックス、Agent Loop は不要です。コマンドは Agent サービスを実行するマシン上で、その OS アカウントの権限で動作します。Web クライアント側の PC では実行されません。
 
 ## インストールと最初の呼び出し
 
-対応する 0.1.0 ワークスペースまたは公開パッケージを使用します。利用側プロジェクトで package.json を type=module に設定し、次のファイルを作成します。モデル/API キーは不要です。
+対応する 0.3.0 ワークスペースまたは公開パッケージを使用します。利用側プロジェクトで package.json を type=module に設定し、次のファイルを作成します。モデル/API キーは不要です。
 
 ```sh
 npm install @cjfclonedeep/capability-sdk
@@ -18,6 +18,7 @@ npm install -D typescript tsx @types/node
 ```ts
 // terminal.ts — Node >=22.16, ESM TypeScript
 import { randomUUID } from 'node:crypto';
+import type { TerminalResult } from '@cjfclonedeep/capability-sdk/execution/terminal';
 import { mountCapabilities } from '@cjfclonedeep/capability-sdk/host';
 import { createCapabilityExecutor } from '@cjfclonedeep/capability-sdk';
 import { createNodeTerminalCapability } from '@cjfclonedeep/capability-sdk/execution/terminal/node';
@@ -46,16 +47,18 @@ async function call(raw: unknown) {
 }
 try {
   console.log(mounted.skillCatalog.instructions('eager'));
+  const created = await call({ action: 'create', reason: 'Open a reusable terminal', name: 'Workspace' });
+  if (!created.ok) throw new Error(created.error.message);
+  const terminalId = (created.data as TerminalResult).terminal!.terminalId;
   let result = await call({
-    action: 'run', reason: 'Inspect the local working directory',
-    command: process.platform === 'win32' ? 'Get-Location' : 'pwd',
-    yieldMs: 1000,
+    action: 'run', reason: 'Inspect the local working directory', terminalId,
+    command: process.platform === 'win32' ? 'Get-Location' : 'pwd', yieldMs: 1000,
   });
   console.log(result);
-  while (result.ok && (result.data as { status: string }).status === 'running') {
+  while (result.ok && (result.data as TerminalResult).terminal?.status === 'running') {
     result = await call({
-      action: 'read', reason: 'Collect remaining command output',
-      sessionId: (result.data as { sessionId: string }).sessionId, yieldMs: 1000,
+      action: 'wait', reason: 'Wait for command completion', terminalId,
+      cursor: (result.data as TerminalResult).cursor, yieldMs: 30000,
     });
     console.log(result);
   }
@@ -71,18 +74,23 @@ npx tsx terminal.ts
 
 ## 操作
 
-- `run`: command と省略可能な cwd、stdin、keepStdinOpen、timeoutMs、yieldMs。毎回新しい Shell を起動します。相対 cwd は設定済みディレクトリから解決され、ファイルシステムの隔離境界ではありません。
-- `read`: sessionId と省略可能な yieldMs。前回以降の stdout/stderr、状態、終了コード、シグナル、切り捨て情報を取得します。
-- `write`: sessionId、stdin、任意の closeStdin と yieldMs。後から入力する場合は run で keepStdinOpen=true を指定します。既定では初期入力後に stdin を閉じます。
-- `stop`: sessionId。プロセスツリーを停止し、終了を待ちます。
+- `create`: 任意の name、cwd、cols、rows で再利用可能な terminalId を作成。`list` は既存端末を列挙します。
+- `run`: terminalId、command、任意の timeoutMs、yieldMs。同じ Shell のディレクトリ、変数、環境を維持します。実行中の端末は別の run を拒否します。
+- `read`: terminalId と任意の cursor。保持された出力を即時取得し、他の読み手のバッファを消費しません。
+- `wait`: terminalId、任意の cursor と yieldMs。コマンド終了まで待機して出力を取得します。
+- `write`: terminalId と input。生の入力を送信し、Enter は `\r` で表します。
+- `interrupt`: Ctrl+C を送信し、応答しない場合は端末を終了します。
+- `resize`: cols/rows。`rename`: name。`close` は端末と子プロセスを終了して出力を保持し、`delete` は記録も削除します。
 
-各操作には reason が必要です。yieldMs は 0–10000、既定値は 1000。running の場合は同じコマンドを再実行せず read で結果を取得します。非ゼロ終了、タイムアウト、キャンセルは ok=false と error.details 内の完全な TerminalResult を返します。実行中と成功した結果は data に入ります。
+すべての操作に reason が必要です。yieldMs は 0–30000 で、呼び出しの待機時間だけを制限します。running は成功ではありません。command.status=succeeded と command.exitCode=0 が成功を示します。run/wait の失敗、中断、タイムアウト時は error.details に TerminalResult が入ります。
 
 ## 実行環境と寿命
 
-auto は Windows で Windows PowerShell、それ以外で Bash を使用します。ホストは powershell、pwsh、bash、sh も指定できます。対象 Shell を事前にインストールしてください。Windows ではウィンドウを表示せず、Shell profile を読み込みません。PTY ではなくパイプを利用するため、TTY 必須または全画面アプリは非対応です。別の run に cd や変数は引き継がれません。
+実際の PTY を独立したネイティブ宿主プロセスで動かします。対話入力、ANSI 出力、サイズ変更をサポートします。auto は Windows で Windows PowerShell、それ以外で Bash を使用します。powershell、pwsh、bash を選択でき、Windows は前二者のみ対応します。Shell profile は読み込みません。.ps1/.cmd を含むパッケージ管理コマンドを直接呼び出せるため、バックグラウンドへの切り離しやログファイルのポーリングは不要です。
 
-run/read/write/stop は同一ランタイムを再利用します。dispose、キャンセル、タイムアウトでプロセスツリーを停止します。Orbit は Agent のターン終了時に解放するため、ターンや再起動をまたぐ常駐実行には使えません。stdout/stderr は出力予算の半分ずつを使用し、超過時は末尾を残して truncated=true を返します。最大 64 件の記録を保持し、古い完了済み記録を先に削除します。
+単独の createNodeTerminalCapability は管理器を所有し、dispose 時に端末を終了します。モデル要求をまたいで保持する場合は、パッケージの createTerminalWorkspaceRegistry を使用します。userId と sessionId で分離し、capability() は解放権限を持たないハンドルを返します。通常の応答完了やコンテキスト圧縮では端末を維持します。会話の停止・終了・削除時には stop({ ownerId, workspaceId }) で端末と子プロセスを終了して記録を削除し、サービス終了時には dispose() を呼びます。再起動後の端末復元やコマンド再実行は行いません。
+
+Node 管理器の subscribe は出力と状態を配信します。Orbit は認可済み SSE で配信し、再接続時に保持出力を再送します。生の出力は絶対カーソルを使い、モデル読み取りでは制御コードを除去します。PTY は stdout/stderr を統合するため、stderr の進捗だけでは失敗になりません。出力上限を超えると末尾を保持して truncated=true を返します。最大 64 件を明示的な削除まで保持します。timeoutMs=0 は期限なし、正数は期限到達時に前面コマンドを中断します。
 
 ## 設定
 
@@ -93,11 +101,11 @@ Windows は powershell/pwsh のみ対応します。ユーザーコマンドの�
 | `AGENT_TERMINAL_ENABLED` | `false` |
 | `AGENT_TERMINAL_CWD` | application cwd |
 | `AGENT_TERMINAL_SHELL` | `auto` |
-| `AGENT_TERMINAL_TIMEOUT_MS` | `120000` |
+| `AGENT_TERMINAL_TIMEOUT_MS` | `0` |
 | `AGENT_TERMINAL_MAX_OUTPUT_CHARS` | `50000` |
 | `AGENT_TERMINAL_MAX_PROCESSES` | `4` |
 
-設定は再マウント後に適用されます。明示的な工場 cwd は AGENT_TERMINAL_CWD より優先されます。createNodeTerminalOperations の直接利用ではホストが認可と解放を管理します。env はホストだけが注入し、省略するとサービスの環境を継承します。
+Shell と初期ディレクトリは新規端末に適用され、管理器の設定更新は後続操作に適用されます。明示的な工場 cwd は AGENT_TERMINAL_CWD より優先されます。createNodeTerminalOperations の直接利用ではホストが認可と解放を管理します。env はホストだけが注入し、省略するとサービスの環境を継承します。
 
 ## Agent 接続
 
@@ -106,3 +114,7 @@ tool.input.jsonSchema をモデルの引数定義に変換し、実行前に inp
 AI SDK では Provider と設定を @cjfclonedeep/capability-sdk/ai-sdk の mountAISDKCapabilities に渡し、agentOptions を自分の Agent に渡します。すべての呼び出し終了後に解放します。コアと Node 入口は AI SDK に依存しません。
 
 公開入口はルートの Provider/契約、/node、/settings、/runtime-skill、/mcp です。[MCP 接続](TERMINAL-MCP.ja.md) に実行可能なサービス例があります。
+
+## 会話のワークスペースと端末 UI
+
+/workspaces は管理器、/http の terminalHttpResponse は操作と SSE、/client の createHttpTerminalClient はホストルートへの接続、/react の TerminalWorkspace は作成・切り替え・改名・中断・終了・削除・リアルタイム出力・端末入力を提供します。入力プロンプトは最後の出力行の直後です。画面を閉じても端末は保持されます。ホストは認証、ワークスペース認可、設定とライフサイクル連携を担当し、モデル要求ごとの dispose で共有端末を破棄しません。
