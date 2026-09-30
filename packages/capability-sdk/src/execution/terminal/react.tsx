@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Loader2, Pencil, Plus, Power, SquareTerminal, StopCircle, Trash2, X } from 'lucide-react';
+import { Loader2, MoreHorizontal, Pencil, Plus, Power, SquareTerminal, StopCircle, Trash2, X } from 'lucide-react';
 import type { Terminal as XTerminal } from '@xterm/xterm';
 import type { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
@@ -12,6 +12,66 @@ const identity = (text: string) => text;
 
 type TerminalView = { terminal: XTerminal; fit: FitAddon; element: HTMLDivElement };
 type BufferState = { output: string; cursor: number };
+
+function TerminalListItem({ item, selected, disabled, onSelect, onAction, translate: t }: {
+  item: TerminalSummary; selected: boolean; disabled: boolean; onSelect: () => void;
+  onAction: (input: TerminalToolInput) => void; translate: (text: string) => string;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(item.name);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menu = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const cancelEdit = useRef(false);
+  const status = t(item.status === 'ready' ? '就绪' : item.status === 'running' ? '运行中' : item.status === 'starting' ? '启动中' : '已关闭');
+  const rename = () => { if (disabled) return; menu.current?.hidePopover(); onSelect(); setDraft(item.name); setEditing(true); };
+  const action = (action: 'interrupt' | 'close' | 'delete', reason: string) => {
+    menu.current?.hidePopover(); onAction({ action, reason, terminalId: item.terminalId });
+  };
+  return <div className={`cap-terminal-item${selected ? ' is-selected' : ''}`}>
+    <SquareTerminal size={15} className="cap-terminal-item-icon" />
+    {editing ? <input className="cap-terminal-rename" autoFocus aria-label={t('重命名终端')} value={draft} maxLength={100}
+      onFocus={event => event.currentTarget.select()} onChange={event => setDraft(event.target.value)}
+      onKeyDown={event => {
+        if (event.key === 'Enter' || event.key === 'Escape') {
+          event.preventDefault(); event.stopPropagation(); cancelEdit.current = event.key === 'Escape'; event.currentTarget.blur();
+        }
+      }} onBlur={() => {
+        if (!cancelEdit.current && draft.trim() && draft.trim() !== item.name) onAction({ action: 'rename', reason: '用户重命名终端', terminalId: item.terminalId, name: draft.trim() });
+        cancelEdit.current = false; setEditing(false);
+      }} /> : <button type="button" className="cap-terminal-item-select" aria-pressed={selected} title={`${item.shell} · ${status}\n${item.cwd}`}
+        onClick={onSelect} onDoubleClick={rename} onKeyDown={event => { if (event.key === 'F2') { event.preventDefault(); rename(); } }}>{item.name}</button>}
+    <i className="cap-terminal-state-dot" data-status={item.status} aria-label={status} title={status} />
+    <button ref={trigger} type="button" className="cap-terminal-icon cap-terminal-more" aria-label={`${item.name} · ${t('终端操作')}`} aria-haspopup="menu" aria-expanded={menuOpen}
+      onClick={() => {
+        if (menu.current?.matches(':popover-open')) { menu.current.hidePopover(); return; }
+        const popup = menu.current, button = trigger.current;
+        if (!popup || !button) return;
+        const rect = button.getBoundingClientRect();
+        popup.showPopover();
+        popup.style.left = `${Math.max(8, Math.min(rect.right - popup.offsetWidth, window.innerWidth - popup.offsetWidth - 8))}px`;
+        popup.style.top = `${Math.max(8, rect.bottom + popup.offsetHeight + 8 > window.innerHeight ? rect.top - popup.offsetHeight - 5 : rect.bottom + 5)}px`;
+        popup.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
+      }}><MoreHorizontal size={16} /></button>
+    <div ref={menu} popover="auto" className="cap-terminal-menu" role="menu" aria-label={t('终端操作')} onToggle={event => setMenuOpen(event.newState === 'open')}
+      onKeyDown={event => {
+        if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); menu.current?.hidePopover(); trigger.current?.focus(); }
+        if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+          event.preventDefault();
+          const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
+          const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+          const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowUp' ? -1 : 1) + buttons.length) % buttons.length;
+          buttons[next]?.focus();
+        }
+      }}>
+      <button type="button" role="menuitem" disabled={disabled} onClick={rename}><Pencil size={14} />{t('重命名')}<kbd>F2</kbd></button>
+      <button type="button" role="menuitem" disabled={disabled || item.status !== 'running'} onClick={() => action('interrupt', '用户中断命令')}><StopCircle size={14} />{t('中断命令')}</button>
+      <button type="button" role="menuitem" disabled={disabled || item.status === 'closed'} onClick={() => action('close', '用户关闭终端')}><Power size={14} />{t('关闭终端')}</button>
+      <button type="button" role="menuitem" className="cap-terminal-delete" disabled={disabled} onClick={() => action('delete', '用户删除终端')}><Trash2 size={14} />{t('删除终端')}</button>
+    </div>
+  </div>;
+}
+
 export function TerminalWorkspace({ client, onClose, closed = false, translate: t = identity }: { client: TerminalClient; onClose: () => void; closed?: boolean; translate?: (text: string) => string }) {
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => { dialog.current?.showModal(); dialog.current?.focus({ preventScroll: true }); }, []);
@@ -25,15 +85,12 @@ export function TerminalWorkspace({ client, onClose, closed = false, translate: 
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
   const [cwd, setCwd] = useState('');
-  const [rename, setRename] = useState('');
-  const [renaming, setRenaming] = useState(false);
   const [viewport, setViewport] = useState<HTMLDivElement | null>(null);
   const [ready, setReady] = useState(false);
   const [streamVersion, setStreamVersion] = useState(0);
   const buffers = useRef(new Map<string, BufferState>());
   const views = useRef(new Map<string, TerminalView>());
   const modules = useRef<{ Terminal: typeof XTerminal; FitAddon: typeof FitAddon } | null>(null);
-  const cancelRename = useRef(false);
   const inputAllowed = useRef(false); inputAllowed.current = Boolean(enabled) && !closed && connected;
   const selected = terminals.find(item => item.terminalId === selectedId) || terminals[0];
 
@@ -92,7 +149,6 @@ export function TerminalWorkspace({ client, onClose, closed = false, translate: 
     const view = selected && views.current.get(selected.terminalId);
     if (view) view.terminal.options.disableStdin = !enabled || !connected || closed || selected?.status === 'closed' || selected?.status === 'starting';
   }, [selected, enabled, connected, closed, ready]);
-  useEffect(() => { setRename(selected?.name || ''); setRenaming(false); }, [selected?.terminalId, selected?.name]);
 
   useEffect(() => {
     const selected = selectedRef.current;
@@ -111,7 +167,9 @@ export function TerminalWorkspace({ client, onClose, closed = false, translate: 
       viewport.replaceChildren(element); terminal.open(element);
       terminal.onData(input => {
         // The client coalesces input per terminal while preserving its order.
-        void send({ action: 'write', reason: '用户终端输入', terminalId: id, input }).catch(reason => setError(String(reason)));
+        void send({ action: 'write', reason: '用户终端输入', terminalId: id, input }).catch(reason => {
+          if (!(reason instanceof Error && reason.name === 'AbortError')) setError(String(reason));
+        });
       });
       terminal.write(buffers.current.get(id)?.output || '');
       view = { terminal, fit, element }; views.current.set(id, view);
@@ -137,11 +195,10 @@ export function TerminalWorkspace({ client, onClose, closed = false, translate: 
     setPending(input.action); setError('');
     try {
       const data = await send(input);
-      if (data.terminal) { setSelectedId(data.terminal.terminalId); setCreating(false); }
+      if (data.terminal && input.action === 'create') { setSelectedId(data.terminal.terminalId); setCreating(false); }
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setPending(''); }
   }
-  const status = (item: TerminalSummary) => t(item.status === 'ready' ? '就绪' : item.status === 'running' ? '运行中' : item.status === 'starting' ? '启动中' : '已关闭');
   const connectionLabel = t(connected ? '实时连接' : connection.status === 'error' ? '连接失败' : connection.status === 'reconnecting' ? '正在重连…' : '正在连接…');
   return <dialog ref={dialog} tabIndex={-1} className="cap-terminal-dialog" aria-label={t('对话终端')} onCancel={event => event.preventDefault()}>
     <style>{terminalStyles}</style>
@@ -163,26 +220,8 @@ export function TerminalWorkspace({ client, onClose, closed = false, translate: 
               <button className="cap-terminal-new" type="submit" disabled={!!pending}>{pending === 'create' ? <Loader2 size={15} className="cap-terminal-spin" /> : <Plus size={15} />}{t('创建')}</button>
             </form>}
             <nav className="cap-terminal-list" aria-label={t('终端列表')}>
-              {terminals.map(item => <div key={item.terminalId} className={`cap-terminal-item${selected?.terminalId === item.terminalId ? ' is-selected' : ''}`}>
-                <button type="button" className="cap-terminal-item-select" aria-pressed={selected?.terminalId === item.terminalId} title={item.cwd} onClick={() => setSelectedId(item.terminalId)} onDoubleClick={() => { setRename(item.name); setRenaming(true); }} onKeyDown={event => { if (event.key === 'F2') { event.preventDefault(); setRenaming(true); } }}>
-                  <span className="cap-terminal-item-icon"><SquareTerminal size={16} /></span><span className="cap-terminal-item-copy"><strong>{item.name}</strong><small>{item.shell}<span>{status(item)}</span></small></span><i className="cap-terminal-state-dot" data-status={item.status} />
-                </button>
-                {selected?.terminalId === item.terminalId && <>
-                  {renaming && <input className="cap-terminal-rename" autoFocus aria-label={t('重命名终端')} value={rename} maxLength={100} onFocus={event => event.currentTarget.select()} onChange={event => setRename(event.target.value)}
-                    onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); cancelRename.current = true; event.currentTarget.blur(); } }}
-                    onBlur={() => {
-                      if (!cancelRename.current && rename.trim() && rename.trim() !== item.name) void act({ action: 'rename', reason: '用户重命名终端', terminalId: item.terminalId, name: rename.trim() });
-                      else setRename(item.name);
-                      cancelRename.current = false; setRenaming(false);
-                    }} />}
-                  <div className="cap-terminal-item-actions" role="group" aria-label={t('终端操作')}>
-                    <button type="button" className="cap-terminal-icon" disabled={!!pending || !connected} aria-label={t('重命名终端')} title={t('重命名终端（F2）')} onClick={() => { setRename(item.name); setRenaming(true); }}><Pencil size={14} /></button>
-                    <button type="button" className="cap-terminal-icon" disabled={!!pending || !connected || item.status !== 'running'} aria-label={t('中断当前命令')} title={t('中断当前命令（Ctrl+C）')} onClick={() => void act({ action: 'interrupt', reason: '用户中断命令', terminalId: item.terminalId })}><StopCircle size={15} /></button>
-                    <button type="button" className="cap-terminal-icon" disabled={!!pending || !connected || item.status === 'closed'} aria-label={t('关闭终端')} title={t('关闭终端，保留输出')} onClick={() => void act({ action: 'close', reason: '用户关闭终端', terminalId: item.terminalId })}><Power size={15} /></button>
-                    <button type="button" className="cap-terminal-icon cap-terminal-delete" disabled={!!pending || !connected} aria-label={t('删除终端')} title={t('删除终端')} onClick={() => void act({ action: 'delete', reason: '用户删除终端', terminalId: item.terminalId })}><Trash2 size={15} /></button>
-                  </div>
-                </>}
-              </div>)}
+              {terminals.map(item => <TerminalListItem key={item.terminalId} item={item} selected={selected?.terminalId === item.terminalId} disabled={!!pending || !connected}
+                onSelect={() => setSelectedId(item.terminalId)} onAction={input => void act(input)} translate={t} />)}
               {!terminals.length && <p>{t('暂无终端')}</p>}
             </nav>
           </aside>

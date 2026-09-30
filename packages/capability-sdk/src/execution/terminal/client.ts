@@ -8,15 +8,79 @@ export interface TerminalClient {
 const errorMessage = (data: { error?: string | { message?: string } }, fallback: string) =>
   typeof data.error === 'string' ? data.error : data.error?.message || fallback;
 export function createHttpTerminalClient(url: string): TerminalClient {
+  type Write = Extract<TerminalToolInput, { action: 'write' }>;
+  type Entry = { request: Write; resolve: (result: TerminalResult) => void; reject: (error: unknown) => void };
+  type Queue = { entries: Entry[]; chars: number; timer?: ReturnType<typeof setTimeout>; active?: Promise<void> };
+  const inputs = new Map<string, Queue>();
+  const post = async (input: TerminalToolInput): Promise<TerminalResult> => {
+    const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input),
+      ...(input.action === 'write' ? { signal: AbortSignal.timeout(10000) } : {}) });
+    const data = await response.json();
+    if (!response.ok) throw new Error(errorMessage(data, 'Terminal operation failed.'));
+    return data;
+  };
+  const discard = (queue: Queue, error: unknown) => {
+    clearTimeout(queue.timer); queue.timer = undefined; queue.chars = 0;
+    for (const entry of queue.entries.splice(0)) entry.reject(error);
+  };
+  const flush = (id: string, queue: Queue) => {
+    clearTimeout(queue.timer); queue.timer = undefined;
+    if (queue.active) return;
+    queue.active = (async () => {
+      while (queue.entries.length) {
+        // Combine keys received during one round trip into the next request.
+        // Keep each paste intact, respect the tool's input limit, and preserve
+        // order independently for each terminal instead of blocking all tabs.
+        const batch: Entry[] = []; let chars = 0;
+        while (queue.entries.length && chars + queue.entries[0].request.input.length <= 100000) {
+          const entry = queue.entries.shift()!; batch.push(entry); chars += entry.request.input.length;
+        }
+        queue.chars -= chars;
+        try {
+          const data = await post({ ...batch[0].request, input: batch.map(entry => entry.request.input).join('') });
+          for (const entry of batch) entry.resolve(data);
+        } catch (error) {
+          // An unacknowledged write may already have reached the shell. Never
+          // replay it, or send its queued tail after the connection fails.
+          for (const entry of batch) entry.reject(error);
+          discard(queue, error);
+        }
+      }
+    })().finally(() => {
+      queue.active = undefined;
+      if (queue.entries.length) flush(id, queue);
+      else if (inputs.get(id) === queue) inputs.delete(id);
+    });
+  };
   return {
     async execute(input) {
-      const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) });
-      const data = await response.json();
-      if (!response.ok) throw new Error(errorMessage(data, 'Terminal operation failed.'));
-      return data;
+      if (input.action === 'write') {
+        if (!input.input.length || input.input.length > 100000) throw new Error('Terminal input must contain between 1 and 100000 characters.');
+        const queue = inputs.get(input.terminalId) || { entries: [], chars: 0 };
+        if (queue.chars + input.input.length > 200000 || queue.entries.length >= 2048) throw new Error('Terminal input is arriving faster than it can be sent.');
+        inputs.set(input.terminalId, queue);
+        return new Promise<TerminalResult>((resolve, reject) => {
+          queue.entries.push({ request: input, resolve, reject }); queue.chars += input.input.length;
+          if (!queue.active && !queue.timer) queue.timer = setTimeout(() => flush(input.terminalId, queue), 8);
+        });
+      }
+      if (input.action === 'interrupt' || input.action === 'close' || input.action === 'delete') {
+        const queue = inputs.get(input.terminalId);
+        if (queue) {
+          discard(queue, new DOMException('Pending terminal input was cancelled.', 'AbortError'));
+          if (queue.active) await queue.active;
+          else inputs.delete(input.terminalId);
+        }
+      }
+      return post(input);
     },
     subscribe(onEvent, onConnection) {
       let stopped = false, attempt = 0;
+      let connection: TerminalConnection | undefined;
+      const updateConnection = (next: TerminalConnection) => {
+        if (connection?.status === next.status && connection?.error === next.error) return;
+        connection = next; onConnection(next);
+      };
       let retry: ReturnType<typeof setTimeout> | undefined;
       let active: AbortController | undefined;
       const connect = async () => {
@@ -28,7 +92,7 @@ export function createHttpTerminalClient(url: string): TerminalClient {
         };
         let retryable = true;
         let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-        onConnection({ status: attempt ? 'reconnecting' : 'connecting' });
+        updateConnection({ status: attempt ? 'reconnecting' : 'connecting' });
         armDeadline(15000);
         try {
           const response = await fetch(`${url}${url.includes('?') ? '&' : '?'}stream=1`, {
@@ -57,7 +121,7 @@ export function createHttpTerminalClient(url: string): TerminalClient {
               if (data) {
                 const event = JSON.parse(data) as TerminalClientEvent;
                 if (stopped) return;
-                attempt = 0; onConnection({ status: 'connected' }); onEvent(event);
+                attempt = 0; updateConnection({ status: 'connected' }); onEvent(event);
                 if (event.type === 'reset') return;
               }
             }
@@ -66,7 +130,7 @@ export function createHttpTerminalClient(url: string): TerminalClient {
           if (stopped) return;
           const failure = controller.signal.aborted ? controller.signal.reason : reason;
           const error = failure instanceof Error ? failure.message : String(failure);
-          onConnection({ status: retryable ? 'reconnecting' : 'error', error });
+          updateConnection({ status: retryable ? 'reconnecting' : 'error', error });
           if (retryable) retry = setTimeout(() => { void connect(); }, Math.min(10000, 1000 * 2 ** attempt++));
         } finally {
           clearTimeout(deadline); await reader?.cancel().catch(() => undefined); reader?.releaseLock();
