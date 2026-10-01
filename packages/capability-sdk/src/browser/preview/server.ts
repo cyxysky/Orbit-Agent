@@ -564,6 +564,10 @@ function handleClientMessage(client: BrowserPreviewClient, text: string) {
       } else if (input.kind === 'clipboard') {
         sendToClient(client, { type: 'clipboard', requestId, text: (result.data as { clipboardText?: string } | undefined)?.clipboardText || '' });
       } else if (input.kind === 'tab' || input.kind === 'browserControl') {
+        const stream = state().streams.get(client.streamKey);
+        // A manual new-tab/navigation action may have started a browser after
+        // the initial subscription reported it unavailable.
+        if (stream && !stream.stop) await attachStream(stream);
         // The active-page listener handles tab changes from every source.
         // Restarting here too races that listener and resets the decoder twice.
       } else if (result.liveControl || result.liveSelect) {

@@ -366,7 +366,7 @@ type PendingExecution = {
 const maxDiagnosticChars = 4_000;
 const defaultBrowserCodeKernelReadyTimeoutMs = 10_000;
 const defaultBrowserCodeExecutionTimeoutMs = 90_000;
-export const BROWSER_CODE_KERNEL_RUNTIME_REVISION = 49;
+export const BROWSER_CODE_KERNEL_RUNTIME_REVISION = 50;
 
 function boundedInteger(value: unknown, fallback: number, min: number, max: number) {
   const parsed = typeof value === 'number' ? value : Number(value);
@@ -765,9 +765,9 @@ function browserCodeKernelMain() {
     if (!activeExecution || !point || page.isClosed()) return;
     await page.evaluate(({ x, y, pointerKind }) => {
       const browserWindow = window as Window & {
-        __aiMoveMouseCursor?: (cursorX: number, cursorY: number, options?: { kind?: string }) => void;
+        __aiMoveMouseCursor?: (cursorX: number, cursorY: number, options?: { kind?: string }) => Promise<void>;
       };
-      browserWindow.__aiMoveMouseCursor?.(x, y, { kind: pointerKind });
+      return browserWindow.__aiMoveMouseCursor?.(x, y, { kind: pointerKind });
     }, { x: point.x, y: point.y, pointerKind: kind }).catch(() => undefined);
   };
 
@@ -1564,18 +1564,20 @@ function browserCodeKernelMain() {
 
   const locatorCenter = async (locator: object) => {
     const candidate = locator as {
+      boundingBox?: () => Promise<{ x: number; y: number; width: number; height: number } | null>;
       evaluate?: <T>(
         callback: (element: Element) => T,
         argument?: unknown,
         options?: { timeout?: number },
       ) => Promise<T>;
     };
-    return candidate.evaluate?.((element) => {
+    await candidate.evaluate?.((element) => {
       element.scrollIntoView({ block: 'center', inline: 'center' });
-      const rect = element.getBoundingClientRect();
-      if (!rect.width || !rect.height) return undefined;
-      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
     }, undefined, { timeout: browserCodePointerLookupTimeoutMs }).catch(() => undefined);
+    // Playwright includes iframe offsets; a DOM rect is local to the target frame.
+    const rect = await candidate.boundingBox?.().catch(() => undefined);
+    if (!rect?.width || !rect.height) return undefined;
+    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
   };
 
   const captureCoordinateClickState = async (

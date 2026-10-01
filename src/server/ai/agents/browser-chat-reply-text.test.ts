@@ -1,6 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { containsPrivateToolProtocol, isBrowserChatDomObservationText, normalizeBrowserChatFinalReplyText } from './browser-chat-reply-text';
+import { browserChatRequestedUserInput } from '../../../lib/browser-chat-tools';
+
+test('user input requests retain the complete Markdown question and ignore superseded requests', () => {
+  const question = ['## 请补充文件', '', ...Array.from({ length: 30 }, (_, i) =>
+    `${i + 1}. [文件 ${i + 1}](https://example.com/files/${i + 1})`), '', '下载完成后回复“已放好”。'].join('\n');
+  const request = { name: 'browser', ok: true, input: { action: 'requestUserInput', question } };
+  assert.ok(question.length > 900);
+  assert.equal(browserChatRequestedUserInput([request]), question);
+  assert.equal(browserChatRequestedUserInput([{ ...request, ok: false }]), undefined);
+  assert.equal(browserChatRequestedUserInput([request, { name: 'browser', ok: true, input: { action: 'state' } }]), undefined);
+});
 
 test('final browser-chat replies preserve Markdown block boundaries', () => {
   const markdown = [

@@ -41,11 +41,16 @@ export type UINode = {
 
 export const markdownParams = z.object({ text: z.string().min(1).max(40_000) }).strict();
 export const markdownResponse = defineResponseType({
-  type: 'core.markdown', description: 'Markdown prose in an ordered response.',
+  type: 'core.markdown', description: 'Markdown prose in an ordered response. Params contains only text; put headings inside text, not a separate title field.',
   params: defineCapabilityInput(z.toJSONSchema(markdownParams), value => markdownParams.parse(value)),
   examples: [{ text: 'Here are the results.' }],
   toText: params => params.text,
   mapText: (params, transform) => ({ text: transform(params.text) }),
+  repair(params) {
+    if (typeof params.title !== 'string' || !params.title.trim() || typeof params.text !== 'string') return params;
+    const { title, ...rest } = params;
+    return { ...rest, text: `## ${title}\n\n${params.text}` };
+  },
   partial(value) {
     const result = markdownParams.safeParse(value);
     return result.success ? result.data : undefined;
@@ -57,16 +62,17 @@ export const htmlParams = z.object({
   html: z.string().min(1).max(100_000).describe('HTML fragment to render directly, without Markdown fences. Use semantic HTML, inline SVG, links and native details/summary interactions. Scripts, event handlers, forms, embeds and remote assets are unavailable.'),
   css: z.string().max(40_000).optional().describe('Optional CSS scoped to this isolated HTML document. Style tags and inline styles in html are also supported. Keep html, body and the outer content wrapper transparent so the response blends into the conversation; reserve background fills for meaningful inner elements such as cards or diagrams. Use responsive layouts with natural content height, system fonts, inline SVG or data images; no external assets. The conversation owns vertical scrolling: do not use viewport heights (vh/dvh), fixed heights, max-height or overflow:auto/scroll on the page or its outer content wrapper.'),
   title: z.string().min(1).max(200).describe('Short accessible title for this UI block.'),
-  text: z.string().min(1).max(20_000).describe('Plain-text equivalent including important facts and download URLs, for history, copying and clients without HTML rendering.'),
+  text: z.string().min(1).max(20_000).describe('Required plain-text equivalent including important facts and download URLs, for history, copying and clients without HTML rendering. Supply this even when another block contains Markdown.'),
 }).strict();
 export type HTMLResponseParams = z.infer<typeof htmlParams>;
 export const htmlResponse = defineResponseType({
   type: 'core.html',
-  description: 'Custom HTML/CSS UI rendered in an isolated, auto-sized frame. Prefer this for bespoke visual layouts and polished deliverables. Supply html, optional css, title and a complete plain-text equivalent in text. Use restrained typography, generous whitespace and responsive layouts; avoid wrapping every section in bordered cards. JavaScript, event handlers, forms, remote resources and parent-page access are unavailable. Use real artifact URLs in anchors; never invent download links. Theme variables --foreground, --muted, --panel, --border, --accent and --accent-strong are available.',
+  description: 'Custom HTML/CSS UI rendered in an isolated, auto-sized frame. Prefer this for bespoke visual layouts and polished deliverables. Required params: html, title and text (a complete plain-text equivalent). Only css is optional. Use restrained typography, generous whitespace and responsive layouts; avoid wrapping every section in bordered cards. JavaScript, event handlers, forms, remote resources and parent-page access are unavailable. Use real artifact URLs in anchors; never invent download links. Theme variables --foreground, --muted, --panel, --border, --accent and --accent-strong are available.',
   params: defineCapabilityInput(z.toJSONSchema(htmlParams), value => htmlParams.parse(value)),
   examples: [{ title: 'Summary', text: 'Three sections are ready for review.', html: '<section><p class="eyebrow">READY FOR REVIEW</p><h2>Three sections, one clear story.</h2><p>The updated content is ready to explore.</p></section>', css: 'section{padding:24px 0}h2{font-size:24px;font-weight:500;margin:8px 0}.eyebrow{font-size:11px;letter-spacing:.14em;color:var(--muted)}' }],
   toText: params => params.text,
   mapText: (params, transform) => ({ ...params, text: transform(params.text) }),
+  repair: params => params.title === undefined ? { ...params, title: 'HTML response' } : params,
 });
 
 const uiParams = z.object({ tree: uiNodeSchema }).strict();

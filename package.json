@@ -10,6 +10,7 @@
   },
   "main": "electron/main.js",
   "scripts": {
+    "mcp:setup": "node packages/capability-sdk/scripts/setup.mjs",
     "code-sandbox:start": "node server/start-code-sandbox-runner.js",
     "dev": "node --max-old-space-size=8144 server/webpilot-server.js --dev",
     "sensitive-data:install": "npm run install-runtime --workspace @cjfclonedeep/capability-sdk",

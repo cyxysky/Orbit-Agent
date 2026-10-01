@@ -6,6 +6,7 @@ import { Popover } from '@heroui/react/popover';
 import { Download, Files, FolderOpen, Loader2, RefreshCw, Search, X } from 'lucide-react';
 import { useI18n } from '@/i18n/I18nProvider';
 import { AppInput } from '@/components/ui/app-input';
+import { ExpandableActionLabel } from '@/components/ui/expandable-action-label';
 import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { useFilePreview } from '@/components/FilePreviewProvider';
 import { WorkspaceHistoryList } from '@/components/WorkspaceSidebarArchive';
@@ -16,7 +17,7 @@ export function BrowserChatFilesPanel({ sessionId, busy }: {
   sessionId: string; busy: boolean;
 }) {
   const { t, language } = useI18n();
-  const { openFilePreview } = useFilePreview();
+  const { openFilePreview, filePreviewOpen } = useFilePreview();
   const [open, setOpen] = useState(false);
   const [groups, setGroups] = useState<BrowserChatMessageFileGroup[]>([]);
   const [selectedId, setSelectedId] = useState<string>();
@@ -50,11 +51,12 @@ export function BrowserChatFilesPanel({ sessionId, busy }: {
   const selected = filtered.find(group => group.messageId === selectedId) || filtered[0];
   const count = groups.reduce((total, group) => total + group.files.length, 0);
   const time = (value: string) => new Intl.DateTimeFormat(language, { hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value));
-  return <Popover isOpen={open} onOpenChange={setOpen}>
+  return <Popover isOpen={open} onOpenChange={nextOpen => { if (nextOpen || !filePreviewOpen) setOpen(nextOpen); }}>
     <Button type="button" variant="ghost" className="browser-chat-conversation-direct-action" aria-label={t('对话文件管理')} aria-expanded={open}>
-      <Files size={17} aria-hidden="true" /><span className="browser-chat-files-trigger-label">{t('对话文件')}</span>
+      <Files size={17} aria-hidden="true" /><ExpandableActionLabel>{t('对话文件')}</ExpandableActionLabel>
     </Button>
-    <Popover.Content className="browser-chat-files-popover" placement="bottom end" offset={10} containerPadding={12}>
+    <Popover.Content className="browser-chat-files-popover" placement="bottom end" offset={10} containerPadding={12}
+      isKeyboardDismissDisabled={filePreviewOpen} shouldCloseOnInteractOutside={element => !filePreviewOpen && !element.closest('.file-preview-overlay')}>
       <Popover.Dialog aria-label={t('对话文件管理')} className="browser-chat-files-dialog">
         <header className="browser-chat-files-header">
           <span className="browser-chat-files-heading-icon"><Files size={20} /></span>
@@ -73,7 +75,7 @@ export function BrowserChatFilesPanel({ sessionId, busy }: {
                     renderItem={group => <button type="button" className={`browser-chat-files-message${selected?.messageId === group.messageId ? ' is-selected' : ''}`}
                       title={group.title} aria-pressed={selected?.messageId === group.messageId} onClick={() => setSelectedId(group.messageId)}>
                       <strong>{group.title}</strong>
-                      <time dateTime={group.createdAt}>{time(group.createdAt)}</time>
+                      <span className="browser-chat-files-message-meta"><time dateTime={group.createdAt}>{time(group.createdAt)}</time><span>{t('{count} 个文件', { count: group.files.length })}</span></span>
                     </button>} />
                 </nav>
                 <section className="browser-chat-files-results" aria-label={selected?.title || t('文件')}>
@@ -82,7 +84,7 @@ export function BrowserChatFilesPanel({ sessionId, busy }: {
                     {selected?.files.map(file => {
                       const source = browserChatArtifactOpenUrl(file)!;
                       return <article className="browser-chat-files-file" key={browserChatArtifactKey(file)}>
-                        <button type="button" className="browser-chat-files-file-main" title={file.fileName} onClick={() => { setOpen(false); openFilePreview({ fileName: file.fileName, source }); }}>
+                        <button type="button" className="browser-chat-files-file-main" title={file.fileName} onClick={() => openFilePreview({ fileName: file.fileName, source })}>
                           <span className="browser-chat-files-file-icon"><FileTypeIcon fileName={file.fileName} size={26} /></span>
                           <span><strong>{file.fileName}</strong><small>{file.fileName.split('.').at(-1)?.toUpperCase()} {typeof file.bytes === 'number' ? `· ${new Intl.NumberFormat(language, { maximumFractionDigits: 1 }).format(file.bytes / 1024)} KB` : ''}{file.pageCount ? ` · ${t('{count} 页', { count: file.pageCount })}` : ''}</small></span>
                         </button>

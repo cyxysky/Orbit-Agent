@@ -15,6 +15,7 @@ import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 import type { SkillRecord } from '@/server/ai/schemas/runtime.schema';
 import { AppInput } from '@/components/ui/app-input';
 import { AppModal } from '@/components/ui/app-modal';
+import { ExpandableActionLabel } from '@/components/ui/expandable-action-label';
 
 type SkillDraft = {
   shared: boolean;
@@ -242,9 +243,9 @@ export function SkillsManager({
   const managerActions = (
     <div className="personal-memory-head-actions">
       <DataTransferButtons kind="skills" onImported={loadSkills} />
-      <button className="ui-button ui-button--primary" onClick={openCreateSkill} type="button">
+      <button aria-label={t('新建 Skill')} className="ui-button ui-button--primary management-toolbar-action is-primary" onClick={openCreateSkill} type="button">
         <Plus size={15} />
-        {t('新建 Skill')}
+        <ExpandableActionLabel>{t('新建 Skill')}</ExpandableActionLabel>
       </button>
     </div>
   );

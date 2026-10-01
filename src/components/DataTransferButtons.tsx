@@ -7,6 +7,7 @@ import { readApiJson } from '@/lib/api-client';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 import { AppInput } from '@/components/ui/app-input';
 import { AppModal } from '@/components/ui/app-modal';
+import { ExpandableActionLabel } from '@/components/ui/expandable-action-label';
 
 type DataTransferKind = 'credentials' | 'skills' | 'memory' | 'model';
 
@@ -178,13 +179,13 @@ export function DataTransferButtons({
   return (
     <>
       <div className="data-transfer-buttons">
-        <button className="ui-button ui-button--neutral" disabled={disabled || busy} onClick={beginExport} type="button">
+        <button aria-label={t('导出')} className="ui-button ui-button--neutral management-toolbar-action" disabled={disabled || busy} onClick={beginExport} type="button">
           {busyOperation === 'export' ? <Loader2 className="spin" size={15} /> : <Download size={15} />}
-          {t('导出')}
+          <ExpandableActionLabel>{t('导出')}</ExpandableActionLabel>
         </button>
-        <button className="ui-button ui-button--neutral" disabled={disabled || busy} onClick={beginImport} type="button">
+        <button aria-label={t('导入')} className="ui-button ui-button--neutral management-toolbar-action" disabled={disabled || busy} onClick={beginImport} type="button">
           {busyOperation === 'import' ? <Loader2 className="spin" size={15} /> : <Upload size={15} />}
-          {t('导入')}
+          <ExpandableActionLabel>{t('导入')}</ExpandableActionLabel>
         </button>
       </div>
       <input

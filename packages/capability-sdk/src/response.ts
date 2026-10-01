@@ -21,6 +21,8 @@ export interface ResponseDefinition<T = Record<string, unknown>> {
   mapText?(params: T, transform: (text: string) => string): T;
   /** Opt-in projection of incomplete streamed params. Other types publish atomically. */
   partial?(params: unknown): T | undefined;
+  /** Optional lossless correction of model-authored params, followed by strict validation. */
+  repair?(params: Record<string, unknown>): Record<string, unknown>;
 }
 
 export function defineResponseType<T extends Record<string, unknown>>(definition: ResponseDefinition<T>): ResponseDefinition<T> {
@@ -86,10 +88,37 @@ export class ResponseRegistry {
         remainingWork: declared.remainingWork.map(item => (item as string).trim()),
       };
     }
-    return { status, ...(completion ? { completion } : {}), blocks: response.blocks.map((block, index) => {
-      try { return this.parse(block); }
-      catch (error) { throw new Error(`blocks.${index}: ${error instanceof Error ? error.message : String(error)}`); }
-    }) };
+    const errors: string[] = [];
+    const blocks = response.blocks.flatMap((block, index) => {
+      try { return [this.parse(block)]; }
+      catch (error) { errors.push(`blocks.${index}: ${error instanceof Error ? error.message : String(error)}`); return []; }
+    });
+    if (errors.length) throw new Error(errors.join('\n'));
+    return { status, ...(completion ? { completion } : {}), blocks };
+  }
+
+  /** Preserve authored content and completion; infer a missing type only from one matching schema. */
+  repairInput(raw: string): string | undefined {
+    try {
+      const response = object(JSON.parse(closeResponseBlocksArray(raw)));
+      if (!Array.isArray(response.blocks)) return undefined;
+      const repaired = { ...response, blocks: response.blocks.map(value => {
+        const block = object(value);
+        const params = object(block.params);
+        const candidates = typeof block.type === 'string' ? [this.require(block.type)]
+          : block.type === undefined ? this.definitions() : [];
+        const matches = candidates.flatMap(definition => {
+          try {
+            return [this.parse({ ...block, type: definition.type, params: definition.repair?.(params) ?? params })];
+          } catch { return []; }
+        });
+        return matches.length === 1 ? matches[0] : block;
+      }) };
+      // Keep the entire response subject to the original schema and host completion review.
+      const valid = this.parseResponse(repaired);
+      const serialized = JSON.stringify(valid);
+      return serialized !== raw ? serialized : undefined;
+    } catch { return undefined; }
   }
 
   /** Keep model instructions and examples aligned with the same registered schemas. */
@@ -210,6 +239,36 @@ function canonical(value: unknown): unknown {
   if (!value || typeof value !== 'object') return value;
   return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))
     .map(([key, entry]) => [key, canonical(entry)]));
+}
+
+/** A model may omit ] between blocks and the next envelope field. Do not repair strings or truncation. */
+function closeResponseBlocksArray(raw: string): string {
+  try { JSON.parse(raw); return raw; } catch { /* Inspect structural delimiters only. */ }
+  if (raw.length > 1_000_000) return raw;
+  const stack: string[] = [];
+  let quoted = false;
+  for (let index = 0; index < raw.length; index++) {
+    const char = raw[index];
+    if (quoted) {
+      if (char === '\\') index++;
+      else if (char === '"') quoted = false;
+      continue;
+    }
+    if (char === '"') { quoted = true; continue; }
+    if (char === '{' || char === '[') stack.push(char);
+    else if (char === '}' || char === ']') {
+      if (stack.pop() !== (char === '}' ? '{' : '[')) return raw;
+    } else if (char === ',' && stack.length === 2 && stack[0] === '{' && stack[1] === '['
+      && /^\s*"(?:completion|status)"\s*:/.test(raw.slice(index + 1))) {
+      const candidate = raw.slice(0, index) + ']' + raw.slice(index);
+      try {
+        const parsed = object(JSON.parse(candidate));
+        if (Array.isArray(parsed.blocks)) return candidate;
+      } catch { /* Reject all other JSON errors. */ }
+      return raw;
+    }
+  }
+  return raw;
 }
 
 /** One instance per response/turn, shared by all framework tool callbacks. */

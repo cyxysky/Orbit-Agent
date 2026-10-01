@@ -6,6 +6,7 @@ import { Search, Trash2, X } from 'lucide-react';
 import { ConfirmDeleteModal } from '@/components/ConfirmDeleteModal';
 import { useI18n } from '@/i18n/I18nProvider';
 import { DataTable, type DataTableColumn } from '@/components/ui/data-table';
+import { ExpandableActionLabel } from '@/components/ui/expandable-action-label';
 
 type ManagementDataTableFilterType = 'datetime' | 'number' | 'select' | 'text';
 
@@ -134,14 +135,16 @@ export function ManagementDataTable<T>({
         </div>
         <div className="domain-list-toolbar-meta">
           <span className="domain-list-count">{t('显示 {visible} / {total} 条', { visible: filteredItems.length, total: items.length })}</span>
-          {onDeleteItem ? <>
-            {selectedItems.length > 0 ? <button className="ui-button ui-button--ghost" disabled={deleting} onClick={() => setSelectedIds(new Set())} type="button">{t('取消选择')}</button> : null}
-            <button className="ui-button ui-button--danger" disabled={!selectedItems.length || deleting}
-              onClick={() => { setDeleteTargets([...selectedItems]); setDeleteError(''); }} type="button">
-              <Trash2 size={15} />{t('批量删除')} ({selectedItems.length})
-            </button>
-          </> : null}
-          {toolbarActions}
+          <div className="management-toolbar-actions">
+            {onDeleteItem ? <>
+              {selectedItems.length > 0 ? <button className="ui-button ui-button--ghost" disabled={deleting} onClick={() => setSelectedIds(new Set())} type="button">{t('取消选择')}</button> : null}
+              <button aria-label={`${t('批量删除')} (${selectedItems.length})`} className="ui-button ui-button--danger management-toolbar-action is-danger" disabled={!selectedItems.length || deleting}
+                onClick={() => { setDeleteTargets([...selectedItems]); setDeleteError(''); }} type="button">
+                <Trash2 size={15} /><ExpandableActionLabel>{t('批量删除')} ({selectedItems.length})</ExpandableActionLabel>
+              </button>
+            </> : null}
+            {toolbarActions}
+          </div>
         </div>
       </div>
 

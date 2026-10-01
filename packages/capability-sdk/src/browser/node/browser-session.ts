@@ -942,7 +942,7 @@ function isSnapshotReference(reference: SnapshotReference | DomNodeReference): r
 
 export type WindowWithAiDomRuntime = Window & {
   __aiBrowserPageRuntimeInstalled?: boolean;
-  __aiMoveMouseCursor?: (x: number, y: number, options?: { kind?: string }) => void;
+  __aiMoveMouseCursor?: (x: number, y: number, options?: { kind?: string }) => Promise<void>;
   __aiGetEventListenerTypes?: (target: EventTarget) => string[];
   __aiDomRuntime?: AiDomRuntime;
   __aiDomMutationState?: AiDomMutationStateSnapshot & {
@@ -1230,9 +1230,15 @@ export class BrowserSession {
         signal?.throwIfAborted();
         if (page !== this.activePage) throw new Error('Browser surface changed during capture.');
         const before = await readContext();
-        const sample = await raceWithAbort(page.screenshot({
-          type: 'png', scale: 'css', timeout: settle ? Math.max(1000, deadline - Date.now()) : 15000,
-        }), signal);
+        // Playwright's scale:'css' uses a scaled CDP clip. Chromium temporarily
+        // resizes its visible surface for that clip, making a headed window pulse
+        // during the settle loop. Resize the captured pixels outside the browser.
+        const sample = await this.capturePngBuffer({
+          capture: 'viewport', outputPixelRatio: 1, page, signal,
+          // Pixel settling is a sampling budget, not the timeout of the last
+          // capture. A slow renderer must not get a shrinking 1–4 second timeout.
+          timeoutMs: DEFAULT_SCREENSHOT_TIMEOUT_MS,
+        });
         const after = await readContext();
         if (before !== after) {
           if (!settle) throw new Error('Browser viewport or document changed during capture.');
@@ -1291,21 +1297,32 @@ export class BrowserSession {
 
   async captureBrowserObservation(runId: string, abortSignal?: AbortSignal, authorizeCodeCoordinates = false) {
     return this.withSessionOperation(async (signal) => {
-      const observation = await this.captureVisualFrame(runId, signal);
-      if (!authorizeCodeCoordinates) return observation;
       this.browserViewportEvidence = undefined;
-      const page = this.activePage;
-      const geometry = await page.evaluate(() => {
-        const win = window as Window & { __aiCoordinateEvidenceDocumentId?: string; __aiDomMutationState?: { epoch?: number } };
-        win.__aiCoordinateEvidenceDocumentId ||= Date.now() + '-' + Math.random();
-        return { documentId: win.__aiCoordinateEvidenceDocumentId, url: location.href,
-          domEpoch: Number(win.__aiDomMutationState?.epoch || 0), width: innerWidth, height: innerHeight,
-          devicePixelRatio, scrollX, scrollY };
-      }).catch(() => undefined);
-      if (geometry && page === this.activePage && geometry.url === observation.url) {
-        this.browserViewportEvidence = { ...geometry, capturedAt: Date.now() };
+      try {
+        const observation = await this.captureVisualFrame(runId, signal);
+        if (!authorizeCodeCoordinates) return observation;
+        const page = this.activePage;
+        const geometry = await page.evaluate(() => {
+          const win = window as Window & { __aiCoordinateEvidenceDocumentId?: string; __aiDomMutationState?: { epoch?: number } };
+          win.__aiCoordinateEvidenceDocumentId ||= Date.now() + '-' + Math.random();
+          return { documentId: win.__aiCoordinateEvidenceDocumentId, url: location.href,
+            domEpoch: Number(win.__aiDomMutationState?.epoch || 0), width: innerWidth, height: innerHeight,
+            devicePixelRatio, scrollX, scrollY };
+        }).catch(() => undefined);
+        signal.throwIfAborted();
+        if (geometry && page === this.activePage && geometry.url === observation.url) {
+          this.browserViewportEvidence = { ...geometry, capturedAt: Date.now() };
+        }
+        return this.latestBrowserObservation = { ...observation, actionable: Boolean(this.browserViewportEvidence) };
+      } catch (error) {
+        // Optional pre-request pixels are not an AI/provider failure. Revoke
+        // stale coordinate evidence and let the caller recover with live state.
+        this.latestVisualFrameContext = undefined;
+        this.latestBrowserObservation = { status: 'unavailable', actionable: false,
+          error: error instanceof Error ? error.message : String(error) };
+        signal.throwIfAborted();
+        return this.latestBrowserObservation;
       }
-      return { ...observation, actionable: Boolean(this.browserViewportEvidence) };
     }, abortSignal);
   }
 
@@ -4419,18 +4436,22 @@ export class BrowserSession {
     ];
   }
 
-  private async capturePngScreenshot(input: {
+  private async capturePngBuffer(input: {
     capture: ScreenshotCaptureMode;
-    filePath: string;
     outputPixelRatio?: number;
     timeoutMs: number;
+    page?: Page;
+    signal?: AbortSignal;
   }) {
+    input.signal?.throwIfAborted();
     const outputPixelRatio = input.outputPixelRatio ?? browserOutputPixelRatioFromEnv(this.runtimeEnvironment());
-    const client = await this.activePage.context().newCDPSession(this.activePage);
+    const page = input.page ?? this.activePage;
+    const client = await page.context().newCDPSession(page);
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
-      await Promise.race([
+      return await raceWithAbort(Promise.race([
         (async () => {
+          input.signal?.throwIfAborted();
           const metrics = await client.send('Page.getLayoutMetrics');
           const source = input.capture === 'fullPage'
             ? metrics.cssContentSize
@@ -4439,8 +4460,8 @@ export class BrowserSession {
           const y = 'pageY' in source ? source.pageY : source.y;
           const width = 'clientWidth' in source ? source.clientWidth : source.width;
           const height = 'clientHeight' in source ? source.clientHeight : source.height;
-          // Capture the existing compositor surface at native scale. Never resize the
-          // browser viewport or ask the compositor to scale it for an observation.
+          // Viewport observations read the existing surface without a clip;
+          // only an explicitly requested full-page image may extend the surface.
           const result = await client.send('Page.captureScreenshot', {
             captureBeyondViewport: input.capture === 'fullPage',
             ...(input.capture === 'fullPage' ? { clip: {
@@ -4455,10 +4476,10 @@ export class BrowserSession {
           if (nativeSize.width === targetWidth && nativeSize.height === targetHeight) {
             // The browser already produced the required pixels. Avoid decoding,
             // recompressing and allocating another full-resolution PNG.
-            await writeFile(input.filePath, png);
+            return png;
           } else {
-            await sharp(png).resize({ width: targetWidth, height: targetHeight, fit: 'fill' })
-              .png().toFile(input.filePath);
+            return sharp(png).resize({ width: targetWidth, height: targetHeight, fit: 'fill' })
+              .png().toBuffer();
           }
         })(),
         new Promise<never>((_, reject) => {
@@ -4467,11 +4488,20 @@ export class BrowserSession {
           }, input.timeoutMs);
           timeout.unref?.();
         }),
-      ]);
+      ]), input.signal);
     } finally {
       if (timeout) clearTimeout(timeout);
       await client.detach().catch(() => undefined);
     }
+  }
+
+  private async capturePngScreenshot(input: {
+    capture: ScreenshotCaptureMode;
+    filePath: string;
+    outputPixelRatio?: number;
+    timeoutMs: number;
+  }) {
+    await writeFile(input.filePath, await this.capturePngBuffer(input));
   }
 
   private async updateLastScreenshotMetrics(
@@ -8746,7 +8776,7 @@ export class BrowserSession {
     await this.ensureBrowserPageRuntime(page);
     await page.evaluate(({ cursorX, cursorY, cursorKind }) => {
       const browserWindow = window as WindowWithAiDomRuntime;
-      browserWindow.__aiMoveMouseCursor?.(cursorX, cursorY, { kind: cursorKind });
+      return browserWindow.__aiMoveMouseCursor?.(cursorX, cursorY, { kind: cursorKind });
     }, { cursorX: x, cursorY: y, cursorKind: kind }).catch(() => undefined);
   }
 

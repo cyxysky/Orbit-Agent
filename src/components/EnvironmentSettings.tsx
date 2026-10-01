@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { TextArea } from '@heroui/react/textarea';
 import { InputGroup } from '@heroui/react/input-group';
+import { ExpandableActionLabel } from '@/components/ui/expandable-action-label';
 import Link from 'next/link';
 import { AlertCircle, ArrowLeft, BookOpen, Bot, Brain, Bug, ChartNoAxesCombined, ChevronDown, CircleCheck, ClipboardCheck, CodeXml, Copy, Database, Files, FolderOpen, ImageIcon, KeyRound, Layers, Loader2, Maximize2, MessagesSquare, Monitor, Navigation, Network, Palette, PencilLine, PlayCircle, Plug, Plus, RefreshCw, Save, ScanSearch, Search, Server, ShieldCheck, SlidersHorizontal, Terminal, Trash2, X, type LucideIcon } from 'lucide-react';
 import { CustomSelect } from '@/components/CustomSelect';
@@ -2042,13 +2043,13 @@ export function EnvironmentSettings({
     const memoryActions = (
       <div className="personal-memory-head-actions">
         <DataTransferButtons kind="memory" onImported={loadPersonalMemoryItems} />
-        <button className="ui-button ui-button--neutral" disabled={loadingPersonalMemory} onClick={() => void loadPersonalMemoryItems()} type="button">
+        <button aria-label={t('刷新')} className="ui-button ui-button--neutral management-toolbar-action" disabled={loadingPersonalMemory} onClick={() => void loadPersonalMemoryItems()} type="button">
           <RefreshCw size={15} />
-          {t('刷新')}
+          <ExpandableActionLabel>{t('刷新')}</ExpandableActionLabel>
         </button>
-        <button className="ui-button ui-button--primary" onClick={openCreatePersonalMemory} type="button">
+        <button aria-label={t('新增记忆')} className="ui-button ui-button--primary management-toolbar-action is-primary" onClick={openCreatePersonalMemory} type="button">
           <Plus size={15} />
-          {t('新增记忆')}
+          <ExpandableActionLabel>{t('新增记忆')}</ExpandableActionLabel>
         </button>
       </div>
     );
@@ -2233,13 +2234,13 @@ export function EnvironmentSettings({
     const accountActions = (
       <div className="personal-memory-head-actions">
         <DataTransferButtons kind="credentials" onImported={loadLoginAccounts} />
-        <button className="ui-button ui-button--neutral" disabled={loadingLoginAccounts} onClick={() => void loadLoginAccounts()} type="button">
+        <button aria-label={t('刷新')} className="ui-button ui-button--neutral management-toolbar-action" disabled={loadingLoginAccounts} onClick={() => void loadLoginAccounts()} type="button">
           <RefreshCw size={15} />
-          {t('刷新')}
+          <ExpandableActionLabel>{t('刷新')}</ExpandableActionLabel>
         </button>
-        <button className="ui-button ui-button--primary" onClick={() => setLoginAccountEditor('create')} type="button">
+        <button aria-label={t('新增账号')} className="ui-button ui-button--primary management-toolbar-action is-primary" onClick={() => setLoginAccountEditor('create')} type="button">
           <Plus size={15} />
-          {t('新增账号')}
+          <ExpandableActionLabel>{t('新增账号')}</ExpandableActionLabel>
         </button>
       </div>
     );

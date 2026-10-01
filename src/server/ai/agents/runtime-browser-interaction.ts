@@ -12,7 +12,7 @@ const domShape = {
   action: z.enum(['state', 'snapshot', 'code', 'dismissSurface', 'navigate', 'tabs', 'waitForHumanVerification', 'requestUserInput'])
     .describe('snapshot reads actionable elements and surfaces; code acts and returns data.postActionState after attempted input, data.actionOutcome="skipped" when a conditional action did not run, and data.pageErrorIndicators for visible HTTP errors (page.verifyState does not exist); dismissSurface always sends a direct mouse click at viewport (0,0), then reports data.closureConfirmed and postActionState. A delivered click is not proof that the popup closed.'),
   reason: z.string().min(1).max(300),
-  question: z.string().min(1).max(4000).optional().describe('requestUserInput: ask for specific user-owned information or an attachment needed for the current task; the user reply resumes the same task.'),
+  question: z.string().min(1).max(4000).optional().describe('requestUserInput: the complete user-facing question in Markdown. Preserve paragraph breaks; use headings and lists for multiple options or files. Ask for specific user-owned information or an attachment; the user reply resumes the same task.'),
   code: z.string().min(1).max(40000).optional(),
   scope: z.enum(['active', 'all']).optional(), frame: z.string().max(200).optional(),
   selector: z.string().max(2000).optional(), query: z.string().max(300).optional(), cursor: z.string().max(1000).optional(),
@@ -42,7 +42,7 @@ const mcpSchema = z.object({
   action: z.enum(['mcp', 'dismissSurface', 'navigate', 'tabs', 'waitForHumanVerification', 'requestUserInput'])
     .describe('dismissSurface directly clicks viewport (0,0) to dismiss an option surface; inspect closureConfirmed and postActionState.'),
   reason: z.string().min(1).max(300),
-  question: z.string().min(1).max(4000).optional(),
+  question: visualBrowserInputSchema.shape.question,
   tool: z.string().min(1).max(100).optional().describe('Use list to discover tools, then an exact official Playwright MCP browser_* tool name.'),
   arguments: z.record(z.string(), z.unknown()).optional(),
   maxMs: z.number().int().min(1000).max(1800000).optional(),

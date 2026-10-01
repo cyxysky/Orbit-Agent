@@ -646,7 +646,7 @@ test('live preview bridges native pickers, datalist, file chooser, and JavaScrip
   assert.equal(await page.locator('body').getAttribute('data-prompt'), 'E-007');
 });
 
-test('browser viewport size and output pixel ratio are independent', async () => {
+test('browser viewport size and output pixel ratio are independent', async (context) => {
   const previousMode = process.env.BROWSER_VIEWPORT_MODE;
   const previousWidth = process.env.BROWSER_VIEWPORT_WIDTH;
   const previousHeight = process.env.BROWSER_VIEWPORT_HEIGHT;
@@ -683,6 +683,22 @@ test('browser viewport size and output pixel ratio are independent', async () =>
     );
     assert.deepEqual(readPngDimensions(await readFile(screenshotPath)), { width: 1600, height: 1200 });
 
+    const observation = await session.captureBrowserObservation('browser-output-pixel-ratio-test');
+    assert.ok(observation.path, 'automatic observation should return an image');
+    assert.deepEqual(readPngDimensions(await readFile(observation.path)), { width: 800, height: 600 });
+    assert.deepEqual(page.viewportSize(), { width: 800, height: 600 });
+
+    const failedCapture = context.mock.method(session as unknown as { capturePngBuffer: () => Promise<Buffer> },
+      'capturePngBuffer', async () => { throw new Error('Renderer screenshot timed out'); });
+    const unavailable = await session.captureBrowserObservation('browser-output-pixel-ratio-test', undefined, true);
+    assert.equal(unavailable.status, 'unavailable', 'a screenshot failure must not reject the next model request');
+    assert.equal(unavailable.actionable, false, 'failed refresh must revoke old coordinate evidence');
+    assert.equal((await session.getBrowserObservation())?.status, 'unavailable');
+    failedCapture.mock.restore();
+    const recovered = await session.captureBrowserObservation('browser-output-pixel-ratio-test');
+    assert.equal(recovered.status, 'available', 'the next observation can recover in the same browser session');
+    assert.deepEqual(page.viewportSize(), { width: 800, height: 600 });
+
     const browserContext = page.context();
     const originalNewCdpSession = browserContext.newCDPSession.bind(browserContext);
     const previewCdpMethods: string[] = [];
@@ -705,6 +721,7 @@ test('browser viewport size and output pixel ratio are independent', async () =>
       onFrame: (frame) => { frames.push(frame); },
       video: true,
     });
+    await waitForCondition(() => frames.length > 0);
     assert.ok(frames.length >= 1, 'screencast should emit an initial frame');
     assert.equal(frames[0].contentType, 'image/png');
     assert.deepEqual(readPngDimensions(Buffer.from(frames[0].data, 'base64')), { width: 800, height: 600 });

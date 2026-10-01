@@ -6,6 +6,8 @@ Codex、Cursor、Claude Code、自有 agent 的完整配置，以及不经过 MC
 
 统一 CLI 从 0.3.0 起随本包提供，不需要编写 `mcp-server.mjs`，也不需要额外安装 TypeScript、tsx 或 MCP 适配器。
 
+当前源码新增[一键安装与多客户端配置](SETUP.zh-CN.md)：`capability-mcp setup` 安装/修复运行环境并配置所有支持的应用，`capability-mcp init all` 只配置应用。均支持 `--dry-run`；默认用户级配置，可用 `--scope project` 限定项目。已有旧发布包需升级到包含此入口的版本。
+
 ## Cursor
 
 在使用方项目根目录运行：
@@ -19,7 +21,7 @@ npx --no-install capability-mcp init cursor
 
 工具配置统一放在项目根目录的 `capability.config.json`，`init cursor` 会创建缺少的该文件。Codex 等其他客户端可运行 `capability-mcp init config` 单独生成配置。启动自动读取，完整字段、默认值、范围、优先级和示例见 [按工具配置参考](MCP-CONFIG.zh-CN.md)。模型可执行 `capability-mcp --describe-config` 获取带说明的 JSON Schema。
 
-在 Cursor 的 MCP 设置里启用 `capability-sdk`。Cursor 会启动项目中安装的服务；无需另开终端常驻进程，也不会通过 npx 下载另一份依赖。项目配置和 `${workspaceFolder}` 变量见 [Cursor 官方文档](https://cursor.com/docs/mcp)。生成的内容是：
+在 Cursor 的 MCP 设置里启用 `capability-sdk`。Cursor 会启动项目中安装的服务；无需另开终端常驻进程，也不会通过 npx 下载另一份依赖。项目配置和 `${workspaceFolder}` 变量见 [Cursor 官方文档](https://cursor.com/docs/mcp)。当前生成器使用本机 Node、SDK 和项目的绝对路径；下面是可手工使用的等价项目配置：
 
 ```json
 {

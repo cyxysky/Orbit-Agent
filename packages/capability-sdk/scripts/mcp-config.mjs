@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { readFile, writeFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 
 export const configFilename = 'capability.config.json';
 const boolean = (defaultValue, description) => ({ type: 'boolean', default: defaultValue, description });
@@ -144,7 +145,8 @@ export async function initConfig(projectRoot) {
   delete value.tools.computer.enabled;
   const filename = path.join(projectRoot, configFilename);
   try {
-    await writeFile(filename, JSON.stringify({ $schema: './node_modules/@cjfclonedeep/capability-sdk/mcp-config.schema.json', ...value }, null, 2) + '\n', { flag: 'wx' });
+    const schemaPath = path.relative(projectRoot, fileURLToPath(new URL('../mcp-config.schema.json', import.meta.url))).replaceAll('\\', '/');
+    await writeFile(filename, JSON.stringify({ $schema: schemaPath, ...value }, null, 2) + '\n', { flag: 'wx' });
     console.error(`Created ${filename}`);
   } catch (error) {
     if (error.code !== 'EEXIST') throw error;

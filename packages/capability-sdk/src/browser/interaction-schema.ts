@@ -12,7 +12,7 @@ const visualBrowserBaseSchema = z.object({
   action: z.enum(['observe', 'act', 'images', 'dismissSurface', 'navigate', 'tabs', 'waitForHumanVerification', 'requestUserInput'])
     .describe('dismissSurface clicks viewport (0,0) to close an option surface; check closureConfirmed and the latest screenshot before continuing.'),
   reason: z.string().min(1).max(300),
-  question: z.string().min(1).max(4000).optional().describe('requestUserInput: a concrete question identifying the material or decision needed to continue the current task.'),
+  question: z.string().min(1).max(4000).optional().describe('requestUserInput: the complete user-facing question in Markdown. Preserve paragraph breaks; use headings and lists for multiple options or files. Identify the material or decision needed to continue the current task.'),
   observationId: z.string().optional(),
   kind: z.enum(['click', 'hover', 'move', 'drag', 'scroll', 'type', 'key']).optional(),
   x: z.number().finite().nonnegative().optional(), y: z.number().finite().nonnegative().optional(),

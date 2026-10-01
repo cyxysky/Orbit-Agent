@@ -51,6 +51,7 @@ import { BrowserChatToolsHelp } from '@/components/BrowserChatToolsHelp';
 import { BrowserChatReasoning } from '@/components/BrowserChatReasoning';
 import { browserChatHasPendingHumanInput, normalizeDisabledBrowserChatTools } from '@/lib/browser-chat-tools';
 import { IconAction } from '@/components/ui/icon-action';
+import { ExpandableActionLabel } from '@/components/ui/expandable-action-label';
 import { CopyTextButton } from '@/components/ui/copy-text-button';
 import { TextArea } from '@heroui/react/textarea';
 import dynamic from 'next/dynamic';
@@ -3176,7 +3177,7 @@ function BrowserChatScreenshotPreviewDialog({
 
 const BrowserChatConfirmationPanel = memo(function BrowserChatConfirmationPanel({
   title, description, children,
-}: { title: string; description: string; children: ReactNode }) {
+}: { title: string; description: ReactNode; children: ReactNode }) {
   return (
     <BlurFade className="browser-chat-tool-confirmation" duration={0.34} offset={8} role="group" aria-label={title}>
       <BorderBeam colorFrom="#d79a18" colorTo="#f5d584" duration={7.5} size={82} />
@@ -3188,10 +3189,10 @@ const BrowserChatConfirmationPanel = memo(function BrowserChatConfirmationPanel(
             <circle className="browser-chat-tool-confirmation-icon-dot" cx="8" cy="11.35" r="0.8" />
           </svg>
         </span>
-        <span className="browser-chat-tool-confirmation-message">
+        <div className="browser-chat-tool-confirmation-message">
           <strong>{title}</strong>
-          <span>{description}</span>
-        </span>
+          <div>{description}</div>
+        </div>
       </div>
       <div className="browser-chat-tool-confirmation-actions">{children}</div>
     </BlurFade>
@@ -3846,7 +3847,7 @@ const BrowserChatManualVerificationCard = memo(function BrowserChatManualVerific
   if (request?.action === 'requestUserInput') return (
     <BrowserChatConfirmationPanel
       title={t('需要你补充资料')}
-      description={request.question || t('请提供继续当前任务所需的信息或文件。')}
+      description={<BrowserChatMarkdown markdown={request.question || t('请提供继续当前任务所需的信息或文件。')} />}
     >
       <p>{t('在下方输入回复或添加附件，发送后继续当前任务。')}</p>
     </BrowserChatConfirmationPanel>
@@ -10357,11 +10358,10 @@ export function BrowserChatWorkspace({
               className="browser-chat-conversation-direct-action"
               disabled={session.status === 'closed'}
               onClick={() => setWebPreviewOpen(true)}
-              title={session.status === 'closed' ? t('当前对话已结束') : t('打开实时界面')}
               type="button"
             >
               <AppWindow aria-hidden="true" size={17} />
-              <span>{t('实时界面')}</span>
+              <ExpandableActionLabel>{t(session.status === 'closed' ? '当前对话已结束' : '实时界面')}</ExpandableActionLabel>
             </button>
           ) : null}
         </div>
@@ -10371,11 +10371,10 @@ export function BrowserChatWorkspace({
             className="browser-chat-conversation-direct-action is-danger"
             disabled={session.status === 'closed' || currentBusy}
             onClick={closeSession}
-            title={t('结束会话并关闭浏览器')}
             type="button"
           >
             <Power aria-hidden="true" size={17} />
-            <span>{t('关闭浏览器')}</span>
+            <ExpandableActionLabel>{t('关闭浏览器')}</ExpandableActionLabel>
           </button>
         </BrowserChatRuntimeStateControl>
         {!webPreviewRuntime ? (

@@ -676,6 +676,7 @@ export function BrowserPreviewWindow({ onClose, client, translate: t = identity 
               setPreviewDownload(null);
               setInputError(message.download.error || '测试浏览器文件下载失败');
             } else if (message.type === 'ready') {
+              reconnectEnabledRef.current = true;
               if (previewInputReadyRef.current) setStatus('live');
               setStreamError('');
             } else if (message.type === 'clipboard' && message.text) {
@@ -1346,7 +1347,7 @@ export function BrowserPreviewWindow({ onClose, client, translate: t = identity 
               <div className="cap-browser-preview-empty">
                 <Loader2 className="spin" size={22} />
                 <strong>{streamError ? t(streamError) : t('正在等待浏览器画面')}</strong>
-                <span>{t('发送一条需要访问网页的消息后，画面会自动出现。')}</span>
+                <span>{t('输入网址或点击“新增标签页”启动浏览器，也可以让 AI 打开网页。')}</span>
               </div>
             ) : null}
           </div>

@@ -2701,10 +2701,16 @@ button.browser-chat-output-file-main {
   overflow-wrap: anywhere;
 }
 
-.browser-chat-tool-confirmation-message strong {
+.browser-chat-tool-confirmation-message > strong {
   color: var(--foreground);
   font-size: 15px;
   font-weight: 680;
+}
+
+.browser-chat-tool-confirmation-message .browser-chat-agent-markdown {
+  font-size: inherit;
+  line-height: 1.7;
+  min-width: 0;
 }
 
 .browser-chat-tool-confirmation-actions {

@@ -1887,6 +1887,7 @@
 .management-table-selection-column input[type="checkbox"] { display: block; width: 16px; height: 16px; margin: auto; accent-color: var(--accent-strong); cursor: pointer; }
 .management-table-selection-column input:disabled { cursor: not-allowed; opacity: 0.4; }
 .management-data-table .domain-list-toolbar-meta .ui-button { white-space: nowrap; }
+.management-toolbar-actions { display: flex; align-items: center; gap: 14px; }
 
 .management-table-primary-column {
   width: 27%;

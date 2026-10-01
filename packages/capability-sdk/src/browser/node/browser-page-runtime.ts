@@ -13,7 +13,7 @@ import type {
   WindowWithAiDomRuntime,
 } from './browser-session.ts';
 
-export const AI_DOM_RUNTIME_VERSION = 30;
+export const AI_DOM_RUNTIME_VERSION = 31;
 
 export function installAccessibilitySnapshotExportControl() {
   if (window.top !== window) return;
@@ -101,82 +101,119 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
   const mouseCursorId = '__ai_mouse_cursor__';
   const mountMouseCursor = () => {
     const existing = document.getElementById(mouseCursorId);
-    if (existing) return existing;
+    if (existing?.dataset.runtimeVersion === String(runtimeVersion)) return existing;
+    existing?.remove();
     if (!document.documentElement) return undefined;
     const cursor = document.createElement('div');
     cursor.id = mouseCursorId;
+    cursor.dataset.runtimeVersion = String(runtimeVersion);
     cursor.setAttribute('aria-hidden', 'true');
     const startX = Math.max(0, Math.round(window.innerWidth / 2));
     const startY = Math.max(0, Math.round(window.innerHeight / 2));
     cursor.dataset.x = String(startX);
     cursor.dataset.y = String(startY);
     Object.assign(cursor.style, {
-      contain: 'layout style paint',
-      height: '34px',
+      all: 'initial',
+      contain: 'layout style',
+      height: '30px',
       left: '0',
       opacity: '0',
+      overflow: 'visible',
       pointerEvents: 'none',
       position: 'fixed',
       top: '0',
       transform: `translate3d(${startX}px, ${startY}px, 0)`,
       transformOrigin: '0 0',
-      width: '30px',
+      width: '28px',
       willChange: 'transform, opacity',
       zIndex: '2147483647',
     });
+    const halo = document.createElement('div');
+    Object.assign(halo.style, {
+      background: 'radial-gradient(circle, rgba(93, 205, 255, .52), rgba(93, 205, 255, .18) 40%, transparent 70%)',
+      height: '52px',
+      left: '-20px',
+      position: 'absolute',
+      top: '-19px',
+      width: '52px',
+    });
     const pointer = document.createElement('div');
+    pointer.dataset.aiMousePointer = 'true';
     const cursorSvg = [
-      '<svg xmlns="http://www.w3.org/2000/svg" width="23" height="30" viewBox="0 0 32 42">',
-      '<path d="M4 3v28.5l7.3-6.9 4.7 12.2 5.6-2.2-4.8-11.8h10.6L4 3z" fill="white" stroke="#111827" stroke-width="2.2" stroke-linejoin="round"/>',
-      '<circle cx="25" cy="8" r="5" fill="#2563eb" stroke="white" stroke-width="2"/>',
+      '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="30" viewBox="0 0 28 30">',
+      '<path d="M5 4 23 10.5Q25 11.3 23 12.4L15.7 15.5 12.5 23Q11.6 25 10.7 23L4 6Q3.2 3.2 5 4Z" fill="#111820" stroke="#fff" stroke-width="2" stroke-linejoin="round"/>',
       '</svg>',
     ].join('');
     Object.assign(pointer.style, {
       backgroundImage: `url("data:image/svg+xml,${encodeURIComponent(cursorSvg)}")`,
       backgroundRepeat: 'no-repeat',
-      backgroundSize: '23px 30px',
-      filter: 'drop-shadow(0 3px 5px rgba(0, 0, 0, 0.42))',
+      backgroundSize: '28px 30px',
+      filter: 'drop-shadow(0 0 3px rgba(71, 189, 255, .8)) drop-shadow(0 2px 2px rgba(0, 0, 0, .22))',
       height: '30px',
-      left: '0',
+      left: '-4px',
       position: 'absolute',
-      top: '0',
-      width: '23px',
+      top: '-4px',
+      transformOrigin: '4px 4px',
+      width: '28px',
     });
     const pulse = document.createElement('div');
     pulse.dataset.aiMousePulse = 'true';
     Object.assign(pulse.style, {
-      border: '2px solid rgba(37, 99, 235, .9)',
+      background: 'rgba(93, 205, 255, .16)',
+      border: '2px solid rgba(93, 205, 255, .9)',
       borderRadius: '999px',
-      height: '18px',
-      left: '-8px',
+      boxSizing: 'border-box',
+      height: '24px',
+      left: '-12px',
       opacity: '0',
       position: 'absolute',
-      top: '-8px',
-      width: '18px',
+      top: '-12px',
+      width: '24px',
     });
-    cursor.append(pointer, pulse);
+    cursor.append(halo, pulse, pointer);
     document.documentElement.appendChild(cursor);
     return cursor;
   };
   Object.defineProperty(win, '__aiMoveMouseCursor', {
     configurable: true,
     enumerable: false,
-    value: (rawX: number, rawY: number, options: { kind?: string } = {}) => {
+    value: async (rawX: number, rawY: number, options: { kind?: string } = {}) => {
       const cursor = mountMouseCursor();
       if (!cursor) return;
       const x = Math.max(0, Math.min(Math.round(Number(rawX) || 0), Math.max(0, window.innerWidth - 1)));
       const y = Math.max(0, Math.min(Math.round(Number(rawY) || 0), Math.max(0, window.innerHeight - 1)));
+      const fromTransform = getComputedStyle(cursor).transform;
+      const distance = Math.hypot(x - Number(cursor.dataset.x), y - Number(cursor.dataset.y));
+      const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      // Retarget from the currently rendered position if another action interrupts a move.
+      cursor.getAnimations().forEach((animation) => animation.cancel());
       cursor.dataset.x = String(x);
       cursor.dataset.y = String(y);
       cursor.style.opacity = '1';
       cursor.style.transition = 'none';
       cursor.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+      if (!reducedMotion && distance > 1) {
+        const movement = cursor.animate([
+          { transform: fromTransform },
+          { transform: cursor.style.transform },
+        ], { duration: Math.min(380, 140 + distance * .22), easing: 'cubic-bezier(.22, .61, .36, 1)' });
+        await movement.finished.catch(() => undefined);
+        if (movement.playState === 'idle') return;
+      }
       if (options.kind === 'click' || options.kind === 'double' || options.kind === 'right') {
         const pulse = cursor.querySelector<HTMLElement>('[data-ai-mouse-pulse="true"]');
+        const pointer = cursor.querySelector<HTMLElement>('[data-ai-mouse-pointer="true"]');
+        pulse?.getAnimations().forEach((animation) => animation.cancel());
+        pointer?.getAnimations().forEach((animation) => animation.cancel());
         pulse?.animate([
-          { opacity: 0.9, transform: 'scale(.35)' },
-          { opacity: 0, transform: 'scale(1.65)' },
-        ], { duration: 320, easing: 'ease-out' });
+          { opacity: .95, transform: reducedMotion ? 'none' : 'scale(.4)' },
+          { opacity: 0, transform: reducedMotion ? 'none' : 'scale(2)' },
+        ], { duration: reducedMotion ? 120 : 460, easing: 'ease-out', iterations: options.kind === 'double' ? 2 : 1 });
+        if (!reducedMotion) pointer?.animate([
+          { transform: 'scale(1)' },
+          { transform: 'scale(.82)', offset: .4 },
+          { transform: 'scale(1)' },
+        ], { duration: 220, easing: 'ease-out', iterations: options.kind === 'double' ? 2 : 1 });
       }
     },
     writable: false,

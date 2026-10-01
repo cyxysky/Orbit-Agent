@@ -2,6 +2,8 @@
 
 本指南覆盖自有 agent、Codex、Cursor、Claude Code、OpenAI Agents SDK、Responses API 和 Vercel AI SDK。工具安装一次；不同 agent 选择 MCP 或进程内调用入口。
 
+当前源码支持自动配置多客户端：`capability-mcp setup` 安装运行环境并配置应用，`capability-mcp init all` 只配置应用。Windows 仓库入口、独立安装、支持列表和作用域见[一键安装指南](SETUP.zh-CN.md)；下文保留手动配置方法。
+
 **版本说明：本文适用于 0.3.0 及后续兼容版本。统一 CLI、分组配置、单一 browser 工具、`/local`、`/openai` 和 MCP 可视化均从 0.3.0 提供，0.2.1 不包含这些功能。**
 
 ## 选择接入方式

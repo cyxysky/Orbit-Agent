@@ -5,6 +5,7 @@ import { Button } from '@heroui/react/button';
 import { Popover } from '@heroui/react/popover';
 import { ArrowRight, Brain, Check, CircleAlert, Loader2, Sparkles, X } from 'lucide-react';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
+import { ExpandableActionLabel } from '@/components/ui/expandable-action-label';
 
 type MemoryProposal = { id: string; items: Array<{ key: string; value: string; status: string; evidence?: string[]; applicability?: { when: string }; expiresAt?: string }> };
 type MemoryJob = { id: string; status: string; attempts: number; error?: string; result?: {
@@ -91,7 +92,7 @@ export function BrowserChatRecoveryPanel({ sessionId, busy }: { sessionId: strin
     <Button type="button" variant="ghost" className="browser-chat-conversation-direct-action browser-chat-recovery-trigger"
       aria-label={`长期记忆${pendingCount ? `，${pendingCount} 项待处理` : ''}`} aria-expanded={open}>
       <Brain size={17} aria-hidden="true" />
-      <span className="browser-chat-recovery-trigger-label">长期记忆</span>
+      <ExpandableActionLabel>长期记忆</ExpandableActionLabel>
       {pendingCount > 0 && <span className="browser-chat-recovery-badge">{pendingCount}</span>}
       {(error || loadError) && !pendingCount && <CircleAlert size={14} aria-label="读取失败" />}
     </Button>

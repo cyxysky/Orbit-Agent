@@ -20,3 +20,14 @@ export function browserChatHasPendingHumanInput(
   return latest?.ok === true && !!input && typeof input === 'object'
     && 'action' in input && ['waitForHumanVerification', 'requestUserInput'].includes(String(input.action));
 }
+
+/** The actual question is user-facing Markdown, never a compact tool summary. */
+export function browserChatRequestedUserInput(
+  tools: readonly { name: string; ok?: boolean; input?: unknown }[],
+) {
+  const latest = tools.findLast((tool) => tool.name === 'browser');
+  const input = latest?.input as { action?: unknown; question?: unknown } | undefined;
+  return latest?.ok === true && input?.action === 'requestUserInput' && typeof input.question === 'string'
+    ? input.question.replace(/\r\n?/g, '\n').trim() || undefined
+    : undefined;
+}

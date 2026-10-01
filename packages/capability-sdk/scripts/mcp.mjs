@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import path from 'node:path';
-import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
-import { pathToFileURL } from 'node:url';
+import { readFile, realpath, stat } from 'node:fs/promises';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { spawn } from 'node:child_process';
 import { parseArgs } from 'node:util';
 import { createLocalProviders, defaultToolGroups, localToolGroups } from './mcp-providers.mjs';
 import { configFilename, configSchema, initConfig, loadConfig, toolConfiguration } from './mcp-config.mjs';
@@ -9,7 +10,8 @@ import { createLocalImageResolver } from './local-images.mjs';
 
 const help = `Usage:
   capability-mcp [--project <directory>] [--tools browser,terminal,...]
-  capability-mcp init cursor [--project <directory>] [--tools ...]
+  capability-mcp setup [--project <directory>] [--clients all] [--scope user]
+  capability-mcp init <client|all> [--project <directory>] [--scope user|project]
   capability-mcp init config [--project <directory>]
   capability-mcp --describe-config
   capability-mcp --list
@@ -23,6 +25,11 @@ Starts a local stdio MCP server. No model key or extra package is required.
 --describe-config  Print the complete configuration schema and field descriptions.
 --skill-mode  eager or lazy (default: eager).
 --list        Print available groups without starting tools or installing runtimes.
+--clients     setup targets: all, or comma-separated cursor,codex,claude-code,
+              claude-desktop,vscode,windsurf,devin.
+--scope       setup/init all default to user; init <client> uses project where supported.
+--name        MCP server name in client configurations (default: capability-sdk).
+--dry-run     Preview setup/init without installing or changing files.
 --help        Show this help.
 
 Local groups: ${localToolGroups.join(', ')}.
@@ -33,44 +40,23 @@ Media inspection/frame extraction work locally; OCR, transcription, generation,
 databases and business integrations require configured providers via --config.
 Runtime: <project>/.capability-sdk/<platform>-<arch> (or CAPABILITY_RUNTIME_HOME).
 MCP artifacts and knowledge: <project>/.capability-sdk/mcp.
-Runtime installation is performed by npm postinstall, never by this command.
+setup installs/repairs runtimes and configures clients; init only configures clients.
+Normal MCP startup never installs runtimes. Existing conflicting entries are kept.
 `;
 
-async function initCursor(projectRoot, values) {
-  const filename = path.join(projectRoot, '.cursor', 'mcp.json');
-  let previous;
-  let config;
-  try { previous = await readFile(filename, 'utf8'); config = JSON.parse(previous.replace(/^\uFEFF/, '')); }
-  catch (error) {
-    if (error.code !== 'ENOENT') throw new Error(`Cannot read ${filename}: ${error.message}`);
-    config = {};
-  }
-  const isObject = value => value && typeof value === 'object' && !Array.isArray(value);
-  if (!isObject(config) || (config.mcpServers !== undefined && !isObject(config.mcpServers))) {
-    throw new Error('Existing .cursor/mcp.json must contain an object with an optional mcpServers object.');
-  }
-  const args = ['${workspaceFolder}/node_modules/@cjfclonedeep/capability-sdk/scripts/mcp.mjs',
-    '--project', '${workspaceFolder}'];
-  for (const key of ['tools', 'config', 'skill-mode']) {
-    if (values[key] !== undefined) args.push(`--${key}`, values[key]);
-  }
-  const entry = { type: 'stdio', command: 'node', args };
-  const existing = config.mcpServers?.['capability-sdk'];
-  if (existing !== undefined) {
-    if (JSON.stringify(existing) === JSON.stringify(entry)) {
-      console.error(`Already configured: ${filename}`);
-      return;
-    }
-    throw new Error('A different capability-sdk server already exists in .cursor/mcp.json; update that entry explicitly. Other settings were not changed.');
-  }
-  config.mcpServers = { ...config.mcpServers, 'capability-sdk': entry };
-  await mkdir(path.dirname(filename), { recursive: true });
-  // Refuse to overwrite edits made while reading/preparing the configuration.
-  if (previous !== undefined && await readFile(filename, 'utf8') !== previous) {
-    throw new Error('.cursor/mcp.json changed during setup; retry.');
-  }
-  await writeFile(filename, `${JSON.stringify(config, null, 2)}\n`, { flag: previous === undefined ? 'wx' : 'w' });
-  console.error(`Configured ${filename}. Enable capability-sdk in Cursor's MCP settings.`);
+async function installRuntime(projectRoot) {
+  const env = { ...process.env };
+  // setup explicitly requests installation, including when an earlier npm install skipped it.
+  delete env.CAPABILITY_SKIP_RUNTIME_INSTALL;
+  delete env.npm_lifecycle_event;
+  if (env.CAPABILITY_RUNTIME_HOME) env.CAPABILITY_RUNTIME_HOME = path.resolve(projectRoot, env.CAPABILITY_RUNTIME_HOME);
+  await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [fileURLToPath(new URL('./runtime.cjs', import.meta.url)), 'install'], {
+      cwd: projectRoot, env, stdio: 'inherit', windowsHide: true,
+    });
+    child.once('error', reject);
+    child.once('exit', code => code === 0 ? resolve() : reject(new Error(`Runtime installation failed (${code}); client configurations were not written.`)));
+  });
 }
 
 async function main() {
@@ -78,6 +64,7 @@ async function main() {
     project: { type: 'string' }, tools: { type: 'string' }, config: { type: 'string' },
     'skill-mode': { type: 'string' }, list: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
     'describe-config': { type: 'boolean' },
+    clients: { type: 'string' }, scope: { type: 'string' }, name: { type: 'string' }, 'dry-run': { type: 'boolean' },
   } });
   if (values.help) { console.log(help); return; }
   if (values['describe-config']) { console.log(JSON.stringify(configSchema, null, 2)); return; }
@@ -85,15 +72,25 @@ async function main() {
     console.log(JSON.stringify({ available: localToolGroups, defaults: defaultToolGroups() }, null, 2));
     return;
   }
-  if (positionals.length && !['init cursor', 'init config'].includes(positionals.join(' '))) {
+  const setup = positionals.length === 1 && positionals[0] === 'setup';
+  const init = positionals.length === 2 && positionals[0] === 'init';
+  if (positionals.length && !setup && !init) {
     throw new Error('Unknown command. Use capability-mcp --help.');
   }
+  if (!setup && !init && ['clients', 'scope', 'name', 'dry-run'].some(key => values[key] !== undefined)) {
+    throw new Error('--clients/--scope/--name/--dry-run require setup or init.');
+  }
+  if (init && values.clients) throw new Error('Use init <client|all>, or setup --clients <list>.');
   if (values['skill-mode'] && !['eager', 'lazy'].includes(values['skill-mode'])) {
     throw new Error('--skill-mode must be eager or lazy.');
   }
   const projectRoot = await realpath(path.resolve(values.project || process.env.CAPABILITY_PROJECT_DIR || process.cwd()));
   if (!(await stat(projectRoot)).isDirectory()) throw new Error('--project must be a directory.');
-  if (positionals.join(' ') === 'init config') { await initConfig(projectRoot); return; }
+  if (positionals.join(' ') === 'init config') {
+    if (values['dry-run']) { await loadConfig(projectRoot); console.error(`Keep/create ${path.join(projectRoot, configFilename)}`); }
+    else await initConfig(projectRoot);
+    return;
+  }
   const moduleConfig = values.config?.endsWith('.mjs');
   const loaded = await loadConfig(projectRoot, moduleConfig ? undefined : values.config);
   const config = loaded.value;
@@ -104,9 +101,25 @@ async function main() {
   if (unknown.length) throw new Error(`Unknown tool groups: ${unknown.join(', ')}. Use --list.`);
   const groups = selected.filter(group => config.tools?.[group]?.enabled !== false);
   if (selection === 'none' && !moduleConfig) throw new Error('--tools none requires an explicit .mjs --config.');
-  if (positionals.length) {
-    await initCursor(projectRoot, values);
+  if (setup || init) {
+    if (moduleConfig) await stat(path.resolve(projectRoot, values.config));
+    const { planClientConfigurations, printClientPlan, applyClientConfigurations } = await import('./mcp-clients.mjs');
+    const plans = await planClientConfigurations(projectRoot, { ...values,
+      clients: setup ? values.clients || 'all' : positionals[1],
+      scope: values.scope || (setup || ['all', 'claude-desktop', 'windsurf', 'devin'].includes(positionals[1]) ? 'user' : 'project'),
+    });
+    printClientPlan(plans);
+    if (values['dry-run']) {
+      if (setup) console.error(`Would install/repair tool runtimes in ${projectRoot}.`);
+      if (!values.config) console.error(`Would keep/create ${path.join(projectRoot, configFilename)}.`);
+      return;
+    }
+    if (setup) {
+      await stat(new URL('../dist/adapters/mcp/index.js', import.meta.url)).catch(() => { throw new Error('SDK dist is missing. Use a prepared release package; setup does not run a build.'); });
+      await installRuntime(projectRoot);
+    }
     if (!values.config) await initConfig(projectRoot);
+    await applyClientConfigurations(plans);
     return;
   }
 

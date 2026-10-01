@@ -4,6 +4,8 @@
 
 The CLI is available since 0.3.0 and needs no server file, TypeScript, tsx, or additional MCP dependency.
 
+The current source also includes [one-command setup](SETUP.md): `capability-mcp setup` installs/repairs local runtimes and configures supported clients; `capability-mcp init all` only configures clients. Both default to user scope and support `--scope project` and `--dry-run`. Older packages must be upgraded to a release containing these commands.
+
 Tool configuration lives in project-root `capability.config.json`, automatically loaded at startup. `capability-mcp init config` creates a complete template; `init cursor` also creates this file when missing. Read [the detailed field reference](MCP-CONFIG.zh-CN.md), or run `capability-mcp --describe-config` for the machine-readable schema with descriptions. JSON uses real booleans/numbers and rejects unknown fields, invalid ranges and incompatible browser options. Explicit JSON settings override corresponding environment variables. Restart MCP after edits.
 
 From the consuming project:
@@ -13,7 +15,7 @@ npm install @cjfclonedeep/capability-sdk
 npx --no-install capability-mcp init cursor
 ```
 
-Enable `capability-sdk` in Cursor's MCP settings. The initializer merges `.cursor/mcp.json`, preserves other settings, and refuses to overwrite a different existing `capability-sdk` entry. Repeating identical setup is a no-op. It neither installs runtimes nor starts tools. Cursor launches Node directly from the local dependency, without downloading another package:
+Enable `capability-sdk` in Cursor's MCP settings. The initializer merges `.cursor/mcp.json`, preserves other settings, and refuses to overwrite a different existing `capability-sdk` entry. Repeating identical setup is a no-op. It neither installs runtimes nor starts tools. Generated configuration uses absolute Node, SDK and project paths. The following is an equivalent manually authored project configuration:
 
 ```json
 {

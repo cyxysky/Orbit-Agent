@@ -2,6 +2,8 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
 
+一键安装本地运行环境并配置多应用 MCP：`npx --no-install capability-mcp setup`。只生成连接配置用 `capability-mcp init all`；全新目录安装和仓库 Windows 入口见[一键安装指南](SETUP.zh-CN.md)。
+
 接入 Cursor 或其他 MCP 客户端，直接使用[统一 MCP 命令](MCP-CLI.zh-CN.md)，无需编写启动文件或增加依赖。此功能从 0.3.0 提供。
 
 ```sh

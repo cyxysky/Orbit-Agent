@@ -341,20 +341,20 @@ html :is(button.ui-icon-button, button:not(.ui-button, .browser-chat-send, .brow
 }
 
 /* Non-primary icon-led actions stay chromeless even when they include a label. */
-html .ui-button:has(> svg):not(.ui-button--primary, .ui-modal-footer .ui-button) {
+html .ui-button:has(> svg):not(.ui-button--primary, .ui-modal-footer .ui-button, .browser-chat-management-dialog .management-toolbar-action) {
   background: transparent !important;
   border: 0 !important;
   box-shadow: none !important;
   padding-inline: 8px;
 }
 
-html .ui-button--neutral:has(> svg):not(.ui-modal-footer .ui-button) {
+html .ui-button--neutral:has(> svg):not(.ui-modal-footer .ui-button, .browser-chat-management-dialog .management-toolbar-action) {
   color: var(--foreground) !important;
 }
 
 
-html .ui-button:has(> svg):not(.ui-button--primary, .ui-modal-footer .ui-button):not(:disabled):hover,
-html .ui-button:has(> svg):not(.ui-button--primary, .ui-modal-footer .ui-button):not(:disabled):active {
+html .ui-button:has(> svg):not(.ui-button--primary, .ui-modal-footer .ui-button, .browser-chat-management-dialog .management-toolbar-action):not(:disabled):hover,
+html .ui-button:has(> svg):not(.ui-button--primary, .ui-modal-footer .ui-button, .browser-chat-management-dialog .management-toolbar-action):not(:disabled):active {
   background: transparent !important;
   border: 0 !important;
   box-shadow: none !important;

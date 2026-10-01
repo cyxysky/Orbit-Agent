@@ -3,6 +3,11 @@ import type { Language } from '@/i18n/language';
 export type { Language } from '@/i18n/language';
 
 const en: Record<string, string> = {
+  '选择 AI 可使用的工具，拖动名称调整顺序。': 'Choose tools for AI. Drag their names to reorder.',
+  '自动保存 · 下条消息生效，并用于新对话': 'Auto-saved · Applies from the next message and to new chats',
+  '自动保存 · 用于新对话': 'Auto-saved · Applies to new chats',
+  '外部服务需先配置': 'External services require setup',
+  '清空搜索': 'Clear search',
   '持久化队列': 'Persistence queue',
   '等待写入': 'Waiting to write',
   '正在写入': 'Writing',

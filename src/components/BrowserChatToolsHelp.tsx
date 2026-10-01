@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { CircleHelp, GripVertical, Search, X } from 'lucide-react';
+import { BookOpen, ChartNoAxesCombined, Check, ChevronDown, CircleHelp, CodeXml, Database, Files, Globe2, GripVertical, Image, MapPin, MessageSquareText, Monitor, Plug, Search, SlidersHorizontal, SquareTerminal, X, type LucideIcon } from 'lucide-react';
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -13,34 +13,44 @@ import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 import { normalizeDisabledBrowserChatTools, type BrowserChatToolHelp } from '@/lib/browser-chat-tools';
 import { readBrowserChatToolPreferences, saveBrowserChatToolPreferences } from '@/lib/browser-chat-tool-preferences';
 
+const toolIcons: Record<string, LucideIcon> = {
+  browser: Globe2, file: Files, chart: ChartNoAxesCombined, maps: MapPin,
+  codeSandbox: CodeXml, connectors: Plug, knowledge: BookOpen, data: Database,
+  media: Image, communication: MessageSquareText, terminal: SquareTerminal, computer: Monitor,
+};
+
 function SortableToolRow({ tool, enabled, disabled, onToggle }: {
   tool: BrowserChatToolHelp; enabled: boolean; disabled: boolean; onToggle: () => void;
 }) {
   const { t } = useI18n();
+  const Icon = toolIcons[tool.name] || Plug;
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id: tool.name });
   return (
-    <article ref={setNodeRef} className={`browser-chat-tool-row${isDragging ? ' is-dragging' : ''}`}
+    <article ref={setNodeRef} className={`browser-chat-tool-row${enabled ? ' is-enabled' : ''}${!tool.available ? ' is-unavailable' : ''}${isDragging ? ' is-dragging' : ''}`}
       style={{ transform: CSS.Transform.toString(transform), transition }}>
       <div className="browser-chat-tool-row-heading">
         <button {...attributes} {...listeners} ref={setActivatorNodeRef} type="button"
           className="browser-chat-tool-drag-handle" aria-label={t('拖拽排序：{name}', { name: t(tool.label) })} title={t('拖拽排序')}>
-          <GripVertical aria-hidden="true" size={16} />
-          <strong>{t(tool.label)}</strong><code>{tool.name}</code>
+          <span className="browser-chat-tool-catalog-icon"><Icon aria-hidden="true" size={17} /></span>
+          <strong>{t(tool.label)}</strong>
+          <GripVertical aria-hidden="true" className="browser-chat-tool-grip" size={14} />
         </button>
         <button type="button" role="switch" aria-checked={enabled} aria-label={t(tool.label)}
-          disabled={disabled} className="browser-chat-tool-switch" onClick={onToggle}><span /></button>
+          disabled={disabled} className="browser-chat-tool-switch" onClick={onToggle}><span><Check aria-hidden="true" size={10} strokeWidth={2.5} /></span></button>
       </div>
-      <p>{t(tool.description)}</p>
-      {!tool.available && <small>{t('当前模型连接方式不提供此工具')}</small>}
-      <details>
-        <summary>{t('试试这样问')}</summary>
-        <ul className="browser-chat-tool-prompts">
-          {tool.prompts.map((prompt) => <li key={prompt}>
-            <span>{t(prompt)}</span>
-            <CopyTextButton text={t(prompt)} label={t('复制提示词')} className="browser-chat-tool-prompt-copy" />
-          </li>)}
-        </ul>
-      </details>
+      <div className="browser-chat-tool-row-body">
+        <p>{t(tool.description)}</p>
+        {!tool.available && <small>{t('当前模型连接方式不提供此工具')}</small>}
+        {tool.prompts.length > 0 && <details>
+          <summary><span>{t('试试这样问')}</span><ChevronDown aria-hidden="true" size={12} /></summary>
+          <ul className="browser-chat-tool-prompts">
+            {tool.prompts.map((prompt) => <li key={prompt}>
+              <span>{t(prompt)}</span>
+              <CopyTextButton text={t(prompt)} label={t('复制提示词')} className="browser-chat-tool-prompt-copy" />
+            </li>)}
+          </ul>
+        </details>}
+      </div>
     </article>
   );
 }
@@ -137,31 +147,39 @@ export function BrowserChatToolsHelp({ userId, sessionId, disabledTools, onChang
     </button>
     <FloatingLayer anchorRef={anchor} layerRef={layer} className="ui-hover-card browser-chat-tools-card" present={open}
       active={dismissible} onDismiss={close} dragHandleSelector=".browser-chat-tools-card-header" onDragStart={keepOpenAfterDrag}
-      placement="top" align="start" preferredWidth={470} maxHeight={600} role="dialog" ariaLabel={t('工具说明与开关')}
+      placement="top" align="start" preferredWidth={440} maxHeight={580} role="dialog" ariaLabel={t('工具说明与开关')}
       onPointerEnter={cancelClose} onPointerLeave={leave}>
       <div className="browser-chat-tools-card-content" onFocusCapture={cancelClose} onBlurCapture={leave}>
         <div className="browser-chat-tools-card-controls">
-        <header className="browser-chat-tools-card-header"><strong>{t('工具')}</strong><span>{enabled} / {tools?.length || 0} {t('已启用')}</span>
-          <button type="button" aria-label={t('关闭')} onClick={close}><X size={16} /></button>
-        </header>
-        <p className="browser-chat-tools-card-hint">{sessionId
-          ? t('开关保存到当前会话，对下一条消息生效，并用于新对话。')
-          : t('开关自动保存，并用于新对话。')}{' '}{t('拖动工具名称可排序。外部服务仍需完成配置。')}</p>
-        <AppInput aria-label={t('搜索工具')} placeholder={t('搜索工具')} value={query}
-          onChange={(event) => setQuery(event.target.value)} prefix={<Search aria-hidden="true" size={16} />} />
-        {error && <p role="alert" className="browser-chat-tools-error">{t(error)}</p>}
+          <header className="browser-chat-tools-card-header">
+            <span className="browser-chat-tools-card-icon"><SlidersHorizontal aria-hidden="true" size={18} /></span>
+            <strong>{t('工具')}</strong>
+            <span className="browser-chat-tools-count">{enabled}<span>/ {tools?.length || 0}</span> {t('已启用')}</span>
+            <button className="browser-chat-tools-close" type="button" aria-label={t('关闭')} onClick={close}><X size={16} /></button>
+          </header>
+          <p className="browser-chat-tools-card-hint">{t('选择 AI 可使用的工具，拖动名称调整顺序。')}</p>
+          <div className="browser-chat-tools-search">
+            <AppInput aria-label={t('搜索工具')} placeholder={t('搜索工具')} value={query}
+              onChange={(event) => setQuery(event.target.value)} prefix={<Search aria-hidden="true" size={15} />}
+              suffix={query ? <button type="button" aria-label={t('清空搜索')} onClick={() => setQuery('')}><X size={14} /></button> : undefined} />
+          </div>
+          {error && <p role="alert" className="browser-chat-tools-error">{t(error)}</p>}
         </div>
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={keepOpenAfterDrag} onDragEnd={reorder}>
-        <div className="browser-chat-tools-list">
-          {!tools && !error && <p role="status">{t('正在加载工具…')}</p>}
-          <SortableContext items={visibleTools.map((tool) => tool.name)} strategy={verticalListSortingStrategy}>
-            {visibleTools.map((tool) => <SortableToolRow key={tool.name} tool={tool}
-              enabled={tool.available && !disabledTools.includes(tool.name)} disabled={busy || Boolean(saving) || !tool.available}
-              onToggle={() => void toggle(tool.name)} />)}
-          </SortableContext>
-          {tools && !visibleTools.length && <p role="status">{t('没有匹配的工具')}</p>}
-        </div>
+          <div className="browser-chat-tools-list">
+            {!tools && !error && <p role="status">{t('正在加载工具…')}</p>}
+            <SortableContext items={visibleTools.map((tool) => tool.name)} strategy={verticalListSortingStrategy}>
+              {visibleTools.map((tool) => <SortableToolRow key={tool.name} tool={tool}
+                enabled={tool.available && !disabledTools.includes(tool.name)} disabled={busy || Boolean(saving) || !tool.available}
+                onToggle={() => void toggle(tool.name)} />)}
+            </SortableContext>
+            {tools && !visibleTools.length && <p role="status">{t('没有匹配的工具')}</p>}
+          </div>
         </DndContext>
+        <footer className="browser-chat-tools-card-footer">
+          <span><Check aria-hidden="true" size={12} />{sessionId ? t('自动保存 · 下条消息生效，并用于新对话') : t('自动保存 · 用于新对话')}</span>
+          <span className="browser-chat-tools-config-note">{t('外部服务需先配置')}</span>
+        </footer>
       </div>
     </FloatingLayer>
   </>;

@@ -3629,7 +3629,7 @@ export async function startBrowserChatScreencast(
 
   const browser = restoreBrowserSessionPrototype(session.browser);
   if (!browser || !session.started || !browser.isUsable()) {
-    throw new Error('当前会话没有运行中的测试浏览器；打开预览不会自动启动或重新打开浏览器。');
+    throw new Error('浏览器未运行。输入网址或点击“新增标签页”启动浏览器。');
   }
   const userKey = browserChatUserRuntimeKey(session.userId);
   cancelBrowserChatUserIdleClose(userKey);
@@ -3682,7 +3682,16 @@ export async function dispatchBrowserChatPreviewInput(
   const session = await hydrateSession(sessionId);
   if (!session || session.status === 'closed') return undefined;
   if (!sessionBelongsToUser(session, userId)) return undefined;
-  const browser = restoreBrowserSessionPrototype(session.browser);
+  let browser = restoreBrowserSessionPrototype(session.browser);
+  // Opening the preview remains passive. Only an explicit navigation or new-tab
+  // action starts a browser, using the saved launch settings and user profile.
+  if ((!session.started || !browser || !browser.isUsable())
+    && input.kind === 'browserControl'
+    && (input.action === 'navigate' || input.action === 'open')) {
+    browser = await ensureStarted(session, () => {
+      if (session.status === 'closed') throw new Error('Browser chat session is closed');
+    }, { preferExistingPage: true });
+  }
   if (!session.started || !browser || !browser.isUsable()) {
     throw new Error('当前会话还没有运行中的浏览器，无法操作实时界面。');
   }

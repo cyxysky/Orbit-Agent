@@ -35,6 +35,32 @@ import {
 } from '@/server/storage/browser-chat-history-store';
 import { executeBrowserCodeRuntimeStateOperation } from '@/server/storage/browser-code-runtime-state';
 import { readBrowserChatSessionSummaries } from '@/server/storage/database-record-store';
+import { browserChatRequestedUserInput } from '@/lib/browser-chat-tools';
+
+async function restoreUserInputQuestions(sessionId: string, messages: BrowserChatMessage[]) {
+  // Older paused replies were flattened and cut at 900 characters. Recover the
+  // original tool question for display, without rewriting persisted history.
+  const candidates = messages.filter(message => message.role === 'assistant' && message.status === 'blocked');
+  const steps = await readBrowserChatStepsByIndexes<StepExecutionResult>(sessionId,
+    candidates.flatMap(message => (message.stepIndexes || []).slice(-1)));
+  const byIndex = new Map(steps.map(step => [step.index, step]));
+  return messages.map(message => {
+    if (!candidates.includes(message)) return message;
+    const index = message.stepIndexes?.at(-1);
+    const step = index === undefined ? undefined : byIndex.get(index);
+    if (!step || step.messageId && step.messageId !== message.id) return message;
+    const question = browserChatRequestedUserInput(step.tools || []);
+    if (!question) return message;
+    const flattened = question.replace(/\s+/g, ' ').trim();
+    const legacyReply = flattened.length > 900 ? `${flattened.slice(0, 900)}...` : flattened;
+    if (message.content === question || message.content.trim() !== legacyReply) return message;
+    return { ...message, content: question, parts: [
+      ...(message.parts || []).filter(part => part.type !== 'text'
+        && !(part.type === 'data-response' && part.data.type === 'core.markdown')),
+      { type: 'data-response' as const, id: 'restored-user-input', data: { type: 'core.markdown', params: { text: question } } },
+    ] };
+  });
+}
 
 function browserChatLogDetails(value?: string) {
   if (!value) return undefined;
@@ -276,7 +302,7 @@ export async function readBrowserChatSessionPage(sessionId: string, userId?: str
     ...session,
     contextUsage: resolvedContextUsage(persistedSession, messages.items),
     hasMessages: messages.items.length > 0 || session.hasMessages === true,
-    messages: messages.items,
+    messages: await restoreUserInputQuestions(sessionId, messages.items),
     steps: recoverBrowserChatToolContext(activeSteps, activeLogs).map(compactStepForClient),
     logs: compactBrowserChatLogsForClient(activeLogs),
     outputCycles: activeRecords.outputCycles,
@@ -321,7 +347,7 @@ export async function readBrowserChatSessionHistoryPage(
       })
     : undefined;
   return {
-    ...(messages ? { messages: messages.items } : {}),
+    ...(messages ? { messages: await restoreUserInputQuestions(sessionId, messages.items) } : {}),
     history: {
       ...(messages ? {
         messages: { cursor: messages.cursor, hasMore: messages.hasMore },

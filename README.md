@@ -1,5 +1,7 @@
 # Orbit
 
+Local MCP tools can be installed and registered without starting Orbit: run `install-mcp.cmd` on Windows or `npm run mcp:setup`. Preview with `install-mcp.cmd --dry-run` or `npm run mcp:setup -- --dry-run`. See the [one-command setup guide](packages/capability-sdk/SETUP.zh-CN.md) for supported clients, independent SDK installation and configuration scopes.
+
 An agent workspace with a Next.js UI, an independent Node.js API, and a separate Agent execution process, with capabilities for browsers, files, code, knowledge, data, and connected tools.
 
 See [Node backend architecture](docs/node-backend-architecture.md) for process boundaries, source/production entry points, packaging, and recovery behavior.
