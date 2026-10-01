@@ -365,8 +365,9 @@ function boundedInteger(value: unknown, fallback: number, min: number, max: numb
   return Math.min(Math.max(normalized, min), max);
 }
 
-function runtimeRequestConsecutiveFailureLimit() {
-  return boundedInteger(process.env.AI_RUNTIME_REQUEST_RETRY_ATTEMPTS, 3, 1, 3);
+function runtimeRequestConsecutiveFailureLimit(subagent = false) {
+  const parentLimit = boundedInteger(process.env.AI_RUNTIME_REQUEST_RETRY_ATTEMPTS, 3, 1, 3);
+  return subagent ? boundedInteger(process.env.AI_SUBAGENT_REQUEST_RETRY_ATTEMPTS, Math.min(parentLimit, 2), 1, 3) : parentLimit;
 }
 
 function upstreamApiDisconnectReason(value?: string) {
@@ -1282,7 +1283,13 @@ async function makeBrowserTools(
       const actionAfterSkillCheck = async (actionSignal?: AbortSignal, trace?: ToolTrace) => {
         const skillGateFailure = name === 'browser' ? undefined : requireHiddenRuntimeSkillRead(name, input, loadedHiddenRuntimeSkillIds);
         if (skillGateFailure) return skillGateFailure;
-        return action(actionSignal, trace);
+        // Preserve the SDK's per-tool deadline as well as turn cancellation.
+        // Let the action settle after cancellation so child batches can return
+        // their result UUIDs and retained progress to the parent.
+        const signal = execution?.abortSignal
+          ? actionSignal ? AbortSignal.any([actionSignal, execution.abortSignal]) : execution.abortSignal
+          : actionSignal;
+        return action(signal, trace);
       };
       const traceVisualContext = referenceOptions?.visualContext;
       return executeTracedBrowserAction({
@@ -1623,6 +1630,7 @@ function runtimePrompt(runtimeRecord: BrowserChatRuntimeRecord) {
     '- When a select, cascader, tree picker, dropdown menu, or date/time option surface remains open and the intent is only to dismiss it, first call browser(action="dismissSurface"). This directly clicks viewport (0,0); do not replace it with a code or coordinate click. Verify closure from closureConfirmed, postActionState when available, and the latest screenshot before interacting behind it. If the click did not close that surface, choose a different observed action instead of repeating it. A dialog with an explicit Close/Cancel button should use that button first; a pending selection that needs Apply/Done/Confirm should use its commit control.',
     '- Use web research when the user asks for it or the answer depends on current external facts. Read relevant pages, prefer primary sources, check dates, cite factual claims, and reuse valid evidence already collected for this task. Respect requests limited to local work, supplied material, or a specific operation; do not start unrelated research before executing a supplied procedure.',
     '- Follow the current tool schema, capability Skill, and user-disabled tool restrictions. If a tool returns the complete required Skill instead of executing, apply that content and retry the intended operation on the next step; do not read the same Skill again. Use only capabilities that help the request.',
+    '- Tool routing for existing documents: use file for PDF/Word/Excel/PPT text and tables. For a discovered remote PDF, call file action=download with the exact urlOrPath, then file action=readContent with the returned artifactId (includeVisuals=false; contentPages for specific PDF pages; offset/limit for text pagination). For an uploaded or already downloaded file, readContent with its attachmentId/artifactId directly. Keep source URL and page numbers with extracted research facts. Reading a PDF needs no Office plan/render or package installation. Use codeSandbox for calculations/transformations on extracted data, explicitly requested code, or a concrete parsing capability that file lacks after inspecting its result; do not start with requests/pypdf/pdfplumber/cryptography installation just to read a PDF. Empty/scanned or malformed text calls for a targeted file visualRead when available; a password-required error needs the password, not repeated parser installs. Respect disabled tools and report access failures without claiming the PDF was read.',
     '- Native tool calling supports multiple tool calls in the same model step; there is no one-tool-per-step limit. Proactively batch independent calls whose inputs are already known, including reading multiple required Skills or downloading multiple known assets. Emit each call separately with its own tool name and schema-valid arguments; do not invent a batch tool or wrap calls in an unsupported array. The runtime schedules execution according to each tool\'s concurrency policy, so submitting a batch does not guarantee simultaneous execution.',
     '- Keep result-dependent calls in later steps: read and inspect a required Skill before invoking its governed capability, inspect a lookup result before using its returned IDs or URLs, and observe a changed page before choosing dependent actions. Batch independent Skill reads together, then use their results in the next step. Call finalResponse only after all required tool results have been received and assessed.',
     '- A server-side browser action or download click does not deliver a file to the user. Deliver only URLs copied exactly from successful artifact or screenshot tool results. Check required output features and visual review coverage before claiming a generated file is complete.',
@@ -2074,12 +2082,12 @@ async function executeRuntimeStep(input: {
     // This watchdog is deliberately separate from the user/session abort
     // signal: its timeout is retryable, while a user cancellation is terminal.
     const runtimeRequestTimeoutMs = aiRuntimeRequestTimeoutMs();
-    const streamTimeouts = aiRuntimeStreamTimeouts(runtimeRequestTimeoutMs, consecutiveRequestFailures);
+    const streamTimeouts = aiRuntimeStreamTimeouts(runtimeRequestTimeoutMs, consecutiveRequestFailures, input.useToolLoopAgent);
     const attemptLabel = () => {
       const retryLabel = executionIdentity.attemptNumber > 1
         ? lastError instanceof AiFirstChunkTimeoutError ? '（首包超时后重试）' : '（重试）'
         : '';
-      return `第 ${executionIdentity.attemptNumber}/${runtimeRequestConsecutiveFailureLimit()} 次请求${retryLabel}`;
+      return `第 ${executionIdentity.attemptNumber}/${runtimeRequestConsecutiveFailureLimit(input.useToolLoopAgent)} 次请求${retryLabel}`;
     };
     const requestWatchdog = createAiRequestWatchdog(abortSignal, runtimeRequestTimeoutMs);
     const onAttemptDebug: ExecutionDebug | undefined = onDebug
@@ -3177,7 +3185,7 @@ async function executeRuntimeStep(input: {
           rejectedContextTokens = undefined;
           Object.assign(executionIdentity, nextRequestExecutionIdentity());
         }
-        streamTimeouts.firstChunkMs = aiRuntimeStreamTimeouts(runtimeRequestTimeoutMs, consecutiveRequestFailures).firstChunkMs;
+        streamTimeouts.firstChunkMs = aiRuntimeStreamTimeouts(runtimeRequestTimeoutMs, consecutiveRequestFailures, input.useToolLoopAgent).firstChunkMs;
         decisionReady = Promise.withResolvers<void>();
         decisionCalls = [];
         rawResponseMessages = [...responseMessages];
@@ -3349,10 +3357,14 @@ async function executeRuntimeStep(input: {
         const turnIndex = typeof event.stepNumber === 'number' ? event.stepNumber : toolExecutionGate.stepNumber;
         if (visibleText) await publishStepText(visibleText, turnIndex);
       };
+      const subagentTimeoutMs = boundedInteger(process.env.AI_SUBAGENT_LOOP_TIMEOUT_MS, 600_000, 1_000, 3_600_000);
       const timeout = {
         ...streamTimeouts,
+        // The SDK's chunk timer also spans tools; a child batch has its own
+        // deadline and must not be interrupted by the default tool window.
+        chunkMs: input.runSubagents ? Math.max(streamTimeouts.chunkMs, subagentTimeoutMs + runtimeRequestTimeoutMs) : streamTimeouts.chunkMs,
         tools: {
-          spawnSubagentsMs: boundedInteger(process.env.AI_SUBAGENT_LOOP_TIMEOUT_MS, 600_000, 1_000, 3_600_000),
+          subagentMs: subagentTimeoutMs,
         },
       };
       const runtimeModel = getModel();
@@ -3558,7 +3570,7 @@ async function executeRuntimeStep(input: {
   }
 
 
-  const consecutiveFailureLimit = runtimeRequestConsecutiveFailureLimit();
+  const consecutiveFailureLimit = runtimeRequestConsecutiveFailureLimit(input.useToolLoopAgent);
   let lastError: unknown;
   let retryingAfterFailure = false;
   let lastRetryDecision: RuntimeRetryDecision | undefined;

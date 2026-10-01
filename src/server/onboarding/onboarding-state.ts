@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { chromium } from 'playwright';
+import { chromium } from 'patchright';
 import {
   WEBPILOT_ONBOARDING_VERSION,
   isWebPilotOnboardingStep,
@@ -169,7 +169,7 @@ export async function readOnboardingReadiness(): Promise<WebPilotOnboardingReadi
   }
   return {
     browser: {
-      detail: browserReady ? 'Playwright 浏览器运行时已安装' : '未找到 Playwright 浏览器运行时',
+      detail: browserReady ? 'Patchright 浏览器运行时已安装' : '未找到 Patchright 浏览器运行时',
       ready: browserReady,
     },
     libreOffice: {

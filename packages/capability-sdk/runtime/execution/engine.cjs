@@ -82,7 +82,10 @@ function createCodeExecutionEngine(options) {
           env: input.env,
           shell: input.shell || false,
           stdio: 'pipe',
-          detached: true,
+          // Unix needs a process group for tree termination. On Windows,
+          // detached creates a separate console even with windowsHide enabled;
+          // taskkill /T already handles the child tree without a detached group.
+          detached: process.platform !== 'win32',
           windowsHide: true,
           ...(options.dropPrivileges === true && process.platform === 'linux' && process.getuid?.() === 0 ? { uid: 10001, gid: 10001 } : {}),
         });

@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import type { Page } from 'playwright';
+import type { Page } from 'patchright';
 import { BrowserSession, type BrowserTabSnapshot } from '@cjfclonedeep/capability-sdk/browser/node';
 
 const environmentKeys = [

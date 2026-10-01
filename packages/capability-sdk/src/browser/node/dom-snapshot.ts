@@ -1,4 +1,4 @@
-import type { CDPSession, Page } from 'playwright';
+import type { CDPSession, Page } from 'patchright';
 import type { CapturedSnapshotNode } from './ax-snapshot.ts';
 import {
   flattenCdpFrameTree,

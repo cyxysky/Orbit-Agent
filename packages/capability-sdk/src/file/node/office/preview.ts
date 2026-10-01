@@ -7,7 +7,7 @@ import path from 'node:path';
 import JSZip from 'jszip';
 import mammoth from 'mammoth';
 import { PDFParse } from 'pdf-parse';
-import { chromium } from 'playwright';
+import { chromium } from 'patchright';
 import sharp from 'sharp';
 import * as XLSX from 'xlsx';
 import { fileFormatForName, officePreviewExtensions, readableFileExtensions } from '../../formats.ts';

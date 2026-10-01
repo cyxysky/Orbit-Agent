@@ -6,7 +6,7 @@ import { resolveLibreOfficeExecutable } from '../libreoffice.ts';
 import { resolveUnoProgramWorker } from './uno.ts';
 import { resolveOfficeJsProgramWorker } from './javascript.ts';
 import { htmlOfficeRuntimeSource } from './html.ts';
-import { chromium } from 'playwright';
+import { chromium } from 'patchright';
 import { managedChromiumOptions } from '../../../runtime.ts';
 import type { OfficeDocumentDraft } from '../../office/types.ts';
 

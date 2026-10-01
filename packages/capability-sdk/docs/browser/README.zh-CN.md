@@ -19,11 +19,11 @@
 ```sh
 npm init -y
 npm pkg set type=module
-npm install @cjfclonedeep/capability-sdk  playwright@^1.60.0
+npm install @cjfclonedeep/capability-sdk  patchright@1.63.0
 npm install -D typescript tsx @types/node
 ```
 
-在使用方项目执行 `npx playwright install chromium` 安装匹配的 Chromium。每个挂载的运行实例创建自己的 BrowserSession；需要保留标签页和 JavaScript 变量的整段会话应复用该实例。本地可见操作可设置 `headless: false`。
+在使用方项目执行 `npx patchright install chromium` 安装匹配的 Chromium。每个挂载的运行实例创建自己的 BrowserSession；需要保留标签页和 JavaScript 变量的整段会话应复用该实例。本地可见操作可设置 `headless: false`。
 
 `state` 用于观察，`code` 使用 Skill 中的 `browser`、`page`、`nodeRepl` API 执行代码，`waitForHumanVerification` 等待人工处理。包提供的 facade 与普通 Playwright Page 并非处处可以互换；模型生成代码前应读取运行时 Skill。超时或取消后，先查看实时状态再决定是否重试。截图需要宿主的图片内容适配和产物存储；浏览器下载可接入 File 的 `createNodeFileDownloadReceiver`。
 
@@ -287,7 +287,7 @@ try {
 
 ## 补充行为参考
 
-在使用方项目执行 `npx playwright install chromium` 安装匹配的 Chromium。每个挂载的运行实例创建自己的 BrowserSession；需要保留标签页和 JavaScript 变量的整段会话应复用该实例。本地可见操作可设置 `headless: false`。
+在使用方项目执行 `npx patchright install chromium` 安装匹配的 Chromium。每个挂载的运行实例创建自己的 BrowserSession；需要保留标签页和 JavaScript 变量的整段会话应复用该实例。本地可见操作可设置 `headless: false`。
 
 `state` 用于观察，`code` 使用 Skill 中的 `browser`、`page`、`nodeRepl` API 执行代码，`waitForHumanVerification` 等待人工处理。包提供的 facade 与普通 Playwright Page 并非处处可以互换；模型生成代码前应读取运行时 Skill。超时或取消后，先查看实时状态再决定是否重试。截图需要宿主的图片内容适配和产物存储；浏览器下载可接入 File 的 `createNodeFileDownloadReceiver`。
 

@@ -171,7 +171,8 @@ export function createFileTools(
   const tools: Record<string, ReturnType<typeof defineCapabilityTool>> = {
     [fileCapabilityToolNames.file]: defineCapabilityTool<FileToolInput, unknown>({
       name: fileCapabilityToolNames.file,
-      description: (visualInputAvailable
+      description: 'Read existing PDFs, Word documents, spreadsheets and presentations with readContent(artifactId OR attachmentId). For a remote PDF/document URL: download(urlOrPath) → readContent(returned artifactId). Use contentPages for PDF text pages and offset/limit for text chunks; reading needs no plan/render or codeSandbox parser installation. Use visualRead for scanned pages or layout-dependent evidence when available. '
+        + (visualInputAvailable
         ? 'File workflow: readSource(documentId) reads editable HTML/Python/JavaScript; readContent(artifactId OR attachmentId) reads file text/data, NOT source. To repair layout: readSource → edit → render → visualRead using render.visualIndex.nextRead → visualReport. render includes screenshot IDs; call visualIndex only for missing index entries. list discovers drafts; plan selects engine; generate creates source; download fetches assets; convert changes file format; unoApi/jsApi describe the planned engine. Never substitute IDs or infer behavior from reason.'
         : 'File workflow: readSource(documentId) reads editable HTML/Python/JavaScript; readContent(artifactId OR attachmentId) reads file text/data, NOT source. To repair: readSource → edit → render. list discovers drafts; plan selects engine; generate creates source; download fetches assets; convert changes file format; unoApi/jsApi describe the planned engine. No visual inspection is available; do not claim visual QA.')
         + ' For text/code/config files use write(fileName, content): publishes exact UTF-8 content immediately, including empty files, without plan, Office engines or rendering. Markdown, TXT, HTML, JS, CSS, JSON, YAML, CSV and custom text extensions use the same write action. Saved code is not executed.'
@@ -180,6 +181,8 @@ export function createFileTools(
         + ' Recovery: readSource/list return saved diagnostics, not a new execution. Check validationEvidence freshness. Do not infer bridge failure from NoneType or source correctness from a runtime blocker. Respect retryable/retryAfter; no unchanged retry loops.',
       input: createFileToolInput(visualInputAvailable),
       inputExamples: [
+        { action: 'download', urlOrPath: 'https://example.com/annual-report.pdf', fileName: 'annual-report.pdf', fileType: 'pdf', reason: 'Download the discovered source PDF for content extraction' },
+        { action: 'readContent', artifactId: 'exact-artifact-id-from-download', contentPages: [1, 2], includeVisuals: false, reason: 'Read PDF evidence on the requested pages' },
         { action: 'write', fileName: 'notes.md', content: '# Notes\n\nMeeting notes.\n' },
         { action: 'list', reason: 'List current file drafts' },
         { action: 'readSource', reason: 'Locate code to patch, without reading the PPTX or attaching screenshots', documentId: 'travel-guide', startLine: 1, endLine: 80 },

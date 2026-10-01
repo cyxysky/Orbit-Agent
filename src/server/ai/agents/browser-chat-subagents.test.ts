@@ -9,42 +9,50 @@ import {
   clearBrowserChatSubagentBatchRegistryForTests,
   preserveBrowserChatSubagentSummary,
   resolvedBrowserChatSubagentStatus,
-  runBrowserChatSubagentAttemptWithRetry,
   runOrReuseBrowserChatSubagentBatch,
   settleBrowserChatSubagents,
 } from './browser-chat-subagents';
 
-test('a child Agent retries once after a thrown or zero-tool failure', async () => {
-  const thrownAttempts: number[] = [];
-  const thrownResult = await runBrowserChatSubagentAttemptWithRetry({
-    run: async (attempt) => {
-      thrownAttempts.push(attempt);
-      if (attempt === 1) throw new Error('request unavailable');
-      return { status: 'passed' as const, toolCount: 1 };
-    },
-    shouldRetryResult: () => false,
-    retryReasonFromError: (error) => String(error),
-    retryReasonFromResult: () => '',
-    onRetry: () => undefined,
+test('a cancelled queued child settles without waiting for an active sibling or consuming its slot', async () => {
+  clearBrowserChatSubagentBatchRegistryForTests();
+  const previous = process.env.AI_SUBAGENT_CONCURRENCY;
+  process.env.AI_SUBAGENT_CONCURRENCY = '1';
+  const blocker = Promise.withResolvers<void>();
+  const started = Promise.withResolvers<void>();
+  const controller = new AbortController();
+  const executed: string[] = [];
+  const active = settleBrowserChatSubagents(['active'], async (task) => {
+    executed.push(task);
+    started.resolve();
+    await blocker.promise;
+    return task;
   });
-  assert.deepEqual(thrownAttempts, [1, 2]);
-  assert.equal(thrownResult.status, 'passed');
-
-  const zeroToolAttempts: number[] = [];
-  const zeroToolResult = await runBrowserChatSubagentAttemptWithRetry({
-    run: async (attempt) => {
-      zeroToolAttempts.push(attempt);
-      return attempt === 1
-        ? { status: 'failed' as const, toolCount: 0 }
-        : { status: 'passed' as const, toolCount: 2 };
-    },
-    shouldRetryResult: (result) => result.status === 'failed' && result.toolCount === 0,
-    retryReasonFromError: (error) => String(error),
-    retryReasonFromResult: () => 'no tools executed',
-    onRetry: () => undefined,
-  });
-  assert.deepEqual(zeroToolAttempts, [1, 2]);
-  assert.equal(zeroToolResult.toolCount, 2);
+  try {
+    await started.promise;
+    const queued = settleBrowserChatSubagents(['cancelled'], async (task) => {
+      executed.push(task);
+      return task;
+    }, () => controller.signal);
+    const reason = new Error('child tool deadline');
+    controller.abort(reason);
+    assert.equal((await queued)[0].error, reason);
+    assert.deepEqual(executed, ['active']);
+    const next = settleBrowserChatSubagents(['next'], async (task) => {
+      executed.push(task);
+      return task;
+    });
+    assert.deepEqual(executed, ['active']);
+    blocker.resolve();
+    await active;
+    assert.equal((await next)[0].result, 'next');
+    assert.deepEqual(executed, ['active', 'next']);
+  } finally {
+    blocker.resolve();
+    await active;
+    if (previous === undefined) delete process.env.AI_SUBAGENT_CONCURRENCY;
+    else process.env.AI_SUBAGENT_CONCURRENCY = previous;
+    clearBrowserChatSubagentBatchRegistryForTests();
+  }
 });
 
 test('running child Agent progress exposes tool calls and results before completion', () => {

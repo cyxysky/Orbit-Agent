@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
-import type { BrowserContext, Page } from 'playwright';
+import type { BrowserContext, Page } from 'patchright';
 import { BrowserCodeKernel, BrowserSession } from '@cjfclonedeep/capability-sdk/browser/node';
 
 function markedPage(groupId: string, nativeTabId: number) {

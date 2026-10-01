@@ -63,14 +63,14 @@ function findBrowserRevisionDir(executablePath) {
     if (/^chromium(?:_headless_shell)?-\d+$/.test(path.basename(dir))) return dir;
     dir = path.dirname(dir);
   }
-  throw new Error(`Unable to locate the Playwright Chromium revision directory from: ${executablePath}`);
+  throw new Error(`Unable to locate the Patchright Chromium revision directory from: ${executablePath}`);
 }
 
 function copyPlaywrightChromium() {
-  const { chromium } = require('playwright');
+  const { chromium } = require('patchright');
   const executablePath = chromium.executablePath();
   if (!fs.existsSync(executablePath)) {
-    throw new Error('Playwright Chromium was not found. Run "npx playwright install chromium" before packaging.');
+    throw new Error('Patchright Chromium was not found. Run "npx patchright install chromium" before packaging.');
   }
 
   const sourceChromiumDir = findBrowserRevisionDir(executablePath);
@@ -90,9 +90,9 @@ function writeStartScript() {
 }
 
 function writeReadme() {
-  const readme = `# Orbit HTTP Server\n\nRequirements: Node.js 22.16 or later. No npm install is required.\n\n1. Extract this directory.\n2. Run start.cmd.\n3. Open http://127.0.0.1:17890.\n\nLocal direct access uses ORBIT_DEFAULT_USER_ID (default: 1). For an online mounted deployment, set ORBIT_REQUIRE_MOUNT_USER_ID=true and pass userId to Orbit.mount().\n\nThe service listens on all network interfaces by default. To change the port, run \`set PORT=3000 && start.cmd\` from Command Prompt, or set \`$env:PORT = '3000'; .\\start.cmd\` in PowerShell. HTTP and WebSocket traffic share this one public port.\n\nRuntime data, artifacts, and browser profiles are written under the runtime directory unless APP_DATA_DIR or ARTIFACTS_DIR is set. Playwright Chromium is included in this package.\n`;
+  const readme = `# Orbit HTTP Server\n\nRequirements: Node.js 22.16 or later. No npm install is required.\n\n1. Extract this directory.\n2. Run start.cmd.\n3. Open http://127.0.0.1:17890.\n\nLocal direct access uses ORBIT_DEFAULT_USER_ID (default: 1). For an online mounted deployment, set ORBIT_REQUIRE_MOUNT_USER_ID=true and pass userId to Orbit.mount().\n\nThe service listens on all network interfaces by default. To change the port, run \`set PORT=3000 && start.cmd\` from Command Prompt, or set \`$env:PORT = '3000'; .\\start.cmd\` in PowerShell. HTTP and WebSocket traffic share this one public port.\n\nRuntime data, artifacts, and browser profiles are written under the runtime directory unless APP_DATA_DIR or ARTIFACTS_DIR is set. Patchright Chromium is included in this package.\n`;
   const packagedReadme = readme
-    .replace('Playwright Chromium is included in this package.', 'Playwright Chromium, LibreOffice, Python, GLiNER, and the multilingual redaction models are included in this package. No separate runtime installation is required.')
+    .replace('Patchright Chromium is included in this package.', 'Patchright Chromium, LibreOffice, Python, GLiNER, and the multilingual redaction models are included in this package. No separate runtime installation is required.')
     .replace('http://127.0.0.1:17890', 'http://127.0.0.1:3000')
     .replace('set PORT=3000 && start.cmd', 'set PORT=17890 && start.cmd')
     .replace("$env:PORT = '3000'", "$env:PORT = '17890'");

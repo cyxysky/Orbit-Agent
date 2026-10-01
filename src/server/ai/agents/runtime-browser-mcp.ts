@@ -7,7 +7,9 @@ import { Experimental_StdioMCPTransport } from '@ai-sdk/mcp/mcp-stdio';
 import type { BrowserSession } from '@cjfclonedeep/capability-sdk/browser/node';
 
 const clients = new WeakMap<BrowserSession, Promise<MCPClient>>();
-const excludedTools = new Set(['browser_run_code_unsafe', 'browser_close', 'browser_tabs']);
+// Patchright deliberately disables page-console capture. Do not advertise an
+// empty console response as evidence that the page has no console errors.
+const excludedTools = new Set(['browser_run_code_unsafe', 'browser_close', 'browser_tabs', 'browser_console_messages']);
 const resolvePackage = createRequire(path.join(process.cwd(), 'package.json'));
 
 async function connectedClient(session: BrowserSession, runId: string) {
@@ -15,13 +17,16 @@ async function connectedClient(session: BrowserSession, runId: string) {
   if (existing) return existing;
   const pending = (async () => {
     const connection = session.browserAutomationConnection();
-    const packageFile = resolvePackage.resolve('@playwright/mcp/package.json');
+    // Use the MCP implementation bundled with the same patched driver. The
+    // standalone @playwright/mcp package would attach an unpatched CDP client.
+    const driverRequire = createRequire(resolvePackage.resolve('patchright'));
+    const packageFile = driverRequire.resolve('patchright-core/package.json');
     const cli = path.join(path.dirname(packageFile), 'cli.js');
     const outputDir = path.resolve(process.cwd(), 'runtime', 'artifacts', runId.replace(/[^a-zA-Z0-9_-]/g, '_'), 'playwright-mcp');
     await mkdir(outputDir, { recursive: true });
     const transport = new Experimental_StdioMCPTransport({
       command: process.execPath,
-      args: [cli, `${connection.protocol === 'cdp' ? '--cdp-endpoint' : '--endpoint'}=${connection.endpoint}`,
+      args: [cli, 'mcp', `${connection.protocol === 'cdp' ? '--cdp-endpoint' : '--endpoint'}=${connection.endpoint}`,
         '--snapshot-mode=full', `--output-dir=${outputDir}`, '--output-max-size=20000000'],
       cwd: process.cwd(), stderr: 'ignore',
     });

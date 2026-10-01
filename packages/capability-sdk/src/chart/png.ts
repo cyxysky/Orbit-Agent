@@ -27,7 +27,7 @@ async function exportExcalidrawPng(option: unknown) {
 export async function exportChartPng(chart: ChartRecord): Promise<string> {
   if (chart.engine === 'excalidraw') return exportExcalidrawPng(chart.option);
   const surface = document.createElement('div');
-  surface.style.cssText = `position:fixed;left:0;top:0;width:1000px;height:${chart.height}px;background:#fff;`;
+  surface.style.cssText = `position:fixed;left:-12000px;top:0;width:1000px;height:${chart.height}px;background:#fff;pointer-events:none;`;
   document.body.append(surface);
   let instance: ChartSurface | undefined;
   let timeout: ReturnType<typeof setTimeout> | undefined;

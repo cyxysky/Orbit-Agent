@@ -366,7 +366,7 @@ type PendingExecution = {
 const maxDiagnosticChars = 4_000;
 const defaultBrowserCodeKernelReadyTimeoutMs = 10_000;
 const defaultBrowserCodeExecutionTimeoutMs = 90_000;
-export const BROWSER_CODE_KERNEL_RUNTIME_REVISION = 50;
+export const BROWSER_CODE_KERNEL_RUNTIME_REVISION = 51;
 
 function boundedInteger(value: unknown, fallback: number, min: number, max: number) {
   const parsed = typeof value === 'number' ? value : Number(value);
@@ -504,7 +504,7 @@ function browserCodeKernelMain() {
     devicePixelRatio: number;
     documentId: string;
     height: number;
-    page: import('playwright').Page;
+    page: import('patchright').Page;
     scrollX: number;
     scrollY: number;
     url: string;
@@ -512,11 +512,11 @@ function browserCodeKernelMain() {
   };
   type CoordinateRectEvidence = CoordinateClickEvidence & {
     rect: { height: number; width: number; x: number; y: number };
-    locator: import('playwright').Locator;
+    locator: import('patchright').Locator;
   };
   type KernelUidBinding = BrowserCodeUidReference & {
-    frame: import('playwright').Frame;
-    page: import('playwright').Page;
+    frame: import('patchright').Frame;
+    page: import('patchright').Page;
     token: string;
     boundEpoch: number;
   };
@@ -526,10 +526,10 @@ function browserCodeKernelMain() {
       ? value
       : `${value.slice(0, 2000)}...[truncated; length=${value.length}]`
   );
-  let browser: import('playwright').Browser | undefined;
+  let browser: import('patchright').Browser | undefined;
   let cdpScope: Awaited<ReturnType<typeof createBrowserCodeCdpScope>> | undefined;
   let replServer: import('node:repl').REPLServer | undefined;
-  let selectedRuntimePage: import('playwright').Page | undefined;
+  let selectedRuntimePage: import('patchright').Page | undefined;
   let sessionGroupId = '';
   let activeExecution: {
     actions: string[];
@@ -540,9 +540,9 @@ function browserCodeKernelMain() {
     startedAt: number;
     attachments: Map<string, BrowserCodeAttachmentBinding>;
     credentials: Map<string, BrowserCodeCredentialBinding>;
-    pendingCoordinateClickEvidence: Map<import('playwright').Page, CoordinateClickEvidence>;
-    pendingCoordinateRectEvidence: Map<import('playwright').Page, CoordinateRectEvidence[]>;
-    observationsBeforeAction: WeakMap<import('playwright').Page, KernelPageObservation>;
+    pendingCoordinateClickEvidence: Map<import('patchright').Page, CoordinateClickEvidence>;
+    pendingCoordinateRectEvidence: Map<import('patchright').Page, CoordinateRectEvidence[]>;
+    observationsBeforeAction: WeakMap<import('patchright').Page, KernelPageObservation>;
     uidBindings: Map<string, KernelUidBinding>;
     uidBindingErrors: Map<string, string>;
     uidReferences: Map<string, BrowserCodeUidReference>;
@@ -682,18 +682,18 @@ function browserCodeKernelMain() {
     },
   });
 
-  const tabIds = new WeakMap<import('playwright').Page, string>();
-  const tabPages = new WeakMap<object, import('playwright').Page>();
-  const tabWrappers = new WeakMap<import('playwright').Page, object>();
-  const agentCreatedPages = new Set<import('playwright').Page>();
-  const nativeContextNewPages = new WeakMap<import('playwright').BrowserContext, () => Promise<import('playwright').Page>>();
-  const pointerDecoratedPages = new WeakSet<import('playwright').Page>();
+  const tabIds = new WeakMap<import('patchright').Page, string>();
+  const tabPages = new WeakMap<object, import('patchright').Page>();
+  const tabWrappers = new WeakMap<import('patchright').Page, object>();
+  const agentCreatedPages = new Set<import('patchright').Page>();
+  const nativeContextNewPages = new WeakMap<import('patchright').BrowserContext, () => Promise<import('patchright').Page>>();
+  const pointerDecoratedPages = new WeakSet<import('patchright').Page>();
   const screenshotDecoratedPagePrototypes = new WeakSet<object>();
   const pointerDecoratedLocatorPrototypes = new WeakSet<object>();
   const credentialLocatorPrototypes = new WeakSet<object>();
-  const rawLocatorByExistingLocator = new WeakMap<object, import('playwright').Locator>();
-  let nativeFrameLocator: ((this: object, selector: string) => import('playwright').Locator) | undefined;
-  let nativeLocatorFilter: ((this: object, options?: unknown) => import('playwright').Locator) | undefined;
+  const rawLocatorByExistingLocator = new WeakMap<object, import('patchright').Locator>();
+  let nativeFrameLocator: ((this: object, selector: string) => import('patchright').Locator) | undefined;
+  let nativeLocatorFilter: ((this: object, options?: unknown) => import('patchright').Locator) | undefined;
   let nativeLocatorFill: ((this: object, value: string) => Promise<void>) | undefined;
   const nativeLocatorActions = new Map<
     string,
@@ -720,16 +720,16 @@ function browserCodeKernelMain() {
     return [{ timeout: browserCodeScreenshotTimeoutMs }, ...args];
   };
 
-  const existingLocator = (locator: import('playwright').Locator) => {
+  const existingLocator = (locator: import('patchright').Locator) => {
     if (!nativeLocatorFilter) return locator;
     const filtered = Reflect.apply(nativeLocatorFilter, locator, [{ visible: true }]);
     rawLocatorByExistingLocator.set(filtered, locator);
     return filtered;
   };
 
-  const createSessionPage = async (targetContext: import('playwright').BrowserContext) => {
+  const createSessionPage = async (targetContext: import('patchright').BrowserContext) => {
     const nativeNewPage = nativeContextNewPages.get(targetContext) || targetContext.newPage.bind(targetContext);
-    const openerPage = replServer?.context.page as import('playwright').Page | undefined;
+    const openerPage = replServer?.context.page as import('patchright').Page | undefined;
     if (!openerPage || openerPage.isClosed() || openerPage.context() !== targetContext) return nativeNewPage();
     const [popupPage] = await Promise.all([
       targetContext.waitForEvent('page', {
@@ -743,7 +743,7 @@ function browserCodeKernelMain() {
     return popupPage;
   };
 
-  const decorateContextNewPage = (browserContext: import('playwright').BrowserContext) => {
+  const decorateContextNewPage = (browserContext: import('patchright').BrowserContext) => {
     if (nativeContextNewPages.has(browserContext)) return;
     nativeContextNewPages.set(browserContext, browserContext.newPage.bind(browserContext));
     try {
@@ -758,7 +758,7 @@ function browserCodeKernelMain() {
   };
 
   const moveVisibleAiPointer = async (
-    page: import('playwright').Page,
+    page: import('patchright').Page,
     point: { x: number; y: number } | undefined,
     kind = 'move',
   ) => {
@@ -772,22 +772,22 @@ function browserCodeKernelMain() {
   };
 
   const locatorFrame = (locator: object) => (
-    Reflect.get(locator, '_frame') as import('playwright').Frame | undefined
+    Reflect.get(locator, '_frame') as import('patchright').Frame | undefined
   );
 
   const locatorPage = (locator: object) => {
-    const frame = locatorFrame(locator) as (import('playwright').Frame & { _page?: import('playwright').Page }) | undefined;
+    const frame = locatorFrame(locator) as (import('patchright').Frame & { _page?: import('patchright').Page }) | undefined;
     if (typeof frame?.page === 'function') return frame.page();
     return frame?._page;
   };
 
   const browserCodeUidAttribute = 'data-ai-browser-code-uid';
 
-  const frameFromUidPath = (page: import('playwright').Page, framePath?: string) => {
+  const frameFromUidPath = (page: import('patchright').Page, framePath?: string) => {
     if (!framePath) return page.mainFrame();
     const parts = framePath.split('.').map((part) => Number(part));
     if (parts.some((part) => !Number.isInteger(part) || part < 0)) return undefined;
-    let frame: import('playwright').Frame | undefined = page.mainFrame();
+    let frame: import('patchright').Frame | undefined = page.mainFrame();
     for (const part of parts) {
       frame = frame.childFrames()[part];
       if (!frame) return undefined;
@@ -796,12 +796,12 @@ function browserCodeKernelMain() {
   };
 
   const bindExecutionUidReferences = async (
-    page: import('playwright').Page,
+    page: import('patchright').Page,
     references: BrowserCodeUidReference[],
   ) => {
     const execution = activeExecution;
     if (!execution) return;
-    const groups = new Map<import('playwright').Frame, Array<BrowserCodeUidReference & { token: string }>>();
+    const groups = new Map<import('patchright').Frame, Array<BrowserCodeUidReference & { token: string }>>();
     for (const [index, reference] of references.slice(0, 1_000).entries()) {
       const uid = String(reference.uid || '').trim();
       if (!/^dom-\d+-\d+$/.test(uid)) continue;
@@ -861,7 +861,7 @@ function browserCodeKernelMain() {
   const clearExecutionUidBindings = async () => {
     const execution = activeExecution;
     if (!execution?.uidBindings.size) return;
-    const tokensByFrame = new Map<import('playwright').Frame, string[]>();
+    const tokensByFrame = new Map<import('patchright').Frame, string[]>();
     for (const binding of execution.uidBindings.values()) {
       const list = tokensByFrame.get(binding.frame) || [];
       list.push(binding.token);
@@ -883,7 +883,7 @@ function browserCodeKernelMain() {
   };
 
   const readUnifiedPageObservation = async (
-    page: import('playwright').Page,
+    page: import('patchright').Page,
   ): Promise<KernelPageObservation> => {
     const mainFrame = page.mainFrame();
     const observations = await Promise.all(page.frames().slice(0, 25).map(async (frame) => {
@@ -1025,7 +1025,7 @@ function browserCodeKernelMain() {
     };
   };
 
-  const markPageObserved = async (page: import('playwright').Page) => {
+  const markPageObserved = async (page: import('patchright').Page) => {
     if (!activeExecution) throw new Error('Page observation is only available while browserCode is executing.');
     const observation = await readUnifiedPageObservation(page);
     activeExecution.observationsBeforeAction.set(page, observation);
@@ -1033,7 +1033,7 @@ function browserCodeKernelMain() {
   };
 
   const prepareStateChangingAction = async (
-    page: import('playwright').Page | undefined,
+    page: import('patchright').Page | undefined,
     action: string,
     report = true,
     retainViewportEvidence = false,
@@ -1055,7 +1055,7 @@ function browserCodeKernelMain() {
   };
 
   const completeStateChangingAction = async (
-    page: import('playwright').Page | undefined,
+    page: import('patchright').Page | undefined,
     action: string,
   ) => {
     if (!activeExecution || !page) return;
@@ -1098,7 +1098,7 @@ function browserCodeKernelMain() {
     return [...terms].slice(0, 16);
   };
 
-  const zeroMatchCandidateDiagnostics = async (locator: import('playwright').Locator) => {
+  const zeroMatchCandidateDiagnostics = async (locator: import('patchright').Locator) => {
     const frame = locatorFrame(locator);
     const page = locatorPage(locator);
     const selector = String(Reflect.get(locator, '_selector') || '').slice(0, 800);
@@ -1251,7 +1251,7 @@ function browserCodeKernelMain() {
         `ACTIONABILITY_FAILED: ${action} requires a real Playwright Locator from the active browser session.`,
       );
     }
-    const originalCandidate = locator as import('playwright').Locator;
+    const originalCandidate = locator as import('patchright').Locator;
     if (String(Reflect.get(originalCandidate, '_selector') || '').includes(browserCodeUidAttribute)) {
       const bindings = activeExecution?.uidBindings;
       const states = await originalCandidate.evaluateAll(elements => elements.map(element => ({
@@ -1372,7 +1372,7 @@ function browserCodeKernelMain() {
       const locatorSelector = Reflect.get(originalCandidate, '_selector');
       const locatorRootFrame = locatorFrame(originalCandidate);
       const enterFrameMarker = ' >> internal:control=enter-frame >> ';
-      const frameOwnerLocators: import('playwright').Locator[] = [];
+      const frameOwnerLocators: import('patchright').Locator[] = [];
       if (locatorRootFrame && typeof locatorSelector === 'string') {
         let markerIndex = locatorSelector.indexOf(enterFrameMarker);
         while (markerIndex >= 0) {
@@ -1581,7 +1581,7 @@ function browserCodeKernelMain() {
   };
 
   const captureCoordinateClickState = async (
-    page: import('playwright').Page,
+    page: import('patchright').Page,
   ): Promise<CoordinateClickEvidence | undefined> => {
     if (page.isClosed()) return undefined;
     const state = await page.evaluate<{
@@ -1659,7 +1659,7 @@ function browserCodeKernelMain() {
   );
 
   const requireCoordinateClickEvidence = async (
-    page: import('playwright').Page,
+    page: import('patchright').Page,
     x: number,
     y: number,
   ) => {
@@ -1711,7 +1711,7 @@ function browserCodeKernelMain() {
     );
   };
 
-  const decoratePageScreenshotPrototype = (page: import('playwright').Page) => {
+  const decoratePageScreenshotPrototype = (page: import('patchright').Page) => {
     const prototype = Object.getPrototypeOf(page) as Record<string, unknown> | null;
     if (!prototype || screenshotDecoratedPagePrototypes.has(prototype)) return;
     const nativeScreenshot = Reflect.get(prototype, 'screenshot');
@@ -1720,7 +1720,7 @@ function browserCodeKernelMain() {
       Object.defineProperty(prototype, 'screenshot', {
         configurable: true,
         value: async function trackedPageScreenshot(
-          this: import('playwright').Page,
+          this: import('patchright').Page,
           ...args: unknown[]
         ) {
           await captureCoordinateClickState(this);
@@ -1770,7 +1770,7 @@ function browserCodeKernelMain() {
         throw new Error('credentialVault.fill() requires a real Playwright Locator as its first argument.');
       }
       const locatorPrototype = Object.getPrototypeOf(locator) as object | null;
-      const targetFrame = Reflect.get(locator, '_frame') as import('playwright').Frame | undefined;
+      const targetFrame = Reflect.get(locator, '_frame') as import('patchright').Frame | undefined;
       const selector = Reflect.get(locator, '_selector');
       const targetPage = targetFrame
         ? currentPages().find((candidatePage) => candidatePage.frames().includes(targetFrame))
@@ -1824,7 +1824,7 @@ function browserCodeKernelMain() {
       }
       const sourceLocator = rawLocatorByExistingLocator.get(locator) || locator;
       const locatorPrototype = Object.getPrototypeOf(sourceLocator) as object | null;
-      const targetFrame = Reflect.get(sourceLocator, '_frame') as import('playwright').Frame | undefined;
+      const targetFrame = Reflect.get(sourceLocator, '_frame') as import('patchright').Frame | undefined;
       const selector = Reflect.get(sourceLocator, '_selector');
       const targetPage = targetFrame
         ? currentPages().find((candidatePage) => candidatePage.frames().includes(targetFrame))
@@ -1864,7 +1864,7 @@ function browserCodeKernelMain() {
     },
   });
 
-  const decorateLocatorPrototype = (page: import('playwright').Page) => {
+  const decorateLocatorPrototype = (page: import('patchright').Page) => {
     const prototype = Object.getPrototypeOf(page.locator('html')) as Record<string, unknown> | null;
     if (!prototype || pointerDecoratedLocatorPrototypes.has(prototype)) return;
     credentialLocatorPrototypes.add(prototype);
@@ -1874,13 +1874,13 @@ function browserCodeKernelMain() {
     const locatorFill = Reflect.get(prototype, 'fill');
     const locatorBoundingBox = Reflect.get(prototype, 'boundingBox');
     if (!nativeFrameLocator && typeof frameLocator === 'function') {
-      nativeFrameLocator = frameLocator as (this: object, selector: string) => import('playwright').Locator;
+      nativeFrameLocator = frameLocator as (this: object, selector: string) => import('patchright').Locator;
     }
     if (!nativeLocatorFill && typeof locatorFill === 'function') {
       nativeLocatorFill = locatorFill as (this: object, value: string) => Promise<void>;
     }
     if (!nativeLocatorFilter && typeof locatorFilter === 'function') {
-      nativeLocatorFilter = locatorFilter as (this: object, options?: unknown) => import('playwright').Locator;
+      nativeLocatorFilter = locatorFilter as (this: object, options?: unknown) => import('patchright').Locator;
     }
     pointerDecoratedLocatorPrototypes.add(prototype);
     if (typeof locatorBoundingBox === 'function') {
@@ -1909,7 +1909,7 @@ function browserCodeKernelMain() {
               if (state) {
                 const evidence: CoordinateRectEvidence = {
                   ...state,
-                  locator: this as import('playwright').Locator,
+                  locator: this as import('patchright').Locator,
                   capturedAt: Date.now(),
                   rect: { height: rect.height, width: rect.width, x: rect.x, y: rect.y },
                 };
@@ -1931,9 +1931,9 @@ function browserCodeKernelMain() {
       try {
         Object.defineProperty(prototype, name, {
           configurable: true,
-          value: function existingChainedLocator(this: import('playwright').Locator, ...args: unknown[]) {
+          value: function existingChainedLocator(this: import('patchright').Locator, ...args: unknown[]) {
             const rawBase = rawLocatorByExistingLocator.get(this) || this;
-            const locator = Reflect.apply(original, rawBase, args) as import('playwright').Locator;
+            const locator = Reflect.apply(original, rawBase, args) as import('patchright').Locator;
             return existingLocator(locator);
           },
           writable: true,
@@ -1961,11 +1961,11 @@ function browserCodeKernelMain() {
               name === 'dragTo' || name === 'setChecked' ? 1 : 0,
             );
             const targetPage = locatorPage(this);
-            let actionableLocator = this as import('playwright').Locator;
+            let actionableLocator = this as import('patchright').Locator;
             const executionArgs = [...normalizedArgs];
             if (targetPage && activeExecution) {
               actionableLocator = forced
-                ? this as import('playwright').Locator
+                ? this as import('patchright').Locator
                 : await resolveActionableLocator(this, name);
               if (name === 'dragTo' && normalizedArgs[0] && typeof normalizedArgs[0] === 'object') {
                 executionArgs[0] = forced
@@ -2027,7 +2027,7 @@ function browserCodeKernelMain() {
               throw new Error('Use attachmentVault.setInputFiles(locator, attachmentId); direct file paths and reconstructed payloads are unavailable to browserCode.');
             }
             const targetPage = locatorPage(this);
-            let actionableLocator = this as import('playwright').Locator;
+            let actionableLocator = this as import('patchright').Locator;
             if (targetPage && activeExecution) {
               const locatorToResolve = name === 'setInputFiles'
                 ? rawLocatorByExistingLocator.get(this) || this
@@ -2048,7 +2048,7 @@ function browserCodeKernelMain() {
     }
   };
 
-  const decoratePage = (page: import('playwright').Page) => {
+  const decoratePage = (page: import('patchright').Page) => {
     if (pointerDecoratedPages.has(page)) return;
     pointerDecoratedPages.add(page);
     decorateLocatorPrototype(page);
@@ -2061,7 +2061,7 @@ function browserCodeKernelMain() {
         Object.defineProperty(pageRecord, name, {
           configurable: true,
           value: (...args: unknown[]) => existingLocator(
-            Reflect.apply(original, page, args) as import('playwright').Locator,
+            Reflect.apply(original, page, args) as import('patchright').Locator,
           ),
           writable: true,
         });
@@ -2084,7 +2084,7 @@ function browserCodeKernelMain() {
           value: async (...args: unknown[]) => {
             const forced = args.some((arg) => arg && typeof arg === 'object' && Reflect.get(arg, 'force') === true);
             const normalizedArgs = actionArgsWithMinimumTimeout(args, optionsIndex);
-            const targetLocators = new Map<number, import('playwright').Locator>();
+            const targetLocators = new Map<number, import('patchright').Locator>();
             if (activeExecution) {
               for (const targetIndex of targetIndices) {
                 if (typeof normalizedArgs[targetIndex] !== 'string') continue;
@@ -2102,7 +2102,7 @@ function browserCodeKernelMain() {
               if (changesState) await prepareStateChangingAction(page, `page.${name}`);
               const orderedTargets = targetIndices
                 .map((targetIndex) => targetLocators.get(targetIndex))
-                .filter((locator): locator is import('playwright').Locator => Boolean(locator));
+                .filter((locator): locator is import('patchright').Locator => Boolean(locator));
               for (const [index, locator] of orderedTargets.entries()) {
                 await moveVisibleAiPointer(
                   page,
@@ -2173,7 +2173,7 @@ function browserCodeKernelMain() {
           configurable: true,
           value: async (...args: unknown[]) => {
             const selectorAction = ['fill', 'type', 'press', 'selectOption', 'setInputFiles'].includes(name);
-            let actionableLocator: import('playwright').Locator | undefined;
+            let actionableLocator: import('patchright').Locator | undefined;
             if (activeExecution && selectorAction && typeof args[0] === 'string') {
               const locator = page.locator(args[0]);
               const locatorToResolve = name === 'setInputFiles'
@@ -2327,20 +2327,20 @@ function browserCodeKernelMain() {
     patchInputDevice(keyboard, 'press', 'keyboard.press');
     patchInputDevice(keyboard, 'type', 'keyboard.type');
     patchInputDevice(keyboard, 'insertText', 'keyboard.insertText');
-    const extendedPage = page as import('playwright').Page & {
-      setTextSelection?: (locator: import('playwright').Locator, input: BrowserTextSelectionSpec) => Promise<unknown>;
+    const extendedPage = page as import('patchright').Page & {
+      setTextSelection?: (locator: import('patchright').Locator, input: BrowserTextSelectionSpec) => Promise<unknown>;
     };
     if (typeof extendedPage.setTextSelection !== 'function') {
       Object.defineProperty(extendedPage, 'setTextSelection', {
         configurable: false,
         enumerable: false,
-        value: (locator: import('playwright').Locator, input: BrowserTextSelectionSpec) => setTextSelection(page, locator, input),
+        value: (locator: import('patchright').Locator, input: BrowserTextSelectionSpec) => setTextSelection(page, locator, input),
         writable: false,
       });
     }
   };
 
-  const tabId = (page: import('playwright').Page) => {
+  const tabId = (page: import('patchright').Page) => {
     const existing = tabIds.get(page);
     if (existing) return existing;
     const id = childRandomUUID();
@@ -2348,7 +2348,7 @@ function browserCodeKernelMain() {
     return id;
   };
 
-  const selectPage = (page: import('playwright').Page) => {
+  const selectPage = (page: import('patchright').Page) => {
     if (!replServer) throw new Error('browserCode JavaScript kernel is not initialized.');
     if (page.isClosed()) throw new Error('Cannot select a closed browser tab.');
     decoratePage(page);
@@ -2359,7 +2359,7 @@ function browserCodeKernelMain() {
     return page;
   };
 
-  const activatePage = async (page: import('playwright').Page) => {
+  const activatePage = async (page: import('patchright').Page) => {
     recordAction('tab.use');
     await page.bringToFront();
     return selectPage(page);
@@ -2369,7 +2369,7 @@ function browserCodeKernelMain() {
     if (value && typeof value === 'object') {
       const direct = tabPages.get(value);
       if (direct) return direct;
-      const candidate = value as import('playwright').Page;
+      const candidate = value as import('patchright').Page;
       if (typeof candidate.url === 'function' && typeof candidate.context === 'function') return candidate;
       const id = typeof (value as { id?: unknown }).id === 'string' ? (value as { id: string }).id : '';
       if (id && browser) {
@@ -2385,8 +2385,8 @@ function browserCodeKernelMain() {
   };
 
   const setTextSelection = async (
-    page: import('playwright').Page,
-    locatorInput: import('playwright').Locator,
+    page: import('patchright').Page,
+    locatorInput: import('patchright').Locator,
     input: BrowserTextSelectionSpec,
   ) => {
     if (!activeExecution) throw new Error('page.setTextSelection() is only available while browserCode is executing.');
@@ -2418,16 +2418,16 @@ function browserCodeKernelMain() {
     };
   };
 
-  function tabForPage(page: import('playwright').Page) {
+  function tabForPage(page: import('patchright').Page) {
     decoratePage(page);
     const existing = tabWrappers.get(page);
     if (existing) return existing;
-    const extendedPage = page as import('playwright').Page & {
-      getByUid?: (uid: string) => import('playwright').Locator;
+    const extendedPage = page as import('patchright').Page & {
+      getByUid?: (uid: string) => import('patchright').Locator;
       domSnapshot?: (options?: { scope?: 'active' | 'all' }) => Promise<string>;
       activeSurface?: () => Promise<Pick<KernelPageObservation, 'activeSurface' | 'surfaces' | 'surfaceStack' | 'topSurfaceIds'>>;
-      setTextSelection?: (locator: import('playwright').Locator, input: BrowserTextSelectionSpec) => Promise<unknown>;
-      expectNavigation?: <T>(action: () => Promise<T>, options?: { timeoutMs?: number; url?: string | RegExp; waitUntil?: NonNullable<Parameters<import('playwright').Page['waitForURL']>[1]>['waitUntil'] }) => Promise<T>;
+      setTextSelection?: (locator: import('patchright').Locator, input: BrowserTextSelectionSpec) => Promise<unknown>;
+      expectNavigation?: <T>(action: () => Promise<T>, options?: { timeoutMs?: number; url?: string | RegExp; waitUntil?: NonNullable<Parameters<import('patchright').Page['waitForURL']>[1]>['waitUntil'] }) => Promise<T>;
     };
     if (typeof extendedPage.getByUid !== 'function') {
       Object.defineProperty(extendedPage, 'getByUid', {
@@ -2536,7 +2536,7 @@ function browserCodeKernelMain() {
       Object.defineProperty(extendedPage, 'expectNavigation', {
         configurable: false,
         enumerable: false,
-        value: async <T>(action: () => Promise<T>, options: { timeoutMs?: number; url?: string | RegExp; waitUntil?: NonNullable<Parameters<import('playwright').Page['waitForURL']>[1]>['waitUntil'] } = {}) => {
+        value: async <T>(action: () => Promise<T>, options: { timeoutMs?: number; url?: string | RegExp; waitUntil?: NonNullable<Parameters<import('patchright').Page['waitForURL']>[1]>['waitUntil'] } = {}) => {
           const navigation = options.url
             ? page.waitForURL(options.url, { timeout: options.timeoutMs, waitUntil: options.waitUntil })
             : page.waitForNavigation({ timeout: options.timeoutMs, waitUntil: options.waitUntil });
@@ -2568,11 +2568,11 @@ function browserCodeKernelMain() {
         recordAction('tab.close');
         return page.close();
       },
-      goto: (url: string, options?: Parameters<import('playwright').Page['goto']>[1]) => {
+      goto: (url: string, options?: Parameters<import('patchright').Page['goto']>[1]) => {
         recordAction('tab.goto');
         return page.goto(url, options);
       },
-      screenshot: (options: Parameters<import('playwright').Page['screenshot']>[0] = {}) => page.screenshot(options),
+      screenshot: (options: Parameters<import('patchright').Page['screenshot']>[0] = {}) => page.screenshot(options),
       title: () => page.title(),
       url: () => page.url(),
       use: () => activatePage(page),
@@ -2582,7 +2582,7 @@ function browserCodeKernelMain() {
     return wrapper;
   }
 
-  const tabInfo = async (page: import('playwright').Page) => {
+  const tabInfo = async (page: import('patchright').Page) => {
     const group = await page.evaluate(() => ({
       id: document.documentElement.getAttribute('data-ai-web-test-session-group-id') || undefined,
       title: document.documentElement.getAttribute('data-ai-web-test-session-group-title') || undefined,
@@ -2753,7 +2753,7 @@ function browserCodeKernelMain() {
     sessionGroupId = String(input.sessionGroupId || '').trim();
     // A bare import here probes ancestors of the temporary kernel directory
     // before NODE_PATH, which can fail the permission check during resolution.
-    const { chromium } = childRequire(input.playwrightEntryPath) as typeof import('playwright');
+    const { chromium } = childRequire(input.playwrightEntryPath) as typeof import('patchright');
     if (input.connection.protocol === 'cdp' && input.targetIds) {
       send({ type: 'startup-stage', stage: 'scoped-cdp-connection' });
       cdpScope = await createBrowserCodeCdpScope({
@@ -2802,8 +2802,8 @@ function browserCodeKernelMain() {
     send({ type: 'ready' });
   };
 
-  const pageTargetIds = new WeakMap<import('playwright').Page, Promise<string>>();
-  const targetIdForPage = (page: import('playwright').Page) => {
+  const pageTargetIds = new WeakMap<import('patchright').Page, Promise<string>>();
+  const targetIdForPage = (page: import('patchright').Page) => {
     let id = pageTargetIds.get(page);
     if (!id) {
       id = (async () => {
@@ -3133,7 +3133,7 @@ const browserCodeHostRequire = browserCodeNodeModule.createRequire(path.join(pro
 function browserCodeResolvedPackageReadRoots(playwrightEntryPath: string) {
   const roots: string[] = [];
   const playwrightRequire = browserCodeNodeModule.createRequire(playwrightEntryPath);
-  for (const resolvedPath of [playwrightEntryPath, playwrightRequire.resolve('playwright-core'), browserCodeHostRequire.resolve('ws')]) {
+  for (const resolvedPath of [playwrightEntryPath, playwrightRequire.resolve('patchright-core'), browserCodeHostRequire.resolve('ws')]) {
     let current = path.dirname(path.resolve(resolvedPath));
     roots.push(current);
     while (path.basename(current).toLowerCase() !== 'node_modules') {
@@ -3386,7 +3386,7 @@ export class BrowserCodeKernel {
     let playwrightEntryPath: string;
     let moduleReadRoots: string[];
     try {
-      playwrightEntryPath = browserCodeHostRequire.resolve('playwright');
+      playwrightEntryPath = browserCodeHostRequire.resolve('patchright');
       moduleReadRoots = browserCodeModuleReadRoots(playwrightEntryPath, this.options.environment);
       mkdirSync(tempDir, { recursive: true });
       writeFileSync(entryPath, childSource(), 'utf8');

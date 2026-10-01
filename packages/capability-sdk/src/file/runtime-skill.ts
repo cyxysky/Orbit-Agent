@@ -12,7 +12,7 @@ export const fileArtifactRuntimeSkillSummary = [
   `<id>${fileArtifactRuntimeSkillId}</id>`,
   '<title>File Artifact Runtime</title>',
 
-  '<description>Read this compact Skill once before using file. It covers identities, workflow and recovery, with optional references for specific tasks. readSource reads generation code; readContent reads file data. Do not load the entire reference manual.</description>',
+  '<description>Read existing PDF/Word/Excel/PPT text and tables: download a remote document URL, then readContent with its artifactId; read uploads by attachmentId. No sandbox parser installation or authoring workflow is needed for reading. Also covers file creation/editing and optional references. readSource reads generation code. Load this compact Skill once, not the entire manual.</description>',
   '<required>true</required>',
   '</system_skill>',
 ].join('\n');
@@ -669,6 +669,7 @@ Read this compact Skill once before the first file call, then use file in a late
 - API index before any plan: file({ action: "unoApi" }) or file({ action: "jsApi" }). Read a specific type with documentType and an optional query; documentId is not required for documentation. When a draft exists, pass its documentId to follow its selected engine and type. Do not re-plan just to read an API.
 
 ## Choose the shortest applicable workflow
+- Research in a remote PDF: download(urlOrPath=the exact discovered URL, fileType="pdf"), then readContent(artifactId=the returned ID, includeVisuals=false). Already uploaded/downloaded files go straight to readContent. Use contentPages for 1-based PDF pages and offset/limit for needed text; retain source URL and page references. Do not invoke codeSandbox or install Python PDF/cryptography packages for ordinary extraction. Use the sandbox for later calculations, explicitly requested code, or a specific unsupported parser need established by the file result. Scanned/poorly extracted pages may need visualRead; a password-required error requires the password. Never treat an HTML error page, empty text, or failed download as PDF evidence.
 - Read an existing file: readContent with its exact attachmentId/artifactId. No plan, generation API reference or visual inspection is required just to read text/data.
 - Text/code/config: write(fileName, content) saves literal UTF-8 (up to 1,000,000 characters), returns artifactId/downloadUrl. Code is saved, not executed. No Office plan/render is needed; a binary extension does not turn text into a binary file.
 - Create Office/PDF: plan, inspect its engine and constraints, query targeted unoApi or jsApi, generate, then render. A successful generate validates/saves source; only a successful render publishes the deliverable. Follow the planned UNO or JavaScript engine and current API signatures.

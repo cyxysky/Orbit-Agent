@@ -286,7 +286,7 @@ export function createBrowserMcpCapability(options: BrowserMcpOptions = {}): Cap
       version: '0.1.0',
       description: 'Explicit, isolated Playwright browser sessions for MCP clients.',
       permissions: ['browser:launch', 'browser:cdp', 'network:access', 'artifact:write'],
-      runtimeRequirements: { node: '>=22.16', playwright: '>=1.60' },
+      runtimeRequirements: { node: '>=22.16', patchright: '1.63.0' },
       skills: [browserRuntimeSkill, runtimeSkill],
     },
     async createRuntime(context) {

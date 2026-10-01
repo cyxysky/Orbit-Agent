@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { link, mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { chromium } from 'playwright';
+import { chromium } from 'patchright';
 import sharp from 'sharp';
 import type { ChartRecord } from '@cjfclonedeep/capability-sdk/chart';
 import type { ChartExportWindow } from '@/components/ChartPngExport';
@@ -38,7 +38,9 @@ async function renderPng(chart: ChartRecord, userId: string) {
     const response = await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 60_000 });
     if (!response?.ok()) throw new Error(`画布导出页面加载失败（${response?.status() || 0}）。`);
     await page.waitForFunction(() => typeof (window as ChartExportWindow).orbitExportChartPng === 'function', undefined, { timeout: 30_000 });
-    const dataUrl = await page.evaluate(record => (window as ChartExportWindow).orbitExportChartPng!(record), chart);
+    // The export function belongs to the application's main world, whereas
+    // Patchright evaluates in an isolated world by default.
+    const dataUrl = await page.evaluate(record => (window as ChartExportWindow).orbitExportChartPng!(record), chart, undefined, false);
     if (!dataUrl.startsWith('data:image/png;base64,')) throw new Error('画布导出没有返回 PNG。');
     const source = Buffer.from(dataUrl.slice('data:image/png;base64,'.length), 'base64');
     // Keep image delivery small; retain PNG rather than silently changing formats.

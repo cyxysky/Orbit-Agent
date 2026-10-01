@@ -9,6 +9,8 @@ export const codeSandboxRuntimeSkill = Object.freeze({
 
 Use JavaScript or Python for deterministic computation, parsing, and transformation. Read this Skill before the first run.
 
+For ordinary PDF/Word/Excel/PPT reading, use the file tool first: download(urlOrPath) for a remote document, then readContent(artifactId), or readContent(attachmentId) for an upload. Do not install requests/pypdf/pdfplumber/cryptography just to extract a PDF that file can read. Use this sandbox for computations on extracted data, explicitly requested code, or a concrete unsupported processing need established by the file result. readFile here reads saved bytes; it does not parse a PDF into text. Respect disabled tools. For scanned pages use targeted file visualRead when available; missing passwords and failed downloads need their actual prerequisite resolved.
+
 ## Tool arguments
 
 codeSandbox({ action: "run", reason, language: "javascript" | "python", code, args?, packages?, timeoutMs?, maxOutputChars?, outputFiles?, inputFiles? })

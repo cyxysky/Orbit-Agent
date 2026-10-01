@@ -1,6 +1,24 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { aiRuntimeRequestTimeoutMs, aiStreamTimeouts } from './ai-sdk-runtime';
+import { AiFirstChunkTimeoutError, aiRuntimeRequestTimeoutMs, aiRuntimeStreamTimeouts, aiStreamTimeouts, createAiRequestWatchdog } from './ai-sdk-runtime';
+
+test('child first-output retries have a fixed configurable deadline and a stalled provider is aborted', async () => {
+  const previous = process.env.AI_SUBAGENT_FIRST_CHUNK_TIMEOUT_MS;
+  process.env.AI_SUBAGENT_FIRST_CHUNK_TIMEOUT_MS = '15';
+  try {
+    assert.deepEqual([0, 1, 2].map(attempt => aiRuntimeStreamTimeouts(1000, attempt, true).firstChunkMs), [15, 15, 15]);
+    assert.equal(aiRuntimeStreamTimeouts(10, 2, true).firstChunkMs, 10);
+    const watchdog = createAiRequestWatchdog(undefined, 1000);
+    try {
+      watchdog.waitForFirstChunk(15);
+      await assert.rejects(watchdog.run(new Promise<never>(() => {})), AiFirstChunkTimeoutError);
+      assert.equal(watchdog.abortSignal.aborted, true);
+    } finally { watchdog.dispose(); }
+  } finally {
+    if (previous === undefined) delete process.env.AI_SUBAGENT_FIRST_CHUNK_TIMEOUT_MS;
+    else process.env.AI_SUBAGENT_FIRST_CHUNK_TIMEOUT_MS = previous;
+  }
+});
 
 test('gives Agent Loop model requests a configurable long deadline', () => {
   const original = process.env.AI_RUNTIME_REQUEST_TIMEOUT_MS;
@@ -30,7 +48,7 @@ test('does not let stream timeouts expire while a tool is still allowed to run',
 
   try {
     assert.deepEqual(aiStreamTimeouts(), {
-      firstChunkMs: 30000,
+      firstChunkMs: 20000,
       chunkMs: 150000,
       toolMs: 120000,
     });

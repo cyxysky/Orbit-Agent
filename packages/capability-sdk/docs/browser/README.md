@@ -32,11 +32,11 @@ Use Node.js >=22.16 and ESM TypeScript. These examples match the 0.2.1 workspace
 ```sh
 npm init -y
 npm pkg set type=module
-npm install @cjfclonedeep/capability-sdk  playwright@^1.60.0
+npm install @cjfclonedeep/capability-sdk  patchright@1.63.0
 npm install -D typescript tsx @types/node
 ```
 
-Install the matching Playwright Chromium runtime with `npx playwright install chromium` in the consuming project. Create a fresh BrowserSession per mounted runtime; keep that runtime alive for the whole conversation that needs its tabs and JavaScript bindings. Use `headless: false` for visible local interaction.
+Install the matching Patchright Chromium runtime with `npx patchright install chromium` in the consuming project. Create a fresh BrowserSession per mounted runtime; keep that runtime alive for the whole conversation that needs its tabs and JavaScript bindings. Use `headless: false` for visible local interaction.
 
 `state` observes; `code` runs browser code using the package Skill APIs (`browser`, `page`, `nodeRepl`); `waitForHumanVerification` yields for a human. A normal Playwright page object is not interchangeable with every package facade. Read the runtime Skill before generating code. On timeout/abort, inspect live state before repeating actions. Screenshots require a model image-content adapter and artifact storage; browser downloads can use File's `createNodeFileDownloadReceiver`.
 

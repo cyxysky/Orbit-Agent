@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { Page } from 'playwright';
+import type { Page } from 'patchright';
 import { BrowserSession } from '@cjfclonedeep/capability-sdk/browser/node';
 
 test('blocked browserCode actions identify the covering and active surface ids', async (context) => {

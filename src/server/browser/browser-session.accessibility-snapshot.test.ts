@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile, unlink } from 'node:fs/promises';
 import test from 'node:test';
-import type { Page } from 'playwright';
+import type { Page } from 'patchright';
 import { BrowserSession } from '@cjfclonedeep/capability-sdk/browser/node';
 import { exportAccessibilitySnapshotJson } from './accessibility-snapshot-test.service';
 

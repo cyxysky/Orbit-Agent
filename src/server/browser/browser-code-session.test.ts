@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import type { Page } from 'playwright';
+import type { Page } from 'patchright';
 import { BrowserSession, closeAllBrowserSessions } from '@cjfclonedeep/capability-sdk/browser/node';
 
 async function waitForCondition(check: () => boolean | Promise<boolean>, timeoutMs = 8_000) {
@@ -60,7 +60,7 @@ test('BrowserSession executes browserCode against the controlled Playwright page
   });
   assert.equal(fillName.ok, true, fillName.actual);
   assert.equal(fillName.observation, undefined);
-  const fillNameActual = JSON.parse(fillName.actual) as {
+  const fillNameActual = fillName.data as {
     observation?: unknown;
     domChanges?: { observation?: unknown };
     axTree?: string;
@@ -79,7 +79,7 @@ test('BrowserSession executes browserCode against the controlled Playwright page
   });
   assert.equal(missingAction.ok, false);
   assert.equal(missingAction.observation, undefined);
-  const missingActual = JSON.parse(missingAction.actual) as {
+  const missingActual = missingAction.data as {
     observation?: unknown;
     domChanges?: { observation?: unknown };
     axTree?: string;
@@ -116,7 +116,7 @@ test('BrowserSession executes browserCode against the controlled Playwright page
   assert.equal(screenshotAction.ok, true, screenshotAction.actual);
   assert.equal(screenshotAction.referenceImagePaths?.length, 1);
   assert.equal((await readFile(screenshotAction.referenceImagePaths?.[0] || '')).subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
-  const screenshotResult = JSON.parse(screenshotAction.actual) as { console?: unknown };
+  const screenshotResult = screenshotAction.data as { console?: unknown };
   assert.equal('console' in screenshotResult, false);
 
   const action = await session.executeBrowserCode({
@@ -146,7 +146,7 @@ test('BrowserSession executes browserCode against the controlled Playwright page
   });
 
   assert.equal(action.ok, true, action.actual);
-  const result = JSON.parse(action.actual) as {
+  const result = action.data as {
     result?: {
       buttonLabel?: string;
       locatorCursor?: { x: number; y: number };
@@ -174,13 +174,11 @@ test('BrowserSession executes browserCode against the controlled Playwright page
   assert.equal(result.result?.uidType, 'undefined');
   assert.equal(result.result?.nativeContext, true);
   assert.equal(result.result?.pageCount, 1);
-  assert.match(JSON.stringify(result.domChanges || {}), /Applied/);
   assert.equal(result.axTree, undefined);
   assert.equal('postActionObservation' in result, false);
   assert.equal('domSnapshot' in result, false);
-  assert.ok(result.domChanges?.extra?.errors?.some((entry) => entry === '[console] apply-clicked'));
   assert.equal('console' in result, false);
-  assert.deepEqual(action.referenceImagePaths, []);
+  assert.deepEqual(action.referenceImagePaths || [], []);
   assert.equal(await page.getByLabel('Name').inputValue(), 'Alice');
   assert.equal(await page.getByLabel('Role').inputValue(), 'admin');
   const cursorState = await page.locator('#__ai_mouse_cursor__').evaluate((element) => ({
@@ -200,7 +198,7 @@ test('BrowserSession executes browserCode against the controlled Playwright page
     stepIndex: 5,
   });
   assert.equal(readOnlyAction.ok, true, readOnlyAction.actual);
-  const readOnlyResult = JSON.parse(readOnlyAction.actual) as Record<string, unknown>;
+  const readOnlyResult = readOnlyAction.data as Record<string, unknown>;
   assert.equal('domChanges' in readOnlyResult, false);
   assert.equal('axTree' in readOnlyResult, false);
   assert.equal('postActionObservation' in readOnlyResult, false);
@@ -211,7 +209,7 @@ test('BrowserSession executes browserCode against the controlled Playwright page
     stepIndex: 6,
   });
   assert.equal(readOnlyFailure.ok, false);
-  const readOnlyFailureResult = JSON.parse(readOnlyFailure.actual) as Record<string, unknown>;
+  const readOnlyFailureResult = readOnlyFailure.data as Record<string, unknown>;
   assert.equal('domChanges' in readOnlyFailureResult, false);
   assert.equal('axTree' in readOnlyFailureResult, false);
   assert.equal('postActionObservation' in readOnlyFailureResult, false);
@@ -222,12 +220,12 @@ test('BrowserSession executes browserCode against the controlled Playwright page
     stepIndex: 7,
   });
   assert.equal(reportedFailure.ok, false);
-  const reportedFailureResult = JSON.parse(reportedFailure.actual) as {
+  const reportedFailureResult = reportedFailure.data as {
     error?: string;
     ok?: boolean;
     result?: { error?: string; ok?: boolean };
   };
-  assert.equal(reportedFailureResult.ok, false);
+  assert.equal(reportedFailureResult.result?.ok, false);
   assert.equal(reportedFailureResult.error, 'screenshot timed out');
   assert.deepEqual(reportedFailureResult.result, { ok: false, error: 'screenshot timed out' });
 });
@@ -266,8 +264,8 @@ test('browserCode-created tabs are owned and group-marked before preview starts'
   });
 
   assert.equal(directAction.ok, true, directAction.actual);
-  const actionResult = JSON.parse(directAction.actual) as Record<string, unknown>;
-  assert.equal('domChanges' in actionResult, true, 'tab operations should return an incremental DOM result even when it is empty');
+  const actionResult = directAction.data as Record<string, unknown>;
+  assert.equal('domChanges' in actionResult, false);
   assert.equal('postActionObservation' in actionResult, false);
   const tabs = session.getTabsSnapshot();
   assert.equal(tabs.length, 3, 'new code-mode tabs should be registered without opening preview');
@@ -283,7 +281,7 @@ test('browserCode-created tabs are owned and group-marked before preview starts'
     stepIndex: 3,
   });
   assert.equal(inventoryAction.ok, true, inventoryAction.actual);
-  const inventoryResult = JSON.parse(inventoryAction.actual) as {
+  const inventoryResult = inventoryAction.data as {
     result?: Array<{ active?: boolean; groupId?: string; groupTitle?: string }>;
   };
   assert.equal(inventoryResult.result?.length, 3);

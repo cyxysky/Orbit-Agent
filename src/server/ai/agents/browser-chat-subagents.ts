@@ -22,27 +22,6 @@ export type BrowserChatSubagentConfirmationInteraction = {
   decision: 'confirmed' | 'cancelled';
 };
 
-export async function runBrowserChatSubagentAttemptWithRetry<TResult>(input: {
-  run: (attemptNumber: 1 | 2, retryReason: string) => Promise<TResult>;
-  shouldRetryResult: (result: TResult) => boolean;
-  retryReasonFromError: (error: unknown) => string;
-  retryReasonFromResult: (result: TResult) => string;
-  onRetry: (retryReason: string) => void | Promise<void>;
-}) {
-  let firstResult: TResult;
-  try {
-    firstResult = await input.run(1, '');
-  } catch (error) {
-    const retryReason = input.retryReasonFromError(error);
-    await input.onRetry(retryReason);
-    return input.run(2, retryReason);
-  }
-  if (!input.shouldRetryResult(firstResult)) return firstResult;
-  const retryReason = input.retryReasonFromResult(firstResult);
-  await input.onRetry(retryReason);
-  return input.run(2, retryReason);
-}
-
 const subagentMessageMaxChars = 512_000;
 const subagentMessageChainMaxChars = 2_000_000;
 
@@ -258,13 +237,29 @@ function subagentConcurrency() {
   return Number.isFinite(configured) ? Math.max(1, Math.floor(configured)) : 20;
 }
 
-async function withSubagentSlot<TResult>(runner: () => Promise<TResult>) {
+async function withSubagentSlot<TResult>(runner: () => Promise<TResult>, signal?: AbortSignal) {
+  signal?.throwIfAborted();
   if (activeSubagents >= subagentConcurrency()) {
-    await new Promise<void>((resolve) => subagentWaiters.push(resolve));
+    await new Promise<void>((resolve, reject) => {
+      const ready = () => {
+        signal?.removeEventListener('abort', abort);
+        resolve();
+      };
+      const abort = () => {
+        const index = subagentWaiters.indexOf(ready);
+        if (index >= 0) subagentWaiters.splice(index, 1);
+        signal?.removeEventListener('abort', abort);
+        reject(signal?.reason);
+      };
+      subagentWaiters.push(ready);
+      signal?.addEventListener('abort', abort, { once: true });
+      if (signal?.aborted) abort();
+    });
   } else {
     activeSubagents += 1;
   }
   try {
+    signal?.throwIfAborted();
     return await runner();
   } finally {
     const next = subagentWaiters.shift();
@@ -309,9 +304,10 @@ export function clearBrowserChatSubagentBatchRegistryForTests() {
 export async function settleBrowserChatSubagents<TTask, TResult>(
   tasks: TTask[],
   runner: (task: TTask, index: number) => Promise<TResult>,
+  signalForTask?: (task: TTask) => AbortSignal,
 ): Promise<Array<BrowserChatSubagentSettled<TTask, TResult>>> {
   const settled = await Promise.allSettled(tasks.map((task, index) => (
-    withSubagentSlot(() => runner(task, index))
+    withSubagentSlot(() => runner(task, index), signalForTask?.(task))
   )));
   return settled.map((item, index) => item.status === 'fulfilled'
     ? { task: tasks[index], result: item.value }

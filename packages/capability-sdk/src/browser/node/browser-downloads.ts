@@ -1,5 +1,5 @@
 import { raceWithAbort } from '../../index.ts';
-import type { Download } from 'playwright';
+import type { Download } from 'patchright';
 import type { Readable } from 'node:stream';
 
 export type BrowserDownloadArtifact = {

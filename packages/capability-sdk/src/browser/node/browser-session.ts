@@ -11,7 +11,7 @@ import path from 'node:path';
 
 import { createHash, randomUUID } from 'node:crypto';
 
-import type { Browser, BrowserContext, BrowserContextOptions, BrowserServer, ConsoleMessage, Dialog, Download as PlaywrightDownload, ElementHandle, FileChooser, Frame, LaunchOptions, Locator, Page, Worker as PlaywrightWorker } from 'playwright';
+import type { Browser, BrowserContext, BrowserContextOptions, BrowserServer, ConsoleMessage, Dialog, Download as PlaywrightDownload, ElementHandle, FileChooser, Frame, LaunchOptions, Locator, Page, Worker as PlaywrightWorker } from 'patchright';
 import { raceWithAbort, type CapabilityConfiguration } from '../../index.ts';
 import { resolveBrowserOutputPixelRatio, resolveBrowserPreviewImageFormat } from '../output-settings.ts';
 import { browserSessionGroupLabel } from '../session-group.ts';
@@ -1799,7 +1799,7 @@ export class BrowserSession {
     // A stale browser can restart this instance in place, so turn-scoped tools
     // keep their BrowserSession identity while it reconnects to the tab group.
     registerBrowserSession(this);
-    const { chromium } = await import('playwright');
+    const { chromium } = await import('patchright');
     const environment = this.runtimeEnvironment();
     const headless = browserHeadlessEnabled(this.options, { env: environment });
     const isolated = this.options.isolated === true;
@@ -2078,7 +2078,7 @@ export class BrowserSession {
       const win = window as Window & { __webPilotEmbeddedBrowserView?: unknown };
       return win.__webPilotEmbeddedBrowserView === true
         || document.documentElement?.getAttribute('data-webpilot-embedded-browser') === 'true';
-    }).catch(() => false);
+    }, undefined, undefined, false).catch(() => false);
   }
 
   private async isElectronEmbeddedBrowserSessionPage(page: Page) {
@@ -2089,7 +2089,7 @@ export class BrowserSession {
       const attributeId = document.documentElement?.getAttribute('data-webpilot-embedded-browser-session-id');
       if (attributeId) return attributeId;
       return String(window.name || '').match(/^AI_WEB_TEST_SESSION_GROUP:([^;]+);/)?.[1] || '';
-    }).catch(() => '');
+    }, undefined, undefined, false).catch(() => '');
     return sessionId === this.options.runId || normalizePageGroupId(sessionId) === this.pageGroupId;
   }
 
@@ -2291,7 +2291,7 @@ export class BrowserSession {
         if (source.page) livePreviewVisibilityOwners.get(source.page)?.(Boolean(visible));
       }).then(async () => {
         await page.addInitScript(installLivePreviewVisibilityReporter);
-        await page.evaluate(installLivePreviewVisibilityReporter).catch(() => undefined);
+        await page.evaluate(installLivePreviewVisibilityReporter, undefined, undefined, false).catch(() => undefined);
       }).catch(() => undefined);
     }
     this.attachPageListeners(page);
@@ -2575,7 +2575,7 @@ export class BrowserSession {
       });
       await this.context.addInitScript(installAccessibilitySnapshotExportControl);
     }
-    await Promise.all(this.sessionPages().map((page) => page.evaluate(installAccessibilitySnapshotExportControl).catch(() => undefined)));
+    await Promise.all(this.sessionPages().map((page) => page.evaluate(installAccessibilitySnapshotExportControl, undefined, undefined, false).catch(() => undefined)));
   }
 
   private async readPageGroupId(page: Page) {
@@ -2886,9 +2886,9 @@ export class BrowserSession {
     let stopped = false;
     let stopPromise: Promise<void> | undefined;
     let page: Page | undefined;
-    let client: import('playwright').CDPSession | undefined;
+    let client: import('patchright').CDPSession | undefined;
     let fileChooserListener: ((chooser: FileChooser) => void) | undefined;
-    let pageBindingPromise: Promise<{ client: import('playwright').CDPSession; page: Page }> | undefined;
+    let pageBindingPromise: Promise<{ client: import('patchright').CDPSession; page: Page }> | undefined;
     let captureTask: Promise<void> | undefined;
     let activeCaptures = 0;
     let captureDurationMs = 0;
@@ -5019,7 +5019,12 @@ export class BrowserSession {
     for (const candidate of executionContext?.pages() || []) {
       if (candidate.isClosed() || pagesBeforeExecution.has(candidate)) continue;
       const id = await step('resolve-created-target', () => this.browserCodeTargetId(candidate, signal));
-      if (returnedTargets.has(id) && this.claimPage(candidate, { makeActive: false })) pagesCreatedDuringExecution.add(candidate);
+      if (returnedTargets.has(id) && this.claimPage(candidate, { makeActive: false })) {
+        pagesCreatedDuringExecution.add(candidate);
+        // Patchright's init-script routing does not cover every URL scheme.
+        // The new tab may have navigated since claimPage marked its blank page.
+        await step('mark-created-page', () => this.ensurePageGroup(candidate, signal));
+      }
     }
     let selectedPage: Page | undefined;
     if (execution.selectedTargetId) {

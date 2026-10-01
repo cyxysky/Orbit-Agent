@@ -85,6 +85,8 @@ ENV GLINER_BATCH_SIZE=8
 
 COPY --from=build /app/package*.json ./
 COPY --from=build /app/node_modules ./node_modules
+# Patchright pins a different Chromium revision from the base image.
+RUN node node_modules/patchright/cli.js install --with-deps chromium
 COPY --from=build /app/.next ./.next
 COPY --from=build /app/dist-backend ./dist-backend
 COPY --from=build /app/next.config.ts ./next.config.ts

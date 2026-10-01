@@ -2,7 +2,7 @@ import { open, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { createConnection, createServer } from 'node:net';
-import type { Browser, BrowserContext, BrowserContextOptions, BrowserServer, BrowserType, LaunchOptions } from 'playwright';
+import type { Browser, BrowserContext, BrowserContextOptions, BrowserServer, BrowserType, LaunchOptions } from 'patchright';
 import { boundedPositiveIntegerEnv, cdpEndpointForPort, cdpPortFromEndpoint, clearManagedBrowserProfileCaches, type BrowserRuntimeEnvironment } from './browser-session-runtime.ts';
 import { type BrowserCodeConnection } from './browser-code-runner.ts';
 import { unknownErrorMessage } from './browser-session-diagnostics.ts';
@@ -309,6 +309,9 @@ export async function connectOrLaunchPersistentBrowserOverCdp(input: {
   const executablePath = externalChromiumExecutablePath(input.chromium, input.launchOptions);
   const launchArgs = [
     ...(input.launchOptions.args || []).filter((arg) => !/^--remote-debugging-(?:pipe|port)(?:=|$)/.test(arg)),
+    // This persistent-browser path spawns Chrome directly, so Patchright's
+    // launch defaults are not applied by BrowserType.launch().
+    '--disable-blink-features=AutomationControlled',
     `--user-data-dir=${input.userDataDir}`,
     `--remote-debugging-port=${port}`,
     '--no-startup-window',

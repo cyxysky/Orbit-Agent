@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
-import { chromium, type Browser, type BrowserContext, type BrowserServer, type Page } from 'playwright';
+import { chromium, type Browser, type BrowserContext, type BrowserServer, type Page } from 'patchright';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   BrowserCodeKernel,

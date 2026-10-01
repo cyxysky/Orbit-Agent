@@ -269,6 +269,7 @@ nodeRepl.write({ status: apiResponse.status(), data: apiPayload });
 - \`await page.activeSurface(): Promise<{ activeSurface?, surfaces, surfaceStack, topSurfaceIds }>\` — structured popup/overlay state. Surface records include \`id, kind, label, descriptor, modal, selector?, framePath?, parentId?, depth, zIndex, rect, signals\`.
 - Ordinary Playwright reads include \`locator.count()\`, \`isVisible()\`, \`isEnabled()\`, \`isChecked()\`, \`inputValue()\`, \`innerText()\`, \`textContent()\`, \`getAttribute()\`, \`allTextContents()\`, \`ariaSnapshot()\`, and \`boundingBox()\`.
 - DOM-only reads belong inside \`page.evaluate(callback, arg?)\`. Browser-page callbacks cannot access Node globals, the local filesystem, environment variables, credentials, or runtime objects such as \`nodeRepl\`.
+- The driver is Patchright, with the Playwright-compatible API (including \`tab.playwright\`). Evaluation defaults to an isolated world. When reading a known application-owned JavaScript global, use \`page.evaluate(callback, arg, undefined, false)\` to select the page's main world; ordinary DOM reads should keep the default. Page-console capture is unavailable; an empty console is not evidence of an error-free page. The cell's Node-side \`console\` still works.
 
 Targeted read example:
 

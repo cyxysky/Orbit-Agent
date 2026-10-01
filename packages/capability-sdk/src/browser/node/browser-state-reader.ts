@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Page } from 'playwright';
+import type { Page } from 'patchright';
 import { raceWithAbort } from '../../index.ts';
 import type { BrowserActionResult, BrowserStateSnapshot } from './browser-session.ts';
 import type { BrowserPageObservation } from './browser-page-observation.ts';
@@ -21,7 +21,7 @@ export class BrowserStateReader {
   constructor(private readonly host: {
     page(): Page;
     revision(page: Page): number;
-    framePath(frame: import('playwright').Frame): string;
+    framePath(frame: import('patchright').Frame): string;
     observation(): Promise<BrowserPageObservation>;
     tabs(): BrowserStateSnapshot['tabs'];
   }) {}

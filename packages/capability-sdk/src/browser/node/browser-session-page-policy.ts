@@ -1,4 +1,4 @@
-import type { Page } from 'playwright';
+import type { Page } from 'patchright';
 
 export function isBlankBrowserUrlLike(url: string) {
   return !url

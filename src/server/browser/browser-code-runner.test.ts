@@ -5,7 +5,7 @@ import { createServer } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import test, { after, before } from 'node:test';
-import { chromium, type Browser, type BrowserContext, type BrowserServer, type Page } from 'playwright';
+import { chromium, type Browser, type BrowserContext, type BrowserServer, type Page } from 'patchright';
 import {
   analyzeBrowserCodeRisk,
   browserCodeHasImageOperation,

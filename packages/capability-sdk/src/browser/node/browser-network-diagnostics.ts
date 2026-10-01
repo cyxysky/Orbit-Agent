@@ -1,4 +1,4 @@
-import type { Page, Request, Response } from 'playwright';
+import type { Page, Request, Response } from 'patchright';
 import type { BrowserActionResult } from './browser-session.ts';
 import { compactDiagnosticText, shouldIgnoreNetworkFailure } from './browser-session-diagnostics.ts';
 

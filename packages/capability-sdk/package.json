@@ -492,7 +492,7 @@
     "zod": "^4.4.3",
     "@modelcontextprotocol/server": "2.0.0",
     "acorn": "^8.16.0",
-    "playwright": "^1.60.0",
+    "patchright": "1.63.0",
     "@codemirror/commands": "^6.11.0",
     "@codemirror/lang-json": "^6.0.2",
     "@codemirror/language": "^6.12.4",

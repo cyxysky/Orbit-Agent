@@ -217,7 +217,7 @@ npm run server:installer
 This produces `dist-server/Orbit-Server-Setup-<version>-x64.exe`. The installer:
 
 - bundles the build machine's compatible Node.js runtime, so Node.js is not required on the target machine;
-- installs the complete Next.js server, Playwright Chromium, and LibreOffice under `Program Files`;
+- installs the complete Next.js server, Patchright Chromium, and LibreOffice under `Program Files`;
 - registers and starts the automatic `WebPilotServer` Windows service;
 - listens on `0.0.0.0:3000` and adds a TCP 3000 firewall rule for domain/private networks;
 - stores runtime data and service logs under `C:\ProgramData\WebPilot` so upgrades do not overwrite them.
@@ -230,7 +230,7 @@ To create only the unpacked server directory on the build machine, run:
 npm run server:package
 ```
 
-This produces `dist-server/Orbit-Server`. When copied directly instead of installed through the EXE, the target machine needs Node.js 22.16 or later and starts it with `start.cmd`. It includes the complete production dependency tree, Playwright Chromium, and LibreOffice, so the target machine does not need `npm install`, `npx playwright install chromium`, or a separate LibreOffice installation.
+This produces `dist-server/Orbit-Server`. When copied directly instead of installed through the EXE, the target machine needs Node.js 22.16 or later and starts it with `start.cmd`. It includes the complete production dependency tree, Patchright Chromium, and LibreOffice, so the target machine does not need `npm install`, `npx patchright install chromium`, or a separate LibreOffice installation.
 
 By default it listens on all network interfaces at port `3000` (locally: `http://127.0.0.1:3000`), stores application data under `runtime/`, and runs the browser headlessly. Set `PORT`, `APP_DATA_DIR`, `ARTIFACTS_DIR`, or `HEADLESS_BROWSER` before `start.cmd` to override those defaults.
 

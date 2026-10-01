@@ -88,7 +88,6 @@ import {
   limitBrowserChatSubagentMessages,
   preserveBrowserChatSubagentSummary,
   resolvedBrowserChatSubagentStatus,
-  runBrowserChatSubagentAttemptWithRetry,
   runOrReuseBrowserChatSubagentBatch,
   settleBrowserChatSubagents,
   type BrowserChatSubagentConfirmationInteraction,
@@ -4955,6 +4954,7 @@ async function runBrowserChatSubagents(input: {
   session: BrowserChatSessionRecord;
   assistantMessageId: string;
   abortController: AbortController;
+  abortSignal?: AbortSignal;
   tasks: BrowserChatSubagentTask[];
   toolCallId?: string;
 }): Promise<BrowserActionResult> {
@@ -5248,10 +5248,12 @@ async function executeBrowserChatSubagentBatch(input: {
   session: BrowserChatSessionRecord;
   assistantMessageId: string;
   abortController: AbortController;
+  abortSignal?: AbortSignal;
   tasks: BrowserChatSubagentTask[];
   toolCallId?: string;
 }): Promise<BrowserActionResult> {
   const { session, assistantMessageId, abortController } = input;
+  const batchSignal = input.abortSignal ? AbortSignal.any([abortController.signal, input.abortSignal]) : abortController.signal;
   const batchId = input.toolCallId || id('subagent_batch');
   const requestedTasks = input.tasks;
   const ownsTurn = () => isActiveBrowserChatTurn(session, assistantMessageId, abortController);
@@ -5262,10 +5264,10 @@ async function executeBrowserChatSubagentBatch(input: {
   tasks.forEach((task, index) => {
     const childAbortController = new AbortController();
     const abortFromParent = () => childAbortController.abort(
-      abortController.signal.reason || new Error('父级对话已中止'),
+      batchSignal.reason || new Error('父级对话已中止'),
     );
-    if (abortController.signal.aborted) abortFromParent();
-    else abortController.signal.addEventListener('abort', abortFromParent, { once: true });
+    if (batchSignal.aborted) abortFromParent();
+    else batchSignal.addEventListener('abort', abortFromParent, { once: true });
     const runtime: BrowserChatActiveSubagentRuntime = {
       sessionId: session.id,
       assistantMessageId,
@@ -5319,7 +5321,7 @@ async function executeBrowserChatSubagentBatch(input: {
   const requestBatchToolConfirmation = createBrowserChatTurnToolConfirmation(
     session,
     assistantMessageId,
-    abortController.signal,
+    batchSignal,
     { recordLogs: false, serialize: true },
   );
 
@@ -5349,7 +5351,7 @@ async function executeBrowserChatSubagentBatch(input: {
       });
     };
     try {
-      if (registry.get(task.id)?.status === 'stopped' || childAbortController.signal.aborted) {
+      if (registry.get(task.id)?.status === 'stopped') {
         return {
           id: task.id,
           title: task.title,
@@ -5383,20 +5385,17 @@ async function executeBrowserChatSubagentBatch(input: {
         usedMemoryIds: browserChatTurnUsedMemoryIds(session, assistantMessageId),
       });
       const initialRuntimeContext = await getRuntimeOperationalContext();
-      const executeChildAttempt = (attemptNumber: number, retryReason = '') => executeInteractiveBrowserTurn({
+      const result = await executeInteractiveBrowserTurn({
         session: activeChild,
         runId: `${session.id}_${task.id}`,
         sessionId: session.id,
         userId: session.userId,
-        turnId: `${assistantMessageId}:subagent:${task.id}:attempt:${attemptNumber}`,
+        turnId: `${assistantMessageId}:subagent:${task.id}:attempt:1`,
         targetUrl: task.url || session.targetUrl || activeChild.currentUrl() || 'about:blank',
         instruction: task.instruction,
         modelInstruction: [
           'A child Agent may finish a text-only result as ordinary assistant Markdown. Use finalResponse only for ordered chart/UI blocks or an explicit failed/blocked status.',
           `你是并行子 Agent“${task.title}”。只完成当前这个独立分支，并返回可追溯事实、来源地址、页面证据、失败原因和未解决问题。`,
-          retryReason
-            ? `[自动重试 ${attemptNumber}/2] 上一次子任务在没有执行任何工具时失败：${retryReason}。重新读取当前页面状态，从头执行本任务，不要只复述上一次错误。`
-            : '',
           '你拥有完整浏览器工具集。完成当前分支后立即返回；不要读取或等待其他子 Agent，也不要因为其他分支失败而停止。',
           browserChatSubagentAuthPrompt(childBrowser.authMode),
           '你运行在独立的子 Agent 页面中。遇到必须由用户处理的验证码、扫码、OTP 或设备确认时，不要继续尝试绕过；请明确报告阻塞证据并把该步骤交回主 Agent。',
@@ -5439,6 +5438,11 @@ async function executeBrowserChatSubagentBatch(input: {
         },
         onDebug: (event) => {
           if (!ownsTask()) return;
+          if (['ai:runtime:dispatch', 'ai:runtime:response-headers', 'ai:runtime:receiving',
+            'ai:runtime:retry', 'ai:runtime:attempt-failed', 'ai:runtime:retry-exhausted', 'ai:runtime:retry-skipped'].includes(event.phase)) {
+            updateBrowserChatStoredSubagent(session.id, task.id, { currentAction: event.message });
+            persistAndNotify(session.id, { defer: true });
+          }
           const outputCycle = browserChatAiOutputCycleFromDebugEvent({
             details: event.details,
             id: id('subagent_cycle'),
@@ -5474,31 +5478,7 @@ async function executeBrowserChatSubagentBatch(input: {
           persistAndNotify(session.id, { defer: true });
         },
       });
-      const result = await runBrowserChatSubagentAttemptWithRetry({
-        run: executeChildAttempt,
-        shouldRetryResult: (attemptResult) => (
-          attemptResult.status === 'failed'
-          && attemptResult.newSteps.reduce((count, step) => count + (step.tools || []).length, 0) === 0
-        ),
-        retryReasonFromError: userFacingErrorMessage,
-        retryReasonFromResult: (attemptResult) => userFacingErrorMessage(
-          attemptResult.reply || attemptResult.newSteps.at(-1)?.actual || '子 Agent 未执行任何工具即结束',
-        ),
-        onRetry: () => {
-          if (!ownsTask()) throw childAbortController.signal.reason || new Error('对话已中断');
-          streamedSubagentText = '';
-          childSteps.clear();
-          updateBrowserChatStoredSubagent(session.id, task.id, {
-          status: 'running',
-          content: '',
-          currentAction: '首次执行失败，正在自动重试 2/2',
-          error: undefined,
-          steps: [],
-          messages: [browserChatSubagentInputMessage(task.id, task.instruction)],
-          });
-          persistAndNotify(session.id);
-        },
-      });
+
       if (!ownsTask()) throw childAbortController.signal.reason || new Error('对话已中断');
       const summaryResult = preserveBrowserChatSubagentSummary(
         textFromUnknown(result.reply || result.newSteps.at(-1)?.actual || '子 Agent 已完成，但没有返回额外文本。'),
@@ -5563,21 +5543,25 @@ async function executeBrowserChatSubagentBatch(input: {
         content: partialContent,
       };
     } finally {
-      abortController.signal.removeEventListener('abort', taskRuntime.abortFromParent);
+      batchSignal.removeEventListener('abort', taskRuntime.abortFromParent);
       if (activeSubagents.get(task.id) === taskRuntime) activeSubagents.delete(task.id);
       await child?.close().catch(() => undefined);
     }
-  });
+  }, (task) => taskRuntimes.get(task.id)!.abortController.signal);
 
-  if (!ownsTurn()) throw abortController.signal.reason || new Error('对话已中断');
-  const results = settled.map((settledResult, index) => {
+  const results = settled.map((settledResult) => {
     const task = settledResult.task;
     if (settledResult.result) return settledResult.result;
+    // Queued cancellations never entered the runner's finally block.
+    const runtime = taskRuntimes.get(task.id)!;
+    batchSignal.removeEventListener('abort', runtime.abortFromParent);
+    if (activeSubagents.get(task.id) === runtime) activeSubagents.delete(task.id);
     const error = userFacingErrorMessage(settledResult.error);
-    void index;
-    updateBrowserChatStoredSubagent(session.id, task.id, { status: 'failed', currentAction: undefined, error });
-    return { id: task.id, title: task.title, task, status: 'failed' as const, error };
+    const status = registry.get(task.id)?.status === 'stopped' ? 'stopped' as const : 'failed' as const;
+    if (ownsTurn()) updateBrowserChatStoredSubagent(session.id, task.id, { status, currentAction: undefined, error });
+    return { id: task.id, title: task.title, task, status, error };
   });
+  if (!ownsTurn()) throw abortController.signal.reason || new Error('对话已中断');
   persistAndNotify(session.id);
   const completedCount = results.filter((item) => item.status !== 'failed' && item.status !== 'stopped').length;
   const partialCount = results.filter((item) => item.status === 'failed' && 'partial' in item && item.partial === true).length;
@@ -5913,7 +5897,7 @@ async function runBrowserChatMessage(
           assertBrowserOperationActive();
           if (startedBrowser !== browser) throw new Error('The active browser session was replaced after this turn started.');
         },
-        runSubagents: (tasks, _abortSignal, toolCallId) => runBrowserChatSubagents({ session, assistantMessageId, abortController, tasks, toolCallId }),
+        runSubagents: (tasks, abortSignal, toolCallId) => runBrowserChatSubagents({ session, assistantMessageId, abortController, abortSignal, tasks, toolCallId }),
         readSubagent: readBrowserChatSubagent(session.id),
         readFile: (input, context) => readFileForSession(session, input, historicalMessages, context?.abortSignal),
         readFileVisuals: (input) => readFileVisualsForSession(session, input),

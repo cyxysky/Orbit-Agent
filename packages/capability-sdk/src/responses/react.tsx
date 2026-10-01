@@ -4,6 +4,10 @@ import { Component, Suspense, createElement, lazy, type ComponentType, type Reac
 import { ResponseRegistry, type ResponseBlock, type ResponseDefinition } from '../index.ts';
 import { htmlResponse, markdownResponse, uiResponse } from './index.ts';
 
+// Static export hosts use the same safe document and declarative layout renderers.
+export { DeclarativeResponseView } from './data-ui.tsx';
+export { createHTMLResponseDocument, HTML_FRAME_MESSAGE, HTML_FRAME_SANDBOX } from './html-document.ts';
+
 export type ResponseRenderContext = {
   identity: string;
   readOnly: boolean;

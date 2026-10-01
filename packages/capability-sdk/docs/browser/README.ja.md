@@ -17,11 +17,11 @@ Node.js >=22.16 と ESM TypeScript を使います。例は 0.1.0 ワークス�
 ```sh
 npm init -y
 npm pkg set type=module
-npm install @cjfclonedeep/capability-sdk  playwright@^1.60.0
+npm install @cjfclonedeep/capability-sdk  patchright@1.63.0
 npm install -D typescript tsx @types/node
 ```
 
-利用側のプロジェクトで `npx playwright install chromium` を実行し、対応する Chromium をインストールします。マウントごとに BrowserSession を作り、タブと JavaScript 変数が必要な会話全体で同じ実行インスタンスを保持します。ローカルで画面を表示するには `headless: false` を指定します。
+利用側のプロジェクトで `npx patchright install chromium` を実行し、対応する Chromium をインストールします。マウントごとに BrowserSession を作り、タブと JavaScript 変数が必要な会話全体で同じ実行インスタンスを保持します。ローカルで画面を表示するには `headless: false` を指定します。
 
 `state` は観測、`code` は Skill に記載された `browser`、`page`、`nodeRepl` API による実行、`waitForHumanVerification` は人間による操作待ちです。パッケージの facade と通常の Playwright Page は完全には互換ではありません。コード生成前に実行時 Skill を読みます。タイムアウトや中断後は再実行前に現在の状態を確認します。スクリーンショットには画像コンテンツの変換と成果物ストレージが必要です。ダウンロードには File の `createNodeFileDownloadReceiver` を利用できます。
 
@@ -285,7 +285,7 @@ try {
 
 ## 補足の動作リファレンス
 
-利用側のプロジェクトで `npx playwright install chromium` を実行し、対応する Chromium をインストールします。マウントごとに BrowserSession を作り、タブと JavaScript 変数が必要な会話全体で同じ実行インスタンスを保持します。ローカルで画面を表示するには `headless: false` を指定します。
+利用側のプロジェクトで `npx patchright install chromium` を実行し、対応する Chromium をインストールします。マウントごとに BrowserSession を作り、タブと JavaScript 変数が必要な会話全体で同じ実行インスタンスを保持します。ローカルで画面を表示するには `headless: false` を指定します。
 
 `state` は観測、`code` は Skill に記載された `browser`、`page`、`nodeRepl` API による実行、`waitForHumanVerification` は人間による操作待ちです。パッケージの facade と通常の Playwright Page は完全には互換ではありません。コード生成前に実行時 Skill を読みます。タイムアウトや中断後は再実行前に現在の状態を確認します。スクリーンショットには画像コンテンツの変換と成果物ストレージが必要です。ダウンロードには File の `createNodeFileDownloadReceiver` を利用できます。
 

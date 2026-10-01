@@ -241,7 +241,7 @@ async function installModels(cache, python) {
 }
 
 function fingerprint() {
-  return createHash('sha256').update(JSON.stringify(spec)).update(fs.readFileSync(requirements)).update(require('playwright/package.json').version).update(require('ffmpeg-static/package.json').version).digest('hex');
+  return createHash('sha256').update(JSON.stringify(spec)).update(fs.readFileSync(requirements)).update(require('patchright/package.json').version).update(require('ffmpeg-static/package.json').version).digest('hex');
 }
 
 async function verify(runtime, { loadModels = false } = {}) {
@@ -267,7 +267,7 @@ async function verify(runtime, { loadModels = false } = {}) {
   }
   try {
     if (!runtime?.chromium || !fs.existsSync(runtime.chromium)) throw new Error('Chromium is missing');
-    const browser = await require('playwright').chromium.launch({ executablePath: runtime.chromium, headless: true, timeout: 30000 });
+    const browser = await require('patchright').chromium.launch({ executablePath: runtime.chromium, headless: true, timeout: 30000 });
     try { const page = await browser.newPage(); await page.setContent('<p>runtime ready</p>'); if (await page.textContent('p') !== 'runtime ready') throw new Error('Render failed'); }
     finally { await browser.close(); }
   } catch (error) { failures.push(`Chromium: ${error.message}`); }
@@ -307,11 +307,11 @@ async function install() {
     const python = await installPython(cache, plan);
     const office = await installOffice(cache);
     const models = await installModels(cache, python);
-    const cli = path.join(path.dirname(require.resolve('playwright/package.json')), 'cli.js');
+    const cli = path.join(path.dirname(require.resolve('patchright/package.json')), 'cli.js');
     if (process.platform === 'linux' && !await works(process.execPath, [cli, 'install-deps', '--dry-run', 'chromium'])) await privileged(process.execPath, [cli, 'install-deps', 'chromium']);
     const browserEnvironment = { ...process.env, PLAYWRIGHT_BROWSERS_PATH: path.join(cache, 'browsers') };
     await run(process.execPath, [cli, 'install', 'chromium'], { env: browserEnvironment });
-    const chromium = await run(process.execPath, ['-e', "console.log(require('playwright').chromium.executablePath())"], { cwd: packageRoot, env: browserEnvironment, capture: true });
+    const chromium = await run(process.execPath, ['-e', "console.log(require('patchright').chromium.executablePath())"], { cwd: packageRoot, env: browserEnvironment, capture: true });
     const ffmpegSource = require('ffmpeg-static');
     if (!ffmpegSource || !fs.existsSync(ffmpegSource)) throw new Error('ffmpeg-static did not install its executable. Check whether npm dependency scripts were disabled.');
     const ffmpeg = path.join(cache, 'bin', process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');

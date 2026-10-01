@@ -20,6 +20,7 @@ export const routes = [
   { path: '/api/browser-chat/[sessionId]/close', load: () => import('./routes/browser-chat/[sessionId]/close/route') },
   { path: '/api/browser-chat/[sessionId]/context', load: () => import('./routes/browser-chat/[sessionId]/context/route') },
   { path: '/api/browser-chat/[sessionId]/files', load: () => import('./routes/browser-chat/[sessionId]/files/route') },
+  { path: '/api/browser-chat/[sessionId]/export', load: () => import('./routes/browser-chat/[sessionId]/export/route') },
   { path: '/api/browser-chat/[sessionId]/terminals', load: () => import('./routes/browser-chat/[sessionId]/terminals/route') },
   { path: '/api/browser-chat/[sessionId]/recovery', load: () => import('./routes/browser-chat/[sessionId]/recovery/route') },
   { path: '/api/browser-chat/[sessionId]/delete', load: () => import('./routes/browser-chat/[sessionId]/delete/route') },

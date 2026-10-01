@@ -154,9 +154,12 @@ export function aiStreamTimeouts(requestTimeoutMs = aiRequestTimeoutMs()) {
 /** Agent prompts and reasoning can need minutes before the first useful output.
  * Auxiliary-call settings must not prematurely cancel the agent request.
  * Recovery increases the first-output allowance, bounded by its request timeout. */
-export function aiRuntimeStreamTimeouts(requestTimeoutMs = aiRuntimeRequestTimeoutMs(), retryAttempt = 0) {
-  const baseMs = positiveInteger(process.env.AI_RUNTIME_FIRST_CHUNK_TIMEOUT_MS, 180_000);
-  const exponent = Math.min(10, Math.max(0, Math.floor(retryAttempt) || 0));
+export function aiRuntimeStreamTimeouts(requestTimeoutMs = aiRuntimeRequestTimeoutMs(), retryAttempt = 0, subagent = false) {
+  const baseMs = positiveInteger(subagent ? process.env.AI_SUBAGENT_FIRST_CHUNK_TIMEOUT_MS
+    ?? process.env.AI_RUNTIME_FIRST_CHUNK_TIMEOUT_MS : process.env.AI_RUNTIME_FIRST_CHUNK_TIMEOUT_MS, 180_000);
+  // A silent child must not keep its parent waiting through 3 + 6 + 10 minutes.
+  // Requests that are producing output still use the inactivity watchdog.
+  const exponent = subagent ? 0 : Math.min(10, Math.max(0, Math.floor(retryAttempt) || 0));
   return {
     ...aiStreamTimeouts(requestTimeoutMs),
     firstChunkMs: Math.min(requestTimeoutMs, baseMs * 2 ** exponent),

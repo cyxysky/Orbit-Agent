@@ -10,7 +10,7 @@ vi.mock('@/server/storage/browser-chat-history-store', () => ({ readBrowserChatS
 vi.mock('@/server/capabilities/browser-chat-chart', () => ({ readBrowserChatChart: mocks.chart }));
 vi.mock('@/server/auth/mount-identity', () => ({ createMountIdentityTicket: () => ({ ticket: 'private-test-ticket' }) }));
 vi.mock('@/server/storage/paths', () => ({ artifactPath: (...parts: string[]) => path.join(mocks.root, ...parts) }));
-vi.mock('playwright', () => ({ chromium: { launch: mocks.launch } }));
+vi.mock('patchright', () => ({ chromium: { launch: mocks.launch } }));
 
 import { exportBrowserChatChartImage } from '@/server/capabilities/browser-chat-chart-image';
 import { communicationReplyWithChartImages } from './communication-chart-images';

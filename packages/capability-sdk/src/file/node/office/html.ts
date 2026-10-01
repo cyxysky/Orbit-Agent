@@ -1,5 +1,5 @@
 import { managedChromiumOptions } from '../../../runtime.ts';
-import { chromium } from 'playwright';
+import { chromium } from 'patchright';
 import { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, ImageRun, ExternalHyperlink, AlignmentType, HeadingLevel, WidthType, ShadingType, LineRuleType, BorderStyle, VerticalAlign } from 'docx';
 import PptxGenJS from 'pptxgenjs';
 import { copyFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';

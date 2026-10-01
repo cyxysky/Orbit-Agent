@@ -3,6 +3,15 @@ import type { Language } from '@/i18n/language';
 export type { Language } from '@/i18n/language';
 
 const en: Record<string, string> = {
+  '导出完整对话为 HTML': 'Export the complete conversation as HTML',
+  '导出 HTML，包含图片、画布和文件': 'Export HTML with images, canvases and files',
+  '导出 HTML': 'Export HTML',
+  '取消导出': 'Cancel export',
+  '点击取消': 'Click to cancel',
+  '正在读取完整对话…': 'Reading the complete conversation…',
+  '正在内嵌图表和画布…': 'Embedding charts and canvases…',
+  '正在内嵌图片和文件…': 'Embedding images and files…',
+  '导出对话失败': 'Unable to export the conversation',
   '选择 AI 可使用的工具，拖动名称调整顺序。': 'Choose tools for AI. Drag their names to reorder.',
   '自动保存 · 下条消息生效，并用于新对话': 'Auto-saved · Applies from the next message and to new chats',
   '自动保存 · 用于新对话': 'Auto-saved · Applies to new chats',

@@ -9,10 +9,10 @@ export const runtimeBuiltinToolPrompts = {
 
 const help: Record<string, [string, string]> = {
   browser: ['浏览器', '搜索并读取网页、操作页面、检查界面和截图。'],
-  file: ['文件', '读取和修改文件，生成 Word、Excel、PPT、PDF，以及 Markdown 等文本文件。'],
+  file: ['文件', '下载文件，读取 PDF、Word、Excel、PPT 的文本和表格，以及创建、修改和预览文档。'],
   chart: ['图表与画布', '创建和更新二维、三维图表，以及可编辑的 Excalidraw 画布。'],
   maps: ['地图', '搜索 Google 地点，规划驾车、步行和骑行路线，并展示交互地图。'],
-  codeSandbox: ['代码沙箱', '运行隔离的代码，计算数据、处理文件和生成程序产物。'],
+  codeSandbox: ['代码沙箱', '运行隔离代码，计算和转换数据，执行自定义程序。普通 PDF 和 Office 内容读取使用文件工具。'],
   connectors: ['连接器', '调用已配置外部服务的接口和操作。'],
   knowledge: ['知识库', '保存、检索和维护可复用的参考资料。'],
   data: ['数据源', '查询已配置的数据源，读取结构并分析数据。'],

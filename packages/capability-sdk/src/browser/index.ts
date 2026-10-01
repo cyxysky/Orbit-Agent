@@ -209,7 +209,7 @@ export const browserCapabilityManifest = Object.freeze({
   version: '0.1.0',
   description: 'Persistent Playwright browser sessions, code execution, snapshots, and visual evidence.',
   permissions: ['browser:launch', 'browser:cdp', 'network:access', 'artifact:write'],
-  runtimeRequirements: { node: '>=22.16', playwright: '>=1.60' },
+  runtimeRequirements: { node: '>=22.16', patchright: '1.63.0' },
   configuration: { settings: browserCapabilitySettings },
   skills: [browserRuntimeSkill, ...browserRuntimeReferenceSkills, browserInteractiveQaSkill],
 } satisfies CapabilityManifest);

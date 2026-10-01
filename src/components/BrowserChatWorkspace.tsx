@@ -2,6 +2,7 @@
 import { normalizeBrowserChatInteractionMode, type BrowserChatInteractionMode } from '@/lib/browser-chat-interaction-mode';
 import { BrowserChatRecoveryPanel } from './BrowserChatRecoveryPanel';
 import { BrowserChatFilesPanel } from './BrowserChatFilesPanel';
+import { BrowserChatExportButton } from './BrowserChatExportButton';
 import { BrowserChatFailureNotice, isBrowserChatFailureNotice } from './BrowserChatFailureNotice';
 
 import { browserChatSessionListTimestamp, compareBrowserChatSessionCreation, upsertBrowserChatSessionByCreation } from '@/lib/browser-chat-session-order';
@@ -10351,6 +10352,7 @@ export function BrowserChatWorkspace({
           <BrowserChatRecoveryPanel key={`recovery-${session.id}`} sessionId={session.id} busy={currentBusy} />
           <BrowserChatFilesPanel key={`files-${session.id}`} sessionId={session.id} busy={currentBusy} />
           <BrowserChatTerminalPanel key={`terminals-${session.id}`} sessionId={session.id} closed={session.status === 'closed'} />
+          <BrowserChatExportButton key={`export-${session.id}`} sessionId={session.id} onError={setError} />
           {webPreviewRuntime ? (
             <button
               aria-label={t('打开实时界面')}
