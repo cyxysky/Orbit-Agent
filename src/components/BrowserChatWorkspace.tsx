@@ -115,6 +115,7 @@ import {
   SendHorizontal,
   Settings,
   ShieldCheck,
+  ShieldOff,
   SlidersHorizontal,
   Sparkles,
   SquareArrowOutUpRight,
@@ -5858,27 +5859,10 @@ function compactContextTokens(tokens: number) {
   return { decimalPlaces: 0, suffix: '', value: tokens };
 }
 
-function BrowserChatSafetySelector({
-  userId,
-  contextUsage,
-  sessionId,
-  disabledTools,
-  onDisabledToolsChange,
-  disabled,
-  onSafetyModeChange,
-  safetyMode,
-}: {
-  userId: string;
+function BrowserChatContextUsage({ contextUsage }: {
   contextUsage?: BrowserChatSession['contextUsage'];
-  sessionId?: string;
-  disabledTools: string[];
-  onDisabledToolsChange: (names: string[]) => void;
-  disabled: boolean;
-  onSafetyModeChange: (mode: BrowserChatSafetyMode) => void;
-  safetyMode: BrowserChatSafetyMode;
 }) {
   const { t } = useI18n();
-  const safetyLabel = safetyMode === 'full' ? t('完全模式') : t('严格模式');
   const currentTokens = Math.max(0, contextUsage?.currentTokens || 0);
   const maxTokens = Math.max(1, contextUsage?.maxTokens || 256_000);
   const contextPercent = Math.min(100, Math.round((currentTokens / maxTokens) * 100));
@@ -5892,88 +5876,114 @@ function BrowserChatSafetySelector({
   const imageDisplay = compactContextTokens(imageTokens);
 
   return (
-    <div className="browser-chat-mode-selector" data-i18n-skip>
-      <Button
-        aria-pressed={safetyMode === 'full'}
-        aria-label={t('执行权限：{mode}', { mode: safetyLabel })}
-        className="browser-chat-mode-selector-trigger glass chip strict"
-        isDisabled={disabled}
-        onPress={() => onSafetyModeChange(safetyMode === 'full' ? 'strict' : 'full')}
-        variant="ghost"
-      >
-        <ShieldCheck aria-hidden="true" size={20} />
-        <span>{safetyLabel}</span>
-        <span
-          aria-hidden="true"
-          className={`browser-chat-safety-toggle${safetyMode === 'full' ? ' is-on' : ''}`}
-        >
-          <span />
-        </span>
-      </Button>
-
-      <HoverCard
-        align="center"
-        title={t('上下文')}
-        width={300}
-        headerAside={`${contextPercent}%`}
-        content={(
-          <>
-            <div
-              className="browser-chat-context-progress"
-              style={{ '--browser-chat-context-progress': `${contextPercent}%` } as CSSProperties}
-            >
-              <span />
-            </div>
-            <div className="browser-chat-context-breakdown">
-              <div className="is-text">
-                <span>{t('消息与系统')}</span>
-                <strong><NumberTicker {...textDisplay} value={textDisplay.value} /></strong>
-              </div>
-              <div className="is-tools">
-                <span>{t('工具')}</span>
-                <strong><NumberTicker {...toolDisplay} value={toolDisplay.value} /></strong>
-              </div>
-              <div className="is-images">
-                <span>{t('图片')}</span>
-                <strong><NumberTicker {...imageDisplay} value={imageDisplay.value} /></strong>
-              </div>
-            </div>
-            <footer className="browser-chat-context-card-total">
-              <span>{t('总计')}</span>
-              <strong>
-                <NumberTicker {...currentDisplay} value={currentDisplay.value} />
-                <span aria-hidden="true"> / </span>
-                <NumberTicker {...maxDisplay} value={maxDisplay.value} />
-              </strong>
-            </footer>
-          </>
-        )}
-      >
-        {(hoverProps) => (
+    <HoverCard
+      align="center"
+      title={t('上下文')}
+      width={300}
+      headerAside={`${contextPercent}%`}
+      content={(
+        <>
           <div
-            {...hoverProps}
-            aria-label={t('当前上下文 {current} / 最大上下文 {max}', {
-              current: currentTokens.toLocaleString('zh-CN'),
-              max: maxTokens.toLocaleString('zh-CN'),
-            })}
-            aria-valuemax={maxTokens}
-            aria-valuemin={0}
-            aria-valuenow={Math.min(currentTokens, maxTokens)}
-            className="browser-chat-context-usage"
-            role="meter"
-            tabIndex={0}
+            className="browser-chat-context-progress"
+            style={{ '--browser-chat-context-progress': `${contextPercent}%` } as CSSProperties}
           >
-            <AnimatedCircularProgressBar
-              className="browser-chat-context-ring"
-              max={maxTokens}
-              min={0}
-              size={20}
-              strokeWidth={2}
-              value={currentTokens}
-            />
+            <span />
           </div>
+          <div className="browser-chat-context-breakdown">
+            <div className="is-text">
+              <span>{t('消息与系统')}</span>
+              <strong><NumberTicker {...textDisplay} value={textDisplay.value} /></strong>
+            </div>
+            <div className="is-tools">
+              <span>{t('工具')}</span>
+              <strong><NumberTicker {...toolDisplay} value={toolDisplay.value} /></strong>
+            </div>
+            <div className="is-images">
+              <span>{t('图片')}</span>
+              <strong><NumberTicker {...imageDisplay} value={imageDisplay.value} /></strong>
+            </div>
+          </div>
+          <footer className="browser-chat-context-card-total">
+            <span>{t('总计')}</span>
+            <strong>
+              <NumberTicker {...currentDisplay} value={currentDisplay.value} />
+              <span aria-hidden="true"> / </span>
+              <NumberTicker {...maxDisplay} value={maxDisplay.value} />
+            </strong>
+          </footer>
+        </>
+      )}
+    >
+      {(hoverProps) => (
+        <div
+          {...hoverProps}
+          aria-label={t('当前上下文 {current} / 最大上下文 {max}', {
+            current: currentTokens.toLocaleString('zh-CN'),
+            max: maxTokens.toLocaleString('zh-CN'),
+          })}
+          aria-valuemax={maxTokens}
+          aria-valuemin={0}
+          aria-valuenow={Math.min(currentTokens, maxTokens)}
+          className="browser-chat-context-usage"
+          data-i18n-skip
+          role="meter"
+          tabIndex={0}
+        >
+          <AnimatedCircularProgressBar
+            className="browser-chat-context-ring"
+            max={maxTokens}
+            min={0}
+            size={20}
+            strokeWidth={2}
+            value={currentTokens}
+          />
+        </div>
+      )}
+    </HoverCard>
+  );
+}
+
+function BrowserChatSafetySelector({
+  userId,
+  sessionId,
+  disabledTools,
+  onDisabledToolsChange,
+  disabled,
+  onSafetyModeChange,
+  safetyMode,
+}: {
+  userId: string;
+  sessionId?: string;
+  disabledTools: string[];
+  onDisabledToolsChange: (names: string[]) => void;
+  disabled: boolean;
+  onSafetyModeChange: (mode: BrowserChatSafetyMode) => void;
+  safetyMode: BrowserChatSafetyMode;
+}) {
+  const { t } = useI18n();
+  const safetyLabel = safetyMode === 'full' ? t('完全模式') : t('严格模式');
+
+  return (
+    <div className="browser-chat-mode-selector" data-i18n-skip>
+      <HoverCard align="center" title={t('执行权限：{mode}', { mode: safetyLabel })} width={200}>
+        {(hoverProps) => (
+          <Button
+            {...hoverProps}
+            aria-pressed={safetyMode === 'full'}
+            aria-label={t('执行权限：{mode}', { mode: safetyLabel })}
+            className="browser-chat-mode-selector-trigger glass chip strict"
+            isDisabled={disabled}
+            isIconOnly
+            onPress={() => onSafetyModeChange(safetyMode === 'full' ? 'strict' : 'full')}
+            variant="ghost"
+          >
+            {safetyMode === 'full'
+              ? <ShieldOff aria-hidden="true" size={20} />
+              : <ShieldCheck aria-hidden="true" size={20} />}
+          </Button>
         )}
       </HoverCard>
+
       <BrowserChatToolsHelp userId={userId} sessionId={sessionId} disabledTools={disabledTools} onChange={onDisabledToolsChange} busy={disabled} />
     </div>
   );
@@ -6730,14 +6740,14 @@ const BrowserChatComposer = memo(function BrowserChatComposer({
               sessionId={sessionId}
               disabledTools={disabledTools}
               onDisabledToolsChange={onDisabledToolsChange}
-              contextUsage={contextUsage}
               disabled={currentBusy || loading}
               onSafetyModeChange={onSafetyModeChange}
               safetyMode={safetyMode}
             />
+            {managementActions}
           </div>
-          {managementActions}
           <div className="browser-chat-compose-submit">
+            <BrowserChatContextUsage contextUsage={contextUsage} />
             <div className="browser-chat-model-control glass chip model">
               <CustomSelect
                 className="browser-chat-provider-select"
@@ -6797,7 +6807,7 @@ function BrowserChatManagementMenu({ onSelect }: {
     onSelect(tab);
   };
   return (
-    <Dock aria-label={t('快捷管理')} className="browser-chat-management-dock" role="group" iconSize={30} disableMagnification direction="bottom">
+    <Dock aria-label={t('快捷管理')} className="browser-chat-management-dock" role="group" iconSize={36} disableMagnification direction="bottom">
       <DockIcon>
         <Popover isOpen={open} onOpenChange={setOpen}>
           <Button isIconOnly aria-label={t('更多')} className="ui-icon-button browser-chat-more-button" variant="ghost" type="button">

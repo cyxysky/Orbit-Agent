@@ -241,9 +241,9 @@
   }
 
   .browser-chat-compose--reference .browser-chat-compose-actions > .browser-chat-compose-tools {
-    flex: 1 1 auto;
+    flex: 0 0 auto;
     justify-content: flex-start;
-    gap: 4px;
+    gap: var(--browser-chat-tool-gap);
   }
 
   .browser-chat-compose--reference .browser-chat-compose-actions > .browser-chat-compose-submit {
@@ -253,14 +253,8 @@
   }
 
   .browser-chat-compose--reference .browser-chat-mode-selector {
-    gap: 12px;
-    padding-left: 8px;
-  }
-
-  .browser-chat-compose--reference .browser-chat-mode-selector-trigger {
-    gap: 5px;
-    font-size: 12px;
-    padding-inline: 4px;
+    gap: var(--browser-chat-tool-gap);
+    padding-left: 0;
   }
 
   .browser-chat-compose--reference .browser-chat-model-control {

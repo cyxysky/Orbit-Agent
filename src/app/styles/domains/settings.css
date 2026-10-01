@@ -554,12 +554,19 @@
   --settings-page-bg: var(--panel);
   --settings-surface: var(--panel);
   --settings-surface-subtle: var(--panel-soft);
+  --settings-field-bg: var(--panel-soft);
   --settings-border: var(--border);
   --settings-border-strong: var(--border-strong);
   --settings-selection-bg: var(--panel-warm);
   --settings-text: var(--foreground);
   --settings-muted: var(--muted);
   --settings-accent-soft: var(--accent-soft);
+}
+
+:root:not([data-theme="dark"]) :is(.settings-workspace-route, .settings-workspace) {
+  --settings-field-bg: color-mix(in srgb, var(--panel) 90%, #fff);
+  --field-hover: var(--settings-field-bg);
+  --field-focus: var(--settings-field-bg);
 }
 
 .settings-workspace-route .browser-chat-main,
@@ -613,7 +620,7 @@
 }
 
 .settings-workspace-route .browser-chat-settings-pane .settings-workspace :is([data-slot="input-group"], [data-slot="input"], [data-slot="textarea"], .custom-select-button) {
-  --field-background: var(--settings-surface-subtle);
+  --field-background: var(--settings-field-bg, var(--panel-soft));
   --field-border: var(--settings-border);
 }
 
@@ -621,7 +628,7 @@
   .input,
   .textarea
 ):not([data-slot], [data-slot] *) {
-  background: var(--settings-surface-subtle);
+  background: var(--settings-field-bg, var(--panel-soft));
   border-color: var(--settings-border);
   box-shadow: none;
 }

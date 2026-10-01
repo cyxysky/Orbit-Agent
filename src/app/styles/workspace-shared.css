@@ -2365,6 +2365,7 @@
   height: var(--nav-item-height);
   min-height: var(--nav-item-height);
   overflow: visible;
+  width: 100%;
 }
 
 .browser-chat-layout .evaluation-case-list .workspace-sidebar-archive-row-open {
@@ -2374,7 +2375,9 @@
   grid-row: 1;
   height: var(--nav-item-height);
   min-height: var(--nav-item-height);
-  padding: 0 10px 0 5px;
+  justify-content: flex-start;
+  padding: 0 10px;
+  width: 100%;
 }
 
 .browser-chat-layout .evaluation-case-list .workspace-sidebar-archive-row-title {
@@ -2413,9 +2416,11 @@
   display: inline-flex;
   grid-column: 1;
   grid-row: 1;
+  inset: auto;
   justify-self: end;
   opacity: 0;
   pointer-events: none;
+  position: relative;
   visibility: hidden;
   width: 28px;
 }

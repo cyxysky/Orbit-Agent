@@ -241,7 +241,7 @@
 }
 
 .settings-workspace .input:not([data-slot], [data-slot] *) {
-  background: var(--panel-soft);
+  background: var(--settings-field-bg, var(--panel-soft));
   border-color: var(--border);
   color: var(--foreground);
 }
@@ -525,14 +525,16 @@
 }
 
 .settings-sensitive-data-test-head {
-  align-items: center;
+  align-items: flex-start;
   display: flex;
+  flex-wrap: wrap;
   gap: 18px;
   justify-content: space-between;
 }
 
 .settings-sensitive-data-test-head > div {
   display: grid;
+  flex: 1 1 360px;
   gap: 5px;
   min-width: 0;
 }
@@ -543,49 +545,110 @@
   margin: 0;
 }
 
-.settings-sensitive-data-test-head span,
-.settings-sensitive-data-replacements-head span {
+.settings-sensitive-data-test-head span {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.5;
 }
 
+.settings-sensitive-data-test .settings-sensitive-data-test-head > div > span {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 .settings-sensitive-data-test-grid {
   display: grid;
-  gap: 14px;
+  gap: 18px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .settings-sensitive-data-test-field {
   display: grid;
   gap: 8px;
+  grid-template-rows: auto minmax(0, 1fr);
   min-width: 0;
 }
 
-.settings-sensitive-data-test-field > strong,
-.settings-sensitive-data-replacements-head strong {
+.settings-sensitive-data-test-field > strong {
   color: var(--foreground);
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 600;
+}
+
+.settings-sensitive-data-test-editor,
+.settings-sensitive-data-test-output {
+  background: var(--settings-field-bg, var(--panel-soft));
 }
 
 .settings-sensitive-data-test-input,
-.settings-sensitive-data-test-input [data-slot="textarea"] {
-  min-height: 220px;
+.settings-sensitive-data-test-output,
+.settings-workspace .settings-sensitive-data-test-preview {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-sizing: border-box;
+  font-family: var(--app-font-mono);
+  font-size: 13px;
+  height: 100%;
+  isolation: isolate;
+  line-height: 1.7;
+  max-height: 480px;
+  min-height: 320px;
+  min-width: 0;
+  overflow: auto;
+  padding: 14px 16px;
+  width: 100%;
+  overflow-wrap: anywhere;
+  tab-size: 2;
+  white-space: pre-wrap;
+  word-break: normal;
+}
+
+.settings-sensitive-data-test-editor {
+  border-radius: 10px;
+  height: 100%;
+  min-width: 0;
+  position: relative;
+}
+
+.settings-workspace .settings-sensitive-data-test-preview {
+  background: transparent;
+  border-color: transparent;
+  color: transparent;
+  inset: 0;
+  margin: 0;
+  overflow: hidden;
+  pointer-events: none;
+  position: absolute;
+}
+
+.settings-sensitive-data-test-input {
+  background: transparent;
+  caret-color: var(--foreground);
+  color: var(--foreground);
+  display: block;
+  position: relative;
+  resize: vertical;
+  z-index: 1;
+}
+
+.settings-workspace .settings-sensitive-data-test-editor.has-tags .settings-sensitive-data-test-preview {
+  color: var(--foreground);
+}
+
+.settings-sensitive-data-test-editor.has-tags .settings-sensitive-data-test-input {
+  color: transparent;
+}
+
+.settings-sensitive-data-test-input:focus {
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus-ring) 12%, transparent);
+  outline: 0;
 }
 
 .settings-sensitive-data-test-output {
-  background: var(--panel-soft);
-  border: 1px solid var(--border);
-  border-radius: 12px;
   color: var(--muted);
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Consolas, monospace);
-  font-size: 13px;
-  line-height: 1.6;
   margin: 0;
-  min-height: 150px;
   overflow-wrap: anywhere;
-  padding: 13px 14px;
   white-space: pre-wrap;
 }
 
@@ -602,60 +665,60 @@
   padding: 10px 12px;
 }
 
-.settings-sensitive-data-replacements {
-  display: grid;
-  gap: 10px;
+.settings-sensitive-data-test {
+  --sensitive-tag-green: var(--accent-strong);
+  --sensitive-tag-blue: #365e83;
+  --sensitive-tag-purple: #73508a;
+  --sensitive-tag-amber: #84611f;
+  --sensitive-tag-rose: #925263;
 }
 
-.settings-sensitive-data-replacements-head {
-  align-items: center;
-  display: flex;
-  gap: 12px;
-  justify-content: space-between;
-}
-
-.settings-sensitive-data-replacement-list {
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  display: grid;
-  overflow: hidden;
-}
-
-.settings-sensitive-data-replacement-row {
-  align-items: center;
-  display: grid;
-  gap: 10px;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1.2fr) auto;
-  min-width: 0;
-  padding: 10px 12px;
-}
-
-.settings-sensitive-data-replacement-row + .settings-sensitive-data-replacement-row {
-  border-top: 1px solid var(--border);
-}
-
-.settings-sensitive-data-replacement-row code {
-  background: color-mix(in srgb, var(--foreground) 5%, transparent);
-  border-radius: 7px;
-  color: var(--foreground);
-  font-size: 12px;
+.settings-sensitive-data-test .settings-sensitive-data-tag {
+  --sensitive-tag-color: var(--sensitive-tag-green);
+  --sensitive-tag-bg: color-mix(in srgb, var(--sensitive-tag-color) 10%, var(--settings-field-bg, var(--panel-soft)));
+  background: var(--sensitive-tag-bg);
+  border-radius: 4px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  /* Paint horizontal space without shifting the mirrored textarea's text. */
+  box-shadow: -4px 0 0 var(--sensitive-tag-bg), 4px 0 0 var(--sensitive-tag-bg);
+  color: var(--sensitive-tag-color);
+  font: inherit;
   overflow-wrap: anywhere;
-  padding: 5px 7px;
+  padding: 2px 0;
   white-space: pre-wrap;
 }
 
-.settings-sensitive-data-replacement-row > span[aria-hidden="true"] {
-  color: var(--muted);
+.settings-sensitive-data-test .settings-sensitive-data-tag-text {
+  overflow: visible;
+  position: relative;
+  text-overflow: clip;
+  white-space: inherit;
+  z-index: 1;
 }
 
-.settings-sensitive-data-label {
-  background: var(--accent-soft);
-  border-radius: 999px;
-  color: var(--accent-strong);
-  font-size: 11px !important;
-  font-weight: 700 !important;
-  padding: 4px 8px;
-  white-space: nowrap;
+.settings-sensitive-data-test .settings-sensitive-data-tag[data-tone="1"] {
+  --sensitive-tag-color: var(--sensitive-tag-blue);
+}
+
+.settings-sensitive-data-test .settings-sensitive-data-tag[data-tone="2"] {
+  --sensitive-tag-color: var(--sensitive-tag-purple);
+}
+
+.settings-sensitive-data-test .settings-sensitive-data-tag[data-tone="3"] {
+  --sensitive-tag-color: var(--sensitive-tag-amber);
+}
+
+.settings-sensitive-data-test .settings-sensitive-data-tag[data-tone="4"] {
+  --sensitive-tag-color: var(--sensitive-tag-rose);
+}
+
+:root[data-theme="dark"] .settings-sensitive-data-test {
+  --sensitive-tag-green: #b6d1b3;
+  --sensitive-tag-blue: #a9ccec;
+  --sensitive-tag-purple: #d1b8e6;
+  --sensitive-tag-amber: #e4cc91;
+  --sensitive-tag-rose: #e9b6c4;
 }
 
 .settings-sensitive-data-test-empty {
@@ -827,7 +890,7 @@
 
 .evaluation-case-sidebar button,
 .evaluation-editor-pane button,
-.evaluation-inspector-pane button {
+.evaluation-inspector-pane button:not(.ui-button--primary) {
   color: inherit;
 }
 
@@ -971,7 +1034,7 @@
   grid-auto-rows: 36px;
   line-height: 36px;
   overflow: hidden;
-  padding-top: 16px;
+  padding: 16px 0 40px;
   text-align: center;
 }
 
@@ -981,8 +1044,8 @@
   position: relative;
 }
 
-.evaluation-editor-content pre,
-.evaluation-editor-content textarea {
+.settings-workspace .evaluation-editor-content pre,
+.settings-workspace .evaluation-editor-content textarea {
   border: 0;
   box-sizing: border-box;
   font-family: var(--font-sans, ui-sans-serif, system-ui, sans-serif);
@@ -1000,7 +1063,7 @@
 }
 
 .settings-workspace :is([data-slot="input-group"], [data-slot="input"], [data-slot="textarea"], .custom-select-button) {
-  --field-background: var(--panel-soft);
+  --field-background: var(--settings-field-bg, var(--panel-soft));
   --field-border: var(--border);
   color: var(--foreground) !important;
 }
@@ -1017,7 +1080,7 @@
   opacity: 1;
 }
 
-.evaluation-editor-content pre {
+.settings-workspace .evaluation-editor-content pre {
   color: transparent;
   overflow: hidden;
   pointer-events: none;
@@ -1031,7 +1094,7 @@
   color: transparent;
 }
 
-.evaluation-editor-content textarea {
+.settings-workspace .evaluation-editor-content textarea {
   background: transparent;
   color: var(--foreground);
   outline: none;
@@ -1079,12 +1142,12 @@
 }
 
 .evaluation-expected-add input {
-  background: var(--panel-soft);
+  background: var(--settings-field-bg, var(--panel-soft));
   border: 1px solid var(--border);
-  border-radius: var(--control-radius);
+  border-radius: 8px;
   color: var(--foreground);
   font: inherit;
-  font-size: 12px;
+  font-size: 13px;
   height: var(--control-height);
   min-width: 0;
   outline: none;
@@ -1093,6 +1156,8 @@
 
 .evaluation-expected-add input:focus {
   border-color: var(--accent-strong);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
+  outline: 0;
 }
 
 .evaluation-expected-add > .ui-button {
@@ -2487,15 +2552,6 @@
     grid-template-columns: 1fr;
   }
 
-  .settings-sensitive-data-replacement-row {
-    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  }
-
-  .settings-sensitive-data-label {
-    grid-column: 1 / -1;
-    justify-self: start;
-  }
-
 
 
 
@@ -2654,7 +2710,7 @@
 
 .browser-chat-settings-pane .settings-workspace .input:not([data-slot], [data-slot] *),
 .browser-chat-settings-pane .settings-workspace .textarea:not([data-slot], [data-slot] *) {
-  background: var(--panel-soft);
+  background: var(--settings-field-bg, var(--panel-soft));
   border-color: var(--border);
   border-radius: 8px;
   min-height: 40px;

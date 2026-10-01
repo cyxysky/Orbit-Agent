@@ -191,6 +191,96 @@ type SensitiveDataTestResult = {
   replacements: SensitiveDataTestReplacement[];
 };
 
+function sensitiveDataTagTone(label: string) {
+  let hash = 0;
+  for (const character of label.trim().toLocaleLowerCase()) {
+    hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
+  }
+  return hash % 5;
+}
+
+function highlightedReplacementText(
+  text: string,
+  replacements: SensitiveDataTestReplacement[],
+  redacted = false,
+): ReactNode[] {
+  const output: ReactNode[] = [];
+  let cursor = 0;
+  let offset = 0;
+  for (const replacement of [...replacements].sort((a, b) => a.start - b.start)) {
+    const start = replacement.start + (redacted ? offset : 0);
+    const end = redacted ? start + replacement.placeholder.length : replacement.end;
+    offset += replacement.placeholder.length - (replacement.end - replacement.start);
+    if (start < cursor || end <= start || end > text.length) continue;
+    const value = redacted ? replacement.placeholder : replacement.original;
+    if (text.slice(start, end) !== value) continue;
+    if (start > cursor) {
+      output.push(<span className="settings-sensitive-data-tag-text" key={`text:${cursor}`}>{text.slice(cursor, start)}</span>);
+    }
+    output.push(
+      <mark
+        className="settings-sensitive-data-tag"
+        data-tone={sensitiveDataTagTone(replacement.label)}
+        key={`${replacement.start}:${replacement.end}`}
+        title={replacement.label}
+      >
+        <span className="settings-sensitive-data-tag-text">{value}</span>
+      </mark>,
+    );
+    cursor = end;
+  }
+  if (cursor < text.length) {
+    output.push(<span className="settings-sensitive-data-tag-text" key={`text:${cursor}`}>{text.slice(cursor)}</span>);
+  }
+  return output;
+}
+
+function SensitiveDataTestEditor({ label, placeholder, value, replacements, onChange }: {
+  label: string;
+  placeholder: string;
+  value: string;
+  replacements?: SensitiveDataTestReplacement[];
+  onChange: (value: string) => void;
+}) {
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const previewRef = useRef<HTMLPreElement>(null);
+  const syncPreview = useCallback(() => {
+    const input = inputRef.current;
+    const preview = previewRef.current;
+    if (!input || !preview) return;
+    const style = getComputedStyle(input);
+    preview.style.width = `${input.clientWidth + parseFloat(style.borderLeftWidth) + parseFloat(style.borderRightWidth)}px`;
+    preview.style.height = `${input.clientHeight + parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth)}px`;
+    preview.scrollTop = input.scrollTop;
+    preview.scrollLeft = input.scrollLeft;
+  }, []);
+  useLayoutEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    const observer = new ResizeObserver(syncPreview);
+    observer.observe(input);
+    return () => observer.disconnect();
+  }, [syncPreview]);
+  useLayoutEffect(syncPreview, [value, replacements, syncPreview]);
+  return (
+    <div className={`settings-sensitive-data-test-editor${replacements?.length ? ' has-tags' : ''}`}>
+      <pre aria-hidden="true" className="settings-sensitive-data-test-preview" ref={previewRef}>
+        {highlightedReplacementText(value, replacements || [])}{'\u200b'}
+      </pre>
+      <textarea
+        aria-label={label}
+        className="settings-sensitive-data-test-input"
+        onChange={(event) => onChange(event.target.value)}
+        onScroll={syncPreview}
+        placeholder={placeholder}
+        ref={inputRef}
+        spellCheck={false}
+        value={value}
+      />
+    </div>
+  );
+}
+
 type SensitiveDataEvaluationDraft = Omit<SensitiveDataEvaluationCase, 'expectedValues'> & {
   expectedValuesText: string;
 };
@@ -766,6 +856,7 @@ export function EnvironmentSettings({
   const [activeSettingsSections, setActiveSettingsSections] = useState<Partial<Record<SettingsTab, string>>>({});
   const [sensitiveDataTestInput, setSensitiveDataTestInput] = useState('');
   const [sensitiveDataTestResult, setSensitiveDataTestResult] = useState<SensitiveDataTestResult | null>(null);
+  const sensitiveDataTestRequestRef = useRef(0);
   const [sensitiveDataTestError, setSensitiveDataTestError] = useState('');
   const [testingSensitiveData, setTestingSensitiveData] = useState(false);
   const [sensitiveDataEvaluationCases, setSensitiveDataEvaluationCases] = useState<SensitiveDataEvaluationDraft[]>([]);
@@ -974,6 +1065,7 @@ export function EnvironmentSettings({
 
   async function runSensitiveDataTest() {
     if (!sensitiveDataTestInput.trim() || testingSensitiveData) return;
+    const requestId = ++sensitiveDataTestRequestRef.current;
     setTestingSensitiveData(true);
     setSensitiveDataTestError('');
     try {
@@ -983,11 +1075,13 @@ export function EnvironmentSettings({
         body: JSON.stringify({ text: sensitiveDataTestInput }),
       });
       const data = await readApiJson<SensitiveDataTestResult>(response, t('敏感数据过滤测试失败'));
+      if (requestId !== sensitiveDataTestRequestRef.current) return;
       setSensitiveDataTestResult({
         text: String(data.text || ''),
         replacements: Array.isArray(data.replacements) ? data.replacements : [],
       });
     } catch (error) {
+      if (requestId !== sensitiveDataTestRequestRef.current) return;
       setSensitiveDataTestResult(null);
       setSensitiveDataTestError(error instanceof Error ? t(error.message) : t('敏感数据过滤测试失败'));
     } finally {
@@ -1573,20 +1667,21 @@ export function EnvironmentSettings({
             onClick={runSensitiveDataTest}
             type="button"
           >
-            {testingSensitiveData ? <Loader2 className="spin" size={15} /> : null}
+            {testingSensitiveData ? <Loader2 className="spin" size={16} /> : <ScanSearch size={16} />}
             {t(testingSensitiveData ? '正在检测' : '开始检测')}
           </button>
         </div>
         <div className="settings-sensitive-data-test-grid">
           <label className="settings-sensitive-data-test-field">
             <strong>{t('待检测文本')}</strong>
-            <TextArea
-              className="settings-sensitive-data-test-input"
-              fullWidth
+            <SensitiveDataTestEditor
+              label={t('待检测文本')}
               placeholder={t('例如：张三的邮箱是 zhangsan@example.com，手机号是 13800138000。')}
+              replacements={sensitiveDataTestResult?.replacements}
               value={sensitiveDataTestInput}
-              onChange={(event) => {
-                setSensitiveDataTestInput(event.target.value);
+              onChange={(value) => {
+                sensitiveDataTestRequestRef.current += 1;
+                setSensitiveDataTestInput(value);
                 setSensitiveDataTestResult(null);
                 setSensitiveDataTestError('');
               }}
@@ -1595,34 +1690,17 @@ export function EnvironmentSettings({
           <div className="settings-sensitive-data-test-field">
             <strong>{t('脱敏结果')}</strong>
             <pre aria-live="polite" className={`settings-sensitive-data-test-output${sensitiveDataTestResult ? ' has-result' : ''}`}>
-              {sensitiveDataTestResult?.text || t('检测完成后在此显示结果。')}
+              {sensitiveDataTestResult
+                ? highlightedReplacementText(sensitiveDataTestResult.text, sensitiveDataTestResult.replacements, true)
+                : t('检测完成后在此显示结果。')}
             </pre>
           </div>
         </div>
         {sensitiveDataTestError ? (
           <div className="settings-sensitive-data-test-error" role="alert">{sensitiveDataTestError}</div>
         ) : null}
-        {sensitiveDataTestResult ? (
-          <div className="settings-sensitive-data-replacements">
-            <div className="settings-sensitive-data-replacements-head">
-              <strong>{t('替换明细')}</strong>
-              <span>{t('{count} 项', { count: sensitiveDataTestResult.replacements.length })}</span>
-            </div>
-            {sensitiveDataTestResult.replacements.length ? (
-              <div className="settings-sensitive-data-replacement-list">
-                {sensitiveDataTestResult.replacements.map((replacement, index) => (
-                  <div className="settings-sensitive-data-replacement-row" key={`${replacement.start}:${replacement.end}:${index}`}>
-                    <code>{replacement.original}</code>
-                    <span aria-hidden="true">→</span>
-                    <code>{replacement.placeholder}</code>
-                    <span className="settings-sensitive-data-label">{replacement.label}</span>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="settings-sensitive-data-test-empty">{t('未检测到敏感内容。')}</div>
-            )}
-          </div>
+        {sensitiveDataTestResult && !sensitiveDataTestResult.replacements.length ? (
+          <div className="settings-sensitive-data-test-empty">{t('未检测到敏感内容。')}</div>
         ) : null}
         </section> : null}
         {view === 'evaluation' ? <section className={`settings-sensitive-data-evaluation-workbench${sensitiveDataEvaluationExpanded ? ' is-expanded' : ''}`}>
@@ -1656,7 +1734,7 @@ export function EnvironmentSettings({
                   </label>
                   <button aria-label={t('新增用例')} className="evaluation-case-create" onClick={addSensitiveDataEvaluationCase} type="button"><Plus size={20} /></button>
                 </div>
-                <div className="evaluation-case-list browser-chat-conversation-history">
+                <div className="evaluation-case-list">
                   {visibleEvaluationCases.map((item) => {
                     const index = sensitiveDataEvaluationCases.findIndex((entry) => entry.id === item.id);
                     const result = evaluationResults.get(item.id);
@@ -1710,18 +1788,23 @@ export function EnvironmentSettings({
                     {Array.from({ length: Math.max(1, selectedEvaluationCase.text.split(/\r?\n/).length) }, (_, index) => <span key={index}>{index + 1}</span>)}
                   </div>
                   <div className="evaluation-editor-content">
-                    <pre aria-hidden="true">{highlightedSensitiveText(selectedEvaluationCase.text, selectedEvaluationValues)}</pre>
+                    <pre aria-hidden="true">{highlightedSensitiveText(selectedEvaluationCase.text, selectedEvaluationValues)}{'\u200b'}</pre>
                     <textarea
                       onChange={(event) => updateSensitiveDataEvaluationCase(selectedEvaluationCase.id, { text: event.target.value })}
                       onScroll={(event) => {
                         const textarea = event.currentTarget;
                         const preview = textarea.previousElementSibling as HTMLElement | null;
                         const lineNumbers = textarea.parentElement?.previousElementSibling as HTMLElement | null;
+                        const paddingBottom = Number.parseFloat(getComputedStyle(textarea).paddingBottom) + textarea.offsetHeight - textarea.clientHeight;
                         if (preview) {
+                          preview.style.paddingBottom = `${paddingBottom}px`;
                           preview.scrollLeft = textarea.scrollLeft;
                           preview.scrollTop = textarea.scrollTop;
                         }
-                        if (lineNumbers) lineNumbers.scrollTop = textarea.scrollTop;
+                        if (lineNumbers) {
+                          lineNumbers.style.paddingBottom = `${paddingBottom}px`;
+                          lineNumbers.scrollTop = textarea.scrollTop;
+                        }
                       }}
                       placeholder={t('输入包含合成敏感数据的测试文本。')}
                       spellCheck={false}
