@@ -19,7 +19,6 @@ export const browserChatFinalResponseSchema = z.unknown().transform((value, cont
   catch (error) { context.addIssue({ code: 'custom', message: error instanceof Error ? error.message : String(error) }); return z.NEVER; }
 });
 export type BrowserChatFinalBlock = ResponseBlock;
-export type BrowserChatFinalResponse = StructuredResponse;
 
 export type BrowserChatUIMessageMetadata = {
   sessionId: string;

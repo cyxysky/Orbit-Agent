@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { mkdtemp, realpath, rm, stat } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { release, tmpdir } from 'node:os';
 import path from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
 import { spawnTerminal, type TerminalProcess } from '../../../runtime/terminal/pty-host-client.cjs';
@@ -9,9 +9,13 @@ import { managedProcessEnvironment } from '../../runtime.ts';
 import { normalizeBoundedInteger, type CapabilityRunContext, type CapabilityExecutionContext } from '../../index.ts';
 import { createTerminalCapability, type TerminalOperations, type TerminalResult, type TerminalSummary, type TerminalEvent, type TerminalCommand } from './index.ts';
 import { terminalShellInvocation, terminalCommandInvocation, type TerminalShell } from './shell-integration.ts';
+import { retainTerminalOutput, splitTerminalOutput, terminalGeometryAt, terminalGeometrySequence, type TerminalGeometry } from './geometry.ts';
 export type { TerminalShell } from './shell-integration.ts';
 
-const plainOutput = (value: string) => stripVTControlCharacters(value.replace(new RegExp('\\x1b\\[[0-?]*[ -/]*[@-~]', 'g'), ''));
+const plainOutput = (value: string) => {
+  const output = splitTerminalOutput(value).flatMap(part => 'output' in part ? [part.output] : []).join('');
+  return stripVTControlCharacters(output.replace(new RegExp('\\x1b\\[[0-?]*[ -/]*[@-~]', 'g'), ''));
+};
 
 export type NodeTerminalOptions = {
   cwd: string; shell?: TerminalShell; env?: NodeJS.ProcessEnv;
@@ -19,7 +23,8 @@ export type NodeTerminalOptions = {
 };
 type TerminalSession = {
   summary: TerminalSummary; process: TerminalProcess; directory: string; nonce: string;
-  output: string; pending: string; suppressEcho: boolean; awaitingStart: boolean; files: string[];
+  output: string; outputGeometry: TerminalGeometry; pending: string; suppressEcho: boolean; awaitingStart: boolean; files: string[];
+  pendingGeometry: Array<{ offset: number; geometry: TerminalGeometry }>;
   timer?: ReturnType<typeof setTimeout>; interruptTimer?: ReturnType<typeof setTimeout>;
   interruption?: 'interrupted' | 'timed_out'; closed: Promise<void>;
 };
@@ -73,13 +78,27 @@ export function createNodeTerminalOperations(initialOptions: NodeTerminalOptions
     }
     s.interruption = undefined; s.suppressEcho = false; s.awaitingStart = false; cleanupCommand(s);
   };
-  const append = (s: TerminalSession, output: string) => {
-    if (!output || s.suppressEcho) return;
+  const append = (s: TerminalSession, output: string, geometry = false) => {
+    if (!output || s.suppressEcho && !geometry) return;
     const startCursor = s.summary.cursor;
     s.summary.cursor += output.length;
-    s.output = (s.output + output).slice(-normalizeBoundedInteger(options.maxOutputChars, 50000, 1000, 500000));
+    const retained = retainTerminalOutput({ output: s.output, geometry: s.outputGeometry }, output,
+      normalizeBoundedInteger(options.maxOutputChars, 50000, 1000, 500000));
+    s.output = retained.output; s.outputGeometry = retained.geometry;
     s.summary.startCursor = s.summary.cursor - s.output.length;
     emit({ type: 'output', terminalId: s.summary.terminalId, output, startCursor, cursor: s.summary.cursor });
+  };
+  const consumePending = (s: TerminalSession, length: number, keepOutput = true) => {
+    let start = 0;
+    while (s.pendingGeometry.length && s.pendingGeometry[0].offset <= length) {
+      const { offset, geometry } = s.pendingGeometry.shift()!;
+      if (keepOutput) append(s, s.pending.slice(start, offset));
+      append(s, terminalGeometrySequence(geometry), true);
+      start = offset;
+    }
+    if (keepOutput) append(s, s.pending.slice(start, length));
+    s.pending = s.pending.slice(length);
+    for (const marker of s.pendingGeometry) marker.offset -= length;
   };
   const consume = (s: TerminalSession, data: string) => {
     const prefix = `\x1b]777;orbit;${s.nonce};`;
@@ -89,18 +108,19 @@ export function createNodeTerminalOperations(initialOptions: NodeTerminalOptions
       if (start < 0) {
         let keep = Math.min(prefix.length - 1, s.pending.length);
         while (keep && !prefix.startsWith(s.pending.slice(-keep))) keep--;
-        append(s, s.pending.slice(0, s.pending.length - keep));
-        s.pending = keep ? s.pending.slice(-keep) : '';
+        consumePending(s, s.pending.length - keep);
         return;
       }
-      append(s, s.pending.slice(0, start)); s.pending = s.pending.slice(start);
+      consumePending(s, start);
       const end = s.pending.indexOf('\x07', prefix.length);
       if (end < 0) {
-        if (s.pending.length > 16384) { append(s, s.pending); s.pending = ''; }
+        if (s.pending.length > 16384) consumePending(s, s.pending.length);
         return;
       }
       const [kind, code, cwd] = s.pending.slice(prefix.length, end).split(';');
-      s.pending = s.pending.slice(end + 1);
+      // A resize can arrive while the private shell marker is split across IPC
+      // chunks. Preserve its boundary while filtering the shell marker itself.
+      consumePending(s, end + 1, false);
       if (kind === 'start') {
         s.suppressEcho = false; s.awaitingStart = false;
         if (s.interruption) s.process.write('\x03');
@@ -169,7 +189,9 @@ export function createNodeTerminalOperations(initialOptions: NodeTerminalOptions
       const s = get(id);
       const offset = Math.max(s.summary.startCursor, Math.min(cursor, s.summary.cursor));
       const output = s.output.slice(offset - s.summary.startCursor);
-      return { terminal: copy(s), output: raw ? output : plainOutput(output), cursor: s.summary.cursor, truncated: cursor < s.summary.startCursor };
+      return { terminal: copy(s), output: raw ? output : plainOutput(output),
+        ...(raw ? { outputGeometry: terminalGeometryAt(s.output, s.outputGeometry, offset - s.summary.startCursor) } : {}),
+        cursor: s.summary.cursor, truncated: cursor < s.summary.startCursor };
     },
     async execute(request, context) {
       if (disposed) throw new Error('Terminal manager is closed.');
@@ -199,21 +221,36 @@ export function createNodeTerminalOperations(initialOptions: NodeTerminalOptions
             cwd, cols, rows, name: 'xterm-256color',
             env: Object.fromEntries(Object.entries(managedProcessEnvironment(options.env || process.env)).filter((entry): entry is [string, string] => typeof entry[1] === 'string')),
           });
+          let windowsPty: TerminalSummary['windowsPty'];
+          if (process.platform === 'win32') {
+            const version = /(\d+)\.(\d+)\.(\d+)/.exec(release());
+            const buildNumber = version ? Number(version[3]) : 0;
+            // Match node-pty's host-build selection; useConptyDll does not force ConPTY.
+            windowsPty = { backend: buildNumber >= 18309 ? 'conpty' : 'winpty',
+              ...(Number.isSafeInteger(buildNumber) && buildNumber > 0 ? { buildNumber } : {}) };
+          }
           let closed!: () => void;
           s = { summary: { terminalId: randomUUID(), name: request.name || `Terminal ${sessions.size + 1}`,
             shell, cwd, pid: child.pid, status: 'starting', createdAt: new Date().toISOString(),
-            cols, rows, exitCode: null, cursor: 0, startCursor: 0 },
-            process: child, directory, nonce, pending: '', output: '', suppressEcho: false, awaitingStart: false, files: [],
+            cols, rows, exitCode: null, cursor: 0, startCursor: 0, ...(windowsPty ? { windowsPty } : {}) },
+            process: child, directory, nonce, pending: '', pendingGeometry: [], output: '', outputGeometry: { cols, rows }, suppressEcho: false, awaitingStart: false, files: [],
             closed: new Promise(resolve => { closed = resolve; }) };
           const current = s;
           sessions.set(current.summary.terminalId, current);
           child.onData(data => consume(current, data));
+          child.onResize(geometry => {
+            current.summary.cols = geometry.cols; current.summary.rows = geometry.rows;
+            current.pendingGeometry.push({ offset: current.pending.length, geometry });
+            consume(current, '');
+            state(current);
+          });
           child.onExit(event => {
-            append(current, current.pending); current.pending = '';
+            consumePending(current, current.pending.length);
             complete(current, event.exitCode); current.summary.status = 'closed'; current.summary.exitCode = event.exitCode;
             state(current); closed();
           });
           state(current);
+          append(current, terminalGeometrySequence({ cols, rows }), true);
           if (disposed) throw new Error('Terminal manager is closed.');
           await wait(current, 15000, context);
           if (current.summary.status !== 'ready') throw new Error(`Terminal could not initialize: ${stripVTControlCharacters(current.output).slice(-2000)}`);
@@ -239,7 +276,7 @@ export function createNodeTerminalOperations(initialOptions: NodeTerminalOptions
       }
       if (s.summary.status === 'closed') throw new Error('Terminal is closed. Create a new terminal.');
       if (request.action === 'resize') {
-        s.process.resize(request.cols, request.rows); s.summary.cols = request.cols; s.summary.rows = request.rows; state(s);
+        await s.process.resize(request.cols, request.rows);
       } else if (request.action === 'interrupt') interrupt(s);
       else if (request.action === 'write') {
         // Opening/focusing a terminal sends device and focus replies through

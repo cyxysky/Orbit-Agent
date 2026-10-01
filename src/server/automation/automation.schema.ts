@@ -129,7 +129,6 @@ export const automationScheduleRecordSchema = z.object({
   }
 });
 
-export type AutomationOperationRecord = z.infer<typeof automationOperationRecordSchema>;
 export type AutomationCaseRecord = z.infer<typeof automationCaseRecordSchema>;
 export type AutomationRunTrigger = z.infer<typeof automationRunTriggerSchema>;
 export type AutomationRunStatus = z.infer<typeof automationRunStatusSchema>;

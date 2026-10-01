@@ -25,9 +25,9 @@ Content selection: readContent accepts sheet plus range (A1:D20) for spreadsheet
 
 ## Required sequence
 
-1. Read skillId=${fileArtifactRuntimeSkillId} once. Complete current Skill text included in a prerequisite response counts as that read; do not call skill again in that case.
-2. Wait for that Skill read to succeed. Do not emit a file call in the same model step.
-3. Continue the workflow below. The Agent host must reject a file call emitted before the successful read without executing it.
+1. Read skillId=${fileArtifactRuntimeSkillId} once before planning a file operation when its instructions are not already available.
+2. If a file call arrives before that read, the Agent host executes it through the normal validation and approval flow and includes the complete current Skill alongside the result. That content satisfies the read; do not call skill again or repeat the file operation merely to load its instructions.
+3. Inspect the original file result and continue the workflow below. An unavailable Skill registration remains an error; an unread registered Skill does not prevent execution.
 
 Every file action uses this same Skill. Do not read a second visual-only Skill. If the Skill read fails, use the complete error and requiredSkillId to restore the missing Skill registration. If a file operation fails, first classify the latest error using the rules below; failureCategory names the failed operation, not its cause. Do not assume every failure requires a source edit. Keep the same documentId or artifactId; never create a replacement document merely to escape a failed step.
 
@@ -654,7 +654,7 @@ export const fileRuntimeReferenceSkills: readonly CapabilitySkill[] = Object.fre
 
 export const fileArtifactRuntimeSkillContent = `# File Artifact Runtime
 
-Read this compact Skill once before the first file call, then use file in a later model step. A successful current read OR the full current Skill included in a tool's prerequisite response satisfies this requirement. If a tool already returned these complete rules, apply them and retry that tool in the next step; do not call skill again. The optional references below are NOT prerequisites. Never enumerate or read the whole manual just to unlock file.
+Read this compact Skill once before planning the first file call when its instructions are not already available. If file is called first, the host executes it through the normal validation and approval flow and supplies these complete rules in result.runtimeSkill. Apply them directly, inspect the original file outcome, and continue; do not call skill again or repeat the file operation merely to load its instructions. The optional references below are NOT prerequisites. Never enumerate or read the whole manual just to unlock file.
 
 ## Tool boundary and identities
 - file is a separate model tool, not a JavaScript global in browser code. Use only actions/parameters advertised by its current schema. Parse JSON text in result.actual; inspect ok and the latest diagnostic.

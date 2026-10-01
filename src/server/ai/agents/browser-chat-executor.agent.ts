@@ -49,6 +49,7 @@ import { nativeRuntimeToolNames, normalizeDisabledCapabilityTools, runtimeBuilti
 import {
   activeBrowserRuntimeSkillId,
   hiddenRuntimeSkillContent,
+  hiddenRuntimeSkillForToolCall,
   requireHiddenRuntimeSkillRead,
   hiddenRuntimeSkillIdsInModelContext,
   skillBodyKeysForPreservation,
@@ -1126,6 +1127,7 @@ async function executeTracedBrowserAction(input: {
   shouldContinue?: () => boolean;
   onToolTrace?: (trace: ToolTrace) => void | Promise<void>;
   onVisualContextChange?: (snapshot: ReturnType<VisualContextManager['snapshot']>) => void | Promise<void>;
+  loadedHiddenRuntimeSkillIds?: Set<string>;
 }) {
   const { traces, name, toolInput, toolCallId, action, aiRequest, aiRequestElapsedMs, runId, stepIndex, visualContext, abortSignal, shouldContinue, onToolTrace, onVisualContextChange } = input;
   throwIfStopped(abortSignal, shouldContinue);
@@ -1139,7 +1141,13 @@ async function executeTracedBrowserAction(input: {
 
   let result: BrowserActionResult;
   const actionStartedAt = Date.now();
-  const actionPromise = Promise.resolve().then(() => action(abortSignal, trace));
+  const runtimeSkill = input.loadedHiddenRuntimeSkillIds
+    ? hiddenRuntimeSkillForToolCall(name, toolInput, input.loadedHiddenRuntimeSkillIds) : undefined;
+  const skillFailure = input.loadedHiddenRuntimeSkillIds
+    ? requireHiddenRuntimeSkillRead(name, toolInput, input.loadedHiddenRuntimeSkillIds) : undefined;
+  const withRuntimeSkill = (result: BrowserActionResult): BrowserActionResult => runtimeSkill
+    ? { ...result, runtimeSkill } : result;
+  const actionPromise = Promise.resolve().then(() => skillFailure || action(abortSignal, trace));
   try {
     result = await racePromiseWithAbort(actionPromise, abortSignal);
     throwIfStopped(abortSignal, shouldContinue);
@@ -1150,7 +1158,7 @@ async function executeTracedBrowserAction(input: {
       // the interrupted message can receive it through realtime state instead
       // of discovering the file only after a full page refresh.
       void actionPromise.then(async (lateResult) => {
-        trace.result = withToolFailureGuidance(name, lateResult);
+        trace.result = withToolFailureGuidance(name, withRuntimeSkill(lateResult));
         trace.actionElapsedMs = elapsedSince(actionStartedAt);
         trace.completedAt = Date.now();
         trace.elapsedMs = trace.startedAt ? trace.completedAt - trace.startedAt : undefined;
@@ -1166,7 +1174,7 @@ async function executeTracedBrowserAction(input: {
       actual: `Tool ${name} threw after execution started: ${infrastructureError(error)}`,
     };
   }
-  result = withToolFailureGuidance(name, result);
+  result = withToolFailureGuidance(name, withRuntimeSkill(result));
   trace.actionElapsedMs = elapsedSince(actionStartedAt);
 
   throwIfStopped(abortSignal, shouldContinue);
@@ -1280,9 +1288,7 @@ async function makeBrowserTools(
   ) {
     const run = async () => {
       throwIfStopped(referenceOptions?.abortSignal, referenceOptions?.shouldContinue);
-      const actionAfterSkillCheck = async (actionSignal?: AbortSignal, trace?: ToolTrace) => {
-        const skillGateFailure = name === 'browser' ? undefined : requireHiddenRuntimeSkillRead(name, input, loadedHiddenRuntimeSkillIds);
-        if (skillGateFailure) return skillGateFailure;
+      const actionWithCancellation = async (actionSignal?: AbortSignal, trace?: ToolTrace) => {
         // Preserve the SDK's per-tool deadline as well as turn cancellation.
         // Let the action settle after cancellation so child batches can return
         // their result UUIDs and retained progress to the parent.
@@ -1306,7 +1312,8 @@ async function makeBrowserTools(
         aiRequestElapsedMs: referenceOptions?.getAiRequestElapsedMs?.(execution?.toolCallId),
         onToolTrace,
         onVisualContextChange: traceVisualContext ? referenceOptions?.onVisualContextChange : undefined,
-        action: actionAfterSkillCheck,
+        action: actionWithCancellation,
+        loadedHiddenRuntimeSkillIds: name === 'browser' ? undefined : loadedHiddenRuntimeSkillIds,
       }).then(async (result) => {
         const imagePaths = [...new Set([
           ...(result.referenceImagePaths?.length ? result.referenceImagePaths : result.referenceImagePath ? [result.referenceImagePath] : []),
@@ -1427,7 +1434,7 @@ async function makeBrowserTools(
     allowedToolNames: allowedCapabilityToolNames,
     skills: {
       // Capability packages publish Skill content only. This Agent owns the
-      // preload tool, per-run loaded state, tool visibility, and hard gate.
+      // preload tool, per-run loaded state, and lazy instruction delivery.
       mode: 'disabled',
       includeTool: false,
       loadedSkillIds: loadedHiddenRuntimeSkillIds,
@@ -1476,7 +1483,7 @@ async function makeBrowserTools(
   const sharedTools: ToolSet = {
     ...((referenceOptions?.runSubagents || referenceOptions?.readSubagent) ? {
       subagent: tool({
-        description: `Spawn independent child Agents or read one returned result UUID. action=spawn requires hidden Skill ${subagentRuntimeSkillId}; action=read is never gated so pending results remain recoverable.`,
+        description: `Spawn independent child Agents or read one returned result UUID. action=spawn uses hidden Skill ${subagentRuntimeSkillId}, supplied with the result if unread; action=read is never gated so pending results remain recoverable.`,
         inputSchema: browserToolInput({
           action: z.enum(['spawn', 'read']),
           tasks: z.array(z.object({
@@ -1629,7 +1636,7 @@ function runtimePrompt(runtimeRecord: BrowserChatRuntimeRecord) {
     '- Historical handoffs and generated reports describe the past. Later user corrections and verified withdrawals supersede their older conclusions. Source files preserve what was written, not a guarantee that every claim is still current. Before delivery, reconcile all requested work, the report body and every linked deliverable against later evidence. Update a generated report after material new findings; do not link an older draft as the final report. The host reviews this evidence before accepting finalResponse; changing completion fields or deleting an unfinished item does not finish the work.',
     '- When a select, cascader, tree picker, dropdown menu, or date/time option surface remains open and the intent is only to dismiss it, first call browser(action="dismissSurface"). This directly clicks viewport (0,0); do not replace it with a code or coordinate click. Verify closure from closureConfirmed, postActionState when available, and the latest screenshot before interacting behind it. If the click did not close that surface, choose a different observed action instead of repeating it. A dialog with an explicit Close/Cancel button should use that button first; a pending selection that needs Apply/Done/Confirm should use its commit control.',
     '- Use web research when the user asks for it or the answer depends on current external facts. Read relevant pages, prefer primary sources, check dates, cite factual claims, and reuse valid evidence already collected for this task. Respect requests limited to local work, supplied material, or a specific operation; do not start unrelated research before executing a supplied procedure.',
-    '- Follow the current tool schema, capability Skill, and user-disabled tool restrictions. If a tool returns the complete required Skill instead of executing, apply that content and retry the intended operation on the next step; do not read the same Skill again. Use only capabilities that help the request.',
+    '- Follow the current tool schema, capability Skill, and user-disabled tool restrictions. When a required Skill is absent from context, the host executes the tool through its normal validation and approval flow and includes the complete current instructions in result.runtimeSkill. Apply them directly in later steps; inspect the original tool outcome and do not reread the Skill or repeat the operation merely to load it. Use only capabilities that help the request.',
     '- Tool routing for existing documents: use file for PDF/Word/Excel/PPT text and tables. For a discovered remote PDF, call file action=download with the exact urlOrPath, then file action=readContent with the returned artifactId (includeVisuals=false; contentPages for specific PDF pages; offset/limit for text pagination). For an uploaded or already downloaded file, readContent with its attachmentId/artifactId directly. Keep source URL and page numbers with extracted research facts. Reading a PDF needs no Office plan/render or package installation. Use codeSandbox for calculations/transformations on extracted data, explicitly requested code, or a concrete parsing capability that file lacks after inspecting its result; do not start with requests/pypdf/pdfplumber/cryptography installation just to read a PDF. Empty/scanned or malformed text calls for a targeted file visualRead when available; a password-required error needs the password, not repeated parser installs. Respect disabled tools and report access failures without claiming the PDF was read.',
     '- Native tool calling supports multiple tool calls in the same model step; there is no one-tool-per-step limit. Proactively batch independent calls whose inputs are already known, including reading multiple required Skills or downloading multiple known assets. Emit each call separately with its own tool name and schema-valid arguments; do not invent a batch tool or wrap calls in an unsupported array. The runtime schedules execution according to each tool\'s concurrency policy, so submitting a batch does not guarantee simultaneous execution.',
     '- Keep result-dependent calls in later steps: read and inspect a required Skill before invoking its governed capability, inspect a lookup result before using its returned IDs or URLs, and observe a changed page before choosing dependent actions. Batch independent Skill reads together, then use their results in the next step. Call finalResponse only after all required tool results have been received and assessed.',
@@ -1801,8 +1808,8 @@ function modelMessagesTextAndImageStats(messages: unknown, tools?: RuntimeToolDe
 function runtimeModelToolReceipt(message: ModelMessage) {
   if (hasSourceFileReceipt(message)) return message;
   // Exact paging and Skill read bodies must survive the model projection,
-  // including historical versions that no longer satisfy the execution gate.
-  // This also covers prerequisite replies that carry the Skill body themselves.
+  // including historical versions that no longer satisfy the current receipt.
+  // This includes tool results that carry automatically supplied instructions.
   if (message.role === 'tool' && (message.content.some(part => part.type === 'tool-result'
     && [contextReadToolName, 'skill'].includes(part.toolName)) || skillBodyKeysForPreservation([message]).size)) return message;
   return boundToolResult(message, 1200);
@@ -4615,9 +4622,8 @@ async function executeCodexRuntimeObject(input: {
     shouldContinue,
     onToolTrace,
     onVisualContextChange,
+    loadedHiddenRuntimeSkillIds,
     action: async (_actionSignal, trace) => {
-      const skillGateFailure = requireHiddenRuntimeSkillRead(type, normalizedParams, loadedHiddenRuntimeSkillIds);
-      if (skillGateFailure) return skillGateFailure;
       const approval = await requestBrowserToolApproval({
         toolName: type,
         toolInput: normalizedParams,

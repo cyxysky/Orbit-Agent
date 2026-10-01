@@ -8,18 +8,56 @@ import type { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import type { TerminalSummary, TerminalToolInput } from './index.ts';
 import type { TerminalClient, TerminalConnection } from './client.ts';
+import { retainTerminalOutput, splitTerminalOutput, type TerminalGeometry } from './geometry.ts';
 import { terminalStyles } from './styles.ts';
 import { FloatingWindow } from '../../ui/floating-window.tsx';
 const identity = (text: string) => text;
 
-type TerminalView = { terminal: XTerminal; fit: FitAddon; element: HTMLDivElement; pendingReplays: number };
-type BufferState = { output: string; cursor: number };
+type TerminalWrite = { output?: string; geometry?: TerminalGeometry; reset?: boolean; replayEnd?: boolean };
+type TerminalView = {
+  terminal: XTerminal; fit: FitAddon; element: HTMLDivElement; pendingReplays: number;
+  writes: TerminalWrite[]; writing: boolean; disposed: boolean; requestedGeometry?: string; scheduleFit?: () => void;
+};
+type BufferState = { output: string; cursor: number; geometry: TerminalGeometry };
 
-function restoreTerminal(view: TerminalView, output: string) {
+function drainTerminal(view: TerminalView) {
+  if (view.writing || view.disposed) return;
+  for (;;) {
+    const write = view.writes.shift();
+    if (!write) return;
+    if (write.geometry) {
+      if (write.reset) view.terminal.reset();
+      view.terminal.resize(write.geometry.cols, write.geometry.rows);
+      if (view.requestedGeometry === `${write.geometry.cols}:${write.geometry.rows}`) view.requestedGeometry = undefined;
+    }
+    if (write.replayEnd && --view.pendingReplays === 0) view.scheduleFit?.();
+    if (write.output) {
+      view.writing = true;
+      view.terminal.write(write.output, () => { view.writing = false; drainTerminal(view); });
+      return;
+    }
+  }
+}
+
+function writeTerminal(view: TerminalView, output: string) {
+  // Strip internal markers before parsing VT, so a resize between two halves
+  // of a control sequence does not cancel xterm's pending parser state.
+  view.writes.push(...splitTerminalOutput(output));
+  drainTerminal(view);
+}
+
+function restoreTerminal(view: TerminalView, buffer: BufferState) {
+  // Reset only after earlier writes finish, and replay the original resize order.
   // Replayed device queries must not send stale replies to the current prompt.
   view.pendingReplays++;
-  view.terminal.reset();
-  view.terminal.write(output, () => { view.pendingReplays--; });
+  view.writes.push({ geometry: buffer.geometry, reset: true }, ...splitTerminalOutput(buffer.output), { replayEnd: true });
+  drainTerminal(view);
+}
+
+function disposeTerminal(view: TerminalView) {
+  view.disposed = true;
+  view.writes.length = 0;
+  view.terminal.dispose();
 }
 
 function TerminalListItem({ item, selected, disabled, onSelect, onAction, onMove, dragProps, dragging, dropPosition, translate: t }: {
@@ -209,7 +247,7 @@ export function TerminalWorkspace({ client, onClose, closed = false, orderStorag
     }).catch(reason => { if (!disposed) setError(String(reason)); });
     return () => {
       disposed = true; modules.current = null;
-      for (const view of mountedViews.values()) view.terminal.dispose();
+      for (const view of mountedViews.values()) disposeTerminal(view);
       mountedViews.clear(); retainedBuffers.clear();
     };
   }, []);
@@ -221,29 +259,34 @@ export function TerminalWorkspace({ client, onClose, closed = false, orderStorag
         const current = event.terminals.flatMap(row => row.terminal ? [row.terminal] : []);
         setEnabled(event.enabled); setTerminals(current);
         const ids = new Set(current.map(item => item.terminalId));
-        for (const [id, view] of views.current) if (!ids.has(id)) { view.terminal.dispose(); views.current.delete(id); }
+        for (const [id, view] of views.current) if (!ids.has(id)) { disposeTerminal(view); views.current.delete(id); }
         buffers.current.clear();
         for (const row of event.terminals) {
           if (!row.terminal) continue;
-          buffers.current.set(row.terminal.terminalId, { output: row.output || '', cursor: row.cursor || 0 });
+          const buffer: BufferState = { output: row.output || '', cursor: row.cursor || 0, geometry: row.outputGeometry || { cols: row.terminal.cols, rows: row.terminal.rows } };
+          buffers.current.set(row.terminal.terminalId, buffer);
           const view = views.current.get(row.terminal.terminalId);
-          if (view) restoreTerminal(view, row.output || '');
+          if (view) restoreTerminal(view, buffer);
         }
       } else if (event.type === 'reset') {
         setTerminals([]); setStreamVersion(value => value + 1);
       } else if (event.type === 'state') {
+        if (!buffers.current.has(event.terminal.terminalId)) buffers.current.set(event.terminal.terminalId, { output: '', cursor: 0, geometry: { cols: event.terminal.cols, rows: event.terminal.rows } });
         setTerminals(current => [...current.filter(item => item.terminalId !== event.terminal.terminalId), event.terminal]
           .sort((a, b) => a.createdAt.localeCompare(b.createdAt)));
       } else if (event.type === 'deleted') {
         setTerminals(current => current.filter(item => item.terminalId !== event.terminalId));
-        views.current.get(event.terminalId)?.terminal.dispose(); views.current.delete(event.terminalId); buffers.current.delete(event.terminalId);
+        const view = views.current.get(event.terminalId);
+        if (view) disposeTerminal(view);
+        views.current.delete(event.terminalId); buffers.current.delete(event.terminalId);
       } else if (event.type === 'output') {
-        const previous = buffers.current.get(event.terminalId) || { output: '', cursor: 0 };
+        const previous = buffers.current.get(event.terminalId) || { output: '', cursor: 0, geometry: { cols: 100, rows: 30 } };
         if (event.startCursor > previous.cursor) { setStreamVersion(value => value + 1); return; }
         if (event.cursor <= previous.cursor) return;
         const output = event.output.slice(previous.cursor - event.startCursor);
-        buffers.current.set(event.terminalId, { output: (previous.output + output).slice(-500000), cursor: event.cursor });
-        views.current.get(event.terminalId)?.terminal.write(output);
+        buffers.current.set(event.terminalId, { ...retainTerminalOutput(previous, output, 500000), cursor: event.cursor });
+        const view = views.current.get(event.terminalId);
+        if (view) writeTerminal(view, output);
       }
     }, setConnection);
   }, [client, streamVersion]);
@@ -260,8 +303,15 @@ export function TerminalWorkspace({ client, onClose, closed = false, orderStorag
     const id = selected.terminalId;
     let view = views.current.get(id);
     if (!view) {
+      const buffer = buffers.current.get(id) || { output: '', cursor: 0, geometry: { cols: selected.cols, rows: selected.rows } };
+      // The host uses the bundled modern ConPTY DLL, including on older Windows builds.
+      const modernConpty = selected.windowsPty?.backend === 'conpty';
       const terminal = new modules.current.Terminal({
-        cols: selected.cols, rows: selected.rows, cursorBlink: true, scrollback: 5000, smoothScrollDuration: 0,
+        ...buffer.geometry, cursorBlink: true, scrollback: 5000, smoothScrollDuration: 0,
+        // Modern ConPTY reflows normally. The legacy Windows compatibility mode
+        // prevents pulling history back when growing taller and displaces input.
+        windowsPty: modernConpty ? undefined : selected.windowsPty,
+        reflowCursorLine: modernConpty,
         fontFamily: 'Cascadia Code, Consolas, monospace', fontSize: 13,
         theme: { background: '#131917', foreground: '#d7e4db', cursor: '#9cddb8', selectionBackground: '#355747', scrollbarSliderBackground: '#ffffff18', scrollbarSliderHoverBackground: '#ffffff28' },
         allowProposedApi: false,
@@ -269,7 +319,7 @@ export function TerminalWorkspace({ client, onClose, closed = false, orderStorag
       const fit = new modules.current.FitAddon(); terminal.loadAddon(fit);
       const element = document.createElement('div'); element.className = 'cap-terminal-emulator';
       viewport.replaceChildren(element); terminal.open(element);
-      const createdView: TerminalView = { terminal, fit, element, pendingReplays: 0 };
+      const createdView: TerminalView = { terminal, fit, element, pendingReplays: 0, writes: [], writing: false, disposed: false };
       terminal.onData(input => {
         if (createdView.pendingReplays || !inputAllowed.current) return;
         // The client coalesces input per terminal while preserving its order.
@@ -277,24 +327,44 @@ export function TerminalWorkspace({ client, onClose, closed = false, orderStorag
           if (!(reason instanceof Error && reason.name === 'AbortError')) setError(String(reason));
         });
       });
-      restoreTerminal(createdView, buffers.current.get(id)?.output || '');
+      restoreTerminal(createdView, buffer);
       view = createdView; views.current.set(id, view);
     } else viewport.replaceChildren(view.element);
     const currentView = view;
     currentView.terminal.options.disableStdin = !inputAllowed.current || selected.status === 'closed' || selected.status === 'starting';
-    let frame = 0;
+    let frame = 0, fitTimer = 0;
     const fit = () => {
       if (!viewport.clientWidth || !viewport.clientHeight) return;
-      const previous = `${currentView.terminal.cols}:${currentView.terminal.rows}`;
-      currentView.fit.fit();
-      if (selectedRef.current?.status !== 'closed' && previous !== `${currentView.terminal.cols}:${currentView.terminal.rows}`) {
-        void send({ action: 'resize', reason: '适应终端窗口', terminalId: id, cols: currentView.terminal.cols, rows: currentView.terminal.rows }).catch(reason => setError(String(reason)));
+      const dimensions = currentView.fit.proposeDimensions();
+      if (!dimensions) return;
+      const cols = Math.max(20, Math.min(500, dimensions.cols));
+      const rows = Math.max(5, Math.min(200, dimensions.rows));
+      const geometry = `${cols}:${rows}`;
+      if (currentView.requestedGeometry === geometry || (!currentView.requestedGeometry && geometry === `${currentView.terminal.cols}:${currentView.terminal.rows}`)) return;
+      if (selectedRef.current?.status !== 'closed') {
+        currentView.requestedGeometry = geometry;
+        void send({ action: 'resize', reason: '适应终端窗口', terminalId: id, cols, rows }).catch(reason => {
+          if (currentView.requestedGeometry === geometry) currentView.requestedGeometry = undefined;
+          if (!(reason instanceof Error && reason.name === 'AbortError')) setError(String(reason));
+        });
       }
     };
-    const scheduleFit = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(fit); };
+    // ConPTY and xterm must see exactly the same sizes; local drag frames never resize xterm.
+    const scheduleFit = () => {
+      cancelAnimationFrame(frame); window.clearTimeout(fitTimer);
+      fitTimer = window.setTimeout(() => { frame = requestAnimationFrame(fit); }, 100);
+    };
+    currentView.scheduleFit = scheduleFit;
     const observer = new ResizeObserver(scheduleFit); observer.observe(viewport);
+    window.addEventListener('resize', scheduleFit);
+    window.visualViewport?.addEventListener('resize', scheduleFit);
     frame = requestAnimationFrame(() => { fit(); currentView.terminal.focus(); });
-    return () => { cancelAnimationFrame(frame); observer.disconnect(); };
+    return () => {
+      if (currentView.scheduleFit === scheduleFit) currentView.scheduleFit = undefined;
+      cancelAnimationFrame(frame); window.clearTimeout(fitTimer); observer.disconnect();
+      window.removeEventListener('resize', scheduleFit);
+      window.visualViewport?.removeEventListener('resize', scheduleFit);
+    };
   }, [ready, viewport, selected?.terminalId, send]);
 
   async function act(input: TerminalToolInput) {

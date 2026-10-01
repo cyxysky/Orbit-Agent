@@ -80,14 +80,6 @@ function contextMessages(records: Record<string, ModelMessage>, refs: string[]) 
   });
 }
 
-export function archiveBrowserChatContextMessages(context: BrowserChatModelContext, messages: ModelMessage[]) {
-  const records = { ...context.records };
-  for (const message of serializableBrowserChatModelMessages(messages)) {
-    records[browserChatContextRecordId(message)] = message;
-  }
-  return { ...context, records };
-}
-
 function modelMessageText(message: ModelMessage) {
   if (typeof message.content === 'string') return message.content.trim();
   if (!Array.isArray(message.content)) return '';

@@ -9,12 +9,16 @@ const errorMessage = (data: { error?: string | { message?: string } }, fallback:
   typeof data.error === 'string' ? data.error : data.error?.message || fallback;
 export function createHttpTerminalClient(url: string): TerminalClient {
   type Write = Extract<TerminalToolInput, { action: 'write' }>;
+  type Resize = Extract<TerminalToolInput, { action: 'resize' }>;
   type Entry = { request: Write; resolve: (result: TerminalResult) => void; reject: (error: unknown) => void };
   type Queue = { entries: Entry[]; chars: number; timer?: ReturnType<typeof setTimeout>; active?: Promise<void> };
+  type ResizeEntry = Omit<Entry, 'request'> & { request: Resize };
+  type ResizeQueue = { entries: ResizeEntry[]; active?: Promise<void> };
   const inputs = new Map<string, Queue>();
+  const resizes = new Map<string, ResizeQueue>();
   const post = async (input: TerminalToolInput): Promise<TerminalResult> => {
     const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input),
-      ...(input.action === 'write' ? { signal: AbortSignal.timeout(10000) } : {}) });
+      ...(input.action === 'write' || input.action === 'resize' ? { signal: AbortSignal.timeout(10000) } : {}) });
     const data = await response.json();
     if (!response.ok) throw new Error(errorMessage(data, 'Terminal operation failed.'));
     return data;
@@ -52,8 +56,36 @@ export function createHttpTerminalClient(url: string): TerminalClient {
       else if (inputs.get(id) === queue) inputs.delete(id);
     });
   };
+  const flushResize = (id: string, queue: ResizeQueue) => {
+    if (queue.active) return;
+    queue.active = (async () => {
+      while (queue.entries.length) {
+        // Only the latest pending geometry matters; never let older requests
+        // finish after a newer resize and leave the PTY at the wrong size.
+        const batch = queue.entries.splice(0);
+        try {
+          const result = await post(batch[batch.length - 1].request);
+          for (const entry of batch) entry.resolve(result);
+        } catch (error) {
+          for (const entry of batch) entry.reject(error);
+        }
+      }
+    })().finally(() => {
+      queue.active = undefined;
+      if (queue.entries.length) flushResize(id, queue);
+      else if (resizes.get(id) === queue) resizes.delete(id);
+    });
+  };
   return {
     async execute(input) {
+      if (input.action === 'resize') {
+        const queue = resizes.get(input.terminalId) || { entries: [] };
+        resizes.set(input.terminalId, queue);
+        return new Promise<TerminalResult>((resolve, reject) => {
+          queue.entries.push({ request: input, resolve, reject });
+          flushResize(input.terminalId, queue);
+        });
+      }
       if (input.action === 'write') {
         if (!input.input.length || input.input.length > 100000) throw new Error('Terminal input must contain between 1 and 100000 characters.');
         const queue = inputs.get(input.terminalId) || { entries: [], chars: 0 };
@@ -70,6 +102,14 @@ export function createHttpTerminalClient(url: string): TerminalClient {
           discard(queue, new DOMException('Pending terminal input was cancelled.', 'AbortError'));
           if (queue.active) await queue.active;
           else inputs.delete(input.terminalId);
+        }
+      }
+      if (input.action === 'close' || input.action === 'delete') {
+        const queue = resizes.get(input.terminalId);
+        if (queue) {
+          const error = new DOMException('Pending terminal resize was cancelled.', 'AbortError');
+          for (const entry of queue.entries.splice(0)) entry.reject(error);
+          if (queue.active) await queue.active;
         }
       }
       return post(input);

@@ -165,14 +165,3 @@ export function createAgentInfrastructureProviders(input: {
     }),
   ];
 }
-
-export const agentInfrastructureToolNames = Object.freeze([
-  'codeSandbox',
-  'connectors',
-  'knowledge',
-  'data',
-  'media',
-  'communication',
-  'terminal',
-  'computer',
-] as const);

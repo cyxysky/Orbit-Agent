@@ -87,10 +87,6 @@ export async function flushDatabaseWriteQueue() {
   }
 }
 
-export async function closeDatabaseWriteQueue() {
-  await flushDatabaseWriteQueue();
-}
-
 export function databaseWriteQueueSnapshot() {
   const writes = state.current ? [state.current, ...state.pending] : state.pending;
   return { pending: state.pending.length, workerActive: Boolean(state.draining),

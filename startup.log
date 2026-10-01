@@ -1,6 +1,0 @@
-[2026-08-11T14:09:38.766Z] App starting. packaged=false
-[2026-08-11T14:09:38.766Z] APP_DATA_DIR=C:\Users\18367\Desktop\test\web-app-test
-[2026-08-11T14:09:38.766Z] resourcesPath=C:\Users\18367\Desktop\test\web-app-test\node_modules\electron\dist\resources
-[2026-08-11T14:09:38.766Z] WEBPILOT_ELECTRON_CDP_PORT=19333
-[2026-08-11T14:09:39.551Z] Loading application: http://127.0.0.1:3000/webpilot/browser-chat
-[2026-08-11T14:09:39.763Z] Embedded browser tabs restored from local cache.

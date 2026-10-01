@@ -144,6 +144,8 @@ export type BrowserActionResult = {
   manualVerification?: { requested: true; maxMs: number };
   /** Runtime Skill required by an Agent-owned execution gate. */
   requiredSkillId?: string;
+  /** Complete operating instructions supplied by the Agent alongside a tool result. */
+  runtimeSkill?: { skillId: string; content: string; readSatisfied: true };
   /** Browser-owned control mirrored into the remote live-preview surface. */
   liveControl?: BrowserLiveNativeControl;
   /** Native select menu mirrored into the remote live-preview surface. */

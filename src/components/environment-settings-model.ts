@@ -36,10 +36,6 @@ const administratorOnlySettingsTabs = new Set<SettingsTab>([
   'sensitive-data',
 ]);
 
-export function environmentSettingsTab(tab: SettingsTab) {
-  return environmentSettingsTabs.find((item) => item.id === tab);
-}
-
 export function isAdministratorOnlySettingsTab(tab: SettingsTab) {
   return administratorOnlySettingsTabs.has(tab);
 }

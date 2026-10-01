@@ -27,21 +27,7 @@ export default function nextConfig(phase: string): NextConfig {
     typescript: {
       tsconfigPath: capabilitySource === 'npm' ? 'tsconfig.npm.json' : 'tsconfig.json',
     },
-    transpilePackages: [
-
-      '@cjfclonedeep/capability-sdk',
-
-
-
-
-
-
-
-
-
-
-
-    ],
+    transpilePackages: ['@cjfclonedeep/capability-sdk'],
     // A running development server must never write into the production build
     // directory. Sharing .next lets dev hot updates corrupt next build manifests.
     distDir: phase === PHASE_DEVELOPMENT_SERVER ? '.next-dev-ui' : '.next',
@@ -158,10 +144,6 @@ export default function nextConfig(phase: string): NextConfig {
       'patchright',
       'patchright-core',
       'pdf-parse',
-      'ai-sdk-provider-gemini-cli',
-      '@google/gemini-cli-core',
-      'tree-sitter-bash',
-      'web-tree-sitter',
       'ffmpeg-static',
     ],
   };

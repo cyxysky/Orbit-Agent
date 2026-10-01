@@ -7,11 +7,7 @@ import {
 } from '@cjfclonedeep/capability-sdk/file/runtime-skill';
 import {
   hiddenRuntimeSkillContent,
-  automaticallyLoadHiddenRuntimeSkill,
-  hiddenRuntimeSkillIdsReadFromTraces,
-  hiddenRuntimeSkillSummaries,
   requiredHiddenRuntimeSkillId,
-  runtimeToolTypesWithAutomaticSkills,
 } from './hidden-runtime-skills';
 import {
   subagentRuntimeSkillContent,
@@ -32,47 +28,11 @@ test('hidden runtime policy gates only the configured tool actions', () => {
   assert.equal(requiredHiddenRuntimeSkillId('subagent', { action: 'read' }), undefined);
 });
 
-test('explicit and automatic hidden Skill loads share the run-scoped set', () => {
-  const traces = [{
-    name: 'skill',
-    input: { action: 'read', skillId: fileArtifactRuntimeSkillId },
-    result: { ok: true },
-  }];
-  const loaded = hiddenRuntimeSkillIdsReadFromTraces(traces);
-  assert.deepEqual([...loaded], [fileArtifactRuntimeSkillId]);
-  assert.equal(automaticallyLoadHiddenRuntimeSkill('file', { action: 'plan' }, loaded), undefined);
-  const subagentLoad = automaticallyLoadHiddenRuntimeSkill('subagent', { action: 'spawn' }, loaded);
-  assert.ok(subagentLoad && !('ok' in subagentLoad));
-  assert.equal(subagentLoad?.loadedRuntimeSkill?.id, subagentRuntimeSkillId);
-  assert.equal(loaded.has(subagentRuntimeSkillId), true);
-
-  const newAgentRun = new Set<string>();
-  const fileLoad = automaticallyLoadHiddenRuntimeSkill('file', { action: 'plan' }, newAgentRun);
-  assert.ok(fileLoad && !('ok' in fileLoad));
-  assert.equal(fileLoad?.loadedRuntimeSkill?.id, fileArtifactRuntimeSkillId);
-  assert.equal(fileLoad?.loadedRuntimeSkill?.content, fileArtifactRuntimeSkillContent);
-  assert.equal(newAgentRun.has(fileArtifactRuntimeSkillId), true);
-  assert.equal(automaticallyLoadHiddenRuntimeSkill('file', { action: 'read' }, newAgentRun), undefined);
-  assert.deepEqual([...hiddenRuntimeSkillIdsReadFromTraces([{
-    ...traces[0],
-    result: { ok: false },
-  }])], []);
-});
-
-test('governed tools remain advertised while their Skills load automatically on first call', () => {
-  const tools = ['browser', 'skill', 'file', 'subagent'];
-  assert.deepEqual(runtimeToolTypesWithAutomaticSkills(tools), tools);
-});
-
 test('hidden built-in Skills are directly readable without entering the user Skill catalog', () => {
   assert.match(hiddenRuntimeSkillContent(browserCodeRuntimeSkillId) || '', /Browser Code Runtime/);
   assert.equal(hiddenRuntimeSkillContent(fileArtifactRuntimeSkillId), fileArtifactRuntimeSkillContent);
   assert.equal(hiddenRuntimeSkillContent(subagentRuntimeSkillId), subagentRuntimeSkillContent);
   assert.equal(hiddenRuntimeSkillContent('user-managed-skill'), undefined);
-  const summaries = hiddenRuntimeSkillSummaries();
-  assert.match(summaries, /system-browser-code-runtime/);
-  assert.match(summaries, /system-file-artifact-runtime/);
-  assert.match(summaries, /system-subagent-runtime/);
 });
 
 test('file and subagent runtime Skills carry the state, QA, and browser ownership contracts', () => {

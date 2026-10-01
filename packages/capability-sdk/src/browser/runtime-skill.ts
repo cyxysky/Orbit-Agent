@@ -20,7 +20,7 @@ This Skill is the authoritative API reference and operating contract supplied by
 
 Tool reasons describe intent, not execution evidence. A successful code result only means the script returned without an uncaught failure. Required actions must not be silently skipped by a count/visibility guard: throw when their prerequisites are missing, and verify the resulting value or business state after acting. Report only operations demonstrated by returned evidence; an empty action list or unchanged value cannot support a completion claim. executionState records attempted and completed browser calls, not business success.
 
-1. Before the first browser action, read this Skill. Its complete current content supplied in a tool prerequisite response also satisfies the read; apply it and retry the original action without another Skill call. Otherwise read it explicitly in a separate model step:
+1. Before planning the first browser action, use the complete current Skill supplied by the host or read it when absent. A complete Skill accompanying a tool result also satisfies the read: apply it and inspect the original operation's outcome without rereading the Skill or repeating the action merely to load its instructions. Otherwise read it explicitly in a separate model step:
 
 \`\`\`json
 { "action": "read", "skillId": "${browserCodeRuntimeSkillId}", "reason": "读取浏览器代码 API 与运行规范" }

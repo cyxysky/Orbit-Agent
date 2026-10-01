@@ -5216,6 +5216,7 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
   sessionAwaitingHuman,
   sessionId,
   sessionBusy,
+  submittedClientMessageId,
   stoppingSubagentIds,
   subagents,
   stepsByIndex,
@@ -5251,6 +5252,7 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
   sessionAwaitingHuman?: boolean;
   sessionId?: string;
   sessionBusy: boolean;
+  submittedClientMessageId?: string;
   stoppingSubagentIds: ReadonlySet<string>;
   subagents: BrowserChatSubagentRecord[];
   stepsByIndex: Map<number, StepExecutionResult>;
@@ -5277,6 +5279,7 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
   } | null>(null);
   const previousRunStateRef = useRef({ sessionBusy, sessionId });
   const previousSessionIdRef = useRef(sessionId);
+  const positionedSubmissionRef = useRef<string | undefined>(undefined);
   const closeSubagent = useCallback(() => setSelectedSubagentId(null), []);
   const openSubagent = useCallback((subagentId: string) => setSelectedSubagentId(subagentId), []);
   const closeScreenshotPreview = useCallback(() => setScreenshotPreview(null), []);
@@ -5458,6 +5461,9 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
     const initialPositioning = messageList?.dataset.scrollReady !== 'true';
     if (sessionChanged) {
       cancelTurnScrollRef.current?.();
+      if (scrollToLatestTimerRef.current) window.clearTimeout(scrollToLatestTimerRef.current);
+      scrollToLatestTimerRef.current = 0;
+      scrollingToLatestRef.current = false;
       if (historyHeightFrameRef.current) cancelAnimationFrame(historyHeightFrameRef.current);
       historyHeightFrameRef.current = 0;
       pendingHistoryHeightRef.current = null;
@@ -5503,6 +5509,31 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
     onInitialPositioned?.(sessionId);
     return undefined;
   }, [firstMessageId, getScrollContainer, onInitialPositioned, sessionId, settleHistoryHeight]);
+
+  useLayoutEffect(() => {
+    if (!submittedClientMessageId || positionedSubmissionRef.current === submittedClientMessageId
+      || !messages.some((message) => message.role === 'user' && message.clientMessageId === submittedClientMessageId)) return;
+    const container = getScrollContainer();
+    if (!container) return;
+    positionedSubmissionRef.current = submittedClientMessageId;
+    // Sending starts a new reading position even when the reader had paused
+    // following, navigated to a turn, or was loading older messages.
+    cancelTurnScrollRef.current?.();
+    if (scrollToLatestTimerRef.current) window.clearTimeout(scrollToLatestTimerRef.current);
+    scrollToLatestTimerRef.current = 0;
+    scrollingToLatestRef.current = false;
+    if (historyHeightFrameRef.current) cancelAnimationFrame(historyHeightFrameRef.current);
+    historyHeightFrameRef.current = 0;
+    pendingHistoryHeightRef.current = null;
+    earlierLoadInFlightRef.current = false;
+    earlierLoadArmedRef.current = true;
+    userScrollIntentUntilRef.current = 0;
+    userScrollDirectionRef.current = null;
+    followLatestRef.current = true;
+    container.scrollTo({ behavior: 'instant', top: Math.max(0, container.scrollHeight - container.clientHeight) });
+    lastObservedScrollTopRef.current = container.scrollTop;
+    setShowScrollToBottom(false);
+  }, [getScrollContainer, messages, submittedClientMessageId]);
 
   useLayoutEffect(() => {
     const previousLastMessageId = previousLastMessageIdRef.current;
@@ -5623,6 +5654,9 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
       });
     };
     const resizeObserver = new ResizeObserver(scheduleScrollToBottom);
+    // Clearing the composer changes the viewport height without necessarily
+    // changing any message's height.
+    resizeObserver.observe(scrollContainer);
     const syncObservedChildren = () => {
       const currentChildren = new Set(Array.from(messageList.children));
       for (const child of observedChildren) {
@@ -5677,11 +5711,12 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
     if (!onLoadEarlier || !historyHasMore || historyLoading || earlierLoadInFlightRef.current) return;
     const container = getScrollContainer();
     if (!container || container.scrollTop > 0) return;
-    pendingHistoryHeightRef.current = {
+    const pendingHistoryHeight = {
       appliedAddedHeight: 0,
       baselineScrollHeight: container.scrollHeight,
       firstMessageId: messages[0]?.id || '',
     };
+    pendingHistoryHeightRef.current = pendingHistoryHeight;
     earlierLoadInFlightRef.current = true;
     earlierLoadArmedRef.current = false;
     followLatestRef.current = false;
@@ -5689,10 +5724,8 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
       await onLoadEarlier();
     } finally {
       requestAnimationFrame(() => {
-        if (!pendingHistoryHeightRef.current) {
-          earlierLoadInFlightRef.current = false;
-          return;
-        }
+        // A new submission/session may have cancelled this history position.
+        if (pendingHistoryHeightRef.current !== pendingHistoryHeight) return;
         const currentContainer = getScrollContainer();
         if (currentContainer && currentContainer.scrollHeight !== pendingHistoryHeightRef.current.baselineScrollHeight) {
           settleHistoryHeight();
@@ -8424,6 +8457,7 @@ export function BrowserChatWorkspace({
   const [attachments, setAttachments] = useState<BrowserChatAttachment[]>([]);
   const attachmentsRef = useRef<BrowserChatAttachment[]>([]);
   const [composerResetToken, setComposerResetToken] = useState(0);
+  const [submittedMessage, setSubmittedMessage] = useState<{ sessionId: string; clientMessageId: string }>();
   const [busy, setBusy] = useState(false);
   const [pendingMessageSessionId, setPendingMessageSessionId] = useState<string | null>(null);
   const [uploadingImage, setUploadingImage] = useState(false);
@@ -9523,6 +9557,7 @@ export function BrowserChatWorkspace({
           ...(optimisticAssistantMessage ? [optimisticAssistantMessage] : []),
         ],
       }, { activate: true });
+      setSubmittedMessage({ sessionId: active.id, clientMessageId });
       attachmentsRef.current = [];
       setAttachments([]);
       if (resetTransportHistory) requestChat.messages = [];
@@ -10479,6 +10514,7 @@ export function BrowserChatWorkspace({
           sessionAwaitingHuman={session?.turnState === 'awaiting_human'}
           sessionId={session?.id}
           sessionBusy={selectedSessionRunning}
+          submittedClientMessageId={submittedMessage?.sessionId === session?.id ? submittedMessage.clientMessageId : undefined}
           stoppingSubagentIds={stoppingSubagentIds}
           subagents={subagents}
           stepsByIndex={stepsByIndex}

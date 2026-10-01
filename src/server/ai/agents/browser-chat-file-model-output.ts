@@ -1,3 +1,5 @@
+export const fileToolSourceOutputMarker = '\n\nExact source below: whitespace, quotes and backslashes are literal, not JSON transport escapes. Copy only source characters into oldText; encode the edit argument as JSON once.\n';
+
 /** The trace/UI keep the original structured result. The model transport must
  * not JSON-encode a JSON string containing another JSON-encoded Python string. */
 export function fileToolModelOutput({ output }: { output: unknown }) {
@@ -17,7 +19,7 @@ export function fileToolModelOutput({ output }: { output: unknown }) {
     const fence = '`'.repeat(Math.max(3, ...[...program.matchAll(/`+/g)].map((match) => match[0].length + 1)));
     return {
       type: 'text' as const,
-      value: `${JSON.stringify({ ...envelope, actual: metadata })}\n\nExact source below: whitespace, quotes and backslashes are literal, not JSON transport escapes. Copy only source characters into oldText; encode the edit argument as JSON once.\n${fence}${actual.sourceLanguage || ''}\n${program}${program.endsWith('\n') ? '' : '\n'}${fence}`,
+      value: `${JSON.stringify({ ...envelope, actual: metadata })}${fileToolSourceOutputMarker}${fence}${actual.sourceLanguage || ''}\n${program}${program.endsWith('\n') ? '' : '\n'}${fence}`,
     };
   }
   return { type: 'text' as const, value: JSON.stringify({ ...envelope, actual }) };

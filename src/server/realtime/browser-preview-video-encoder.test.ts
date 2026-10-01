@@ -8,7 +8,7 @@ import {
   browserPreviewH264Configuration,
   browserPreviewVideoBitrateKbps,
   browserPreviewVideoMimeType,
-} from './browser-preview-video-encoder';
+} from '@cjfclonedeep/capability-sdk/browser/preview/video-encoder';
 
 function mp4Box(type: string, payload: Buffer) {
   const box = Buffer.alloc(8 + payload.length);

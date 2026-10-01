@@ -6,8 +6,10 @@ import {
 } from '../../index.ts';
 import { terminalRuntimeSkill } from './runtime-skill.ts';
 import { terminalCapabilitySettings } from './settings.ts';
+import type { TerminalGeometry } from './geometry.ts';
 export * from './runtime-skill.ts';
 export * from './settings.ts';
+export * from './geometry.ts';
 
 export const terminalCapabilityToolNames = Object.freeze({ terminal: 'terminal' } as const);
 const reason = z.string().trim().min(1).max(300);
@@ -43,10 +45,11 @@ export type TerminalSummary = {
   status: 'starting' | 'ready' | 'running' | 'closed';
   createdAt: string; cols: number; rows: number; exitCode: number | null;
   command?: TerminalCommand; cursor: number; startCursor: number;
+  windowsPty?: { backend: 'conpty' | 'winpty'; buildNumber?: number };
 };
 export type TerminalResult = {
   terminals?: TerminalSummary[]; terminal?: TerminalSummary;
-  output?: string; cursor?: number; truncated?: boolean; deleted?: string;
+  output?: string; outputGeometry?: TerminalGeometry; cursor?: number; truncated?: boolean; deleted?: string;
 };
 export type TerminalEvent =
   | { type: 'reset' }

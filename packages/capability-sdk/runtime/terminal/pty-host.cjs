@@ -3,6 +3,8 @@
 // natural shell exit, native failures and shutdown release all of those handles.
 const pty = require('node-pty');
 let terminal, stopping = false, finished = false, deadline, pendingBytes = 0;
+let resizeReady = process.platform !== 'win32';
+const pendingResizes = [];
 function send(message, callback) {
   if (!process.connected) { callback?.(); return; }
   process.send(message, error => { callback?.(); if (error) stop(); });
@@ -25,6 +27,10 @@ function stop() {
   try { if (terminal) terminal.kill(); else finish(130); }
   catch { finish(130); }
 }
+function resize(message) {
+  terminal.resize(message.cols, message.rows);
+  send({ type: 'resized', requestId: message.requestId, cols: message.cols, rows: message.rows });
+}
 process.on('message', message => {
   try {
     if (message.type === 'start') {
@@ -39,12 +45,22 @@ process.on('message', message => {
           send({ type: 'error', message: 'Terminal output consumer is not responding.' }); stop(); return;
         }
         send({ type: 'data', output }, () => { pendingBytes -= Buffer.byteLength(output); });
+        if (!resizeReady) {
+          // node-pty marks its Windows socket ready before forwarding the first
+          // data event. Keep that initial output at its original geometry, then
+          // apply queued resizes now that native resize will execute immediately.
+          resizeReady = true;
+          try { for (const request of pendingResizes.splice(0)) resize(request); }
+          catch (error) { send({ type: 'error', message: error.message }); stop(); }
+        }
       });
       terminal.onExit(event => finish(event.exitCode));
       send({ type: 'ready', pid: terminal.pid });
     } else if (message.type === 'write') terminal.write(message.input);
-    else if (message.type === 'resize') terminal.resize(message.cols, message.rows);
-    else if (message.type === 'close') stop();
+    else if (message.type === 'resize') {
+      if (resizeReady) resize(message);
+      else pendingResizes.push(message);
+    } else if (message.type === 'close') stop();
   } catch (error) { send({ type: 'error', message: error.message }); stop(); }
 });
 process.on('disconnect', stop);

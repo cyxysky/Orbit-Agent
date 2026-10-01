@@ -15,6 +15,7 @@ import { terminalCapabilityManifest } from '@cjfclonedeep/capability-sdk/executi
 import { knowledgeCapabilityManifest } from '@cjfclonedeep/capability-sdk/knowledge';
 import { mediaCapabilityManifest } from '@cjfclonedeep/capability-sdk/media';
 import { subagentRuntimeSkill } from './subagent-runtime-skill';
+import { fileToolSourceOutputMarker } from './browser-chat-file-model-output';
 
 function manifestRuntimeSkill(manifest: { id: string; skills?: readonly CapabilitySkill[] }) {
   const skill = manifest.skills?.[0];
@@ -78,10 +79,6 @@ export function activeBrowserRuntimeSkillId() {
   return browserRuntimeSkill.id;
 }
 
-export function hiddenRuntimeSkillSummaries() {
-  return Object.values(hiddenRuntimeSkills).map((skill) => skill.summary).join('\n');
-}
-
 export function hiddenRuntimeSkillIds() {
   return Object.keys(hiddenRuntimeSkills);
 }
@@ -106,14 +103,28 @@ function toolCatalogFromSkills(skills: readonly CapabilitySkill[]) {
   })));
 }
 
+function runtimeSkillResultRecord(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value === 'string') {
+    const text = value;
+    try { value = JSON.parse(text); } catch {
+      // readSource separates its JSON metadata from the exact fenced program.
+      const firstLineEnd = text.indexOf('\n');
+      if (firstLineEnd < 0 || !text.startsWith(fileToolSourceOutputMarker, firstLineEnd)) return undefined;
+      try { value = JSON.parse(text.slice(0, firstLineEnd)); } catch { return undefined; }
+      const actual = value && typeof value === 'object' && !Array.isArray(value)
+        ? (value as Record<string, unknown>).actual : undefined;
+      if (!actual || typeof actual !== 'object' || Array.isArray(actual)
+        || (actual as Record<string, unknown>).readKind !== 'source') return undefined;
+    }
+  }
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
 /** Reuse only full, current-version Skill text still present in tool evidence.
  * A summary, user assertion or previous read ID is not sufficient after compaction. */
 export function hiddenRuntimeSkillIdsInModelContext(messages: ReadonlyArray<{ role: string; content: unknown }>) {
   const loaded = new Set<string>();
-  const record = (value: unknown): Record<string, unknown> | undefined => {
-    if (typeof value === 'string') { try { value = JSON.parse(value); } catch { return undefined; } }
-    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
-  };
+  const record = runtimeSkillResultRecord;
   for (const message of messages) {
     if (message.role !== 'tool' || !Array.isArray(message.content)) continue;
     for (const part of message.content) {
@@ -131,6 +142,10 @@ export function hiddenRuntimeSkillIdsInModelContext(messages: ReadonlyArray<{ ro
         && typeof gate.requiredSkillId === 'string'
         && gate.skillContent === hiddenRuntimeSkillContent(gate.requiredSkillId)
         && typeof gate.skillContent === 'string') loaded.add(gate.requiredSkillId);
+      const receipt = record(result.runtimeSkill);
+      if (receipt?.readSatisfied === true && typeof receipt.skillId === 'string'
+        && typeof receipt.content === 'string'
+        && receipt.content === hiddenRuntimeSkillContent(receipt.skillId)) loaded.add(receipt.skillId);
     }
   }
   return loaded;
@@ -140,10 +155,7 @@ export function hiddenRuntimeSkillIdsInModelContext(messages: ReadonlyArray<{ ro
  * is still an exact read receipt, even when it no longer satisfies the current
  * version gate. User Skills must not depend on membership in the system catalog. */
 export function skillBodyKeysForPreservation(messages: ReadonlyArray<{ role: string; content: unknown }>) {
-  const record = (value: unknown): Record<string, unknown> | undefined => {
-    if (typeof value === 'string') { try { value = JSON.parse(value); } catch { return undefined; } }
-    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
-  };
+  const record = runtimeSkillResultRecord;
   const calls = new Map<string, string>();
   for (const message of messages) if (message.role === 'assistant' && Array.isArray(message.content)) {
     for (const part of message.content) {
@@ -163,6 +175,9 @@ export function skillBodyKeysForPreservation(messages: ReadonlyArray<{ role: str
       }
       if (result?.ok === false && actual?.code === 'RUNTIME_SKILL_CONTENT_RETURNED'
         && typeof actual.requiredSkillId === 'string' && typeof actual.skillContent === 'string' && actual.skillContent.trim()) add(actual.requiredSkillId, actual.skillContent);
+      const receipt = record(result?.runtimeSkill);
+      if (receipt?.readSatisfied === true && typeof receipt.skillId === 'string'
+        && typeof receipt.content === 'string' && receipt.content.trim()) add(receipt.skillId, receipt.content);
     }
   }
   return ids;
@@ -177,24 +192,6 @@ export function requiredHiddenRuntimeSkillId(
   return policy.skillId;
 }
 
-export function hiddenRuntimeSkillIdsReadFromTraces(traces: ReadonlyArray<{
-  name?: string;
-  input?: unknown;
-  result?: { ok?: boolean };
-}>) {
-  const loaded = new Set<string>();
-  for (const trace of traces) {
-    if (trace.name !== 'skill' || trace.result?.ok !== true) continue;
-    if (!trace.input || typeof trace.input !== 'object' || Array.isArray(trace.input)) continue;
-    const input = trace.input as Record<string, unknown>;
-    if (input.action !== undefined && input.action !== 'read') continue;
-    if (typeof input.skillId === 'string' && hiddenRuntimeSkillContent(input.skillId)) {
-      loaded.add(input.skillId);
-    }
-  }
-  return loaded;
-}
-
 export function requireHiddenRuntimeSkillRead(
   toolName: string,
   input: unknown,
@@ -203,21 +200,31 @@ export function requireHiddenRuntimeSkillRead(
   const requiredSkillId = requiredHiddenRuntimeSkillId(toolName, input);
   if (!requiredSkillId || loadedSkillIds.has(requiredSkillId)) return undefined;
   const skillContent = hiddenRuntimeSkillContent(requiredSkillId);
+  // Available instructions accompany the actual operation's result. Only a
+  // missing registration prevents execution; an unread Skill does not.
+  if (skillContent) return undefined;
   return {
     ok: false,
     actual: JSON.stringify({
       ok: false,
-      code: skillContent ? 'RUNTIME_SKILL_CONTENT_RETURNED' : 'RUNTIME_SKILL_READ_REQUIRED',
-      error: skillContent
-        ? `The complete current Skill ${requiredSkillId} is included below and satisfies the read prerequisite for the next model step. Apply it directly. Do NOT call skill or contextRead to read it again. ${toolName} was NOT executed; retry the original tool call in the next model step.`
-        : `Read required runtime Skill ${requiredSkillId} before calling ${toolName}. The governed operation was not executed.`,
+      code: 'RUNTIME_SKILL_READ_REQUIRED',
+      error: `Required runtime Skill ${requiredSkillId} is unavailable. Restore its registration before calling ${toolName}. The governed operation was not executed.`,
       requiredSkillId,
-      ...(skillContent ? { skillReadSatisfied: true, operationExecuted: false, nextAction: { tool: toolName, reuseOriginalInput: true } } : {}),
-      ...(skillContent ? { skillContent } : {}),
     }, null, 2),
     failureCategory: 'skill-read-required',
     requiredSkillId,
   };
+}
+
+export function hiddenRuntimeSkillForToolCall(
+  toolName: string,
+  input: unknown,
+  loadedSkillIds: ReadonlySet<string>,
+): BrowserActionResult['runtimeSkill'] {
+  const skillId = requiredHiddenRuntimeSkillId(toolName, input);
+  if (!skillId || loadedSkillIds.has(skillId)) return undefined;
+  const content = hiddenRuntimeSkillContent(skillId);
+  return content ? { skillId, content, readSatisfied: true } : undefined;
 }
 
 export function runtimeToolTypesWithLoadedSkills(
@@ -228,9 +235,9 @@ export function runtimeToolTypesWithLoadedSkills(
   return toolTypes.filter((toolName) => {
     if (defaultVisibleCapabilityToolNames.has(toolName)) return true;
     // subagent action=read must remain available for collecting a result after
-    // a resume. action=spawn is still rejected by requireHiddenRuntimeSkillRead.
+    // a resume. action=spawn follows the same lazy Skill delivery as other tools.
     if (toolName === 'subagent' && options.allowSubagentRead) return true;
     const policy = hiddenRuntimeSkillPolicies[toolName];
-    return !policy || loadedSkillIds.has(policy.skillId);
+    return !policy || loadedSkillIds.has(policy.skillId) || Boolean(hiddenRuntimeSkillContent(policy.skillId));
   });
 }

@@ -13,7 +13,7 @@ export const subagentRuntimeSkillSummary = [
 
 export const subagentRuntimeSkillContent = `# Subagent Runtime
 
-This built-in Skill is authoritative for subagent action=spawn. Read it successfully in a separate model step before the first spawn in an Agent run; an early spawn is rejected without executing. subagent action=read is deliberately ungated, so pending results can always be collected.
+This built-in Skill is authoritative for subagent action=spawn. Read it before planning a spawn when its instructions are not already available. If spawn is called first, the host executes it through the normal validation and approval flow and supplies these complete instructions alongside the result. Inspect the actual returned UUIDs; do not repeat the spawn or read this Skill again merely to load its instructions. subagent action=read is deliberately ungated, so pending results can always be collected.
 
 ## Host tool boundary and API signatures
 

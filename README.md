@@ -308,7 +308,7 @@ system-file-artifact-runtime
 
 这样普通附件读取不会白白多一个步骤，但真正开始生成或修改文件前一定理解工作流。
 
-目前 `file` 的大量规则同时散落在工具描述和系统提示中，[browser-chat-executor.agent.ts](C:/Users/chenjf/Desktop/test2/web-app-test/src/server/ai/agents/browser-chat-executor.agent.ts:1358) 和 [runtime-prompt-rules.ts](C:/Users/chenjf/Desktop/test2/web-app-test/src/server/ai/agents/runtime-prompt-rules.ts:3) 都很长。迁移成隐藏 Skill 后，可以明显缩短每次模型请求的固定上下文。
+当前文件工具规则集中在 SDK 的 [file/runtime-skill.ts](packages/capability-sdk/src/file/runtime-skill.ts)，由 [hidden-runtime-skills.ts](src/server/ai/agents/hidden-runtime-skills.ts) 注册和门控。首次受控调用未读取 Skill 时返回完整规则，Agent 在下一步遵循规则并重试原调用。
 
 ## 2. 子 Agent Skill
 

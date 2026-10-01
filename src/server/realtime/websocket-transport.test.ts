@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { consumeWebSocketFrames, encodeWebSocketBinary, encodeWebSocketText } from './websocket-transport';
+import { consumeWebSocketFrames, encodeWebSocketBinary, encodeWebSocketText } from '@cjfclonedeep/capability-sdk/host/websocket-transport';
 
 function maskedClientText(value: string) {
   const payload = Buffer.from(value);

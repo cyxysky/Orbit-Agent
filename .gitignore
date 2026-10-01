@@ -19,6 +19,7 @@
 /.data
 /runtime
 *.tsbuildinfo
+*.log
 .env
 .env.*
 !.env.example
