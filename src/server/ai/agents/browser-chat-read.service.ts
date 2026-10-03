@@ -302,7 +302,9 @@ export async function readBrowserChatSessionPage(sessionId: string, userId?: str
     ...session,
     contextUsage: resolvedContextUsage(persistedSession, messages.items),
     hasMessages: messages.items.length > 0 || session.hasMessages === true,
-    messages: await restoreUserInputQuestions(sessionId, messages.items),
+    messages: recoverOrphanedBrowserChatSession({
+      ...session, messages: await restoreUserInputQuestions(sessionId, messages.items),
+    }).messages,
     steps: recoverBrowserChatToolContext(activeSteps, activeLogs).map(compactStepForClient),
     logs: compactBrowserChatLogsForClient(activeLogs),
     outputCycles: activeRecords.outputCycles,
@@ -361,7 +363,8 @@ export async function readBrowserChatSessionLogs(
   userId?: string | number,
   input: { cursor?: string; limit?: number; messageId?: string; subagentsOnly?: boolean } = {},
 ) {
-  const session = await readBrowserChatSessionHeader<BrowserChatSessionSnapshot>(sessionId);
+  const storedSession = await readBrowserChatSessionHeader<BrowserChatSessionSnapshot>(sessionId);
+  const session = storedSession ? recoverOrphanedBrowserChatSession(storedSession) : undefined;
   if (!session || !belongsToUser(session, userId)) return undefined;
   if (input.subagentsOnly) {
     return {
@@ -385,6 +388,7 @@ export async function readBrowserChatSessionLogs(
     ? browserChatClientRecordsForMessage(
         { ...session, messages: message ? [message] : [] },
         messageId,
+        { includeSubagents: true },
       )
     : { outputCycles: [], subagents: [] };
   const persistedToolIds = new Set(persistedSteps.flatMap((step) => (

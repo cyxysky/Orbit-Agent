@@ -89,9 +89,13 @@ function checkChartFormatters(value: unknown, omit: boolean, path = 'option', co
     // Dataset columns are user data, even when a column is named "formatter".
     if (component === 'dataset' && key === 'source') continue;
     const entryPath = `${path}.${key}`;
-    if (formatterComponents.has(component) && (key === 'formatter' || key === 'valueFormatter')
-      && (typeof entry === 'function' || (typeof entry === 'string' && isFunctionSource(entry)))) {
-      if (!omit) throw new Error(`${entryPath} 不能使用 JavaScript 函数或函数字符串。请移除此字段以使用默认提示，或将 formatter 改为 ECharts 字符串模板（例如 "{b}: {c}"）；多系列提示可省略 formatter。`);
+    if (formatterComponents.has(component) && key === 'valueFormatter' && entry != null) {
+      // ECharts calls valueFormatter directly; unlike formatter, it has no string-template form.
+      if (!omit) throw new Error(`${entryPath} 只接受 JavaScript 函数，持久化图表不能使用函数或函数字符串，也不支持字符串模板。请移除此字段以使用默认提示，或改用 formatter 字符串模板（例如 "{b}: {c}"）。`);
+      delete record[key];
+    } else if (formatterComponents.has(component) && key === 'formatter' && entry != null
+      && (typeof entry !== 'string' || isFunctionSource(entry))) {
+      if (!omit) throw new Error(`${entryPath} 必须是 ECharts 字符串模板，不能使用 JavaScript 函数或函数字符串。请移除此字段以使用默认提示，或将 formatter 改为 ECharts 字符串模板（例如 "{b}: {c}"）；多系列提示可省略 formatter。`);
       delete record[key];
     } else checkChartFormatters(entry, omit, entryPath, ['normal', 'emphasis', 'blur', 'select'].includes(key) ? component : key);
   }

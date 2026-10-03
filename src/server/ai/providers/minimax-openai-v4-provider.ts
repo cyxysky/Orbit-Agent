@@ -201,6 +201,7 @@ function transformMiniMaxRequestBody(
   body: Record<string, unknown>,
   promptReasoningDetails: MiniMaxReasoningDetail[][],
   extraRequestParameters: Record<string, unknown>,
+  reasoning: LanguageModelV4CallOptions['reasoning'],
 ) {
   let assistantIndex = 0;
   const messages = Array.isArray(body.messages) ? body.messages.map((messageValue) => {
@@ -220,6 +221,17 @@ function transformMiniMaxRequestBody(
     return message;
   }) : body.messages;
   const requestBody: Record<string, unknown> = { ...body, messages, ...extraRequestParameters, reasoning_split: true };
+  const effort = requestBody.reasoning_effort ?? reasoning;
+  // M3.1 Flash always thinks and rejects none/disabled. Use its lowest
+  // supported effort for the generic off/minimal preferences.
+  if (/minimax-m3\.1-flash/i.test(String(body.model))) {
+    if (effort === 'none' || effort === 'minimal') requestBody.reasoning_effort = 'low';
+    if (isRecord(requestBody.thinking) && requestBody.thinking.type === 'disabled') {
+      requestBody.thinking = { ...requestBody.thinking, type: 'adaptive' };
+    }
+  } else if (/^minimax-m3$/i.test(String(body.model)) && effort === 'none' && requestBody.thinking === undefined) {
+    requestBody.thinking = { type: 'disabled' };
+  }
   // MiniMax now uses max_completion_tokens. Preserve an explicit provider
   // override without also sending the SDK's lower, deprecated max_tokens.
   if (requestBody.max_completion_tokens === undefined && requestBody.max_tokens !== undefined) {
@@ -301,7 +313,7 @@ class MiniMaxOpenAIV4LanguageModel implements LanguageModelV4 {
       includeUsage: true,
       metadataExtractor: metadataExtractor(),
       supportedUrls: () => ({}),
-      transformRequestBody: (body) => transformMiniMaxRequestBody(body, promptDetails, this.options.extraRequestParameters || {}),
+      transformRequestBody: (body) => transformMiniMaxRequestBody(body, promptDetails, this.options.extraRequestParameters || {}, callOptions.reasoning),
     });
     return provider(this.modelId);
   }

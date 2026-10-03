@@ -65,6 +65,7 @@ export function compactBrowserChatLogForClient<TLog extends BrowserChatClientLog
         text: aiOutput.text,
         response,
         timings: aiOutput.timings,
+        performance: aiOutput.performance,
         usage: aiOutput.usage,
       },
       execution: details?.execution,

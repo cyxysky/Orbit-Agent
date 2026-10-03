@@ -47,7 +47,8 @@ export class RuntimeExecutionJournal {
           ? !pending.startedCallIds.includes(call.toolCallId)
           : pending.phase === 'planned' || pending.phase === 'awaiting-approval';
         n.pending!.results.push({ role: 'tool', content: [{ type: 'tool-result', toolCallId: call.toolCallId, toolName: call.toolName,
-          output: { type: 'error-json', value: { outcome: unexecuted ? 'not-executed' : 'unknown',
+          output: { type: 'error-json', value: { code: 'interrupted-tool-outcome', hostGenerated: true,
+            outcome: unexecuted ? 'not-executed' : 'unknown',
             reason: unexecuted ? 'Interrupted before execution.' : 'Execution was interrupted without a recorded result.',
             next: 'Inspect current state and make a new decision. This receipt does not establish business success; the previous call is not replayed.' } } }] });
       }

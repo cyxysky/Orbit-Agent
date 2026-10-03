@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { parse as parseCSS } from 'postcss';
 import { defineResponseType, defineCapabilityInput, type ResponseBlock } from '../index.ts';
 
 const uiValueSchema: z.ZodType<unknown> = z.lazy(() => z.union([
@@ -73,6 +74,25 @@ export const htmlResponse = defineResponseType({
   toText: params => params.text,
   mapText: (params, transform) => ({ ...params, text: transform(params.text) }),
   repair: params => params.title === undefined ? { ...params, title: 'HTML response' } : params,
+  repairFollowing(params, fragment) {
+    // Some model transports split CSS out as a {$text: stylesheet} sibling.
+    // Only reattach a complete stylesheet immediately after its HTML. Explicit
+    // response blocks and mixed prose remain separate; no fragment is discarded.
+    if (!fragment || typeof fragment !== 'object' || Array.isArray(fragment)) return undefined;
+    const fields = Object.keys(fragment);
+    if (fields.length !== 1 || !['$text', 'css'].includes(fields[0])) return undefined;
+    const css = (fragment as Record<string, unknown>)[fields[0]];
+    if (typeof css !== 'string' || !css.trim() || css.length > 40_000 || typeof params.html !== 'string'
+      || (params.css !== undefined && typeof params.css !== 'string')) return undefined;
+    try {
+      const stylesheet = parseCSS(css);
+      if (!stylesheet.nodes.every(node => ['rule', 'atrule', 'comment'].includes(node.type))) return undefined;
+      let declarations = 0;
+      stylesheet.walkDecls(() => { declarations++; });
+      if (!declarations) return undefined;
+    } catch { return undefined; }
+    return { ...params, css: params.css ? `${params.css}\n${css}` : css };
+  },
 });
 
 const uiParams = z.object({ tree: uiNodeSchema }).strict();

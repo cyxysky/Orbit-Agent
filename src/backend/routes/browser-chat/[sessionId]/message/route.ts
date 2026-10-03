@@ -160,6 +160,8 @@ export async function POST(request: Request, context: BrowserChatSessionRouteCon
             body.skillIds,
             userId,
             body.disabledTools,
+            body.subagentId,
+            body.reasoningEffort,
           );
           await terminal;
         } finally {

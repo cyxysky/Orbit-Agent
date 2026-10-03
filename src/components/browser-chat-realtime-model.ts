@@ -1,3 +1,5 @@
+import { browserChatSubagentBatchVersion } from './browser-chat-subagent-model';
+
 /** Restore structural sharing after JSON transport / SDK structuredClone.
  * Records are immutable JSON values; unchanged branches keep their identity.
  */
@@ -23,7 +25,7 @@ export function shareBrowserChatValue<T>(previous: T, incoming: T): T {
 }
 
 export type BrowserChatRealtimeCollectionPatch<
-  TMessage extends { clientMessageId?: string; id: string; role?: string; createdAt?: string; updatedAt?: string },
+  TMessage extends { clientMessageId?: string; id: string; role?: string; status?: string; createdAt?: string; updatedAt?: string },
   TStep extends { index: number },
   TLog extends { id: string; time?: string },
 > = {
@@ -116,13 +118,28 @@ function mergeRealtimeStepTools(current: unknown[] = [], incoming: unknown[] = [
     }
     const previous = merged[index] as Record<string, unknown>;
     if (previous === record) return;
+    let newerSubagentResult = false;
+    if (previous.name === 'subagent' || previous.name === 'spawnSubagents') {
+      const before = browserChatSubagentBatchVersion(previous.rawResult ?? previous.result);
+      const after = browserChatSubagentBatchVersion(record.rawResult ?? record.result);
+      if (before?.batchId && before.batchId === after?.batchId) {
+        // A resumed branch legitimately moves from completed to running. Its
+        // newer batch revision is authoritative; late acknowledgements are not.
+        if (before.revision !== undefined && after.revision !== undefined && before.revision !== after.revision) {
+          if (after.revision < before.revision) return;
+          newerSubagentResult = true;
+        } else if (before.status === 'completed' && after.status === 'running') return;
+      }
+    }
     const next = { ...previous, ...record };
     // Realtime events may arrive out of order. Once a tool is terminal, a stale
     // "started" snapshot must never erase its result and make it look active again.
     if (previous.ok !== undefined && record.ok === undefined) next.ok = previous.ok;
     for (const key of ['elapsedMs', 'error', 'rawResult', 'result'] as const) {
+      if (key === 'error' && newerSubagentResult) continue;
       if (previous[key] !== undefined && record[key] === undefined) next[key] = previous[key];
     }
+    if (newerSubagentResult) next.error = record.error;
     for (const key of ['elapsedMs', 'aiRequestElapsedMs'] as const) {
       if (typeof previous[key] === 'number' && Number.isFinite(previous[key])
         && (record[key] === undefined || (typeof record[key] === 'number' && record[key] < previous[key]))) next[key] = previous[key];
@@ -133,7 +150,7 @@ function mergeRealtimeStepTools(current: unknown[] = [], incoming: unknown[] = [
 }
 
 export function mergeBrowserChatRealtimeCollections<
-  TMessage extends { clientMessageId?: string; id: string; role?: string; createdAt?: string; updatedAt?: string },
+  TMessage extends { clientMessageId?: string; id: string; role?: string; status?: string; createdAt?: string; updatedAt?: string },
   TStep extends { index: number },
   TLog extends { id: string; time?: string },
 >(
@@ -146,11 +163,18 @@ export function mergeBrowserChatRealtimeCollections<
   let messages = removeRealtimeRecords(current.messages, patch.removedMessageIds, (message) => message.id);
   for (const message of patch.messages || []) {
     const key = messageKey(message);
-    const index = messages.findIndex((item) => messageKey(item) === key);
+    const sameIdIndex = messages.findIndex((item) => item.id === message.id);
+    const index = sameIdIndex >= 0 ? sameIdIndex : messages.findIndex((item) => messageKey(item) === key);
     const existing = index >= 0 ? messages[index] : undefined;
     const existingTime = existing?.updatedAt || existing?.createdAt || '';
     const incomingTime = message.updatedAt || message.createdAt || '';
     if (existing && existing.id === message.id && incomingTime < existingTime) continue;
+    const changedClient = existing?.id === message.id && existing.clientMessageId && message.clientMessageId
+      && existing.clientMessageId !== message.clientMessageId;
+    if (changedClient && existing.status !== 'blocked' && incomingTime === existingTime) continue;
+    if (existing?.id === message.id && existing.status && !['queued', 'running'].includes(existing.status)
+      && (message.status === 'queued' || message.status === 'running') && incomingTime === existingTime
+      && !(existing.status === 'blocked' && changedClient)) continue;
     if (index >= 0) {
       const replacement = existing?.id === message.id && existing.createdAt
         ? { ...message, createdAt: existing.createdAt }
@@ -174,7 +198,7 @@ export function mergeBrowserChatRealtimeCollections<
     if (existing === incoming) continue;
     const wouldRegressCompletedStep = existing
       && existing.status && !['queued', 'running'].includes(existing.status)
-      && incoming.status === 'running';
+      && (incoming.status === 'running' || incoming.status === 'queued');
     if (!existing) {
       steps = insertRealtimeRecord(steps, step, (candidate) => candidate.index > step.index);
       continue;

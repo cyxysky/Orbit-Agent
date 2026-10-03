@@ -1,4 +1,6 @@
 'use client';
+
+import { normalizeReasoningEffort, reasoningEffortOptions, type ReasoningEffortSetting } from '@/lib/reasoning-effort';
 import { normalizeBrowserChatInteractionMode, type BrowserChatInteractionMode } from '@/lib/browser-chat-interaction-mode';
 import { BrowserChatRecoveryPanel } from './BrowserChatRecoveryPanel';
 import { BrowserChatFilesPanel } from './BrowserChatFilesPanel';
@@ -50,7 +52,8 @@ import { Popover } from '@heroui/react/popover';
 import { HoverCard } from '@/components/HoverCard';
 import { BrowserChatToolsHelp } from '@/components/BrowserChatToolsHelp';
 import { BrowserChatReasoning } from '@/components/BrowserChatReasoning';
-import { browserChatHasPendingHumanInput, normalizeDisabledBrowserChatTools } from '@/lib/browser-chat-tools';
+import { browserChatHasPendingHumanInput, browserChatRequestedUserInput, normalizeDisabledBrowserChatTools } from '@/lib/browser-chat-tools';
+import { browserChatOrderedResponseParts } from '@/components/browser-chat-markdown';
 import { IconAction } from '@/components/ui/icon-action';
 import { ExpandableActionLabel } from '@/components/ui/expandable-action-label';
 import { CopyTextButton } from '@/components/ui/copy-text-button';
@@ -155,7 +158,7 @@ import {
   normalizeBrowserChatHistory,
   type BrowserChatHistoryState,
 } from '@/components/browser-chat-history-controller';
-import { browserChatSubagentRecordsForToolCall } from '@/components/browser-chat-subagent-model';
+import { browserChatSubagentBatchIsPending, browserChatSubagentBatchSize, browserChatSubagentRecordsForToolCall } from '@/components/browser-chat-subagent-model';
 import {
   browserChatToolContextTokenMetrics,
   browserChatToolHasLegacyContextAfter,
@@ -214,7 +217,7 @@ import { WorkspaceOverflowMenu } from '@/components/WorkspaceOverflowMenu';
 import { BrowserChatOnboarding } from '@/components/BrowserChatOnboarding';
 import { BrowserChatRuntimeStateControl } from '@/components/BrowserChatRuntimeStateControl';
 import { BrowserChatTerminalPanel } from '@/components/BrowserChatTerminalPanel';
-import { BeautifulLoadingState } from '@/components/BeautifulLoadingState';
+import { BeautifulLoadingState, formatOutputTokensPerSecond, outputTokensPerSecondTitle } from '@/components/BeautifulLoadingState';
 import { useFilePreview } from '@/components/FilePreviewProvider';
 import {
   useBrowserChatSkillCatalog,
@@ -286,6 +289,7 @@ import { startGlobalLoading, stopGlobalLoading } from '@/lib/global-loading';
 import { waitForMinimumLoading } from '@/lib/minimum-loading';
 import { WEBPILOT_ONBOARDING_RESTART_EVENT } from '@/lib/onboarding';
 import { asRecord } from '@/lib/unknown-value';
+import type { BrowserChatActivity, BrowserChatOutputPerformance } from '@/lib/browser-chat-activity';
 import {
   modelSelectionDiagnosticLabel,
   modelSelectionOptionsForConfig,
@@ -332,13 +336,7 @@ type BrowserChatMessage = {
   skillIds?: string[];
   stepIndexes?: number[];
   artifacts?: BrowserChatArtifactSummary[];
-  activity?: {
-    phase: string;
-    label: string;
-    updatedAt: string;
-    startedAt?: string;
-    operationId?: string;
-  };
+  activity?: BrowserChatActivity;
   status?: 'queued' | 'running' | 'passed' | 'failed' | 'blocked' | 'interrupted';
 };
 
@@ -429,6 +427,7 @@ type BrowserChatSession = {
   disabledTools?: string[];
   modelProvider: ModelProvider;
   model: string;
+  reasoningEffort?: ReasoningEffortSetting;
   status: 'idle' | 'running' | 'closed' | 'error';
   turnState?: 'idle' | 'running' | 'awaiting_confirmation' | 'awaiting_human' | 'stopping' | 'completed' | 'failed' | 'interrupted' | 'closed';
   busy: boolean;
@@ -1036,7 +1035,13 @@ function browserChatToolLabel(name: string, input: unknown, t: (value: string) =
     const action = toolInputValue(asRecord(input), ['action']);
     if (action === 'generateImage') return t('生成图片');
     if (action === 'generateVideo') return t('生成视频');
+    if (action === 'composeVideo') return t('合成分镜视频');
     if (action === 'generateSpeech') return t('生成语音');
+  }
+  if (name === 'novel') {
+    const action = toolInputValue(asRecord(input), ['action']);
+    const labels: Record<string, string> = { plan: '保存小说草稿', edit: '修改小说草稿', validate: '校验小说内容', review: '校订小说大纲', confirmPlan: '确认小说方案', writeChapter: '编写小说章节', read: '读取小说', list: '小说项目', export: '导出小说' };
+    return t(labels[action] || '小说创作');
   }
   const filePresentation = browserChatFileToolPresentation(name, input);
   if (filePresentation) return t(filePresentation.label);
@@ -1162,7 +1167,7 @@ function BrowserChatToolIcon({ input, name }: { input?: unknown; name: string })
   if (name === 'contextRead') return <FileSearch size={14} />;
   if (name === 'codeSandbox') return <SquareTerminal size={13} />;
   if (name === 'connectors') return <Cable size={13} />;
-  if (name === 'knowledge') return <BookOpen size={13} />;
+  if (name === 'knowledge' || name === 'novel') return <BookOpen size={13} />;
   if (name === 'data') return <Database size={13} />;
   if (name === 'media') {
     if (action === 'transcribe') return <Volume2 size={13} />;
@@ -1836,7 +1841,7 @@ function normalizeToolConfirmation(value?: BrowserChatToolConfirmation): Browser
     toolName,
     inputSignature,
     reason: typeof value.reason === 'string' && value.reason.trim() ? compactText(value.reason, 300) : undefined,
-    prompt: compactText(prompt, 500),
+    prompt: toolName === 'novel' ? prompt : compactText(prompt, 500),
     screenshotUrl: typeof value.screenshotUrl === 'string' && value.screenshotUrl.trim()
       ? value.screenshotUrl.trim()
       : undefined,
@@ -1924,10 +1929,16 @@ function overlayBrowserChatUIMessages(
     const previous = index >= 0 ? result[index] : undefined;
     // A stream is a retained source of evidence, not authority to revive a
     // stopped turn or replace a newer server checkpoint with stale content.
-    if (previous?.status && !['running', 'queued'].includes(previous.status)) continue;
+    if (previous?.status && !['running', 'queued'].includes(previous.status)
+      && !(previous.status === 'blocked' && streamed.status === 'running'
+        && streamed.updatedAt && streamed.updatedAt > (previous.updatedAt || previous.createdAt))) continue;
+    if (previous?.id === streamed.id && previous.clientMessageId && streamed.clientMessageId
+      && previous.clientMessageId !== streamed.clientMessageId
+      && (!streamed.updatedAt || streamed.updatedAt <= (previous.updatedAt || previous.createdAt))) continue;
     if (previous?.id === streamed.id && previous.updatedAt && streamed.updatedAt
       && previous.updatedAt > streamed.updatedAt) continue;
     if (index >= 0) result[index] = { ...result[index], ...streamed,
+      createdAt: previous?.id === streamed.id ? previous.createdAt : streamed.createdAt,
       stepIndexes: streamed.stepIndexes?.length
         ? [...new Set([...(previous?.stepIndexes || []), ...streamed.stepIndexes])]
         : previous?.stepIndexes || [],
@@ -1993,7 +2004,10 @@ function normalizeSession(session: BrowserChatSession): BrowserChatSession {
 }
 
 function mergeBrowserChatSessionWindow(existing: BrowserChatSession | null | undefined, incoming: BrowserChatSession) {
-  return normalizeSession(mergeBrowserChatSessionWindowData(existing, incoming));
+  const merged = mergeBrowserChatSessionWindowData(existing, incoming);
+  return normalizeSession(existing?.id === incoming.id && incoming.history
+    ? { ...merged, subagents: mergeBrowserChatRealtimeSubagents(existing.subagents, incoming.subagents) }
+    : merged);
 }
 
 function mergeBrowserChatHistoryChunk(
@@ -2007,7 +2021,10 @@ function mergeBrowserChatHistoryChunk(
     subagents?: BrowserChatSubagentRecord[];
   },
 ) {
-  return normalizeSession(mergeBrowserChatHistoryChunkData(current, chunk));
+  return normalizeSession({
+    ...mergeBrowserChatHistoryChunkData(current, chunk),
+    subagents: mergeBrowserChatRealtimeSubagents(current.subagents, chunk.subagents),
+  });
 }
 
 function browserChatRealtimePatch(value: unknown): BrowserChatSessionRealtimePatch | undefined {
@@ -2018,21 +2035,35 @@ function mergeBrowserChatRealtimeSubagents(
   current: BrowserChatSubagentRecord[] | undefined,
   incoming: Array<Partial<BrowserChatSubagentRecord> & Pick<BrowserChatSubagentRecord, 'id'>> | undefined,
 ) {
-  if (!incoming?.length) return current || emptyBrowserChatSubagents;
-  const currentById = new Map((current || []).map((record) => [record.id, record]));
-  const merged = mergeBrowserChatRealtimeRecords(current, incoming);
-  if (merged === current) return current;
-  return merged.map((record) => {
-    const previous = currentById.get(record.id);
-    if (!previous || record === previous) return record;
-    if (record.updatedAt && previous.updatedAt && record.updatedAt < previous.updatedAt) return previous;
+  const original = current || emptyBrowserChatSubagents;
+  if (!incoming?.length) return original;
+  let merged = original;
+  const indexes = new Map(original.map((record, index) => [record.id, index]));
+  for (const record of incoming) {
+    const index = indexes.get(record.id);
+    if (index === undefined) {
+      if (merged === original) merged = [...merged];
+      indexes.set(record.id, merged.length);
+      merged.push(record as BrowserChatSubagentRecord);
+      continue;
+    }
+    const previous = merged[index];
+    if (record === previous) continue;
+    if (record.updatedAt && previous.updatedAt && record.updatedAt < previous.updatedAt) continue;
     if (
-      (previous.status === 'stopped' || previous.status === 'passed' || previous.status === 'failed')
-      && (record.status === 'running' || record.status === 'queued')
-    ) return previous;
+      (previous.status === 'stopped' && record.status && record.status !== 'stopped')
+      || (
+        (previous.status === 'passed' || previous.status === 'failed')
+        && (record.status === 'running' || record.status === 'queued')
+      )
+    ) continue;
     const toolCount = Math.max(previous.toolCount || 0, record.toolCount || 0);
-    return toolCount === record.toolCount ? record : { ...record, toolCount };
-  });
+    const shared = shareBrowserChatValue(previous, { ...previous, ...record, toolCount });
+    if (shared === previous) continue;
+    if (merged === original) merged = [...merged];
+    merged[index] = shared;
+  }
+  return merged;
 }
 
 function mergeBrowserChatSessionRealtimePatch(
@@ -2834,6 +2865,11 @@ function BrowserChatToolScreenshotButton({ tool }: { tool: BrowserChatToolCall }
   );
 }
 
+function BrowserChatNovelLibraryButton() {
+  const { openFilePreview } = useFilePreview();
+  return <button className="browser-chat-conversation-direct-action" type="button" aria-label="小说书架：阅读与编辑" onClick={() => openFilePreview({ fileName: '小说书架', source: '', mode: 'editNovel' })}><BookOpen size={17} /><ExpandableActionLabel>阅读与编辑</ExpandableActionLabel></button>;
+}
+
 function BrowserChatToolContextTokenInfo({ tool }: { tool: BrowserChatToolCall }) {
   const recovery = (tool.input && typeof tool.input === 'object' && 'recoveryReview' in tool.input && typeof tool.input.recoveryReview === 'string' ? tool.input.recoveryReview : '');
   const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -3100,6 +3136,7 @@ function BrowserChatMessageArtifactCards({
                   </span>
                 </button>
                 <span className="browser-chat-output-file-actions">
+                  {/\.(mp4|webm|mov|mkv|avi)$/i.test(file.fileName) ? <button onClick={() => openFilePreview({ fileName: file.fileName, source: file.openUrl, mode: 'editVideo' })} title={t('剪辑视频')} type="button"><PencilLine size={15} /><span>{t('剪辑')}</span></button> : null}
                   <button aria-label={t('预览文件 {name}', { name: file.fileName })} onClick={openPreview} title={t('预览')} type="button">
                     <Eye size={15} /><span>{t('预览')}</span>
                   </button>
@@ -3222,7 +3259,12 @@ const BrowserChatToolConfirmationActions = memo(function BrowserChatToolConfirma
   const resolvingCancel = resolving && resolvingConfirmationAction === 'cancel';
   return (
     <>
-      <BrowserChatConfirmationPanel title={t('需要你的确认')} description={pending.reason || pending.prompt}>
+      <BrowserChatConfirmationPanel
+        title={t(pending.toolName === 'novel' ? '确认小说创作方案' : '需要你的确认')}
+        description={pending.toolName === 'novel'
+          ? <div className="browser-chat-novel-plan-review"><BrowserChatMarkdown markdown={pending.prompt} /></div>
+          : pending.reason || pending.prompt}
+      >
           {pending.screenshotUrl ? (
             <button
               className="browser-chat-tool-screenshot"
@@ -3250,7 +3292,7 @@ const BrowserChatToolConfirmationActions = memo(function BrowserChatToolConfirma
             size="default"
           >
             {resolvingConfirm ? <Loader2 className="spin" size={13} /> : <BadgeCheck size={13} />}
-            {resolvingConfirm ? t('确认中') : t('确认执行')}
+            {resolvingConfirm ? t('确认中') : t(pending.toolName === 'novel' ? '确认方案，开始写作' : '确认执行')}
           </RainbowButton>
       </BrowserChatConfirmationPanel>
       {screenshotOpen && pending.screenshotUrl ? (
@@ -3297,12 +3339,13 @@ const BrowserChatSubagentToolDisclosure = memo(function BrowserChatSubagentToolD
   title,
   tool,
   toolResult,
+  running,
 }: {
   batchId?: string;
   cardContent: ReactNode;
   className: string;
   isActive: boolean;
-  onLoadSubagentRecords?: () => void;
+  onLoadSubagentRecords?: () => void | Promise<void>;
   onResolveToolConfirmation?: (confirmationId: string, action: BrowserChatToolConfirmationAction) => void | Promise<void>;
   onSelectTool: (detail: BrowserChatToolDetail) => void;
   onResume?: () => void | Promise<void>;
@@ -3322,12 +3365,16 @@ const BrowserChatSubagentToolDisclosure = memo(function BrowserChatSubagentToolD
     () => browserChatSubagentViewsFromRecords(structuredSubagents || [], toolResult, batchId),
     [batchId, structuredSubagents, toolResult],
   );
+  const batchTasks = asRecord(tool.input)?.tasks;
+  const expectedSubagentCount = browserChatSubagentBatchSize(toolResult)
+    ?? (Array.isArray(batchTasks) ? batchTasks.length : 1);
   const structuredSubagentsComplete = Boolean(
-    batchSubagents.length
+    batchSubagents.length >= expectedSubagentCount
+    && batchSubagents.length
     && batchSubagents.every((subagent) => subagent.status !== 'running' && subagent.status !== 'queued'),
   );
   const loadSubagentRecords = useCallback(async () => {
-    if (!onLoadSubagentRecords || loadingRecords || structuredSubagentsComplete) return;
+    if (running || !onLoadSubagentRecords || loadingRecords || structuredSubagentsComplete) return;
     const showLoading = batchSubagents.length === 0;
     if (showLoading) setLoadingRecords(true);
     try {
@@ -3335,13 +3382,15 @@ const BrowserChatSubagentToolDisclosure = memo(function BrowserChatSubagentToolD
     } finally {
       if (showLoading) setLoadingRecords(false);
     }
-  }, [batchSubagents.length, loadingRecords, onLoadSubagentRecords, structuredSubagentsComplete]);
+  }, [batchSubagents.length, loadingRecords, onLoadSubagentRecords, running, structuredSubagentsComplete]);
   useEffect(() => {
     const requestKey = batchId || tool.id || title;
-    if (!onLoadSubagentRecords || structuredSubagentsComplete || requestedBatchRef.current === requestKey) return;
+    // A running turn is fed by realtime records. Do not mark its historical
+    // fetch as attempted before the completed-turn loader becomes available.
+    if (running || !onLoadSubagentRecords || structuredSubagentsComplete || requestedBatchRef.current === requestKey) return;
     requestedBatchRef.current = requestKey;
     void loadSubagentRecords();
-  }, [batchId, loadSubagentRecords, onLoadSubagentRecords, structuredSubagentsComplete, title, tool.id]);
+  }, [batchId, loadSubagentRecords, onLoadSubagentRecords, running, structuredSubagentsComplete, title, tool.id]);
   return (
     <section aria-label={title} className="browser-chat-ai-line-collapse browser-chat-subagent-tool browser-chat-tool-chips is-expanded">
       <div className="browser-chat-tool-card-row">
@@ -3424,6 +3473,7 @@ const BrowserChatStepToolCards = memo(function BrowserChatStepToolCards({
   onlyPendingConfirmation = false,
   pendingToolConfirmation,
   pendingManualVerificationToolKey,
+  userInputQuestionInAnswer,
   resolvingConfirmationAction,
   resolvingConfirmationId,
   resumingHumanVerification,
@@ -3433,13 +3483,14 @@ const BrowserChatStepToolCards = memo(function BrowserChatStepToolCards({
   visibleToolIndexes,
 }: {
   logs: BrowserChatLogRecord[];
-  onLoadSubagentRecords?: () => void;
+  onLoadSubagentRecords?: () => void | Promise<void>;
   onSelectTool: (detail: BrowserChatToolDetail) => void;
-  onResumeHumanVerification?: () => void | Promise<void>;
+  onResumeHumanVerification?: (subagentId?: string) => void | Promise<void>;
   onResolveToolConfirmation?: (confirmationId: string, action: BrowserChatToolConfirmationAction) => void | Promise<void>;
   onlyPendingConfirmation?: boolean;
   pendingToolConfirmation?: BrowserChatToolConfirmation;
   pendingManualVerificationToolKey?: string;
+  userInputQuestionInAnswer?: boolean;
   resolvingConfirmationAction?: BrowserChatToolConfirmationAction | null;
   resolvingConfirmationId?: string | null;
   resumingHumanVerification?: boolean;
@@ -3497,7 +3548,8 @@ const BrowserChatStepToolCards = memo(function BrowserChatStepToolCards({
             && candidate.contextBefore.requestCreatedAt !== requestCreatedAt);
         const presentation = browserChatToolPresentation(tool, step, running, supersededByLaterRequest);
         const { isActive: isActiveTool, stateClass, status } = presentation;
-        const translatedStatus = t(status);
+        const translatedStatus = t(isSubagentSpawnTool(tool.name, tool.input)
+          && browserChatSubagentBatchIsPending(tool.rawResult ?? tool.result) ? '已异步启动' : status);
         const pendingConfirmation = pendingConfirmationForTool({
           pending: pendingToolConfirmation,
           stepIndex: step.index,
@@ -3556,7 +3608,7 @@ const BrowserChatStepToolCards = memo(function BrowserChatStepToolCards({
               </BrowserChatToolResponseDraft>
             )}
             {pendingManualVerificationToolKey === `${step.index}:${toolIndex}` ? (
-              <BrowserChatManualVerificationCard input={tool.input} onResume={!running ? onResumeHumanVerification : undefined} resuming={resumingHumanVerification} />
+              <BrowserChatManualVerificationCard input={tool.input} messageId={step.messageId} questionInAnswer={userInputQuestionInAnswer} onResume={!running ? onResumeHumanVerification : undefined} resuming={resumingHumanVerification} />
             ) : null}
             <BrowserChatToolConfirmationActions
               pending={pendingConfirmation}
@@ -3573,12 +3625,13 @@ const BrowserChatStepToolCards = memo(function BrowserChatStepToolCards({
 
 type BrowserChatAiCycleCommonProps = {
   logs: BrowserChatLogRecord[];
-  onLoadSubagentRecords?: () => void;
+  onLoadSubagentRecords?: () => void | Promise<void>;
   onResolveToolConfirmation?: (confirmationId: string, action: BrowserChatToolConfirmationAction) => void | Promise<void>;
-  onResumeHumanVerification?: () => void | Promise<void>;
+  onResumeHumanVerification?: (subagentId?: string) => void | Promise<void>;
   onSelectTool: (detail: BrowserChatToolDetail) => void;
   pendingToolConfirmation?: BrowserChatToolConfirmation;
   pendingManualVerificationToolKey?: string;
+  userInputQuestionInAnswer?: boolean;
   resolvingConfirmationAction?: BrowserChatToolConfirmationAction | null;
   resolvingConfirmationId?: string | null;
   resumingHumanVerification?: boolean;
@@ -3615,6 +3668,7 @@ const BrowserChatAiCycleLine = memo(function BrowserChatAiCycleLine({
   onSelectTool,
   pendingToolConfirmation,
   pendingManualVerificationToolKey,
+  userInputQuestionInAnswer,
   resolvingConfirmationAction,
   resolvingConfirmationId,
   resumingHumanVerification,
@@ -3690,7 +3744,9 @@ const BrowserChatAiCycleLine = memo(function BrowserChatAiCycleLine({
           ? undefined
           : toolUserActionForTool(logs, toolDetail.stepIndex, executedTool.name, executedTool.input);
         const compactMeta = executedTool.invalid ? meta : meta ? compactText(meta, 150) : undefined;
-        const visibleMeta = [compactMeta, pendingConfirmation ? t('等待用户确认') : t(status)].filter(Boolean).join(' · ');
+        const visibleStatus = isSubagentSpawnTool(executedTool.name, executedTool.input)
+          && browserChatSubagentBatchIsPending(executedTool.rawResult ?? executedTool.result) ? '已异步启动' : status;
+        const visibleMeta = [compactMeta, pendingConfirmation ? t('等待用户确认') : t(visibleStatus)].filter(Boolean).join(' · ');
         const card = (
           <BrowserChatToolCardContent
             active={isActive}
@@ -3739,7 +3795,7 @@ const BrowserChatAiCycleLine = memo(function BrowserChatAiCycleLine({
                 </BrowserChatToolResponseDraft>
               )}
               {pendingManualVerificationToolKey === `${toolDetail.stepIndex}:${toolDetail.toolIndex}` ? (
-                <BrowserChatManualVerificationCard input={executedTool.input} onResume={!running ? onResumeHumanVerification : undefined} resuming={resumingHumanVerification} />
+                <BrowserChatManualVerificationCard input={executedTool.input} messageId={toolDetail.step.messageId} questionInAnswer={userInputQuestionInAnswer} onResume={!running ? onResumeHumanVerification : undefined} resuming={resumingHumanVerification} />
               ) : null}
               <BrowserChatToolConfirmationActions
                 pending={pendingConfirmation}
@@ -3764,6 +3820,7 @@ const BrowserChatExecutedCycleGroup = memo(function BrowserChatExecutedCycleGrou
   onSelectTool,
   pendingToolConfirmation,
   pendingManualVerificationToolKey,
+  userInputQuestionInAnswer,
   resolvingConfirmationAction,
   resolvingConfirmationId,
   resumingHumanVerification,
@@ -3792,6 +3849,7 @@ const BrowserChatExecutedCycleGroup = memo(function BrowserChatExecutedCycleGrou
             onSelectTool={onSelectTool}
             pendingToolConfirmation={pendingToolConfirmation}
             pendingManualVerificationToolKey={pendingManualVerificationToolKey}
+            userInputQuestionInAnswer={userInputQuestionInAnswer}
             resolvingConfirmationAction={resolvingConfirmationAction}
             resolvingConfirmationId={resolvingConfirmationId}
             resumingHumanVerification={resumingHumanVerification}
@@ -3821,6 +3879,7 @@ const BrowserChatExecutedCycleGroup = memo(function BrowserChatExecutedCycleGrou
               onSelectTool={onSelectTool}
               pendingToolConfirmation={pendingToolConfirmation}
               pendingManualVerificationToolKey={pendingManualVerificationToolKey}
+              userInputQuestionInAnswer={userInputQuestionInAnswer}
               resolvingConfirmationAction={resolvingConfirmationAction}
               resolvingConfirmationId={resolvingConfirmationId}
               resumingHumanVerification={resumingHumanVerification}
@@ -3837,28 +3896,66 @@ const BrowserChatExecutedCycleGroup = memo(function BrowserChatExecutedCycleGrou
 
 const BrowserChatManualVerificationCard = memo(function BrowserChatManualVerificationCard({
   input,
+  messageId,
+  onPreview,
+  onReply,
   onResume,
+  questionInAnswer = false,
+  replySubagentId,
   resuming,
 }: {
   input?: unknown;
+  messageId?: string;
+  onPreview?: () => void | Promise<void>;
+  onReply?: () => void;
   onResume?: () => void | Promise<void>;
+  questionInAnswer?: boolean;
+  replySubagentId?: string;
   resuming?: boolean;
 }) {
   const { t } = useI18n();
+  const panel = useContext(BrowserChatSubagentPanelContext);
+  const targetSubagentId = replySubagentId || (panel?.selectedSubagentId
+    && messageId === `${panel.selectedSubagentId}:assistant` ? panel.selectedSubagentId : undefined);
+  const reply = onReply || (targetSubagentId && panel?.replyToSubagent ? () => {
+    panel.closeSubagent();
+    panel.replyToSubagent?.(targetSubagentId);
+  } : undefined);
+  const preview = onPreview || (targetSubagentId && panel?.previewSubagent ? () => {
+    panel.closeSubagent();
+    return panel.previewSubagent?.(targetSubagentId);
+  } : undefined);
   const request = input && typeof input === 'object' ? input as { action?: string; question?: string } : undefined;
-  if (request?.action === 'requestUserInput') return (
-    <BrowserChatConfirmationPanel
-      title={t('需要你补充资料')}
-      description={<BrowserChatMarkdown markdown={request.question || t('请提供继续当前任务所需的信息或文件。')} />}
-    >
-      <p>{t('在下方输入回复或添加附件，发送后继续当前任务。')}</p>
-    </BrowserChatConfirmationPanel>
-  );
+  if (request?.action === 'requestUserInput') {
+    const replyButton = reply ? (
+      <RainbowButton aria-pressed={panel?.replyTargetSubagentId === targetSubagentId} className="browser-chat-tool-confirm" disabled={resuming} onClick={reply} size="default">
+        {panel?.replyTargetSubagentId === targetSubagentId ? t('已选择回复此子 Agent') : t('回复此子 Agent')}
+      </RainbowButton>
+    ) : null;
+    // The committed answer already presents the question. Keep only an action
+    // when replying must explicitly target a subagent.
+    if (questionInAnswer) return replyButton;
+    return (
+      <BrowserChatConfirmationPanel
+        title={t('需要你补充资料')}
+        description={<BrowserChatMarkdown markdown={request.question || t('请提供继续当前任务所需的信息或文件。')} />}
+      >
+        <p>{t('在下方输入回复或添加附件，发送后继续当前任务。')}</p>
+        {replyButton}
+      </BrowserChatConfirmationPanel>
+    );
+  }
   return (
     <BrowserChatConfirmationPanel
       title={t('需要人工完成验证')}
       description={t('请在浏览器中完成验证码、登录/安全验证或其他需要本人确认的步骤。')}
     >
+        {preview ? (
+          <RainbowButton className="browser-chat-tool-confirm" disabled={resuming || panel?.previewingSubagentId === targetSubagentId} onClick={() => void preview()} size="default">
+            {panel?.previewingSubagentId === targetSubagentId ? <Loader2 className="spin" size={13} /> : <AppWindow size={13} />}
+            {t('打开验证页')}
+          </RainbowButton>
+        ) : null}
         {onResume ? (
           <RainbowButton className="browser-chat-tool-confirm" disabled={resuming} onClick={() => void onResume()} size="default">
             {resuming ? <Loader2 className="spin" size={13} /> : <BadgeCheck size={13} />}
@@ -3871,6 +3968,7 @@ const BrowserChatManualVerificationCard = memo(function BrowserChatManualVerific
 
 type BrowserChatSubagentView = {
   id: string;
+  messageId?: string;
   title: string;
   instruction: string;
   createdAt: string;
@@ -3878,6 +3976,7 @@ type BrowserChatSubagentView = {
   status: 'queued' | 'running' | 'passed' | 'blocked' | 'failed' | 'stopped';
   content: string;
   summary?: string;
+  error?: string;
   resumable: boolean;
   toolCount: number;
   currentAction?: string;
@@ -3889,6 +3988,11 @@ type BrowserChatSubagentPanelContextValue = {
   selectedSubagentId: string | null;
   closeSubagent: () => void;
   openSubagent: (subagentId: string) => void;
+  resumeSubagent?: (subagentId: string) => void | Promise<void>;
+  replyToSubagent?: (subagentId: string) => void;
+  replyTargetSubagentId?: string;
+  previewSubagent?: (subagentId: string) => void | Promise<void>;
+  previewingSubagentId?: string;
   stopSubagent: (subagentId: string) => void | Promise<void>;
   stoppingSubagentIds: ReadonlySet<string>;
 };
@@ -3908,12 +4012,17 @@ function browserChatClampSubagentPanelWidth(width: number) {
   return Math.min(Math.max(BROWSER_CHAT_SUBAGENT_PANEL_MIN_WIDTH, width), maximumWidth);
 }
 
-function browserChatSubagentStatusPresentation(subagent: Pick<BrowserChatSubagentView, 'status' | 'summary'>) {
+function browserChatSubagentStatusPresentation(subagent: Pick<BrowserChatSubagentView, 'status' | 'resumable' | 'steps'>) {
   if (subagent.status === 'passed') return { className: 'status-passed', label: '已完成' };
   if (subagent.status === 'stopped') return { className: 'status-failed', label: '已停止' };
-  if (subagent.status === 'failed' && subagent.summary?.trim()) return { className: 'status-partial', label: '已返回结果' };
   if (subagent.status === 'failed') return { className: 'status-failed', label: '执行失败' };
-  if (subagent.status === 'blocked') return { className: 'status-blocked', label: '等待处理' };
+  if (subagent.status === 'blocked') {
+    const tools = subagent.steps.flatMap((step) => step.tools || []);
+    const humanRequest = subagent.resumable && browserChatHasPendingHumanInput(tools)
+      ? asRecord(tools.findLast((tool) => tool.name === 'browser')?.input) : undefined;
+    return { className: 'status-blocked', label: humanRequest?.action === 'requestUserInput'
+      ? '等待补充资料' : humanRequest ? '等待人工验证' : '等待处理' };
+  }
   if (subagent.status === 'queued') return { className: 'status-running', label: '等待执行' };
   return { className: 'status-running', label: '正在执行' };
 }
@@ -3926,6 +4035,7 @@ function browserChatSubagentViewsFromRecords(
   return browserChatSubagentRecordsForToolCall(records, toolResult, toolCallId)
     .map((record) => ({
       id: record.id,
+      messageId: record.messageId,
       title: record.title,
       instruction: record.instruction,
       createdAt: record.createdAt,
@@ -3933,6 +4043,7 @@ function browserChatSubagentViewsFromRecords(
       status: record.status,
       content: record.content,
       summary: record.summary,
+      error: record.error,
       resumable: record.resumable,
       toolCount: record.toolCount,
       currentAction: record.currentAction,
@@ -3952,12 +4063,17 @@ const BrowserChatSubagentDetail = memo(function BrowserChatSubagentDetail({
   resuming?: boolean;
   subagent: BrowserChatSubagentView;
 }) {
+  const { t } = useI18n();
   const assistantMessageId = `${subagent.id}:assistant`;
   const operationRunning = subagent.status === 'running' || subagent.status === 'queued';
+  const terminalContent = subagent.summary || subagent.content || subagent.error || '';
+  const errorExplanation = (subagent.status === 'failed' || subagent.status === 'stopped')
+    && subagent.error?.trim() && terminalContent.trim() !== subagent.error.trim()
+    ? subagent.error : undefined;
   const assistantMessage = useMemo<BrowserChatMessage>(() => ({
     id: assistantMessageId,
     role: 'assistant',
-    content: operationRunning ? subagent.content : subagent.summary || subagent.content,
+    content: operationRunning ? subagent.content : terminalContent,
     createdAt: subagent.createdAt,
     updatedAt: subagent.updatedAt,
     status: subagent.status === 'queued'
@@ -3973,7 +4089,7 @@ const BrowserChatSubagentDetail = memo(function BrowserChatSubagentDetail({
           updatedAt: subagent.updatedAt,
         }
       : undefined,
-  }), [assistantMessageId, operationRunning, subagent]);
+  }), [assistantMessageId, operationRunning, subagent, terminalContent]);
   const steps = useMemo(() => subagent.steps.map((step) => ({
     ...step,
     messageId: assistantMessageId,
@@ -3983,6 +4099,9 @@ const BrowserChatSubagentDetail = memo(function BrowserChatSubagentDetail({
     messageId: assistantMessageId,
     subagentId: undefined,
   })), [assistantMessageId, subagent.outputCycles]);
+  const selectTool = useCallback((detail: BrowserChatToolDetail) => onSelectTool({
+    ...detail, subagentId: subagent.id, parentMessageId: subagent.messageId,
+  }), [onSelectTool, subagent.id, subagent.messageId]);
 
   return (
     <div className="browser-chat-subagent-detail">
@@ -4004,12 +4123,17 @@ const BrowserChatSubagentDetail = memo(function BrowserChatSubagentDetail({
             message={assistantMessage}
             outputCycles={outputCycles}
             onResumeHumanVerification={onResume}
-            onSelectTool={onSelectTool}
+            onSelectTool={selectTool}
             resumingHumanVerification={resuming}
             running={operationRunning}
             steps={steps}
             subagents={[]}
           />
+          {errorExplanation ? (
+            <p className="browser-chat-tools-error" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+              {t(subagent.status === 'stopped' ? '已停止' : '执行失败')}：{errorExplanation}
+            </p>
+          ) : null}
         </div>
       </article>
     </div>
@@ -4017,14 +4141,12 @@ const BrowserChatSubagentDetail = memo(function BrowserChatSubagentDetail({
 });
 
 const BrowserChatSubagentPanel = memo(function BrowserChatSubagentPanel({
-  loadingRecords,
   onClose,
   onSelectTool,
   onResume,
   resuming,
   subagent,
 }: {
-  loadingRecords?: boolean;
   onClose: () => void;
   onSelectTool: (detail: BrowserChatToolDetail) => void;
   onResume?: () => void | Promise<void>;
@@ -4132,17 +4254,17 @@ const BrowserChatSubagentPanel = memo(function BrowserChatSubagentPanel({
         <header className="browser-chat-subagent-panel-header">
           <div className="browser-chat-subagent-panel-heading">
             <span className={`browser-chat-subagent-status-icon ${status.className}`} aria-hidden="true">
-              {loadingRecords || subagent.status === 'running'
+              {subagent.status === 'running'
                 ? <Loader2 className="spin" size={14} />
                 : subagent.status === 'queued'
                   ? <Clock3 size={14} />
-                : subagent.status === 'passed' || status.className === 'status-partial'
+                : subagent.status === 'passed'
                   ? <CheckCircle2 size={14} /> : <CircleAlert size={14} />}
             </span>
             <div>
               <h2 id={titleId}>{subagent.title}</h2>
               <p>
-                {loadingRecords ? t('正在加载消息') : t(status.label)}
+                {t(status.label)}
                 {' · '}
                 {t('{count} 个工具', { count: subagent.toolCount })}
               </p>
@@ -4202,7 +4324,12 @@ const BrowserChatSubagentList = memo(function BrowserChatSubagentList({
       ) : null}
       {subagents.map((subagent) => {
         const status = browserChatSubagentStatusPresentation(subagent);
-        const stoppable = subagent.status === 'running' || subagent.status === 'queued';
+        const stoppable = subagent.status === 'running' || subagent.status === 'queued'
+          || (subagent.status === 'blocked' && subagent.resumable);
+        const subagentTools = subagent.steps.flatMap((step) => step.tools || []);
+        const humanRequest = subagent.status === 'blocked' && subagent.resumable
+          && browserChatHasPendingHumanInput(subagentTools)
+          ? subagentTools.findLast((tool) => tool.name === 'browser') : undefined;
         const stopping = panel?.stoppingSubagentIds.has(subagent.id) ?? false;
         const pendingConfirmation = pendingToolConfirmation?.subagentId === subagent.id
           ? pendingToolConfirmation
@@ -4218,17 +4345,17 @@ const BrowserChatSubagentList = memo(function BrowserChatSubagentList({
               type="button"
             >
               <span className={`browser-chat-subagent-status-icon ${status.className}`} aria-hidden="true">
-                {loadingRecords || subagent.status === 'running'
+                {subagent.status === 'running'
                   ? <Loader2 className="spin" size={14} />
                   : subagent.status === 'queued'
                     ? <Clock3 size={14} />
-                  : subagent.status === 'passed' || status.className === 'status-partial'
+                  : subagent.status === 'passed'
                     ? <CheckCircle2 size={14} /> : <CircleAlert size={14} />}
               </span>
               <span className="browser-chat-subagent-row-copy">
                 <span className="browser-chat-subagent-row-title">{subagent.title}</span>
                 <span className="browser-chat-subagent-row-meta">
-                  {loadingRecords ? t('正在加载消息') : t(status.label)}
+                  {t(status.label)}
                   {' · '}
                   {t('{count} 个工具', { count: subagent.toolCount })}
                 </span>
@@ -4253,15 +4380,30 @@ const BrowserChatSubagentList = memo(function BrowserChatSubagentList({
               resolvingConfirmationId={resolvingConfirmationId}
               onResolveToolConfirmation={onResolveToolConfirmation}
             />
+            {humanRequest ? (
+              <BrowserChatManualVerificationCard
+                input={humanRequest.input}
+                onPreview={panel?.previewSubagent ? () => {
+                  panel.closeSubagent();
+                  return panel.previewSubagent?.(subagent.id);
+                } : undefined}
+                onReply={panel?.replyToSubagent ? () => {
+                  panel.closeSubagent();
+                  panel.replyToSubagent?.(subagent.id);
+                } : undefined}
+                onResume={panel?.resumeSubagent ? () => panel.resumeSubagent?.(subagent.id) : onResume}
+                replySubagentId={subagent.id}
+                resuming={resuming}
+              />
+            ) : null}
           </div>
         );
       })}
       {selectedSubagent && panel ? (
         <BrowserChatSubagentPanel
-          loadingRecords={loadingRecords}
           onClose={panel.closeSubagent}
           onSelectTool={onSelectTool}
-          onResume={onResume}
+          onResume={panel.resumeSubagent ? () => panel.resumeSubagent?.(selectedSubagent.id) : onResume}
           resuming={resuming}
           subagent={selectedSubagent}
         />
@@ -4278,6 +4420,7 @@ const BrowserChatProcessDisclosure = memo(function BrowserChatProcessDisclosure(
   message,
   onCollapse,
   onExpand,
+  outputPerformance,
   running,
 }: {
   autoOpen: boolean;
@@ -4287,6 +4430,7 @@ const BrowserChatProcessDisclosure = memo(function BrowserChatProcessDisclosure(
   message: BrowserChatMessage;
   onCollapse?: () => void;
   onExpand?: () => Promise<void> | void;
+  outputPerformance?: BrowserChatOutputPerformance;
   running: boolean;
 }) {
   const { t } = useI18n();
@@ -4397,6 +4541,11 @@ const BrowserChatProcessDisclosure = memo(function BrowserChatProcessDisclosure(
         {running ? <Loader2 aria-hidden="true" className="spin" size={13} /> : null}
         <span>{label}</span>
         {elapsed ? <small>{elapsed}</small> : null}
+        {!running && outputPerformance?.outputTokensPerSecond !== undefined ? (
+          <small title={t(outputTokensPerSecondTitle(outputPerformance))}>
+            · {formatOutputTokensPerSecond(outputPerformance)}
+          </small>
+        ) : null}
         <ChevronDown aria-hidden="true" className="browser-chat-process-chevron" size={14} />
       </button>
       <div
@@ -4435,7 +4584,7 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
   onResolveToolConfirmation,
   onResumeHumanVerification,
   onSelectTool,
-  pendingToolConfirmation,
+  pendingToolConfirmation: requestedToolConfirmation,
   resolvingConfirmationAction,
   resolvingConfirmationId,
   resumingHumanVerification,
@@ -4450,7 +4599,7 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
   onLoadProcessRecords?: (signal?: AbortSignal) => Promise<BrowserChatMessageRecordPage>;
   outputCycles: BrowserChatAiOutputCycle[];
   onResolveToolConfirmation?: (confirmationId: string, action: BrowserChatToolConfirmationAction) => void | Promise<void>;
-  onResumeHumanVerification?: () => void | Promise<void>;
+  onResumeHumanVerification?: (subagentId?: string) => void | Promise<void>;
   onSelectTool: (detail: BrowserChatToolDetail) => void;
   pendingToolConfirmation?: BrowserChatToolConfirmation;
   resolvingConfirmationAction?: BrowserChatToolConfirmationAction | null;
@@ -4486,13 +4635,28 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
   }, []);
   useEffect(() => releaseHistoricalProcessRecords, [releaseHistoricalProcessRecords]);
   const logs = running ? liveLogs : transientRecords?.logs ?? liveLogs;
-  const outputCycles = running ? liveOutputCycles : transientRecords?.outputCycles ?? liveOutputCycles;
-  const steps = running ? liveSteps : transientRecords?.steps ?? liveSteps;
-  const subagents = running ? liveSubagents : transientRecords?.subagents ?? liveSubagents;
+  const outputCycles = useMemo(() => running || !transientRecords
+    ? liveOutputCycles
+    : mergeBrowserChatRealtimeRecords(liveOutputCycles, transientRecords.outputCycles),
+  [liveOutputCycles, running, transientRecords]);
+  const steps = useMemo(() => running || !transientRecords
+    ? liveSteps
+    : mergeBrowserChatRealtimeCollections({ messages: [], logs: [], steps: transientRecords.steps }, { steps: liveSteps }).steps,
+  [liveSteps, running, transientRecords]);
+  const subagents = useMemo(() => running || !transientRecords
+    ? liveSubagents
+    : mergeBrowserChatRealtimeSubagents(transientRecords.subagents, liveSubagents),
+  [liveSubagents, running, transientRecords]);
   const markdownArtifacts = useSharedBrowserChatValue(message.artifacts || emptyBrowserChatArtifacts);
   const confirmationLogs = useSharedBrowserChatValue(useMemo(() => logs.filter((log) =>
     log.phase.startsWith('tool:confirmation:')), [logs]));
-  const loadSubagentRecords = useCallback(() => { void loadHistoricalProcessRecords(); }, [loadHistoricalProcessRecords]);
+  // Confirmation headers and tool/log updates use different transports. An
+  // already-resolved header must not hide activity or re-create approval UI.
+  const pendingToolConfirmation = requestedToolConfirmation && !confirmationLogs.some((log) => (
+    ['tool:confirmation:confirmed', 'tool:confirmation:cancelled', 'tool:confirmation:stale'].includes(log.phase)
+    && parseJsonObjectText(log.details)?.confirmationId === requestedToolConfirmation.id
+  )) ? requestedToolConfirmation : undefined;
+  const loadSubagentRecords = useCallback(() => loadHistoricalProcessRecords(), [loadHistoricalProcessRecords]);
   const selectTool = useCallback((detail: BrowserChatToolDetail) => {
     const confirmation = toolUserActionForTool(
       confirmationLogs,
@@ -4625,6 +4789,13 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
   const showPendingTimelineFallback = hasPendingConfirmation
     && !hasSubagentPendingConfirmation
     && !aiCyclesContainPendingConfirmation;
+  const showStandaloneConfirmation = showPendingTimelineFallback && !unrepresentedTimelineEntries.some(({ step, visibleToolIndexes }) => (
+    (visibleToolIndexes || []).some((toolIndex) => {
+      const tool = step.tools?.[toolIndex];
+      return tool && pendingConfirmationForTool({ pending: pendingToolConfirmation, stepIndex: step.index,
+        toolName: tool.name, toolInput: tool.input, toolOk: tool.ok });
+    })
+  ));
   const splitTimelineEntries = useMemo(() => unrepresentedTimelineEntries.map(({ step, visibleToolIndexes }) => {
     const currentToolIndexes: number[] = [];
     const historicalToolIndexes: number[] = [];
@@ -4724,6 +4895,19 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
   )));
   const hasFinalResponse = hasFinalText || hasStructuredResponse;
   const hideManualVerificationStatusText = manualVerificationPaused && isBrowserChatManualVerificationStatusText(finalText);
+  const userInputQuestionInAnswer = useMemo(() => {
+    if (running || !manualVerificationPaused || !hasFinalResponse) return false;
+    const question = browserChatRequestedUserInput(steps.flatMap((step) => step.tools || []));
+    if (!question) return false;
+    // Compare against the same projection as the answer renderer: structured
+    // response parts may supersede message.content, so content alone is unsafe.
+    const answerTexts = browserChatOrderedResponseParts(displayResponseParts, hideManualVerificationStatusText ? '' : displayFinalText)
+      .flatMap((part) => part.type === 'text' ? [part.text]
+        : part.type === 'data-response' && part.data.type === 'core.markdown' && typeof part.data.params.text === 'string'
+          ? [part.data.params.text] : []);
+    const normalizedQuestion = question.replace(/\s+/g, ' ').trim();
+    return [...answerTexts, answerTexts.join('\n\n')].some((text) => text.replace(/\s+/g, ' ').trim() === normalizedQuestion);
+  }, [displayFinalText, displayResponseParts, hasFinalResponse, hideManualVerificationStatusText, manualVerificationPaused, running, steps]);
   const hasHistoricalAiOutput = aiOutputCycleEntries.length > 0;
   const hasPersistedProcess = Boolean(message.stepIndexes?.length);
   const hasProcessContent = hasHistoricalAiOutput || hasPersistedProcess || shouldShowStepTimeline || running || hasPendingConfirmation;
@@ -4742,6 +4926,7 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
     onResolveToolConfirmation,
     onResumeHumanVerification,
     pendingManualVerificationToolKey,
+    userInputQuestionInAnswer,
     onSelectTool: selectTool,
     pendingToolConfirmation,
     resolvingConfirmationAction,
@@ -4767,6 +4952,7 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
           message={message}
           onCollapse={!running ? releaseHistoricalProcessRecords : undefined}
           onExpand={!running ? loadHistoricalProcessRecords : undefined}
+          outputPerformance={rawAiOutputCycles[rawAiOutputCycles.length - 1]?.performance}
           running={running}
         >
           {aiOutputCycleEntries.map((entry, index) => (
@@ -4799,6 +4985,7 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
                     onResolveToolConfirmation={onResolveToolConfirmation}
                     pendingToolConfirmation={pendingToolConfirmation}
                     pendingManualVerificationToolKey={pendingManualVerificationToolKey}
+                    userInputQuestionInAnswer={userInputQuestionInAnswer}
                     resolvingConfirmationAction={resolvingConfirmationAction}
                     resolvingConfirmationId={resolvingConfirmationId}
                     resumingHumanVerification={resumingHumanVerification}
@@ -4811,14 +4998,21 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
               ))}
             </div>
           ) : null}
-          {running && !hasPendingConfirmation ? (
+          {showStandaloneConfirmation ? <BrowserChatToolConfirmationActions pending={pendingToolConfirmation}
+            resolvingConfirmationAction={resolvingConfirmationAction} resolvingConfirmationId={resolvingConfirmationId}
+            onResolveToolConfirmation={onResolveToolConfirmation} /> : null}
+          {running ? (
             <BeautifulLoadingState
               className={`browser-chat-agent-thinking${hasHistoricalAiOutput || shouldShowStepTimeline ? ' is-continuation' : ''}`}
-              detail={runningActivityLabel}
-              label={message.activity?.operationId?.startsWith('tool:') ? t('正在执行工具')
+              detail={hasPendingConfirmation ? t('确认或取消后，继续当前任务') : runningActivityLabel}
+              label={hasPendingConfirmation ? t('等待用户确认') : message.activity?.phase === 'tool:failed' ? t('工具失败，正在继续处理') : message.activity?.phase === 'chat:subagent-wait'
+                || message.activity?.operationId?.startsWith('subagent:wait') ? t('等待子 Agent 返回结果')
+                : message.activity?.operationId?.startsWith('tool:') ? t('正在执行工具')
                 : message.activity?.operationId?.startsWith('compression:') ? t('正在压缩上下文')
                   : t('AI 正在处理当前请求')}
               showElapsed
+              showTokensPerSecond={!hasPendingConfirmation && message.activity?.operationId?.startsWith('ai:')}
+              outputPerformance={message.activity?.performance}
               startedAt={message.activity?.startedAt || message.createdAt}
             />
           ) : null}
@@ -4891,7 +5085,7 @@ const BrowserChatMessageItem = memo(function BrowserChatMessageItem({
   onLoadMessageRecords: BrowserChatMessageRecordLoader;
   onPreviewImage: (attachment: BrowserChatAttachment) => void;
   onResolveToolConfirmation?: (confirmationId: string, action: BrowserChatToolConfirmationAction) => void | Promise<void>;
-  onResumeHumanVerification?: () => void | Promise<void>;
+  onResumeHumanVerification?: (subagentId?: string) => void | Promise<void>;
   onSelectTool: (detail: BrowserChatToolDetail) => void;
   onShowLogs: (messageId: string) => void;
   pendingToolConfirmation?: BrowserChatToolConfirmation;
@@ -5100,7 +5294,7 @@ type BrowserChatExecutedGroupProps = {
   onLoadMessageRecords: BrowserChatMessageRecordLoader;
   outputCyclesByMessageId: Map<string, BrowserChatAiOutputCycle[]>;
   onResolveToolConfirmation?: (confirmationId: string, action: BrowserChatToolConfirmationAction) => void | Promise<void>;
-  onResumeHumanVerification?: () => void | Promise<void>;
+  onResumeHumanVerification?: (subagentId?: string) => void | Promise<void>;
   onSelectTool: (detail: BrowserChatToolDetail) => void;
   pendingToolConfirmation?: BrowserChatToolConfirmation;
   resolvingConfirmationAction?: BrowserChatToolConfirmationAction | null;
@@ -5203,15 +5397,19 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
   onLoadEarlier,
   onInitialPositioned,
   onPreviewImage,
+  onPreviewSubagent,
   onResolveToolConfirmation,
+  onReplyToSubagent,
   onResumeHumanVerification,
   onSelectTool,
   onStopSubagent,
   onShowLogs,
   pendingToolConfirmation,
+  previewingSubagentId,
   resolvingConfirmationAction,
   resolvingConfirmationId,
   resumingHumanVerification,
+  replyTargetSubagentId,
   revealImmediately,
   sessionAwaitingHuman,
   sessionId,
@@ -5239,15 +5437,19 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
   onLoadEarlier?: () => void | Promise<void>;
   onInitialPositioned?: (sessionId?: string) => void;
   onPreviewImage: (attachment: BrowserChatAttachment) => void;
+  onPreviewSubagent?: (subagentId: string) => void | Promise<void>;
   onResolveToolConfirmation?: (confirmationId: string, action: BrowserChatToolConfirmationAction) => void | Promise<void>;
-  onResumeHumanVerification?: () => void | Promise<void>;
+  onReplyToSubagent?: (subagentId: string) => void;
+  onResumeHumanVerification?: (subagentId?: string) => void | Promise<void>;
   onSelectTool: (detail: BrowserChatToolDetail) => void;
   onStopSubagent: (subagentId: string) => void | Promise<void>;
   onShowLogs: (messageId: string) => void;
   pendingToolConfirmation?: BrowserChatToolConfirmation;
+  previewingSubagentId?: string;
   resolvingConfirmationAction?: BrowserChatToolConfirmationAction | null;
   resolvingConfirmationId?: string | null;
   resumingHumanVerification?: boolean;
+  replyTargetSubagentId?: string;
   revealImmediately?: boolean;
   sessionAwaitingHuman?: boolean;
   sessionId?: string;
@@ -5297,9 +5499,14 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
     selectedSubagentId,
     closeSubagent,
     openSubagent,
+    resumeSubagent: onResumeHumanVerification,
+    replyToSubagent: sessionAwaitingHuman && !sessionBusy ? onReplyToSubagent : undefined,
+    replyTargetSubagentId,
+    previewSubagent: onPreviewSubagent,
+    previewingSubagentId,
     stopSubagent: onStopSubagent,
     stoppingSubagentIds,
-  }), [closeSubagent, onStopSubagent, openSubagent, selectedSubagentId, stoppingSubagentIds]);
+  }), [closeSubagent, onPreviewSubagent, onReplyToSubagent, onResumeHumanVerification, onStopSubagent, openSubagent, previewingSubagentId, replyTargetSubagentId, selectedSubagentId, sessionAwaitingHuman, sessionBusy, stoppingSubagentIds]);
   const screenshotPreviewContext = useMemo(() => ({ open: openScreenshotPreview }), [openScreenshotPreview]);
   const stepRecords = useMemo(() => [...stepsByIndex.values()], [stepsByIndex]);
   const mainOutputCycles = useMemo(() => outputCycles.filter((cycle) => !cycle.subagentId), [outputCycles]);
@@ -5535,20 +5742,22 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
     setShowScrollToBottom(false);
   }, [getScrollContainer, messages, submittedClientMessageId]);
 
-  useLayoutEffect(() => {
-    const previousLastMessageId = previousLastMessageIdRef.current;
-    previousLastMessageIdRef.current = lastMessageId;
-    if (!previousLastMessageId || previousLastMessageId === lastMessageId
-      || !followLatestRef.current || earlierLoadInFlightRef.current) return;
+  const stopFollowingLatest = useCallback(() => {
     const container = getScrollContainer();
+    followLatestRef.current = false;
+    cancelTurnScrollRef.current?.();
+    if (scrollToLatestTimerRef.current) window.clearTimeout(scrollToLatestTimerRef.current);
+    scrollToLatestTimerRef.current = 0;
+    const wasScrollingToLatest = scrollingToLatestRef.current;
+    scrollingToLatestRef.current = false;
     if (!container) return;
-    // Appending the optimistic user/assistant turn can change the preceding
-    // answer's layout. Pin before paint so a content resize cannot be mistaken
-    // for the reader scrolling away from the bottom.
-    container.scrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
-    lastObservedScrollTopRef.current = container.scrollTop;
-    setShowScrollToBottom(false);
-  }, [getScrollContainer, lastMessageId]);
+    if (wasScrollingToLatest) {
+      // Clearing our timer does not cancel the browser's native smooth scroll.
+      container.scrollTo({ behavior: 'instant', top: container.scrollTop });
+      lastObservedScrollTopRef.current = container.scrollTop;
+    }
+    setShowScrollToBottom(container.scrollHeight - container.scrollTop - container.clientHeight > 72);
+  }, [getScrollContainer]);
 
   const trackScrollPosition = useCallback(() => {
     const container = getScrollContainer();
@@ -5566,27 +5775,51 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
       setShowScrollToBottom(distanceFromBottom > 72);
       return;
     }
+    const scrolledUp = container.scrollTop < previousScrollTop - 0.5;
+    const hasUserScrollIntent = performance.now() <= userScrollIntentUntilRef.current;
+    const userScrolledUp = hasUserScrollIntent && userScrollDirectionRef.current === 'up';
+    // Scrollbar dragging and touch inertia can outlast the input intent window.
+    // A height collapse can also reduce scrollTop, but leaves us at the bottom.
+    if (userScrolledUp || (!scrollingToLatestRef.current && scrolledUp && (hasUserScrollIntent || distanceFromBottom > 16))) {
+      stopFollowingLatest();
+      return;
+    }
     if (scrollingToLatestRef.current) {
       followLatestRef.current = true;
       setShowScrollToBottom(false);
       return;
     }
-    if (performance.now() <= userScrollIntentUntilRef.current) {
-      if (userScrollDirectionRef.current === 'up' || container.scrollTop < previousScrollTop - 0.5) {
-        followLatestRef.current = false;
-      } else if ((userScrollDirectionRef.current === 'down' || container.scrollTop > previousScrollTop + 0.5)
-        && distanceFromBottom <= 16) {
-        followLatestRef.current = true;
-      }
+    if (distanceFromBottom <= 16 && (container.scrollTop > previousScrollTop + 0.5
+      || (performance.now() <= userScrollIntentUntilRef.current && userScrollDirectionRef.current === 'down'))) {
+      followLatestRef.current = true;
     }
     setShowScrollToBottom(!followLatestRef.current && distanceFromBottom > 72);
-  }, [getScrollContainer]);
+  }, [getScrollContainer, stopFollowingLatest]);
+
+  useLayoutEffect(() => {
+    const previousLastMessageId = previousLastMessageIdRef.current;
+    previousLastMessageIdRef.current = lastMessageId;
+    if (!previousLastMessageId || previousLastMessageId === lastMessageId
+      || !followLatestRef.current || earlierLoadInFlightRef.current) return;
+    const container = getScrollContainer();
+    if (!container) return;
+    trackScrollPosition();
+    if (!followLatestRef.current) return;
+    // Appending the optimistic user/assistant turn can change the preceding
+    // answer's layout. Pin before paint so a content resize cannot be mistaken
+    // for the reader scrolling away from the bottom.
+    container.scrollTo({ behavior: 'instant', top: Math.max(0, container.scrollHeight - container.clientHeight) });
+    lastObservedScrollTopRef.current = container.scrollTop;
+    setShowScrollToBottom(false);
+  }, [getScrollContainer, lastMessageId, trackScrollPosition]);
 
   const scrollToLatest = useCallback(() => {
     const container = getScrollContainer();
     if (!container) return;
     cancelTurnScrollRef.current?.();
     if (scrollToLatestTimerRef.current) window.clearTimeout(scrollToLatestTimerRef.current);
+    userScrollIntentUntilRef.current = 0;
+    userScrollDirectionRef.current = null;
     scrollingToLatestRef.current = true;
     followLatestRef.current = true;
     setShowScrollToBottom(false);
@@ -5617,7 +5850,9 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
     const cancelPinning = () => { cancelled = true; };
     const pinToBottom = () => {
       if (cancelled || !followLatestRef.current) return;
-      container.scrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+      trackScrollPosition();
+      if (!followLatestRef.current) return;
+      container.scrollTo({ behavior: 'instant', top: Math.max(0, container.scrollHeight - container.clientHeight) });
       lastObservedScrollTopRef.current = container.scrollTop;
       followLatestRef.current = true;
       setShowScrollToBottom(false);
@@ -5635,7 +5870,7 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
       container.removeEventListener('touchstart', cancelPinning);
       container.removeEventListener('wheel', cancelPinning);
     };
-  }, [getScrollContainer, sessionBusy, sessionId]);
+  }, [getScrollContainer, sessionBusy, sessionId, trackScrollPosition]);
 
   useEffect(() => {
     const messageList = scrollRef.current;
@@ -5649,7 +5884,10 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
       frame = requestAnimationFrame(() => {
         frame = 0;
         if (!followLatestRef.current || earlierLoadInFlightRef.current) return;
-        scrollContainer.scrollTop = Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight);
+        // The native scroll event can arrive after this resize callback.
+        trackScrollPosition();
+        if (!followLatestRef.current) return;
+        scrollContainer.scrollTo({ behavior: 'instant', top: Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight) });
         lastObservedScrollTopRef.current = scrollContainer.scrollTop;
       });
     };
@@ -5673,21 +5911,42 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
     // ResizeObserver owns content-height changes. Watching every text mutation
     // also observes elapsed timers and forces layout even when height is stable.
     const mutationObserver = new MutationObserver(syncObservedChildren);
-    const markUserScrollIntent = (event?: Event) => {
-      userScrollIntentUntilRef.current = performance.now() + 600;
+    let lastTouchY: number | undefined;
+    const markUserScrollIntent = (event: Event) => {
+      let direction: 'up' | 'down' | null = null;
       if (event instanceof WheelEvent) {
-        userScrollDirectionRef.current = event.deltaY < 0 ? 'up' : event.deltaY > 0 ? 'down' : null;
-        if (event.deltaY < 0 && scrollContainer.scrollHeight > scrollContainer.clientHeight + 1) {
-          followLatestRef.current = false;
+        if (!event.deltaY || event.ctrlKey) return;
+        direction = event.deltaY < 0 ? 'up' : 'down';
+      } else if (typeof TouchEvent !== 'undefined' && event instanceof TouchEvent) {
+        const touchY = event.touches[0]?.clientY;
+        if (event.type === 'touchmove' && touchY !== undefined && lastTouchY !== undefined) {
+          direction = touchY > lastTouchY ? 'up' : touchY < lastTouchY ? 'down' : null;
         }
-      } else {
-        userScrollDirectionRef.current = null;
+        lastTouchY = touchY;
+      } else if (event instanceof KeyboardEvent) {
+        const target = event.target;
+        if (target instanceof HTMLElement && target.closest('input, textarea, select, [contenteditable="true"]')) return;
+        if (['ArrowUp', 'PageUp', 'Home'].includes(event.key) || (event.key === ' ' && event.shiftKey)) direction = 'up';
+        else if (['ArrowDown', 'PageDown', 'End', ' '].includes(event.key)) direction = 'down';
+        else return;
+      }
+      userScrollIntentUntilRef.current = performance.now() + 600;
+      userScrollDirectionRef.current = direction;
+      if (direction === 'up' || scrollingToLatestRef.current || cancelTurnScrollRef.current) stopFollowingLatest();
+      if (direction === 'down' && scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight <= 16) {
+        followLatestRef.current = true;
+        setShowScrollToBottom(false);
+      }
+      if (!followLatestRef.current && frame) {
+        cancelAnimationFrame(frame);
+        frame = 0;
       }
     };
-    const markPointerDrag = (event: PointerEvent) => { if (event.buttons) markUserScrollIntent(); };
+    const markPointerDrag = (event: PointerEvent) => { if (event.buttons) markUserScrollIntent(event); };
     scrollContainer.addEventListener('scroll', trackScrollPosition, { passive: true });
     scrollContainer.addEventListener('wheel', markUserScrollIntent, { passive: true });
     scrollContainer.addEventListener('touchstart', markUserScrollIntent, { passive: true });
+    scrollContainer.addEventListener('touchmove', markUserScrollIntent, { passive: true });
     scrollContainer.addEventListener('pointerdown', markUserScrollIntent, { passive: true });
     scrollContainer.addEventListener('pointermove', markPointerDrag, { passive: true });
     scrollContainer.addEventListener('keydown', markUserScrollIntent);
@@ -5697,6 +5956,7 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
       scrollContainer.removeEventListener('scroll', trackScrollPosition);
       scrollContainer.removeEventListener('wheel', markUserScrollIntent);
       scrollContainer.removeEventListener('touchstart', markUserScrollIntent);
+      scrollContainer.removeEventListener('touchmove', markUserScrollIntent);
       scrollContainer.removeEventListener('pointerdown', markUserScrollIntent);
       scrollContainer.removeEventListener('pointermove', markPointerDrag);
       scrollContainer.removeEventListener('keydown', markUserScrollIntent);
@@ -5704,7 +5964,7 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
       resizeObserver.disconnect();
       if (frame) cancelAnimationFrame(frame);
     };
-  }, [getScrollContainer, trackScrollPosition]);
+  }, [getScrollContainer, stopFollowingLatest, trackScrollPosition]);
 
   const loadEarlier = useCallback(async () => {
     if (cancelTurnScrollRef.current) return;
@@ -6031,6 +6291,7 @@ const BrowserChatComposer = memo(function BrowserChatComposer({
   availableSkills,
   busy,
   contextUsage,
+  focusToken,
   currentBusy,
   imageInputRef,
   interrupting,
@@ -6040,6 +6301,9 @@ const BrowserChatComposer = memo(function BrowserChatComposer({
   modelSelection,
   modelSelectionTitle,
   modelSelectionOptions,
+  reasoningEffort,
+  reasoningSaving,
+  onReasoningEffortChange,
   safetyMode,
   onInterrupt,
   onModelSelectionChange,
@@ -6064,6 +6328,7 @@ const BrowserChatComposer = memo(function BrowserChatComposer({
   availableSkills: SkillRecord[];
   busy: boolean;
   contextUsage?: BrowserChatSession['contextUsage'];
+  focusToken?: number;
   currentBusy: boolean;
   imageInputRef: RefObject<HTMLInputElement | null>;
   interrupting: boolean;
@@ -6072,6 +6337,9 @@ const BrowserChatComposer = memo(function BrowserChatComposer({
   managementActions: ReactNode;
   modelSelection: string;
   modelSelectionTitle: string;
+  reasoningEffort: ReasoningEffortSetting;
+  reasoningSaving: boolean;
+  onReasoningEffortChange: (value: ReasoningEffortSetting) => void;
   modelSelectionOptions: Array<{ description?: string; group?: string; label: string; selectedLabel?: string; value: string }>;
   safetyMode: BrowserChatSafetyMode;
   onInterrupt: () => void | Promise<void>;
@@ -6118,6 +6386,12 @@ const BrowserChatComposer = memo(function BrowserChatComposer({
       delete editorRef.current.dataset.empty;
     }
   }, [resetToken]);
+
+  useEffect(() => {
+    if (!focusToken) return;
+    const frame = requestAnimationFrame(() => editorRef.current?.focus({ preventScroll: true }));
+    return () => cancelAnimationFrame(frame);
+  }, [focusToken]);
 
   const editorPlainText = useCallback((root: HTMLElement | null) => {
     if (!root) return '';
@@ -6789,6 +7063,14 @@ const BrowserChatComposer = memo(function BrowserChatComposer({
                 options={compactModelSelectionOptions.length ? compactModelSelectionOptions : [{ label: t('未启用模型服务商'), value: modelSelection }]}
                 searchable
                 searchPlaceholder={t('搜索模型')}
+                submenu={{
+                  label: t('思考强度'),
+                  description: t('仅用于当前对话，实际档位以模型支持为准。'),
+                  disabled: currentBusy || loading || reasoningSaving,
+                  onChange: value => onReasoningEffortChange(normalizeReasoningEffort(value)),
+                  options: reasoningEffortOptions.map(option => ({ ...option, label: t(option.label).replace(/^.*? · /, '') })),
+                  value: reasoningEffort,
+                }}
                 tooltip={<p className="browser-chat-model-details">{modelSelectionTitle}</p>}
                 tooltipTitle={t('当前模型')}
                 tooltipWidth={280}
@@ -8454,9 +8736,15 @@ export function BrowserChatWorkspace({
   const [modelConfig, setModelConfig] = useState<BrowserChatModelConfig | null>(null);
   const modelSelectionSaveRef = useRef<Promise<void>>(Promise.resolve());
   const modelSelectionRevisionRef = useRef(0);
+  const [draftReasoningEffort, setDraftReasoningEffort] = useState<ReasoningEffortSetting>('provider-default');
+  const reasoningEffort = normalizeReasoningEffort(session?.reasoningEffort ?? draftReasoningEffort);
+  const reasoningSaveRef = useRef<Promise<void>>(Promise.resolve());
+  const [reasoningSaving, setReasoningSaving] = useState(false);
   const [attachments, setAttachments] = useState<BrowserChatAttachment[]>([]);
   const attachmentsRef = useRef<BrowserChatAttachment[]>([]);
   const [composerResetToken, setComposerResetToken] = useState(0);
+  const [composerFocusToken, setComposerFocusToken] = useState(0);
+  const [subagentReplyTarget, setSubagentReplyTarget] = useState<{ sessionId: string; subagentId: string } | null>(null);
   const [submittedMessage, setSubmittedMessage] = useState<{ sessionId: string; clientMessageId: string }>();
   const [busy, setBusy] = useState(false);
   const [pendingMessageSessionId, setPendingMessageSessionId] = useState<string | null>(null);
@@ -8507,6 +8795,11 @@ export function BrowserChatWorkspace({
   const [embeddedBrowserDialogOpen, setEmbeddedBrowserDialogOpen] = useState(false);
   const [webPreviewRuntime, setWebPreviewRuntime] = useState(false);
   const [webPreviewOpen, setWebPreviewOpen] = useState(false);
+  const [webPreviewGeneration, setWebPreviewGeneration] = useState(0);
+  const [subagentPreviewTarget, setSubagentPreviewTarget] = useState<{ sessionId: string; subagentId: string } | null>(null);
+  const [previewingSubagentId, setPreviewingSubagentId] = useState<string>();
+  const subagentPreviewRequestRef = useRef(0);
+  const subagentPreviewQueueRef = useRef<Promise<void>>(Promise.resolve());
   const [editingConversationTitle, setEditingConversationTitle] = useState(false);
   const [conversationTitleDraft, setConversationTitleDraft] = useState('');
   const [savingConversationTitle, setSavingConversationTitle] = useState(false);
@@ -8526,6 +8819,7 @@ export function BrowserChatWorkspace({
           clientMessageId: metadata.clientMessageId || latest.id,
           attachments: metadata.attachments || [],
           skillIds: metadata.skillIds || [],
+          subagentId: metadata.subagentId,
         },
       };
     },
@@ -8538,7 +8832,20 @@ export function BrowserChatWorkspace({
   const queueUIRecord = useCallback((sessionId: string, part: BrowserChatUIMessagePart) => {
     if (!uiRecordsMountedRef.current || (part.type !== 'data-step' && part.type !== 'data-outputCycle' && part.type !== 'data-subagent')) return;
     const records = pendingUIRecordsRef.current.get(sessionId) || new Map<string, BrowserChatUIMessagePart>();
-    records.set(part.type + ':' + part.id, part);
+    const recordKey = part.type + ':' + part.id;
+    const previous = records.get(recordKey);
+    // Preserve terminal/results evidence before coalescing events for the frame.
+    // Keeping only the last packet can discard completion if a late start lands
+    // in the same frame, before the session-level monotonic merge sees it.
+    if (previous?.type === 'data-step' && part.type === 'data-step') {
+      records.set(recordKey, { ...part, data: mergeBrowserChatRealtimeCollections(
+        { messages: [], logs: [], steps: [previous.data] }, { steps: [part.data] },
+      ).steps[0] });
+    } else if (previous?.type === 'data-subagent' && part.type === 'data-subagent') {
+      records.set(recordKey, { ...part, data: mergeBrowserChatRealtimeSubagents([previous.data], [part.data])[0] });
+    } else if (previous?.type === 'data-outputCycle' && part.type === 'data-outputCycle') {
+      records.set(recordKey, { ...part, data: mergeBrowserChatOutputCycleStreams([previous.data], [part.data])[0] });
+    } else records.set(recordKey, part);
     pendingUIRecordsRef.current.set(sessionId, records);
     if (uiRecordsFrameRef.current) return;
     uiRecordsFrameRef.current = requestAnimationFrame(() => {
@@ -8614,7 +8921,9 @@ export function BrowserChatWorkspace({
     if (!toolDialog) return null;
     let resolvedDetail = toolDialog;
     if (toolDialog.tool.id && (toolDialog.step.status === 'running' || toolDialog.tool.ok === undefined)) {
-      for (const step of steps) {
+      const ownerSteps = toolDialog.subagentId
+        ? subagents.find((child) => child.id === toolDialog.subagentId)?.steps || [] : steps;
+      for (const step of ownerSteps) {
         const toolIndex = (step.tools || []).findIndex((tool) => tool.id === toolDialog.tool.id);
         if (toolIndex < 0) continue;
         const tool = step.tools?.[toolIndex];
@@ -8632,7 +8941,7 @@ export function BrowserChatWorkspace({
       ...resolvedDetail,
       confirmationScreenshotUrl: confirmation?.screenshotUrl || toolDialog.confirmationScreenshotUrl,
     };
-  }, [logs, steps, toolDialog]);
+  }, [logs, steps, subagents, toolDialog]);
   const visibleMessages = useSharedBrowserChatValue(useMemo(() => overlayBrowserChatUIMessages(
     messages,
     currentRequestUIMessages,
@@ -8678,6 +8987,82 @@ export function BrowserChatWorkspace({
     () => [...visibleMessages].reverse().find((item) => item.role === 'assistant')?.id,
     [visibleMessages],
   );
+  const replyableSubagents = useMemo(() => session?.turnState === 'awaiting_human' && !selectedSessionRunning
+    ? subagents.filter((subagent) => {
+      if (subagent.messageId !== lastAssistantMessageId || subagent.status !== 'blocked' || !subagent.resumable) return false;
+      const tools = subagent.steps.flatMap((step) => step.tools || []);
+      return browserChatHasPendingHumanInput(tools)
+        && asRecord(tools.findLast((tool) => tool.name === 'browser')?.input)?.action === 'requestUserInput';
+    }) : [], [lastAssistantMessageId, selectedSessionRunning, session?.turnState, subagents]);
+  const selectedReplySubagent = subagentReplyTarget?.sessionId === session?.id
+    ? replyableSubagents.find((subagent) => subagent.id === subagentReplyTarget?.subagentId) : undefined;
+  useEffect(() => {
+    if (subagentReplyTarget && !selectedReplySubagent) setSubagentReplyTarget(null);
+  }, [selectedReplySubagent, subagentReplyTarget]);
+  const replyToSubagent = useCallback((subagentId: string) => {
+    if (!session?.id || !replyableSubagents.some((subagent) => subagent.id === subagentId)) return;
+    setSubagentReplyTarget({ sessionId: session.id, subagentId });
+    setComposerFocusToken((token) => token + 1);
+  }, [replyableSubagents, session?.id]);
+  const previewableSubagents = useMemo(() => subagents.filter((subagent) => {
+    if (subagent.messageId !== lastAssistantMessageId || subagent.status !== 'blocked' || !subagent.resumable) return false;
+    const tools = subagent.steps.flatMap((step) => step.tools || []);
+    return browserChatHasPendingHumanInput(tools)
+      && asRecord(tools.findLast((tool) => tool.name === 'browser')?.input)?.action === 'waitForHumanVerification';
+  }), [lastAssistantMessageId, subagents]);
+  const updateSubagentPreviewSelection = useCallback((targetSessionId: string, subagentId?: string) => {
+    // Serialize selection and clear requests: a slow selection must not arrive
+    // after closing the viewer and redirect the next main-agent preview.
+    const request = subagentPreviewQueueRef.current.catch(() => undefined).then(async () => {
+      const suffix = subagentId ? `/${encodeURIComponent(subagentId)}` : '';
+      const response = await fetch(browserChatApiUrl(`/api/browser-chat/${encodeURIComponent(targetSessionId)}/subagents${suffix}/preview`), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+      });
+      await readApiJson<Record<string, unknown>>(response, '切换实时界面失败');
+    });
+    subagentPreviewQueueRef.current = request;
+    return request;
+  }, [browserChatApiUrl]);
+  const clearSubagentPreviewTarget = useCallback(async () => {
+    const target = subagentPreviewTarget;
+    const sequence = ++subagentPreviewRequestRef.current;
+    setSubagentPreviewTarget(null);
+    setPreviewingSubagentId(undefined);
+    if (!target) return;
+    try {
+      await updateSubagentPreviewSelection(target.sessionId);
+      if (sequence === subagentPreviewRequestRef.current) setWebPreviewGeneration((generation) => generation + 1);
+    } catch (previewError) {
+      if (sequence === subagentPreviewRequestRef.current && activeSessionIdRef.current === target.sessionId) {
+        setError(previewError instanceof Error ? previewError.message : '切换实时界面失败');
+      }
+    }
+  }, [subagentPreviewTarget, updateSubagentPreviewSelection]);
+  const previewSubagent = useCallback(async (subagentId: string) => {
+    const targetSessionId = session?.id;
+    if (!targetSessionId || !previewableSubagents.some((subagent) => subagent.id === subagentId)) return;
+    const sequence = ++subagentPreviewRequestRef.current;
+    setSubagentPreviewTarget({ sessionId: targetSessionId, subagentId });
+    setPreviewingSubagentId(subagentId);
+    try {
+      await updateSubagentPreviewSelection(targetSessionId, subagentId);
+      if (sequence !== subagentPreviewRequestRef.current || activeSessionIdRef.current !== targetSessionId) return;
+      setWebPreviewGeneration((generation) => generation + 1);
+      setWebPreviewOpen(true);
+    } catch (previewError) {
+      if (sequence !== subagentPreviewRequestRef.current) return;
+      setSubagentPreviewTarget(null);
+      setError(previewError instanceof Error ? previewError.message : '切换实时界面失败');
+    } finally {
+      if (sequence === subagentPreviewRequestRef.current) setPreviewingSubagentId(undefined);
+    }
+  }, [previewableSubagents, session?.id, updateSubagentPreviewSelection]);
+  useEffect(() => {
+    if (subagentPreviewTarget && (subagentPreviewTarget.sessionId !== session?.id
+      || !previewableSubagents.some((subagent) => subagent.id === subagentPreviewTarget.subagentId))) {
+      void clearSubagentPreviewTarget();
+    }
+  }, [clearSubagentPreviewTarget, previewableSubagents, session?.id, subagentPreviewTarget]);
   const browserActivationRequestId = useMemo(() => {
     if (!selectedSessionRunning || !lastAssistantMessageId) return '';
     return [...logs].reverse().find((log) => (
@@ -8764,12 +9149,14 @@ export function BrowserChatWorkspace({
   }, [attachments]);
 
   useEffect(() => {
-    if (!session || selectedSessionRunning || session.turnState === 'awaiting_human' || session.pendingToolConfirmation) return undefined;
+    if (!session || selectedSessionRunning || session.turnState === 'awaiting_human' || session.pendingToolConfirmation
+      || session.subagents.some((subagent) => subagent.status === 'running' || subagent.status === 'queued')) return undefined;
     const sessionId = session.id;
     const timer = window.setTimeout(() => {
       setSession((current) => {
         if (!current || current.id !== sessionId || isBrowserChatSessionRunning(current)
-          || current.turnState === 'awaiting_human' || current.pendingToolConfirmation) {
+          || current.turnState === 'awaiting_human' || current.pendingToolConfirmation
+          || current.subagents.some((subagent) => subagent.status === 'running' || subagent.status === 'queued')) {
           return current;
         }
         if (!current.logs.length && !current.steps.length && !current.outputCycles.length && !current.subagents.length) {
@@ -8894,13 +9281,15 @@ export function BrowserChatWorkspace({
     const controller = new AbortController();
     toolDialogAbortRef.current = controller;
     setToolDialog(detail);
-    const messageId = detail.step.messageId;
+    const messageId = detail.parentMessageId || detail.step.messageId;
     setToolDialogLoadState(messageId ? 'loading' : 'idle');
     if (!messageId) return;
-    void loadMessageRecords(messageId, { signal: controller.signal })
+    void loadMessageRecords(messageId, { signal: controller.signal, subagentsOnly: Boolean(detail.subagentId) })
       .then((records) => {
         if (controller.signal.aborted) return;
-        const step = records.steps.find((item) => item.index === detail.stepIndex);
+        const ownerSteps = detail.subagentId
+          ? records.subagents.find((child) => child.id === detail.subagentId)?.steps || [] : records.steps;
+        const step = ownerSteps.find((item) => item.index === detail.stepIndex);
         if (!step) throw new Error('Tool step is not yet available in persisted records.');
         const toolIndex = detail.tool.id
           ? (step.tools || []).findIndex((tool) => tool.id === detail.tool.id)
@@ -8909,8 +9298,9 @@ export function BrowserChatWorkspace({
         if (!tool) throw new Error('Tool call is not yet available in persisted records.');
         const confirmation = toolUserActionForTool(records.logs, step.index, tool.name, tool.input);
         setToolDialog((current) => {
-          if (!current || current.stepIndex !== detail.stepIndex || current.tool.id !== detail.tool.id) return current;
+          if (!current || current.subagentId !== detail.subagentId || current.stepIndex !== detail.stepIndex || current.tool.id !== detail.tool.id) return current;
           return {
+            ...detail,
             confirmationScreenshotUrl: confirmation?.screenshotUrl || detail.confirmationScreenshotUrl,
             step,
             stepIndex: step.index,
@@ -8997,7 +9387,7 @@ export function BrowserChatWorkspace({
   const allSelectableRecentSessionsSelected = selectableRecentSessionIds.length > 0
     && selectableRecentSessionIds.every((id) => selectedSessionIdSet.has(id));
   const embeddedBrowserActive = embeddedBrowserEnabled;
-  const embeddedBrowserCovered = Boolean(toolDialog || logDialogMessageId || filePreviewOpen || embeddedBrowserDialogOpen || managementTab || messageGenerationDialog);
+  const embeddedBrowserCovered = Boolean(webPreviewOpen || toolDialog || logDialogMessageId || filePreviewOpen || embeddedBrowserDialogOpen || managementTab || messageGenerationDialog);
   const embeddedBrowserViewActive = embeddedBrowserActive && !embeddedBrowserCovered;
   const modelSelection = modelSelectionValueForConfig(modelConfig, { model: modelId, provider: modelProvider });
   const modelSelectionDiagnostic = modelSelectionDiagnosticLabel(modelConfig, { model: modelId, provider: modelProvider });
@@ -9051,6 +9441,32 @@ export function BrowserChatWorkspace({
     modelSelectionSaveRef.current = save;
     void save.catch((error) => { if (revision === modelSelectionRevisionRef.current) setError(error instanceof Error ? error.message : '保存模型选择失败'); });
   }, [modelConfig]);
+
+  const changeReasoningEffort = useCallback((next: ReasoningEffortSetting) => {
+    const targetId = session?.id;
+    if (!targetId) { setDraftReasoningEffort(next); return; }
+    const previous = normalizeReasoningEffort(session.reasoningEffort);
+    const apply = (value: ReasoningEffortSetting) => {
+      setSession(current => current?.id === targetId ? { ...current, reasoningEffort: value } : current);
+      setSessions(current => current.map(item => item.id === targetId ? { ...item, reasoningEffort: value } : item));
+    };
+    apply(next);
+    setReasoningSaving(true);
+    const save = reasoningSaveRef.current.catch(() => undefined).then(async () => {
+      const response = await fetch(browserChatApiUrl(`/api/browser-chat/${encodeURIComponent(targetId)}`), {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reasoningEffort: next }),
+      });
+      const data = await readApiJson<{ session: BrowserChatSession }>(response, '保存思考强度失败');
+      apply(normalizeReasoningEffort(data.session.reasoningEffort));
+    });
+    reasoningSaveRef.current = save;
+    void save.catch(error => {
+      apply(previous);
+      setError(error instanceof Error ? error.message : '保存思考强度失败');
+    }).finally(() => {
+      if (reasoningSaveRef.current === save) { setReasoningSaving(false); reasoningSaveRef.current = Promise.resolve(); }
+    });
+  }, [browserChatApiUrl, session?.id, session?.reasoningEffort]);
 
   const applyBrowserRuntimeSettings = useCallback((saved: Array<{ key?: string; value?: string }>) => {
     const embeddedSetting = saved.find((item) => item.key === 'ELECTRON_EMBEDDED_BROWSER');
@@ -9391,7 +9807,7 @@ export function BrowserChatWorkspace({
     const response = await fetch(browserChatApiUrl('/api/browser-chat/create'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ safetyMode, disabledTools, modelProvider, model: modelId, targetUrl: requestedTargetUrl }),
+      body: JSON.stringify({ safetyMode, disabledTools, modelProvider, model: modelId, reasoningEffort, targetUrl: requestedTargetUrl }),
     });
     const data = await readApiJson<Record<string, unknown>>(response, '创建对话会话失败');
     const created = upsertSession(data.session as BrowserChatSession, { activate: true });
@@ -9486,7 +9902,8 @@ export function BrowserChatWorkspace({
   }
 
   async function sendMessage(content: string, skillIds: string[] = [], messageAttachments?: BrowserChatAttachment[]) {
-    try { await modelSelectionSaveRef.current; }
+    const intendedReplyTarget = subagentReplyTarget;
+    try { await Promise.all([modelSelectionSaveRef.current, reasoningSaveRef.current]); }
     catch (error) { setError(error instanceof Error ? error.message : '保存模型选择失败'); return false; }
     const trimmedContent = content.trim();
     const nextAttachments = messageAttachments ?? attachments;
@@ -9511,6 +9928,17 @@ export function BrowserChatWorkspace({
     try {
       let active = await ensureSession();
       setPendingMessageSessionId(active.id);
+      const replySubagent = selectedReplySubagent && subagentReplyTarget?.sessionId === active.id
+        && active.turnState === 'awaiting_human'
+        ? active.subagents.find((record) => record.id === selectedReplySubagent.id
+          && record.status === 'blocked' && record.resumable) : undefined;
+      if (intendedReplyTarget && (!replySubagent || activeSessionIdRef.current !== intendedReplyTarget.sessionId)) {
+        throw new Error(t('该子 Agent 已不再等待回复，请重新选择任务后发送。'));
+      }
+      const resumingParentMessageId = active.turnState === 'awaiting_human'
+        && active.subagents.some((record) => record.status === 'blocked' && record.resumable)
+        ? replySubagent?.messageId || [...active.messages].reverse().find((message) => message.role === 'assistant')?.id
+        : undefined;
       const optimisticTimestamp = new Date().toISOString();
       const willQueue = isBrowserChatSessionRunning(active)
         || (active.turnState !== 'awaiting_human' && active.messages.some((message) => message.status === 'queued'));
@@ -9522,6 +9950,7 @@ export function BrowserChatWorkspace({
         // token makes long conversations progressively more expensive.
         active = { ...active, messages: overlayBrowserChatUIMessages(active.messages, requestChat.messages, active.id) };
       }
+      const resumeCheckpoint = resumingParentMessageId ? active : undefined;
       const optimisticUserMessage: BrowserChatMessage = {
         id: `${clientMessageId}:user`,
         role: 'user',
@@ -9534,7 +9963,7 @@ export function BrowserChatWorkspace({
         skillIds,
         status: willQueue ? 'queued' : undefined,
       };
-      const optimisticAssistantMessage: BrowserChatMessage | undefined = willQueue ? undefined : {
+      const optimisticAssistantMessage: BrowserChatMessage | undefined = willQueue || resumingParentMessageId ? undefined : {
         id: `${clientMessageId}:assistant`,
         role: 'assistant',
         content: '',
@@ -9552,7 +9981,9 @@ export function BrowserChatWorkspace({
         turnState: willQueue ? active.turnState : 'running',
         updatedAt: optimisticTimestamp,
         messages: [
-          ...active.messages,
+          ...active.messages.map((message) => message.id === resumingParentMessageId
+            ? { ...message, clientMessageId, updatedAt: optimisticTimestamp, status: 'running' as const }
+            : message),
           optimisticUserMessage,
           ...(optimisticAssistantMessage ? [optimisticAssistantMessage] : []),
         ],
@@ -9571,14 +10002,36 @@ export function BrowserChatWorkspace({
           createdAt: optimisticTimestamp,
           attachments: nextAttachments,
           skillIds,
+          subagentId: replySubagent?.id,
         },
       }, {
-        body: { safetyMode, disabledTools, modelProvider, model: modelId },
-      }).catch((chatError) => {
+        body: { safetyMode, disabledTools, modelProvider, model: modelId, reasoningEffort },
+      }).catch(async (chatError) => {
         setError(chatError instanceof Error ? chatError.message : '发送消息失败');
         attachmentsRef.current = nextAttachments;
         setAttachments(nextAttachments);
+        if (resumeCheckpoint && resumingParentMessageId) {
+          const rollback = (current: BrowserChatSession) => {
+            const resumedMessage = current.messages.find((message) => message.id === resumingParentMessageId);
+            if (current.id !== resumeCheckpoint.id || resumedMessage?.clientMessageId !== clientMessageId
+              || resumedMessage.updatedAt !== optimisticTimestamp) return current;
+            const previousMessage = resumeCheckpoint.messages.find((message) => message.id === resumingParentMessageId);
+            return { ...current, busy: resumeCheckpoint.busy, status: resumeCheckpoint.status,
+              turnState: resumeCheckpoint.turnState, updatedAt: resumeCheckpoint.updatedAt,
+              messages: current.messages.filter((message) => message.id !== optimisticUserMessage.id)
+                .map((message) => message.id === resumingParentMessageId && previousMessage ? previousMessage : message) };
+          };
+          setSession((current) => current ? rollback(current) : current);
+          setSessions((current) => current.map(rollback));
+          const restored = await refreshSession(resumeCheckpoint.id, { activate: activeSessionIdRef.current === resumeCheckpoint.id }).catch(() => undefined);
+          if (intendedReplyTarget && activeSessionIdRef.current === intendedReplyTarget.sessionId
+            && restored?.turnState === 'awaiting_human'
+            && restored.subagents.some((record) => record.id === intendedReplyTarget.subagentId && record.status === 'blocked' && record.resumable)) {
+            setSubagentReplyTarget(intendedReplyTarget);
+          }
+        }
       });
+      setSubagentReplyTarget(null);
       return true;
     } catch (sendError) {
       const sendMessageText = sendError instanceof Error ? sendError.message : '发送消息失败';
@@ -9706,13 +10159,17 @@ export function BrowserChatWorkspace({
     }
   }
 
-  async function resumeHumanVerification() {
+  async function resumeHumanVerification(subagentId?: string) {
     const active = session;
     if (!active?.id || currentBusy || resumingHumanVerification) return;
     setResumingHumanVerification(true);
     setError('');
     try {
-      const response = await fetch(browserChatApiUrl(`/api/browser-chat/${active.id}/resume-verification`), { method: 'POST' });
+      const response = await fetch(browserChatApiUrl(`/api/browser-chat/${active.id}/resume-verification`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(subagentId ? { subagentId } : {}),
+      });
       const data = await readApiJson<{ session: BrowserChatSession }>(response, '继续人工校验回合失败');
       if (data.session) upsertSession(data.session, { activate: activeSessionIdRef.current === active.id });
     } catch (resumeError) {
@@ -10395,20 +10852,26 @@ export function BrowserChatWorkspace({
       <div className="browser-chat-conversation-header-actions">
         <div className="browser-chat-conversation-tools" role="group" aria-label={t('对话工具')}>
           <BrowserChatRecoveryPanel key={`recovery-${session.id}`} sessionId={session.id} busy={currentBusy} />
+          <BrowserChatNovelLibraryButton />
           <BrowserChatFilesPanel key={`files-${session.id}`} sessionId={session.id} busy={currentBusy} />
           <BrowserChatTerminalPanel key={`terminals-${session.id}`} sessionId={session.id} closed={session.status === 'closed'} />
           <BrowserChatExportButton key={`export-${session.id}`} sessionId={session.id} onError={setError} />
-          {webPreviewRuntime ? (
+          {webPreviewRuntime || subagentPreviewTarget?.sessionId === session.id ? (
             <button
               aria-label={t('打开实时界面')}
               aria-pressed={webPreviewOpen}
               className="browser-chat-conversation-direct-action"
               disabled={session.status === 'closed'}
-              onClick={() => setWebPreviewOpen(true)}
+              onClick={() => {
+                const targetSessionId = session.id;
+                void clearSubagentPreviewTarget().then(() => {
+                  if (activeSessionIdRef.current === targetSessionId) setWebPreviewOpen(webPreviewRuntime);
+                });
+              }}
               type="button"
             >
               <AppWindow aria-hidden="true" size={17} />
-              <ExpandableActionLabel>{t(session.status === 'closed' ? '当前对话已结束' : '实时界面')}</ExpandableActionLabel>
+              <ExpandableActionLabel>{t(session.status === 'closed' ? '当前对话已结束' : subagentPreviewTarget ? '返回主 Agent 页面' : '实时界面')}</ExpandableActionLabel>
             </button>
           ) : null}
         </div>
@@ -10501,15 +10964,19 @@ export function BrowserChatWorkspace({
           onLoadEarlier={loadEarlierHistory}
           onInitialPositioned={markMessageViewportReady}
           onPreviewImage={previewAttachment}
+          onPreviewSubagent={previewSubagent}
           onResolveToolConfirmation={resolveToolConfirmation}
+          onReplyToSubagent={replyToSubagent}
           onResumeHumanVerification={resumeHumanVerification}
           onSelectTool={showToolDetails}
           onStopSubagent={stopSubagent}
           onShowLogs={showMessageLogs}
           pendingToolConfirmation={session?.pendingToolConfirmation}
+          previewingSubagentId={previewingSubagentId}
           resolvingConfirmationAction={resolvingConfirmationAction}
           resolvingConfirmationId={resolvingConfirmationId}
           resumingHumanVerification={resumingHumanVerification}
+          replyTargetSubagentId={selectedReplySubagent?.id}
           revealImmediately={!loadingSessionHistory && !loadingSessionId && messageViewportReady}
           sessionAwaitingHuman={session?.turnState === 'awaiting_human'}
           sessionId={session?.id}
@@ -10548,6 +11015,14 @@ export function BrowserChatWorkspace({
       ) : null}
 
       <div className="browser-chat-composer-shell">
+        {selectedReplySubagent ? (
+          <div className="browser-chat-subagent-reply-target" role="status">
+            <span>{t('正在回复子 Agent：{title}', { title: selectedReplySubagent.title })}</span>
+            <button aria-label={t('取消定向回复')} className="ui-icon-button" onClick={() => setSubagentReplyTarget(null)} title={t('取消定向回复')} type="button">
+              <X size={14} />
+            </button>
+          </div>
+        ) : null}
         <BrowserChatComposer
           key={`composer:${sessionUiKey}`}
           userId={requestUserId}
@@ -10558,6 +11033,7 @@ export function BrowserChatWorkspace({
           availableSkills={skills}
           busy={busy}
           contextUsage={session?.contextUsage}
+          focusToken={composerFocusToken}
           currentBusy={currentBusy}
           imageInputRef={imageInputRef}
           interrupting={interrupting}
@@ -10569,6 +11045,9 @@ export function BrowserChatWorkspace({
           modelSelection={modelSelection}
           modelSelectionTitle={modelSelectionDiagnostic}
           modelSelectionOptions={modelSelectionOptions}
+          reasoningEffort={reasoningEffort}
+          reasoningSaving={reasoningSaving}
+          onReasoningEffortChange={changeReasoningEffort}
           safetyMode={safetyMode}
           onInterrupt={interruptConversation}
           onModelSelectionChange={changeModelSelection}
@@ -10674,10 +11153,13 @@ export function BrowserChatWorkspace({
         </div>
       </main>
 
-      {webPreviewRuntime && webPreviewOpen && session ? (
+      {webPreviewOpen && session ? (
         <BrowserChatWebPreviewModal
-          key={`${session.userId || requestUserId}:${session.id}`}
-          onClose={() => setWebPreviewOpen(false)}
+          key={`${session.userId || requestUserId}:${session.id}:${webPreviewGeneration}`}
+          onClose={() => {
+            setWebPreviewOpen(false);
+            void clearSubagentPreviewTarget();
+          }}
           sessionId={session.id}
           userId={session.userId || requestUserId}
         />

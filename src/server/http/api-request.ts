@@ -43,10 +43,11 @@ async function readJsonRequestValue(request: Request, maxBytes: number, optional
 async function parseRequestBody<T extends z.ZodType>(
   request: Request,
   schema: T,
-  input: { maxBytes?: number },
+  input: { maxBytes?: number | null },
   optional: boolean,
 ): Promise<z.infer<T>> {
-  const maxBytes = Math.max(1024, Math.floor(input.maxBytes || 1024 * 1024));
+  // null explicitly opts out for documents whose size is not capped by the application.
+  const maxBytes = input.maxBytes === null ? Infinity : Math.max(1024, Math.floor(input.maxBytes || 1024 * 1024));
   const parsed = schema.safeParse(await readJsonRequestValue(request, maxBytes, optional));
   if (!parsed.success) {
     throw new ApiRequestError('Request body is invalid', { code: 'validation_failed' });
@@ -57,7 +58,7 @@ async function parseRequestBody<T extends z.ZodType>(
 export async function parseJsonRequest<T extends z.ZodType>(
   request: Request,
   schema: T,
-  input: { maxBytes?: number } = {},
+  input: { maxBytes?: number | null } = {},
 ): Promise<z.infer<T>> {
   return parseRequestBody(request, schema, input, false);
 }
@@ -65,7 +66,7 @@ export async function parseJsonRequest<T extends z.ZodType>(
 export async function parseOptionalJsonRequest<T extends z.ZodType>(
   request: Request,
   schema: T,
-  input: { maxBytes?: number } = {},
+  input: { maxBytes?: number | null } = {},
 ): Promise<z.infer<T>> {
   return parseRequestBody(request, schema, input, true);
 }

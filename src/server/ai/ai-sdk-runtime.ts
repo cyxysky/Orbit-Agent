@@ -1,4 +1,7 @@
 import type { LanguageModelCallOptions, TelemetryOptions } from 'ai';
+import type { LanguageModelV4CallOptions } from '@ai-sdk/provider';
+import { currentReasoningEffort } from './reasoning-scope';
+import type { ReasoningEffortSetting } from '@/lib/reasoning-effort';
 
 export type AiReasoningEffort = NonNullable<LanguageModelCallOptions['reasoning']>;
 
@@ -17,9 +20,23 @@ function positiveInteger(value: string | undefined, fallback: number) {
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
 }
 
-export function aiReasoningEffort(): AiReasoningEffort | undefined {
-  const value = String(process.env.AI_REASONING_EFFORT || '').trim() as AiReasoningEffort;
+export function aiReasoningEffort(setting = currentReasoningEffort()): AiReasoningEffort | undefined {
+  const value = setting as AiReasoningEffort;
+  // SDK-neutral reasoning currently ends at xhigh. MiniMax's additional max
+  // level is supplied through provider options at the model boundary below.
+  if (String(value) === 'max') return 'xhigh';
   return reasoningEfforts.has(value) && value !== 'provider-default' ? value : undefined;
+}
+
+export function withAiReasoningSettings(options: LanguageModelV4CallOptions, provider: string, setting: ReasoningEffortSetting = currentReasoningEffort()): LanguageModelV4CallOptions {
+  const reasoning = options.reasoning ?? aiReasoningEffort(setting);
+  const maximum = setting === 'max' && reasoning === 'xhigh';
+  return { ...options, reasoning,
+    ...(maximum && provider.startsWith('minimax.') ? { providerOptions: {
+      ...options.providerOptions,
+      minimax: { reasoningEffort: 'max', ...options.providerOptions?.minimax },
+    } } : {}),
+  };
 }
 
 export function aiRequestTimeoutMs(fallback = 120_000) {

@@ -31,6 +31,7 @@ import {
   browserChatOrderedResponseParts,
   normalizeBrowserChatMarkdown,
   remarkBrowserChatCjkStrong,
+  remarkBrowserChatArtifactLinks,
 } from '@/components/browser-chat-markdown';
 import { normalizeEmbeddedBrowserAddress } from '@/components/browser-chat-embedded-url';
 import type { BrowserChatUIMessagePart } from '@/lib/browser-chat-ui-message';
@@ -165,7 +166,7 @@ const BrowserChatMarkdownBlock = memo(function BrowserChatMarkdownBlock({ markdo
     <ReactMarkdown
       urlTransform={(url, key) => defaultUrlTransform(resolveBrowserChatArtifactReference(url, artifacts, key === 'src'))}
       rehypePlugins={[rehypeRaw, [rehypeSanitize, browserChatHtmlSchema], rehypeBrowserChatSvgReferences, rehypeKatex]}
-      remarkPlugins={[remarkGfm, remarkMath, remarkBrowserChatCjkStrong]}
+      remarkPlugins={[remarkGfm, remarkMath, remarkBrowserChatCjkStrong, remarkBrowserChatArtifactLinks]}
       components={markdownComponents}
     >
       {markdown}

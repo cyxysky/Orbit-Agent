@@ -9,6 +9,7 @@ import {
 } from './browser-chat-format';
 import { asRecord } from './unknown-value';
 import { stripBrowserChatContextMarkers } from './browser-chat-visible-text';
+import { browserChatOutputPerformanceFromUnknown } from './browser-chat-activity';
 
 /** Keep streamed reasoning and text in one cycle without replacing each other. */
 export function mergeBrowserChatStreamPart(
@@ -322,6 +323,7 @@ export function browserChatAiOutputCycleFromDebugEvent(input: {
     id: input.id,
     messageId: input.messageId,
     output: compacted,
+    performance: browserChatOutputPerformanceFromUnknown(aiOutput.performance),
     stepIndex: input.stepIndex,
     agentStepIndex: Number.isFinite(rawAgentStepIndex) ? rawAgentStepIndex : undefined,
     sequence: input.sequence,

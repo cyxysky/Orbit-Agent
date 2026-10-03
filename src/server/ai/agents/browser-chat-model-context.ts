@@ -6,6 +6,7 @@ import { stripBrowserChatContextMarkers } from '../../../lib/browser-chat-visibl
 import { withoutRuntimePromptCacheMetadata, isRuntimePromptCacheMetadataMessage } from './runtime-prompt-cache';
 import { parseContextSummary } from './runtime-semantic-summary';
 import { completeRuntimeModelToolChain } from './runtime-context-compression';
+import type { SubagentResultInbox } from './browser-chat-subagent-delivery';
 
 export type BrowserChatModelContextCompression = {
   compressedAt: string;
@@ -39,6 +40,8 @@ export type BrowserChatModelContext = {
   }>;
   lastCompression?: Omit<BrowserChatModelContextCompression, 'continuationSummary'>;
   continuationSummary?: string;
+  /** Result events are independent of replaceable/compacted active messages. */
+  subagentInbox?: SubagentResultInbox;
 };
 
 const persistentBinaryOmissionText = '[Binary visual input omitted from persistent model context; use the conversation file registry to read it again.]';
@@ -92,7 +95,9 @@ function modelMessageText(message: ModelMessage) {
 
 export function isOriginalBrowserChatUserMessage(message: ModelMessage) {
   return message.role === 'user' && !isRuntimePromptCacheMetadataMessage(message)
-    && !/^\[(?:Approved historical memory|Historical handoff|Historical context segment|Document visual QA|Attachment visual content|Explicit visual evidence|(?:Current |Historical )?browser observation|Browser observation|Source file context|Execution progress)/.test(modelMessageText(message));
+    && !/^\[(?:Approved historical memory|Historical handoff|Historical context segment|Document visual QA|Attachment visual content|Explicit visual evidence|(?:Current |Historical )?browser observation|Browser observation|Source file context|Execution progress|Runtime response protocol)/.test(modelMessageText(message))
+    // Older checkpoints stored this host reminder without a bracketed marker.
+    && !/^Runtime response protocol:/.test(modelMessageText(message));
 }
 
 export function latestBrowserChatUserMessageIndex(messages: ModelMessage[]) {
@@ -100,7 +105,7 @@ export function latestBrowserChatUserMessageIndex(messages: ModelMessage[]) {
 }
 
 function currentTurnContains(messages: ModelMessage[], role: 'user' | 'assistant', text: string) {
-  const start = messages.findLastIndex((message) => message.role === 'user');
+  const start = latestBrowserChatUserMessageIndex(messages);
   return messages.slice(Math.max(0, start)).some((message) => message.role === role && modelMessageText(message) === text.trim());
 }
 export function appendInterruptedBrowserChatTurn(messages: ModelMessage[], userContent: string, assistantContent: string, inputAlreadyStored = true) {
@@ -148,7 +153,9 @@ export function normalizeBrowserChatModelContext(value: unknown): BrowserChatMod
     : record.history || [];
   const active = record.activeMessages !== undefined
     ? register(withoutRuntimePromptCacheMetadata(normalizeBrowserChatModelMessages(record.activeMessages)))
-    : register(withoutRuntimePromptCacheMetadata(normalizeBrowserChatModelMessages(contextMessages(records, record.active || []))));
+    // Older snapshots may contain only the transcript/history. Missing active
+    // state must fall back to that history; an explicitly empty window stays empty.
+    : register(withoutRuntimePromptCacheMetadata(normalizeBrowserChatModelMessages(contextMessages(records, record.active ?? history))));
   const compression = record.lastCompression;
   const continuationSummary = parseContextSummary(record.continuationSummary) ? record.continuationSummary! : '';
   return {
@@ -160,6 +167,7 @@ export function normalizeBrowserChatModelContext(value: unknown): BrowserChatMod
     ...(record.lastRequest ? { lastRequest: record.lastRequest } : {}),
     ...(record.knowledge ? { knowledge: record.knowledge } : {}),
     ...(record.branches ? { branches: record.branches } : {}),
+    ...(record.subagentInbox ? { subagentInbox: record.subagentInbox } : {}),
     ...(compression && typeof compression === 'object' ? { lastCompression: { compressedAt: compression.compressedAt, estimatedTokensBefore: compression.estimatedTokensBefore, estimatedTokensAfter: compression.estimatedTokensAfter, retainedMessageCount: compression.retainedMessageCount, summarizedMessageCount: compression.summarizedMessageCount, targetTokens: compression.targetTokens, thresholdTokens: compression.thresholdTokens, windowTokens: compression.windowTokens } } : {}),
     ...(continuationSummary ? { continuationSummary } : {}),
   };

@@ -12,8 +12,8 @@ function stable(value: unknown): string {
   return JSON.stringify(value) ?? 'null';
 }
 
-/** Collapse only complete, consecutive browser exchanges with identical
- * no-action evidence in the model request. The archived transcript is intact. */
+/** Collapse only complete, consecutive, identical no-action exchanges.
+ * Different scripts, assistant text or returned fields remain in context. */
 export function projectRepeatedNoActionHistory(messages: ModelMessage[]) {
   const blocks: ModelMessage[][] = [];
   for (let index = 0; index < messages.length;) {
@@ -35,9 +35,13 @@ export function projectRepeatedNoActionHistory(messages: ModelMessage[]) {
     if (input?.action !== 'code' || typeof input.reason !== 'string' || !execution
       || !Array.isArray(execution.attemptedActions) || execution.attemptedActions.length
       || !Array.isArray(execution.completedActions) || execution.completedActions.length) return undefined;
-    const result = { ok: output?.ok, result: data?.result, error: data?.error, finalPage: data?.finalPage,
-      attemptedActions: execution.attemptedActions, completedActions: execution.completedActions, outcome: execution.outcome };
-    return createHash('sha256').update(stable([input.reason.trim().replace(/\s+/g, ' '), result])).digest('hex');
+    // Call IDs identify exchanges, not their content. Everything else must be
+    // identical before deleting an exchange from the model's history.
+    const comparable = block.map(message => ({ ...message,
+      content: Array.isArray(message.content) ? message.content.map(part =>
+        part.type === 'tool-call' || part.type === 'tool-result' ? { ...part, toolCallId: '' } : part) : message.content,
+    }));
+    return createHash('sha256').update(stable(comparable)).digest('hex');
   };
   const projected: ModelMessage[][] = [];
   let previousSignature: string | undefined;
@@ -53,7 +57,7 @@ export function projectRepeatedNoActionHistory(messages: ModelMessage[]) {
   return { messages: projected.flat(), suppressed };
 }
 
-/** Observed repetition, not a business verdict or a tool-execution veto.
+/** Observed repetition, not a business verdict.
  * For a no-action result, changing only the script cannot make the same
  * declared target and same returned evidence into progress. */
 export function repeatedBrowserExecutionEvidence(messages: ModelMessage[], records: Record<string, ModelMessage> = {}) {
@@ -79,15 +83,23 @@ export function repeatedBrowserExecutionEvidence(messages: ModelMessage[], recor
   let run: { signature: string; kind: 'same-call' | 'same-no-action' | 'same-blocked-surface' | 'same-observed-state' | 'repeated-state-cycle'; toolCallIds: string[]; codeHashes: string[];
     attemptedActions: unknown[]; completedActions: unknown[]; result: unknown } | undefined;
   const recent: Array<{ signature: string; id: string; codeHash: string }> = [];
+  // Include both navigation and extraction receipts. A navigate/read loop has
+  // no postActionState on every other call, so visual-only cycles miss it.
+  const exactRecent: Array<{ signature: string; id: string; codeHash: string }> = [];
+  let exactCycle: { period: number; count: number; toolCallIds: string[] } | undefined;
   let cycle: typeof run;
   let cyclePeriod: number | undefined;
   for (const message of expanded.reverse()) {
-    if (isOriginalBrowserChatUserMessage(message)) { run = undefined; cycle = undefined; recent.length = 0; calls.clear(); seen.clear(); }
+    if (isOriginalBrowserChatUserMessage(message)) {
+      run = undefined; cycle = undefined; exactCycle = undefined;
+      recent.length = 0; exactRecent.length = 0; calls.clear(); seen.clear();
+    }
     if (!Array.isArray(message.content)) continue;
     for (const part of message.content) {
       if (part.type === 'tool-call') { calls.set(part.toolCallId, { name: part.toolName, input: part.input }); continue; }
       if (part.type !== 'tool-result' || seen.has(part.toolCallId)) continue;
       seen.add(part.toolCallId);
+      exactCycle = undefined;
       const call = calls.get(part.toolCallId), input = object(call?.input);
       let output = 'value' in part.output ? object(part.output.value) : undefined;
       const original = typeof output?.sourceRef === 'string' ? records[output.sourceRef] : undefined;
@@ -100,10 +112,10 @@ export function repeatedBrowserExecutionEvidence(messages: ModelMessage[], recor
         || call?.name === 'browser' && (['state', 'snapshot', 'observe', 'images'].includes(String(input?.action))
           || input?.action === 'tabs' && (!input.tabOperation || input.tabOperation === 'list')
           || input?.action === 'mcp' && (input.tool === 'list' || object(data?.mcp)?.readOnly === true));
-      if (readOnly) continue;
+      if (readOnly) { exactRecent.length = 0; continue; }
       if (!input || call?.name !== 'browser' || part.toolName !== call.name
         || !['code', 'mcp', 'act', 'dismissSurface', 'navigate', 'tabs'].includes(String(input?.action))) {
-        run = undefined; cycle = undefined; recent.length = 0; continue;
+        run = undefined; cycle = undefined; recent.length = 0; exactRecent.length = 0; continue;
       }
       const attemptedActions = Array.isArray(execution?.attemptedActions) ? execution.attemptedActions : [];
       const completedActions = Array.isArray(execution?.completedActions) ? execution.completedActions : [];
@@ -132,11 +144,26 @@ export function repeatedBrowserExecutionEvidence(messages: ModelMessage[], recor
       const kind = blockedSurface ? 'same-blocked-surface' : sameViewEligible ? 'same-observed-state' : noAction ? 'same-no-action' : 'same-call';
       const signature = createHash('sha256').update(stable(blockedSurface
         ? [kind, activeSurface?.id, finalPage?.url]
-        : sameDomEligible ? [kind, observedPage?.url, observedPage?.title, visibleText, observed?.truncated]
-        : samePixelsEligible ? [kind, pixels?.url, pixels?.visualHash]
+        : sameDomEligible ? [kind, observedPage?.url, observedPage?.title, visibleText, observed?.truncated, data?.result]
+        : samePixelsEligible ? [kind, pixels?.url, pixels?.visualHash, data?.result]
         : noAction ? [kind, reason, result] : [kind, callInput, result])).digest('hex');
       const previous = run?.signature === signature ? run : undefined;
       const codeHash = createHash('sha256').update(stable(callInput)).digest('hex');
+      const exactSignature = createHash('sha256').update(stable([callInput, result,
+        sameDomEligible ? [observedPage?.url, visibleText] : undefined,
+      ])).digest('hex');
+      exactRecent.push({ signature: exactSignature, id: part.toolCallId, codeHash });
+      if (exactRecent.length > 16) exactRecent.shift();
+      for (let period = 1; period <= 4; period++) {
+        const tail = exactRecent.slice(-period * 3);
+        if (tail.length !== period * 3
+          || !tail.every((item, index) => index < period || item.signature === tail[index - period].signature)) continue;
+        let count = tail.length;
+        while (count < exactRecent.length
+          && exactRecent[exactRecent.length - count - 1].signature === exactRecent[exactRecent.length - count - 1 + period].signature) count++;
+        exactCycle = { period, count, toolCallIds: exactRecent.slice(-count).map(item => item.id) };
+        break;
+      }
       run = { signature, kind, toolCallIds: [...(previous?.toolCallIds || []), part.toolCallId],
         codeHashes: [...new Set([...(previous?.codeHashes || []), codeHash])],
         attemptedActions, completedActions, result: data?.result };
@@ -157,9 +184,18 @@ export function repeatedBrowserExecutionEvidence(messages: ModelMessage[], recor
     }
   }
   if (cycle) run = cycle;
+  if (exactCycle && run) {
+    run = { ...run, kind: exactCycle.period === 1 ? 'same-call' : 'repeated-state-cycle',
+      toolCallIds: exactCycle.toolCallIds,
+      codeHashes: [...new Set(exactRecent.slice(-exactCycle.count).map(item => item.codeHash))] };
+    cyclePeriod = exactCycle.period;
+  }
   if (!run || run.toolCallIds.length < (run.kind === 'same-blocked-surface' || run.kind === 'same-observed-state' ? 3 : 2)) return undefined;
   return { signature: run.signature, kind: run.kind, consecutiveCount: run.toolCallIds.length,
-    ...(cycle ? { cyclePeriod } : {}),
+    ...(cycle || exactCycle ? { cyclePeriod } : {}),
+    // Three cycles get a recovery advisory; the fourth ends tool execution.
+    // Never end work merely because the screenshot stayed the same.
+    requiresFinalization: Boolean(exactCycle && exactCycle.count >= exactCycle.period * 4),
     distinctCodeCount: run.codeHashes.length, toolCallIds: run.toolCallIds.slice(-4),
     attemptedActions: run.attemptedActions, completedActions: run.completedActions,
     resultPreview: stable(run.result).slice(0, 1600),
@@ -171,5 +207,5 @@ export function repeatedBrowserExecutionEvidence(messages: ModelMessage[], recor
       ? 'The same browser target returned the same evidence without attempting browser input, even when the script changed. Script edits alone are not progress.'
       : run.kind === 'same-observed-state'
       ? 'Several browser cells returned the same visible page state and result despite different scripts or intentions. Check the actual account, destination, form, date range and active filters before another dependent action. A bounded view may omit a real change; retrieve the specific missing evidence instead of assuming either success or absence.'
-      : 'The same browser code returned the same evidence repeatedly.'} Outer ok is not task success. Do not retry this target from the same assumption. Inspect the recovery DOM and current screenshot to establish the actual target and account/page identity, or contextRead to recover a previously working interaction. Then choose a different evidence-based action or record a concrete blocker and continue independent work. A bounded wait is appropriate only for an evidenced asynchronous condition. This comparison does not prove the page or business state is unchanged.` };
+      : 'The same browser code returned the same evidence repeatedly.'} For read-only research, use the returned data.result as evidence; a successful read does not need a click or a visible page change. If output was shortened, use contextRead with its archived ref and omitted pointer instead of rerunning extraction. Outer ok alone is not task success. Do not retry this target from the same assumption. Resolve a specific missing fact with a different source or query, or summarize the verified findings and remaining gaps. For page interactions, inspect the recovery DOM and current screenshot before changing the action. A bounded wait is appropriate only for an evidenced asynchronous condition. This comparison does not prove the page or business state is unchanged.` };
 }

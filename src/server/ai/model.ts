@@ -1,6 +1,9 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { aiFetch } from './ai-fetch';
+import { withAiReasoningSettings } from './ai-sdk-runtime';
+import { currentReasoningEffort, withReasoningEffort } from './reasoning-scope';
+import type { ReasoningEffortSetting } from '@/lib/reasoning-effort';
 import { resolveCodexCliPath } from './codex-cli';
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import type { generateText } from 'ai';
@@ -53,6 +56,7 @@ export type ModelSettingsOverride = {
   model?: string;
   supportsImageInput?: boolean;
   maxContextTokens?: number;
+  reasoningEffort?: ReasoningEffortSetting;
 };
 
 const modelSettingsStorage = ((globalThis as typeof globalThis & {
@@ -111,6 +115,7 @@ function lazyLanguageModel(
 ): GenerateTextModel {
   // Capture before lazy loading, which may run outside the settings scope.
   const sessionId = modelSettingsStorage.getStore()?.sessionId || randomUUID();
+  const reasoningEffort = currentReasoningEffort();
   let resolvedModel: Promise<LoadedLanguageModel> | undefined;
   const loadModel = () => (resolvedModel ??= loader(sessionId));
   return {
@@ -119,13 +124,15 @@ function lazyLanguageModel(
     modelId,
     supportedUrls: {},
     doGenerate: async (options) => {
-      const prepared = normalizeToolInputSchemas(await filterSensitiveData(options));
-      const result = await (await loadModel()).doGenerate(prepared);
+      const model = await loadModel();
+      const prepared = normalizeToolInputSchemas(await filterSensitiveData(withAiReasoningSettings(options, model.provider, reasoningEffort)));
+      const result = await model.doGenerate(prepared);
       return { ...result, usage: normalizeRuntimeCacheUsage(result.usage) };
     },
     doStream: async (options) => {
-      const prepared = normalizeToolInputSchemas(await filterSensitiveData(options));
-      const result = await (await loadModel()).doStream(prepared);
+      const model = await loadModel();
+      const prepared = normalizeToolInputSchemas(await filterSensitiveData(withAiReasoningSettings(options, model.provider, reasoningEffort)));
+      const result = await model.doStream(prepared);
       return { ...result, stream: result.stream.pipeThrough(new TransformStream({
         transform(part, controller) {
           controller.enqueue(part.type === 'finish'
@@ -185,7 +192,7 @@ function openAiCompatibleModel(
 
 export function withModelSettings<T>(settings: ModelSettingsOverride, callback: () => T): T {
   const sessionId = settings.sessionId?.trim() || modelSettingsStorage.getStore()?.sessionId || randomUUID();
-  return modelSettingsStorage.run({ ...settings, sessionId }, callback);
+  return modelSettingsStorage.run({ ...settings, sessionId }, () => withReasoningEffort(settings.reasoningEffort, callback));
 }
 
 export function getModel(): GenerateTextModel {
@@ -376,7 +383,7 @@ function getCodexModel(model: string): GenerateTextModel {
   const cwd = process.env.CODEX_CWD || projectRoot;
   const approvalMode = parseApprovalMode(process.env.CODEX_APPROVAL_MODE) || 'on-request';
   const sandboxMode = parseSandboxMode(process.env.CODEX_SANDBOX_MODE) || 'workspace-write';
-  const effort = parseReasoningEffort(process.env.AI_REASONING_EFFORT) || 'medium';
+  const effort = parseReasoningEffort(currentReasoningEffort()) || 'medium';
   const verbose = process.env.CODEX_VERBOSE === 'true';
 
   return lazyLanguageModel('codex', model, () => import('ai-sdk-provider-codex-cli').then((provider) => (
@@ -454,6 +461,7 @@ function parseSandboxMode(value: string | undefined): SandboxMode | undefined {
 }
 
 function parseReasoningEffort(value: string | undefined): ReasoningEffort | undefined {
+  if (value === 'max') return 'xhigh';
   if (value === 'none' || value === 'minimal' || value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh') return value;
   return undefined;
 }

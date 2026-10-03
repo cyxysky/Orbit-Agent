@@ -57,6 +57,11 @@ export function floatingLayerZIndex(anchor: Pick<HTMLElement, 'closest'>) {
     const parentZIndex = Number.parseInt(window.getComputedStyle(parentFloatingLayer).zIndex, 10);
     if (Number.isFinite(parentZIndex)) return parentZIndex + 1;
   }
+  const floatingWindow = anchor.closest('.floating-window');
+  if (floatingWindow) {
+    const parentZIndex = Number.parseInt(window.getComputedStyle(floatingWindow).zIndex, 10);
+    if (Number.isFinite(parentZIndex)) return parentZIndex + 1;
+  }
   return anchor.closest('[aria-modal="true"]') ? modalFloatingLayerZIndex : undefined;
 }
 
@@ -193,7 +198,8 @@ export function FloatingLayer({
 
     setResolvedPlacement(nextPlacement);
     setLayoutStyle((current) => {
-      const next: CSSProperties = {
+      const next: CSSProperties & { '--floating-layer-max-height': string } = {
+        '--floating-layer-max-height': `${Math.floor(availableHeight)}px`,
         bottom: 'auto',
         left: Math.round(positionedLeft),
         maxHeight: Math.floor(availableHeight),

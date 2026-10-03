@@ -95,6 +95,28 @@ function DataChartRenderer({ chart, classNames = {}, onSave, onReload, translate
     let disposed = false;
     let instance: ChartSurface | undefined;
     let observer: ResizeObserver | undefined;
+    let resizeFrame: number | undefined;
+    let lastWidth = 0;
+    let lastHeight = 0;
+    const scheduleResize = () => {
+      if (disposed || resizeFrame !== undefined) return;
+      // Resize notifications can arrive during chart layout/hover updates.
+      // Let that work finish, then resize once for the actual container size.
+      resizeFrame = requestAnimationFrame(() => {
+        resizeFrame = undefined;
+        if (disposed || !instance) return;
+        const width = surface.clientWidth;
+        const height = surface.clientHeight;
+        if (width <= 0 || height <= 0 || (width === lastWidth && height === lastHeight)) return;
+        try {
+          instance.resize();
+          lastWidth = width;
+          lastHeight = height;
+        } catch (reason) {
+          setError(reason instanceof Error ? reason.message : '图表更新失败。');
+        }
+      });
+    };
     setError(''); setReady(false);
     void (async () => {
       if (isThree) {
@@ -112,10 +134,17 @@ function DataChartRenderer({ chart, classNames = {}, onSave, onReload, translate
       }
       if (disposed) { instance?.dispose(); return; }
       instanceRef.current = instance!;
-      observer = new ResizeObserver(() => instance?.resize()); observer.observe(surface);
+      lastWidth = surface.clientWidth;
+      lastHeight = surface.clientHeight;
+      observer = new ResizeObserver(scheduleResize); observer.observe(surface);
       setReady(true);
     })().catch((reason) => { if (!disposed) setError(reason instanceof Error ? reason.message : '图表渲染失败。'); });
-    return () => { disposed = true; observer?.disconnect(); instance?.dispose(); instanceRef.current = null; applyOptionRef.current = null; };
+    return () => {
+      disposed = true;
+      observer?.disconnect();
+      if (resizeFrame !== undefined) cancelAnimationFrame(resizeFrame);
+      instance?.dispose(); instanceRef.current = null; applyOptionRef.current = null;
+    };
   }, [renderer, threeOption, isThree, refresh, t]);
 
   async function save(option: Record<string, unknown>) {

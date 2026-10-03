@@ -854,6 +854,120 @@ a:not([data-slot], [data-slot] *) {
   text-align: center;
 }
 
+.custom-select-menu.has-submenu {
+  height: 360px;
+}
+
+.custom-select-menu.has-submenu.submenu-expanded {
+  height: 480px;
+}
+
+.custom-select-submenu {
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  min-height: 40px;
+  max-height: max(40px, calc(var(--floating-layer-max-height, 360px) - 104px));
+  overflow: hidden;
+  margin-top: 4px;
+  padding: 4px;
+}
+
+.custom-select-submenu-trigger {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.custom-select-submenu-trigger:focus:not(:focus-visible) {
+  outline: none;
+  box-shadow: none;
+}
+
+.custom-select-submenu-trigger:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.custom-select-submenu-body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.custom-select-submenu-value {
+  color: var(--muted-strong);
+  margin-left: auto;
+}
+
+.custom-select-submenu-trigger svg {
+  flex-shrink: 0;
+  transition: transform 160ms ease;
+}
+
+.custom-select-submenu-trigger svg.open {
+  transform: rotate(180deg);
+}
+
+.custom-select-submenu-options {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px 2px;
+}
+
+.custom-select-submenu-option {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 6px 4px;
+  min-height: 32px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-strong);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.custom-select-submenu-option[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--foreground);
+  border-color: var(--border);
+}
+
+.custom-select-submenu-trigger:hover,
+.custom-select-submenu-option:hover:not(:disabled) {
+  background: var(--panel-soft);
+}
+
+.custom-select-submenu-option:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.custom-select-submenu-description {
+  margin: 4px 8px 6px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 .browser-chat-layout.sidebar-collapsed .browser-chat-recent-section>p {
   display: none;
 }

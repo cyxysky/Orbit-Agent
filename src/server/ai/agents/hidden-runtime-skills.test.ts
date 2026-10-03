@@ -91,7 +91,7 @@ test('file and subagent runtime Skills carry the state, QA, and browser ownershi
   assert.match(subagentRuntimeSkillContent, /## Host tool boundary and API signatures/);
   assert.match(subagentRuntimeSkillContent, /declare function subagent\(input: SubagentInput\)/);
   assert.match(subagentRuntimeSkillContent, /type SpawnActual/);
-  assert.match(subagentRuntimeSkillContent, /type ReadActual/);
+  assert.match(subagentRuntimeSkillContent, /content\?: string/);
   assert.match(subagentRuntimeSkillContent, /## Spawn examples/);
-  assert.match(subagentRuntimeSkillContent, /## Ordered read examples/);
+  assert.match(subagentRuntimeSkillContent, /## Automatic result delivery/);
 });

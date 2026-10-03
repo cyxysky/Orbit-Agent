@@ -92,6 +92,7 @@ export function createBrowserPreviewServer(options: BrowserPreviewServerOptions)
   let closed = false;
   let closing: Promise<void> | undefined;
   const currentState: BrowserPreviewWebSocketState = { clients: new Set(), streams: new Map() };
+  const resettingSessions = new Map<string, Promise<void>>();
   const state = () => currentState;
   const startScreencast = options.startScreencast;
   const dispatchPreviewInput = options.dispatchInput;
@@ -517,6 +518,7 @@ async function dispatchLatestMove(client: BrowserPreviewClient) {
       const input = client.pendingMove;
       client.pendingMove = undefined;
       const result = await dispatchPreviewInput(client.sessionId, client.userId, input);
+      if (client.socket.destroyed || !state().clients.has(client)) return;
       if (result?.ok === false) sendToClient(client, { type: 'inputError', error: result.actual });
     }
   } catch (error) {
@@ -553,8 +555,10 @@ function handleClientMessage(client: BrowserPreviewClient, text: string) {
   client.pendingMove = undefined;
   const requestId = typeof message.requestId === 'string' ? message.requestId : undefined;
   client.actionChain = client.actionChain.then(async () => {
+    if (client.socket.destroyed || !state().clients.has(client)) return;
     try {
       const result = await dispatchPreviewInput(client.sessionId, client.userId, input);
+      if (client.socket.destroyed || !state().clients.has(client)) return;
       if (!result || result.ok === false) {
         sendToClient(client, {
           type: 'inputError',
@@ -749,7 +753,7 @@ function createServer() {
       sessionId,
       ticket: (url.searchParams.get('ticket') || '').trim(),
     }).catch(() => undefined);
-    if (!auth || closed || netSocket.destroyed) {
+    if (!auth || closed || netSocket.destroyed || resettingSessions.has(sessionId)) {
       netSocket.destroy();
       return;
     }
@@ -797,6 +801,34 @@ async function closePreviewServer(current: BrowserPreviewWebSocketState) {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
+function resetSession(sessionId: string, userId?: string, onReset?: () => void): Promise<void> {
+  const existing = resettingSessions.get(sessionId);
+  if (existing) return onReset ? existing.then(() => resetSession(sessionId, userId, onReset)) : existing;
+  const matches = (value: { sessionId: string; userId: string }) => value.sessionId === sessionId
+    && (userId === undefined || value.userId === userId);
+  const attempt = Promise.resolve().then(async () => {
+    const streams = [...state().streams.values()].filter(matches);
+    const clients = [...state().clients].filter(matches);
+    // Remove routing synchronously before waiting for any screencast startup.
+    // Reconnects must not replay a frame captured for the previous target.
+    for (const stream of streams) { state().streams.delete(stream.key); stream.clients.clear(); }
+    for (const client of clients) {
+      state().clients.delete(client);
+      client.pendingMove = undefined;
+      client.pendingFrame = undefined;
+      client.pendingVideo = [];
+      client.pendingVideoBytes = 0;
+      client.socket.destroy();
+    }
+    await Promise.all(streams.map((stream) => stopStream(stream)));
+    onReset?.();
+  }).finally(() => {
+    if (resettingSessions.get(sessionId) === attempt) resettingSessions.delete(sessionId);
+  });
+  resettingSessions.set(sessionId, attempt);
+  return attempt;
+}
+
 async function ensureBrowserPreviewWebSocketServer(): Promise<BrowserPreviewWebSocketInfo> {
   if (closed) throw new Error('Browser preview server is closed.');
   const current = state();
@@ -829,7 +861,7 @@ async function ensureBrowserPreviewWebSocketServer(): Promise<BrowserPreviewWebS
   return current.starting;
 }
 
-return { ensure: ensureBrowserPreviewWebSocketServer, close() {
+return { ensure: ensureBrowserPreviewWebSocketServer, resetSession, close() {
   closed = true;
   return closing ||= (async () => {
     await currentState.starting?.catch(() => undefined);

@@ -15,7 +15,7 @@ import type { BrowserChatFinalBlock } from '@/lib/browser-chat-ui-message';
 import { browserChatExecutionParts } from '@/lib/browser-chat-ui-message';
 import { browserChatArtifactOpenUrl, browserChatArtifactsFromSteps, mergeBrowserChatArtifactSummaries, resolveBrowserChatArtifactReference, type BrowserChatArtifactSummary } from '@/lib/browser-chat-artifacts';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
-import { browserChatOrderedResponseParts, normalizeBrowserChatMarkdown, remarkBrowserChatCjkStrong } from './browser-chat-markdown';
+import { browserChatOrderedResponseParts, normalizeBrowserChatMarkdown, remarkBrowserChatCjkStrong, remarkBrowserChatArtifactLinks } from './browser-chat-markdown';
 import { browserChatHtmlSchema, rehypeBrowserChatSvgReferences } from './browser-chat-html';
 import { createResponseContext } from './response-context';
 
@@ -129,7 +129,7 @@ export async function buildBrowserChatExport(snapshot: BrowserChatExportSnapshot
   const context = createResponseContext({ sessionId: snapshot.id, locale: options.locale, translate: text => text, renderMarkdown: text => text });
   const charts = new Map<string, string>();
   const markdown = (text: string, files: BrowserChatArtifactSummary[] = []) => <ReactMarkdown
-    remarkPlugins={[remarkGfm, remarkMath, remarkBrowserChatCjkStrong]}
+    remarkPlugins={[remarkGfm, remarkMath, remarkBrowserChatCjkStrong, remarkBrowserChatArtifactLinks]}
     rehypePlugins={[rehypeRaw, [rehypeSanitize, browserChatHtmlSchema], rehypeBrowserChatSvgReferences, [rehypeKatex, { output: 'mathml' }]]}
     urlTransform={(url, key) => defaultUrlTransform(resolveBrowserChatArtifactReference(url, files, key === 'src'))}>
     {normalizeBrowserChatMarkdown(text)}

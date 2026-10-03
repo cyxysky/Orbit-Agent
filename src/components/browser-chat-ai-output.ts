@@ -14,6 +14,8 @@ type BrowserChatToolCall = NonNullable<StepExecutionResult['tools']>[number];
 
 export type BrowserChatToolDetail = {
   confirmationScreenshotUrl?: string;
+  subagentId?: string;
+  parentMessageId?: string;
   stepIndex: number;
   step: StepExecutionResult;
   toolIndex: number;

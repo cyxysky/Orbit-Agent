@@ -1,6 +1,19 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import type { BrowserChatOutputPerformance } from '@/lib/browser-chat-activity';
+import { useI18n } from '@/i18n/I18nProvider';
+
+export function formatOutputTokensPerSecond(outputPerformance?: BrowserChatOutputPerformance) {
+  const tokensPerSecond = outputPerformance?.outputTokensPerSecond;
+  if (typeof tokensPerSecond !== 'number' || !Number.isFinite(tokensPerSecond) || tokensPerSecond < 0) return '— TPS';
+  return `${outputPerformance?.estimated ? '≈' : ''}${tokensPerSecond.toFixed(1)} TPS`;
+}
+
+export function outputTokensPerSecondTitle(outputPerformance?: BrowserChatOutputPerformance) {
+  return outputPerformance?.includesFirstOutputWait
+    ? '请求平均输出速度（包含首包等待）' : '输出生成速度';
+}
 
 const DRIVE_DELAYS = Array.from({ length: 9 }, (_, index) => {
   const row = Math.floor(index / 3);
@@ -33,17 +46,22 @@ export function BeautifulLoadingState({
   className = '',
   detail,
   label,
+  outputPerformance,
   showElapsed = false,
+  showTokensPerSecond = false,
   startedAt,
   variant = 'grid',
 }: {
   className?: string;
   detail?: string;
   label: string;
+  outputPerformance?: BrowserChatOutputPerformance;
   showElapsed?: boolean;
+  showTokensPerSecond?: boolean;
   startedAt?: number | string;
   variant?: 'grid' | 'orbit';
 }) {
+  const { t } = useI18n();
   const elapsed = useElapsedTime(showElapsed, startedAt);
 
   return (
@@ -65,7 +83,13 @@ export function BeautifulLoadingState({
         <span className="beautiful-loading-label">{label}</span>
         {detail ? <small>{detail}</small> : null}
       </span>
-      {showElapsed ? <span className="beautiful-loading-elapsed">{elapsed}</span> : null}
+      {showElapsed || showTokensPerSecond ? (
+        <span className="beautiful-loading-elapsed" title={showTokensPerSecond ? t(outputTokensPerSecondTitle(outputPerformance)) : undefined}>
+          {showElapsed ? elapsed : null}
+          {showElapsed && showTokensPerSecond ? ' · ' : null}
+          {showTokensPerSecond ? formatOutputTokensPerSecond(outputPerformance) : null}
+        </span>
+      ) : null}
     </div>
   );
 }

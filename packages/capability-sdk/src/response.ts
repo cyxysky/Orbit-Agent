@@ -23,6 +23,8 @@ export interface ResponseDefinition<T = Record<string, unknown>> {
   partial?(params: unknown): T | undefined;
   /** Optional lossless correction of model-authored params, followed by strict validation. */
   repair?(params: Record<string, unknown>): Record<string, unknown>;
+  /** Recover an unambiguous detached fragment immediately following this block. */
+  repairFollowing?(params: Record<string, unknown>, fragment: unknown): Record<string, unknown> | undefined;
 }
 
 export function defineResponseType<T extends Record<string, unknown>>(definition: ResponseDefinition<T>): ResponseDefinition<T> {
@@ -64,7 +66,8 @@ export class ResponseRegistry {
 
   parse(value: unknown): ResponseBlock {
     const block = object(value);
-    if (Object.keys(block).some(key => key !== 'type' && key !== 'params') || typeof block.type !== 'string') throw new Error('Response blocks require only type and params.');
+    const extra = Object.keys(block).filter(key => key !== 'type' && key !== 'params');
+    if (extra.length || typeof block.type !== 'string') throw new Error(`Response blocks require {type, params}; put content fields inside params.${extra.length ? ` Unexpected fields: ${extra.join(', ')}.` : ' Missing string type.'}`);
     return { type: block.type, params: this.require(block.type).params.parse(block.params) };
   }
 
@@ -102,23 +105,55 @@ export class ResponseRegistry {
     try {
       const response = object(JSON.parse(closeResponseBlocksArray(raw)));
       if (!Array.isArray(response.blocks)) return undefined;
-      const repaired = { ...response, blocks: response.blocks.map(value => {
-        const block = object(value);
-        const params = object(block.params);
+      const blocks: ResponseBlock[] = [];
+      for (const value of response.blocks) {
+        const previous = blocks.at(-1);
+        const joined = previous && this.get(previous.type)?.repairFollowing?.(previous.params, value);
+        if (previous && joined) {
+          blocks[blocks.length - 1] = this.parse({ type: previous.type, params: joined });
+          continue;
+        }
+        // Transport text wrappers and flat content fields carry authored content;
+        // preserve it in the canonical envelope rather than dropping the block.
+        const block: Record<string, unknown> = typeof value === 'string' ? { type: 'core.markdown', params: { text: value } } : object(value);
+        if (Object.keys(block).length === 1 && typeof block.$text === 'string') {
+          blocks.push(this.parse({ type: 'core.markdown', params: { text: block.$text } }));
+          continue;
+        }
+        const params = { ...(block.params === undefined ? {} : object(block.params)) };
+        for (const [key, content] of Object.entries(block)) {
+          if (key === 'type' || key === 'params') continue;
+          if (Object.hasOwn(params, key) && JSON.stringify(canonical(params[key])) !== JSON.stringify(canonical(content))) {
+            throw new Error(`Conflicting response field: ${key}`);
+          }
+          params[key] = content;
+        }
         const candidates = typeof block.type === 'string' ? [this.require(block.type)]
           : block.type === undefined ? this.definitions() : [];
         const matches = candidates.flatMap(definition => {
           try {
-            return [this.parse({ ...block, type: definition.type, params: definition.repair?.(params) ?? params })];
+            return [this.parse({ type: definition.type, params: definition.repair?.(params) ?? params })];
           } catch { return []; }
         });
-        return matches.length === 1 ? matches[0] : block;
-      }) };
+        if (matches.length !== 1) return undefined;
+        blocks.push(matches[0]);
+      }
       // Keep the entire response subject to the original schema and host completion review.
-      const valid = this.parseResponse(repaired);
+      const valid = this.parseResponse({ ...response, blocks });
       const serialized = JSON.stringify(valid);
       return serialized !== raw ? serialized : undefined;
     } catch { return undefined; }
+  }
+
+  /** Apply lossless input repair before adapters report a tool validation failure. */
+  parseInput(value: unknown): StructuredResponse {
+    try { return this.parseResponse(value); }
+    catch (error) {
+      let repaired: string | undefined;
+      try { repaired = this.repairInput(JSON.stringify(value)); } catch { /* Preserve the original validation error. */ }
+      if (!repaired) throw error;
+      return this.parseResponse(JSON.parse(repaired));
+    }
   }
 
   /** Keep model instructions and examples aligned with the same registered schemas. */
@@ -126,6 +161,7 @@ export class ResponseRegistry {
     return [
       'Every final answer, including prose-only answers and clarification questions, must be submitted through finalResponse. Ordinary assistant text is progress narration, not a completed response.',
       'When a successful tool returns content entries with type="response", finish with finalResponse and include their exact block values. Plain text identifiers do not render registered views.',
+      'Every block has exactly {type, params}. Keep text, title, html and css INSIDE that block\'s params. CSS belongs in the same core.html block as its HTML; never emit a separate CSS block or a {$text: ...} fragment. For ordinary prose, use core.markdown with params.text.',
       'Registered block types for this run:',
       ...this.definitions().map(definition => {
         const example = definition.examples?.[0];
@@ -154,10 +190,10 @@ export class ResponseRegistry {
             remainingWork: { type: 'array', maxItems: 64, items: { type: 'string', minLength: 1, maxLength: 500 } },
           },
         },
-        blocks: { type: 'array', minItems: 1, maxItems: 64, items: { anyOf: variants } },
+        blocks: { type: 'array', minItems: 1, maxItems: 64, description: 'Ordered {type, params} blocks. All content is inside params; put HTML and its CSS in the same core.html block, never in a separate text fragment.', items: { anyOf: variants } },
       },
     };
-    return { jsonSchema, parse: value => this.parseResponse(value) };
+    return { jsonSchema, parse: value => this.parseInput(value) };
   }
 
   /** Publish only a contiguous prefix; an incomplete block must not shift later positions. */

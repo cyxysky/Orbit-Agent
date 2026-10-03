@@ -1,4 +1,4 @@
-import { mergeBrowserChatRealtimeCollections } from './browser-chat-realtime-model';
+import { mergeBrowserChatRealtimeCollections, mergeBrowserChatRealtimeRecords } from './browser-chat-realtime-model';
 
 export type BrowserChatHistoryPageState = {
   cursor?: string;
@@ -11,9 +11,10 @@ export type BrowserChatHistoryState = {
   steps: BrowserChatHistoryPageState;
 };
 
-type MessageLike = { status?: string; clientMessageId?: string; createdAt?: string; id: string; role?: string };
+type MessageLike = { status?: string; clientMessageId?: string; createdAt?: string; updatedAt?: string; id: string; role?: string };
 type StepLike = { index: number };
 type LogLike = { id: string; time?: string };
+type OutputCycleLike = { id: string; revision?: number };
 type HistorySession<TMessage extends MessageLike, TStep extends StepLike, TLog extends LogLike> = {
   history?: BrowserChatHistoryState;
   id: string;
@@ -21,7 +22,7 @@ type HistorySession<TMessage extends MessageLike, TStep extends StepLike, TLog e
   messages: TMessage[];
   steps: TStep[];
   queuedTurns?: Array<{ userMessageId: string }>;
-  outputCycles?: unknown[];
+  outputCycles?: OutputCycleLike[];
   subagents?: unknown[];
 };
 
@@ -40,12 +41,6 @@ export function browserChatHasEarlierMessages(value: BrowserChatHistoryState | u
 
 export function browserChatReachedHistoryTop(previousScrollTop: number, currentScrollTop: number) {
   return previousScrollTop > 0 && currentScrollTop === 0;
-}
-
-function messageKey(message: MessageLike) {
-  return message.clientMessageId && message.role
-    ? `client:${message.clientMessageId}:${message.role}`
-    : `id:${message.id}`;
 }
 
 function historyRecordId(value: unknown) {
@@ -84,19 +79,20 @@ export function mergeBrowserChatSessionWindowData<
   // The queue is authoritative, unlike a paginated history window. Missing
   // queued records were removed; incoming promoted messages are merged below.
   const queuedIds = incoming.queuedTurns && new Set(incoming.queuedTurns.map((turn) => turn.userMessageId));
-  const messages = new Map(existing.messages.filter((message) => (
+  const retainedMessages = existing.messages.filter((message) => (
     message.status !== 'queued' || !queuedIds || queuedIds.has(message.id)
-  )).map((message) => [messageKey(message), message]));
-  for (const message of incoming.messages) messages.set(messageKey(message), message);
-  const { steps } = mergeBrowserChatRealtimeCollections(existing, { steps: incoming.steps });
+  ));
+  const { messages, steps } = mergeBrowserChatRealtimeCollections({ ...existing, messages: retainedMessages }, {
+    messages: incoming.messages, steps: incoming.steps,
+  });
   const logs = new Map(existing.logs.map((log) => [log.id, log]));
   for (const log of incoming.logs) logs.set(log.id, log);
   return {
     ...incoming,
-    messages: [...messages.values()].sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || '')),
+    messages: [...messages].sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || '')),
     steps,
     logs: [...logs.values()].sort((a, b) => (a.time || '').localeCompare(b.time || '')),
-    outputCycles: mergeHistoryRecords(existing.outputCycles, incoming.outputCycles),
+    outputCycles: mergeBrowserChatRealtimeRecords(existing.outputCycles, incoming.outputCycles),
     subagents: mergeHistoryRecords(existing.subagents, incoming.subagents),
     history: existing.history || incoming.history,
   };
@@ -114,13 +110,11 @@ export function mergeBrowserChatHistoryChunkData<
     logs?: TLog[];
     messages?: TMessage[];
     steps?: TStep[];
-    outputCycles?: unknown[];
+    outputCycles?: OutputCycleLike[];
     subagents?: unknown[];
   },
 ): TSession {
-  const messages = new Map(current.messages.map((message) => [messageKey(message), message]));
-  for (const message of chunk.messages || []) messages.set(messageKey(message), message);
-  const { steps } = mergeBrowserChatRealtimeCollections(current, { steps: chunk.steps });
+  const { messages, steps } = mergeBrowserChatRealtimeCollections(current, { messages: chunk.messages, steps: chunk.steps });
   const logs = new Map(current.logs.map((log) => [log.id, log]));
   for (const log of chunk.logs || []) logs.set(log.id, log);
   const previousHistory = current.history || {
@@ -130,10 +124,10 @@ export function mergeBrowserChatHistoryChunkData<
   };
   return {
     ...current,
-    messages: [...messages.values()].sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || '')),
+    messages: [...messages].sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || '')),
     steps,
     logs: [...logs.values()].sort((a, b) => (a.time || '').localeCompare(b.time || '')),
-    outputCycles: mergeHistoryRecords(current.outputCycles, chunk.outputCycles),
+    outputCycles: mergeBrowserChatRealtimeRecords(current.outputCycles, chunk.outputCycles),
     subagents: mergeHistoryRecords(current.subagents, chunk.subagents),
     history: {
       messages: chunk.history?.messages || previousHistory.messages,

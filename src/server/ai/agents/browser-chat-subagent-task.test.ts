@@ -35,7 +35,7 @@ test('child Agent spawn input has no fixed batch-size ceiling', () => {
   assert.equal(tasks.length, 25);
 });
 
-test('all three simple task fields are required and malformed values are rejected', () => {
+test('task title and instruction are required and malformed supplied URLs are rejected', () => {
   assert.deepEqual(normalizeBrowserChatSubagentTasks([{ title: 'Old title', url: 'https://example.com' }]), []);
   assert.deepEqual(normalizeBrowserChatSubagentTasks(['Read page']), []);
   assert.deepEqual(normalizeBrowserChatSubagentTasks([{ instruction: 'Read page' }]), []);

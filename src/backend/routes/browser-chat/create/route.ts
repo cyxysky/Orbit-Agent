@@ -20,6 +20,7 @@ export async function POST(request: Request) {
         disabledTools: body.disabledTools,
         modelProvider: body.modelProvider,
         model: body.model,
+        reasoningEffort: body.reasoningEffort,
         title: body.title,
         userId,
       });

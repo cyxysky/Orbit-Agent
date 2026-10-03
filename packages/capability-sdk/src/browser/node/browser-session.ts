@@ -106,6 +106,8 @@ export type BrowserChildSessionOptions = Pick<BrowserSessionOptions,
   background?: boolean;
   /** Copies per-tab sessionStorage into the child's new page on matching origins. */
   inheritSessionStorage?: boolean;
+  /** Cancels a deferred child-page initialization without starting another browser. */
+  abortSignal?: AbortSignal;
 };
 
 export type BrowserSessionCookie = {
@@ -1694,14 +1696,30 @@ export class BrowserSession {
       .map((item) => [item.origin, item.values]));
   }
 
-  async forkChildSession(options: BrowserChildSessionOptions): Promise<BrowserSession> {
+  /** An unstarted reserved child keeps the session identity already held by tool runtimes. */
+  async forkChildSession(options: BrowserChildSessionOptions, reservedChild?: BrowserSession): Promise<BrowserSession> {
+    const assertReservedChild = () => {
+      if (!reservedChild) return;
+      if (reservedChild === this || reservedChild.lifecycle !== 'idle' || reservedChild.startPromise
+        || reservedChild.closePromise || reservedChild.context || reservedChild.browser || reservedChild.ownedPages.size) {
+        throw new Error('A reserved child browser must be an independent, unstarted session.');
+      }
+      if (reservedChild.options.runId !== options.runId
+        || reservedChild.options.browserCodeStateSessionId !== (options.browserCodeStateSessionId || this.options.browserCodeStateSessionId)) {
+        throw new Error('The reserved child browser scope must match its fork options.');
+      }
+    };
+    options.abortSignal?.throwIfAborted();
+    assertReservedChild();
     if (!this.context || !this.isUsable()) throw new Error('Parent browser session has not started');
     const context = this.context;
     const restorePage = options.background === false ? undefined : this.page;
     const inheritedSessionStorage = options.inheritSessionStorage === false
       ? {}
       : await this.sessionStorageByOrigin();
-    const child = new BrowserSession({
+    options.abortSignal?.throwIfAborted();
+    assertReservedChild();
+    const child = reservedChild || new BrowserSession({
       actionFrameLimit: options.actionFrameLimit,
       browserSurface: this.browserSurface,
       browserCodeStateSessionId: options.browserCodeStateSessionId || this.options.browserCodeStateSessionId,
@@ -1723,11 +1741,16 @@ export class BrowserSession {
     child.nativeTabGrouperEnabled = this.nativeTabGrouperEnabled;
     child.usesSessionGroupPageSelection = true;
     this.childBrowserSessions.add(child);
+    let childPage: Page | undefined;
     try {
       await child.prepareContext(context, { claimPages: false });
+      options.abortSignal?.throwIfAborted();
       child.installOwnedPageDiscovery(context);
       const page = await context.newPage();
+      childPage = page;
+      options.abortSignal?.throwIfAborted();
       await this.pageGroupMarkPromises.get(page)?.catch(() => undefined);
+      options.abortSignal?.throwIfAborted();
       this.releaseOwnedPage(page);
       child.claimPage(page);
       if (Object.keys(inheritedSessionStorage).length) {
@@ -1738,12 +1761,20 @@ export class BrowserSession {
         }, inheritedSessionStorage);
       }
       await child.ensurePageGroup(page);
+      options.abortSignal?.throwIfAborted();
       if (restorePage && !restorePage.isClosed()) await restorePage.bringToFront().catch(() => undefined);
+      options.abortSignal?.throwIfAborted();
       child.lifecycle = 'ready';
       registerBrowserSession(child);
       return child;
     } catch (error) {
-      await child.close({ force: true }).catch(() => undefined);
+      if (reservedChild) {
+        await childPage?.close().catch(() => undefined);
+        // Deferred initialization can run inside this child's browser-code
+        // transaction. Closing its scheduler would cancel that same operation
+        // and prevent its host from falling back to ordinary startup.
+        await child.closeNow({ force: true }).catch(() => undefined);
+      } else await child.close({ force: true }).catch(() => undefined);
       throw error;
     }
   }
@@ -2497,7 +2528,7 @@ export class BrowserSession {
       await this.ensureBrowserPageRuntime(frame);
       const observation = await frame.evaluate(() => (
         (window as WindowWithAiDomRuntime).__aiDomRuntime?.pageObservation()
-      )).catch(() => undefined);
+      )).catch((error) => { if (frame === mainFrame) throw error; return undefined; });
       if (!observation) return undefined;
       const framePath = frame === mainFrame ? undefined : this.getFramePath(frame);
       return {
@@ -2531,7 +2562,7 @@ export class BrowserSession {
     return {
       epoch: available.reduce((max, item) => Math.max(max, item.epoch), 0),
       url: main?.url || page.url(),
-      title: main?.title || await page.title().catch(() => ''),
+      title: main?.title || await page.title(),
       ...(main?.focusedElement ? { focusedElement: main.focusedElement } : {}),
       ...(selectedSurface ? { activeSurface: selectedSurface.surface } : {}),
       surfaces: available.flatMap((item) => item.surfaces),
@@ -3877,6 +3908,17 @@ export class BrowserSession {
       const frame = page.mainFrame();
       this.browserRuntimeRevisionByFrame.set(frame, (this.browserRuntimeRevisionByFrame.get(frame) || 0) + 1);
     };
+    const onCrash = () => {
+      // A crashed Playwright Page still reports isClosed() === false.
+      this.navigationSequenceByPage.set(page, (this.navigationSequenceByPage.get(page) || 0) + 1);
+      this.browserRuntimeRevisionByFrame.set(page.mainFrame(), (this.browserRuntimeRevisionByFrame.get(page.mainFrame()) || 0) + 1);
+      this.stateReader?.clear();
+      if (this.page === page) {
+        this.browserViewportEvidence = undefined;
+        this.latestBrowserObservation = { status: 'unavailable', actionable: false,
+          error: 'Page crashed. Open a new tab or explicitly navigate before reading fresh state; the previous action outcome is unknown.' };
+      }
+    };
     const onConsole = (message: ConsoleMessage) => {
       const text = message.text();
       if (message.type() === 'error' && !shouldIgnoreConsoleError(text)) {
@@ -3919,12 +3961,14 @@ export class BrowserSession {
     this.networkDiagnostics.attach(page);
     page.on('framenavigated', onFrameNavigated);
     page.on('domcontentloaded', onDomContentLoaded);
+    page.on('crash', onCrash);
     page.on('console', onConsole);
     page.on('pageerror', onPageError);
     page.on('dialog', onDialog);
     this.pageListenerDisposers.set(page, () => {
       page.off('framenavigated', onFrameNavigated);
       page.off('domcontentloaded', onDomContentLoaded);
+      page.off('crash', onCrash);
       page.off('console', onConsole);
       page.off('pageerror', onPageError);
       page.off('dialog', onDialog);

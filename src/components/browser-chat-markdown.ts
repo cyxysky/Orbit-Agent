@@ -181,7 +181,35 @@ type MarkdownAstNode = {
   children?: MarkdownAstNode[];
   type?: string;
   value?: string;
+  url?: string;
 };
+
+/** GFM autolinks absolute URLs, but tool artifacts use root-relative URLs. */
+export function remarkBrowserChatArtifactLinks() {
+  const visit = (node: MarkdownAstNode) => {
+    if (['link', 'linkReference', 'code', 'inlineCode', 'html'].includes(node.type || '') || !node.children) return;
+    // Inline HTML may contain an existing anchor spanning adjacent text nodes.
+    if (node.children.some(child => child.type === 'html')) return;
+    node.children = node.children.flatMap(child => {
+      if (child.type !== 'text' || typeof child.value !== 'string') { visit(child); return [child]; }
+      const value = child.value, nodes: MarkdownAstNode[] = [];
+      let offset = 0;
+      for (const match of value.matchAll(/(^|[\s（(【\[：:，,；;])((?:\/[a-zA-Z0-9._~-]+)*\/api\/artifacts\/[^\s<>"'`\[\]，。；！？、（）【】]+)/gu)) {
+        const start = match.index + match[1].length;
+        let url = match[2].replace(/[.,;:!?}]+$/u, '');
+        while (url.endsWith(')') && (url.match(/\)/g)?.length || 0) > (url.match(/\(/g)?.length || 0)) url = url.slice(0, -1);
+        if (!url.split('/api/artifacts/')[1]) continue;
+        if (start > offset) nodes.push({ type: 'text', value: value.slice(offset, start) });
+        nodes.push({ type: 'link', url, children: [{ type: 'text', value: url }] });
+        offset = start + url.length;
+      }
+      if (!nodes.length) return [child];
+      if (offset < value.length) nodes.push({ type: 'text', value: value.slice(offset) });
+      return nodes;
+    });
+  };
+  return visit;
+}
 
 function unparsedStrongNodes(value: string) {
   const nodes: MarkdownAstNode[] = [];

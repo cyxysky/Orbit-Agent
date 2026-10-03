@@ -65,7 +65,7 @@ const browserParser = z.object({
   code: z.string().min(1).max(40_000).optional().describe(
     'Required only when action=code. JavaScript executed in the persistent Playwright runtime.',
   ),
-  maxOutputChars: z.number().int().min(1_000).max(200_000).optional().describe('Output budget for code/state. State supports scope, frame, selector, query and nextCursor continuation.'),
+  maxOutputChars: z.number().int().min(1_000).optional().describe('Optional explicit output limit. Code returns the complete result when omitted. State supports scope, frame, selector, query and nextCursor continuation, with a maximum page size of 200000 characters.'),
   maxMs: z.number().int().min(1_000).max(30 * 60_000).optional().describe('Optional only when action=waitForHumanVerification.'),
 }).strict();
 

@@ -6,14 +6,14 @@ export const subagentRuntimeSkillSummary = [
   '<system_skill>',
   `<id>${subagentRuntimeSkillId}</id>`,
   '<title>Subagent Runtime</title>',
-  '<description>Hidden built-in operating manual for safe child-Agent task splitting, shared browser state, page ownership, and ordered result collection.</description>',
+  '<description>Hidden built-in operating manual for synchronous child-Agent batches, shared capabilities, browser ownership, and complete results.</description>',
   '<required>conditional</required>',
   '</system_skill>',
 ].join('\n');
 
 export const subagentRuntimeSkillContent = `# Subagent Runtime
 
-This built-in Skill is authoritative for subagent action=spawn. Read it before planning a spawn when its instructions are not already available. If spawn is called first, the host executes it through the normal validation and approval flow and supplies these complete instructions alongside the result. Inspect the actual returned UUIDs; do not repeat the spawn or read this Skill again merely to load its instructions. subagent action=read is deliberately ungated, so pending results can always be collected.
+This built-in Skill is authoritative for subagent action=spawn. If its instructions are not already available, the host executes spawn through the normal validation and approval flow and supplies these complete instructions alongside the result. Do not repeat the spawn or read this Skill again merely to load its instructions. Children use the same model, execution loop, tools, enabled capabilities, task context, and authorization rules as the parent, with an independent conversation and owned browser pages. Tasks in one batch execute concurrently, but spawn is synchronous: it waits for all children to settle and directly returns their complete results.
 
 ## Host tool boundary and API signatures
 
@@ -22,7 +22,7 @@ This built-in Skill is authoritative for subagent action=spawn. Read it before p
 \`\`\`ts
 type SubagentTask = {
   title: string;       // 1-160 characters
-  url: string;         // absolute URL, maximum 4,000 characters
+  url?: string;        // optional starting absolute URL; omit when no page is needed
   instruction: string; // self-contained task and evidence contract, 1-4,000 characters
 };
 
@@ -30,24 +30,24 @@ type SubagentInput =
   | {
       action: "spawn";
       reason?: string;
-      tasks: SubagentTask[]; // preferred batch form; every task runs concurrently
+      tasks: SubagentTask[]; // preferred batch form; concurrent tasks, synchronous batch result
     }
   | {
       action: "spawn";
       reason?: string;
       title: string;
-      url: string;
+      url?: string;
       instruction: string; // flat fallback for exactly one child
     }
   | {
       action: "read";
       reason?: string;
-      uuid: string; // exact UUID returned by spawn
+      uuid: string;       // retrieve one older or resumed child's entire saved result
     };
 
 type SubagentToolResult = {
   ok: boolean;
-  actual: string; // JSON text; inspect and preserve UUID order
+  actual: string; // JSON text containing complete child results
   failureCategory?: string;
   requiredSkillId?: string;
 };
@@ -59,35 +59,36 @@ The successful spawn result has this semantic shape:
 
 \`\`\`ts
 type SpawnActual = {
+  action: "spawn";
+  asynchronous: false;
+  status: "completed";
+  allSettled: true;
   subagents: Array<{
     uuid: string;
     index: number;
     title: string;
-    status: "passed" | "blocked" | "failed";
+    status: "queued" | "running" | "awaiting-confirmation" | "passed" | "blocked" | "failed" | "stopped";
+    content: string;
+    error?: string;
+    resumable: boolean;
   }>;
-  summary: string;
   batchId: string;
+  next?: string;
+};
+
+type ReadActual = {
+  action: "read";
+  uuid: string;
+  status: "queued" | "running" | "awaiting-confirmation" | "passed" | "blocked" | "failed" | "stopped";
+  pending: boolean;
+  content: string;
+  error?: string;
+  resumable: boolean;
   next: string;
 };
 \`\`\`
 
-The successful read result has this semantic shape:
-
-\`\`\`ts
-type ReadActual = {
-  uuid: string;
-  title: string;
-  status: "passed" | "blocked" | "failed";
-  summary?: string;
-  summaryChars?: number;
-  summaryOriginalChars?: number;
-  summaryTruncated: false;
-  partial: boolean;
-  error?: string;
-};
-\`\`\`
-
-\`actual\` is JSON text inside the outer tool result. Read it semantically. A successful batch barrier means all branches settled; it does not mean every branch passed, and it does not expose each child summary until that UUID is read.
+\`actual\` is JSON text inside the outer tool result. Spawn waits for the whole batch and returns the full output for each child in this same tool result. Success of the tool call does not imply every child succeeded: assess each child's status, content, partial evidence and error. No additional read call is needed to collect a new spawn's results.
 
 ## Spawn examples
 
@@ -132,7 +133,7 @@ subagent({
 Strong child instructions contain five things:
 
 1. One independent objective and its explicit non-goals.
-2. The exact starting URL.
+2. The exact starting URL when the task uses a specific page, or relevant file/context identifiers otherwise.
 3. The facts or action outcome required from the child.
 4. The evidence format: URLs, visible fields, table rows, confirmation text, tab id, or failure details.
 5. The stopping/handoff condition, including whether the child may retain an owned deliverable tab.
@@ -147,40 +148,20 @@ Do not send a vague instruction such as \`"看看这个页面"\`. Use a self-con
 }
 \`\`\`
 
-## Ordered read examples
+## Retrieving saved results
 
-If spawn returns UUIDs \`u1\`, \`u2\`, and \`u3\` in that order, read them in three later model steps:
-
-\`\`\`js
-subagent({
-  action: "read",
-  uuid: "u1-exact-uuid-from-spawn",
-  reason: "读取第一个子 Agent 结果"
-})
-\`\`\`
+Use the complete results returned by spawn directly. action="read" is available for results from an older conversation turn or a child resumed after human verification. One read with the exact UUID returns the entire saved output. Do not re-spawn completed tasks to retrieve their output.
 
 \`\`\`js
-subagent({
-  action: "read",
-  uuid: "u2-exact-uuid-from-spawn",
-  reason: "读取第二个子 Agent 结果"
-})
+subagent({ action: "read", uuid: "exact-uuid-from-spawn", reason: "读取已有子 Agent 的完整结果" })
 \`\`\`
 
-\`\`\`js
-subagent({
-  action: "read",
-  uuid: "u3-exact-uuid-from-spawn",
-  reason: "读取第三个子 Agent 结果"
-})
-\`\`\`
-
-Never put several UUIDs in one read call, invent a UUID, skip ahead, or synthesize from the spawn status list. If a read returns \`not_found\`, preserve that UUID and report that it is outside the current conversation or no longer exists. If it reports \`running\` or \`queued\`, the batch barrier was not complete and the returned failure guidance is authoritative.
+Results have no child-specific paging or truncation. Preserve findings, sources, conflicts and unresolved items in working notes; normal context compaction remains available for long conversations. Original UUIDs remain usable in follow-up turns and after restart. An older asynchronous task can still have pending=true; that receipt is not a completed result. Never use unrelated browser operations merely to wait. Failed/stopped children are terminal: assess their errors and partial evidence, and report real failed branches alongside successful findings.
 
 ## When to delegate
 
 - Spawn only concrete tasks that are independent and useful in parallel.
-- Give each child a self-contained title, URL, instruction, expected output, and evidence requirement.
+- Give each child a self-contained title, instruction, expected output, evidence requirement, and starting URL when relevant. A file, research, or code task does not need a fabricated URL.
 - Good boundaries include independent URLs, documents, research questions, comparisons, or test branches.
 - Keep dependent steps, final synthesis, and externally consequential decisions in the parent Agent.
 - Never split consecutive operations on the same interactive page across children. One owner must retain the complete page transaction.
@@ -199,11 +180,11 @@ Each child must work in its own page or tab. It must not take over, navigate, cl
 - At completion, retain only explicit deliverable or handoff tabs and return their ids, URLs, titles, and status to the parent when relevant.
 - The parent decides the final retained-tab set after all child results are integrated.
 
-## Spawning and reading results
+## Spawning and integrating results
 
-For multiple independent tasks, pass tasks=[{ title, url, instruction }, ...]. For exactly one child, the flat title, url, and instruction form is allowed. Do not retry the same rejected parameter shape repeatedly.
+For multiple independent tasks, pass tasks=[{ title, instruction, url? }, ...]. For exactly one child, the flat title, instruction, and optional url form is allowed. Do not retry the same rejected parameter shape repeatedly.
 
-The spawn result returns child UUIDs in collection order. After the batch barrier completes, call subagent action=read with exactly one UUID per model step, in the returned order. Never synthesize unread child output or read multiple UUIDs out of order. The parent Agent alone combines evidence, resolves conflicts, decides whether follow-up work is required, and writes the final answer.
+The spawn call waits for every task in its concurrent batch, then directly returns their complete output. Parent/tool cancellation also stops the executing children. Assess successful findings alongside partial results and errors. The parent Agent alone combines evidence, resolves conflicts, decides whether follow-up work is required, and writes the final answer after collecting the required evidence.
 
 ## Browser failure handoff
 

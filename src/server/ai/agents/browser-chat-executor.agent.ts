@@ -12,7 +12,7 @@ import { browserChatCapabilityResult } from '@/lib/browser-chat-capability-resul
 import { coreResponses, markdownBlock } from '@cjfclonedeep/capability-sdk/responses';
 import { ResponseSession, type StructuredResponse } from '@cjfclonedeep/capability-sdk';
 import { randomUUID } from 'node:crypto';
-import { boundToolResult, createRuntimeContextReadTool, contextReadToolName, contextReadInputSchema, readRuntimeContextMaterial, runtimeContextMessageRef, type RuntimeContextManifest } from './runtime-context-assembler';
+import { createRuntimeContextReadTool, contextReadToolName, contextReadInputSchema, readRuntimeContextMaterial, runtimeContextMessageRef, type RuntimeContextManifest } from './runtime-context-assembler';
 import { runtimeKnowledgeMessage, type RuntimeKnowledgeBlock } from './runtime-knowledge-context';
 import { generateText, hasToolCall, parsePartialJson, streamText, ToolLoopAgent, tool, type ModelMessage, type StopCondition, type ToolCallRepairFunction, type ToolSet } from 'ai';
 import { z } from 'zod';
@@ -23,6 +23,8 @@ import { chartCapabilityManifest, chartCapabilityToolNames } from '@cjfclonedeep
 import { mapsCapabilityManifest } from '@cjfclonedeep/capability-sdk/maps';
 import { browserChatMapsCapability, executeBrowserChatMaps } from '@/server/capabilities/browser-chat-maps';
 import { createAISDKResponseTool, EnvironmentCapabilityConfigStore, mountAISDKCapabilities } from '@cjfclonedeep/capability-sdk/ai-sdk';
+import { mountCapabilities } from '@cjfclonedeep/capability-sdk/host';
+import type { NovelConfirmationRequest } from '@cjfclonedeep/capability-sdk/novel';
 import type { AiRequestSnapshot, AiToolContextSnapshot, BrowserOperationRecord, StepExecutionResult, StepToolCall, VisualFrameRecord } from '@/server/ai/schemas/runtime.schema';
 import { getModel, getModelSettings } from '@/server/ai/model';
 import { AiFirstChunkTimeoutError, aiReasoningEffort, aiRuntimeRequestTimeoutMs, aiRuntimeStreamTimeouts, aiTelemetry, createAiRequestWatchdog } from '@/server/ai/ai-sdk-runtime';
@@ -52,7 +54,6 @@ import {
   hiddenRuntimeSkillForToolCall,
   requireHiddenRuntimeSkillRead,
   hiddenRuntimeSkillIdsInModelContext,
-  skillBodyKeysForPreservation,
   runtimeToolTypesWithLoadedSkills,
 } from './hidden-runtime-skills';
 import { ContextSummaryError, parseContextSummary, type ContextSummaryGenerator } from './runtime-semantic-summary';
@@ -64,7 +65,7 @@ import {
 } from '@/server/capabilities/browser-chat-chart';
 import { capabilityResultToBrowserActionResult } from '@/server/capabilities/browser-chat-result';
 import { browserOperationSummary } from '@cjfclonedeep/capability-sdk/browser';
-import { createAgentInfrastructureProviders } from '@/server/capabilities/agent-infrastructure';
+import { agentMediaToolTimeoutMs, createAgentInfrastructureProviders } from '@/server/capabilities/agent-infrastructure';
 import {
   createBrowserChatFileCapability,
   executeBrowserChatFile,
@@ -77,6 +78,8 @@ import {
 } from '@/lib/browser-chat-ui-message';
 import { containsPrivateToolProtocol, isBrowserChatDomObservationText, normalizeBrowserChatFinalReplyText } from './browser-chat-reply-text';
 import { createReasoningStreamObserver, type ReasoningStreamUpdate } from './browser-chat-reasoning-stream';
+import { createBrowserChatOutputPerformance } from './browser-chat-output-performance';
+import { subagentModelMessages, subagentResultActual } from './browser-chat-subagent-delivery';
 import {
   formatFileArtifactResult,
 } from '@cjfclonedeep/capability-sdk/file/node/workspace';
@@ -109,7 +112,7 @@ import {
 } from './runtime-tool-selection';
 import { browserToolApprovalRequest } from './browser-tool-approval';
 import { withToolFailureGuidance } from './runtime-tool-failure-guidance';
-import { hasSourceFileReceipt, sourceFileRequest } from './runtime-source-files';
+import { sourceFileRequest } from './runtime-source-files';
 import {
   estimateRuntimeMessageContext,
   estimateRuntimeTextTokens,
@@ -133,6 +136,7 @@ import {
 } from './runtime-tool-trace';
 import {
   normalizeBrowserChatSubagentTasks,
+  type BrowserChatSubagentReadInput,
   type BrowserChatSubagentTask,
 } from './browser-chat-subagent-task';
 import {
@@ -199,6 +203,16 @@ type ToolTraceProgress = {
 
 type BrowserChatSafetyMode = 'strict' | 'full';
 
+function novelPlanConfirmationHandler(
+  request: ((input: BrowserToolConfirmationRequest) => Promise<BrowserToolConfirmationDecision>) | undefined,
+  stepIndex?: number,
+) {
+  return request ? (proposal: NovelConfirmationRequest) => request({
+    toolName: 'novel', input: proposal.input,
+    reason: `确认《${proposal.plan.title}》创作方案`, prompt: proposal.prompt, stepIndex,
+  }) : undefined;
+}
+
 export type BrowserToolConfirmationDecision = 'confirmed' | 'cancelled';
 
 export type BrowserToolConfirmationRequest = {
@@ -215,9 +229,14 @@ export type BrowserChatSubagentRunner = (
   toolCallId?: string,
 ) => Promise<BrowserActionResult>;
 
-export type BrowserChatSubagentReader = (
-  uuid: string,
-) => Promise<BrowserActionResult>;
+export type BrowserChatSubagentReader = (input: BrowserChatSubagentReadInput, abortSignal?: AbortSignal) => Promise<BrowserActionResult>;
+
+export type BrowserChatSubagentResultSnapshot = {
+  toolCallId: string;
+  result: BrowserActionResult;
+};
+
+type BrowserChatSubagentModelCallAliases = Map<string, string>;
 
 type RuntimeDecision = {
   action: string;
@@ -401,6 +420,7 @@ function runtimeRetryFromError(error: unknown) {
     consecutiveFailures: Math.max(0, Math.floor(consecutiveFailures)),
     consecutiveFailureLimit: Math.max(1, Math.floor(consecutiveFailureLimit)),
     retryable: decision?.retryable === true,
+    category: typeof decision?.category === 'string' ? decision.category : undefined,
   };
 }
 
@@ -465,7 +485,7 @@ function upstreamDisconnectLines(
 function userFacingInfrastructureError(value?: string, context?: { error?: unknown; aiRequest?: AiRequestSnapshot }) {
   const text = value || '';
   const retryInfo = runtimeRetryFromError(context?.error);
-  if (isProviderBillingLimitMessage(text)) {
+  if (retryInfo?.category === 'billing' || isProviderBillingLimitMessage(text)) {
     const status = firstErrorValue(context?.error, 'status') ?? firstErrorValue(context?.error, 'statusCode') ?? 429;
     const reason = trimDebugText(text.split(/\r?\n/, 1)[0] || text, 600);
     return `上游 AI 服务返回 ${status}：${reason}\n这是套餐或额度耗尽，不会进行无效重试。本轮操作已停止，当前页面状态已保留。`;
@@ -800,65 +820,69 @@ function browserChatFinalResponseCompletionError(response: StructuredResponse) {
   return undefined;
 }
 
-function subagentUuidsFromToolResult(result?: BrowserActionResult) {
-  if (!result?.ok) return [];
-  const parsed = parseJsonObjectText(result.actual);
-  const subagents = Array.isArray(parsed?.subagents) ? parsed.subagents : [];
-  return subagents.flatMap((item) => {
-    const record = recordFromUnknown(item);
-    const uuid = typeof record.uuid === 'string' ? record.uuid.trim() : '';
-    return uuid ? [uuid] : [];
+function subagentHumanPauseReply(snapshots: readonly BrowserChatSubagentResultSnapshot[]) {
+  const children = snapshots.flatMap(snapshot => {
+    const actual = parseJsonObjectText(snapshot.result.actual);
+    return Array.isArray(actual?.subagents) ? actual.subagents.map(recordFromUnknown)
+      .filter(child => child.status === 'blocked' && child.resumable === true) : [];
   });
+  const replies = children.map(child => {
+    const text = [child.question, child.summary, child.content]
+      .find(value => typeof value === 'string' && value.trim()) as string | undefined;
+    const reply = text || '子 Agent 正在等待人工处理，请完成其请求后继续。';
+    return children.length > 1 && typeof child.title === 'string' && child.title.trim()
+      ? `子 Agent「${child.title}」：\n\n${reply}` : reply;
+  });
+  return replies.length ? replies.join('\n\n') : undefined;
 }
 
-function pendingSubagentUuidsFromTraces(traces: ToolTrace[]) {
-  const spawned: string[] = [];
-  const read = new Set<string>();
+function subagentHumanPauseReplyFromTraces(traces: readonly ToolTrace[]) {
+  const latest = new Map<string, Record<string, unknown>>();
   for (const trace of traces) {
-    const input = recordFromUnknown(trace.input);
-    if (trace.name === 'spawnSubagents' || (trace.name === 'subagent' && input.action === 'spawn')) {
-      for (const uuid of subagentUuidsFromToolResult(trace.result)) {
-        if (!spawned.includes(uuid)) spawned.push(uuid);
-      }
-      continue;
+    if (trace.name !== 'subagent' || !trace.result?.ok) continue;
+    const actual = subagentResultActual(trace.result);
+    if (Array.isArray(actual.subagents)) for (const value of actual.subagents) {
+      const child = recordFromUnknown(value);
+      if (typeof child.uuid === 'string') latest.set(child.uuid, child);
     }
-    if (!(trace.name === 'readSubagent' || (trace.name === 'subagent' && input.action === 'read')) || !trace.result?.ok) continue;
-    const uuid = typeof input.uuid === 'string' ? input.uuid.trim() : '';
-    if (uuid) read.add(uuid);
+    if (actual.action === 'read' && typeof actual.uuid === 'string') latest.set(actual.uuid, actual);
   }
-  return spawned.filter((uuid) => !read.has(uuid));
+  return subagentHumanPauseReply([{ toolCallId: 'child-results', result: { ok: true,
+    actual: JSON.stringify({ subagents: [...latest.values()] }) } }]);
 }
 
-function pendingSubagentUuidsFromSteps(steps: StepExecutionResult[]) {
-  const spawned: string[] = [];
-  const read = new Set<string>();
-  for (const step of steps) {
-    for (const toolCall of step.tools || []) {
-      const rawResult = toolCall.rawResult && typeof toolCall.rawResult === 'object' && !Array.isArray(toolCall.rawResult)
-        ? toolCall.rawResult as BrowserActionResult
-        : undefined;
-      const input = recordFromUnknown(toolCall.input);
-      if (toolCall.name === 'spawnSubagents' || (toolCall.name === 'subagent' && input.action === 'spawn')) {
-        for (const uuid of subagentUuidsFromToolResult(rawResult)) {
-          if (!spawned.includes(uuid)) spawned.push(uuid);
-        }
-        continue;
-      }
-      if (!(toolCall.name === 'readSubagent' || (toolCall.name === 'subagent' && input.action === 'read')) || rawResult?.ok !== true) continue;
-      const uuid = typeof input.uuid === 'string' ? input.uuid.trim() : '';
-      if (uuid) read.add(uuid);
-    }
+function subagentModelToolCallId(toolCallId: string, aliases?: ReadonlyMap<string, string>) {
+  const visited = new Set<string>();
+  let id = toolCallId;
+  while (aliases?.has(id) && !visited.has(id)) {
+    visited.add(id);
+    id = aliases.get(id)!;
   }
-  return spawned.filter((uuid) => !read.has(uuid));
+  return id;
 }
 
-function requiredSubagentReadDirective(uuid: string, remaining: number) {
-  return [
-    '[Required child Agent result read]',
-    `There are ${remaining} completed child Agent result(s) that have not been read.`,
-    `In this model step, call subagent with action="read" and exactly this UUID: ${uuid}`,
-    'Do not answer, synthesize, or call another tool until every returned child UUID has been read.',
-  ].join('\n');
+function restoreSubagentModelCallAliases(messages: readonly ModelMessage[], aliases: BrowserChatSubagentModelCallAliases) {
+  for (const message of messages) if (message.role === 'tool') for (const part of message.content) {
+    if (part.type !== 'tool-result' || part.toolName !== 'subagent' || !('value' in part.output)) continue;
+    const value = typeof part.output.value === 'string' ? parseJsonObjectText(part.output.value) || {} : recordFromUnknown(part.output.value);
+    const actual = typeof value.actual === 'string' ? parseJsonObjectText(value.actual) : undefined;
+    if (actual?.action === 'read') continue;
+    const originalId = typeof actual?.batchId === 'string' ? actual.batchId : '';
+    if (originalId && originalId !== part.toolCallId) aliases.set(originalId, part.toolCallId);
+  }
+}
+
+function remapSubagentModelCallIds(messages: readonly ModelMessage[], aliases?: ReadonlyMap<string, string>) {
+  if (!aliases?.size) return [...messages];
+  return messages.map(message => {
+    if ((message.role !== 'assistant' && message.role !== 'tool') || !Array.isArray(message.content)) return message;
+    const content = message.content.map(part => {
+      if ((part.type !== 'tool-call' && part.type !== 'tool-result') || part.toolName !== 'subagent') return part;
+      const toolCallId = subagentModelToolCallId(part.toolCallId, aliases);
+      return toolCallId === part.toolCallId ? part : { ...part, toolCallId };
+    });
+    return { ...message, content } as ModelMessage;
+  });
 }
 
 function upsertToolTrace(traces: ToolTrace[], trace: ToolTrace) {
@@ -1228,8 +1252,7 @@ async function makeBrowserTools(
     onVisualContextChange?: (snapshot: ReturnType<VisualContextManager['snapshot']>) => void | Promise<void>;
     requestToolConfirmation?: (request: BrowserToolConfirmationRequest) => Promise<BrowserToolConfirmationDecision>;
     runSubagents?: BrowserChatSubagentRunner;
-    readSubagent?: BrowserChatSubagentReader;
-    requiredSubagentUuid?: string;
+    readSubagentResult?: BrowserChatSubagentReader;
     readFile?: (input: BrowserChatReadFileInput, context?: import('@cjfclonedeep/capability-sdk').CapabilityExecutionContext) => Promise<BrowserActionResult>;
     readFileVisuals?: (input: BrowserChatFileVisualInput) => Promise<BrowserActionResult>;
     readSkill?: BrowserChatReadSkill;
@@ -1385,6 +1408,7 @@ async function makeBrowserTools(
     : undefined;
   const infrastructureProviders = createAgentInfrastructureProviders({
     attachmentBindings: referenceOptions?.attachmentBindings,
+    requestNovelConfirmation: novelPlanConfirmationHandler(referenceOptions?.requestToolConfirmation, referenceOptions?.stepIndex),
   });
   const enabledCapabilityIds = allowedCapabilityToolNames
     ? new Set([
@@ -1481,61 +1505,45 @@ async function makeBrowserTools(
   };
 
   const sharedTools: ToolSet = {
-    ...((referenceOptions?.runSubagents || referenceOptions?.readSubagent) ? {
+    ...(referenceOptions?.runSubagents || referenceOptions?.readSubagentResult ? {
       subagent: tool({
-        description: `Spawn independent child Agents or read one returned result UUID. action=spawn uses hidden Skill ${subagentRuntimeSkillId}, supplied with the result if unread; action=read is never gated so pending results remain recoverable.`,
+        description: `Run child Agents with action=spawn. Tasks in one batch execute concurrently, but this tool call waits for the whole batch and returns all full results directly. Use action=read with an exact uuid only to retrieve a saved or resumed child's full result. action=spawn uses hidden Skill ${subagentRuntimeSkillId}, supplied with the result if unread.`,
         inputSchema: browserToolInput({
           action: z.enum(['spawn', 'read']),
+          uuid: z.string().trim().min(1).max(160).optional().describe('Exact child UUID returned by spawn; required for action=read.'),
           tasks: z.array(z.object({
-            title: z.string().min(1).max(160).describe('Short display title for this child Agent.'),
-            instruction: z.string().min(1).max(4_000).describe('Self-contained task and expected evidence for this child Agent.'),
-            url: z.string().url().max(4_000).describe('Independent page or PRD entry URL for this child Agent.'),
-          })).min(1).optional().describe('Preferred batch form for two or more independent child Agents. Every task runs concurrently.'),
-          title: z.string().min(1).max(160).optional().describe('Flat fallback title when spawning exactly one child Agent.'),
-          instruction: z.string().min(1).max(4_000).optional().describe('Flat fallback instruction when spawning exactly one child Agent.'),
-          url: z.string().url().max(4_000).optional().describe('Flat fallback URL when spawning exactly one child Agent.'),
-          uuid: z.string().uuid().optional().describe('One child Agent UUID returned by action=spawn; required only for action=read.'),
+            title: z.string().trim().min(1).max(160).describe('Short display title for this child Agent.'),
+            instruction: z.string().trim().min(1).max(4_000).describe('Self-contained task and expected evidence for this child Agent.'),
+            url: z.string().trim().url().max(4_000).optional().describe('Optional starting page URL. Omit for research, files, or code tasks without a specific page.'),
+          })).min(1).optional().describe('Preferred batch form for independent child Agents. Tasks execute concurrently; spawn waits for the batch and returns full results.'),
+          title: z.string().trim().min(1).max(160).optional().describe('Flat fallback title when spawning exactly one child Agent.'),
+          instruction: z.string().trim().min(1).max(4_000).optional().describe('Flat fallback instruction when spawning exactly one child Agent.'),
+          url: z.string().trim().url().max(4_000).optional().describe('Optional starting URL when spawning exactly one child Agent.'),
         }, [
           { reason: '并行分析独立页面', action: 'spawn', tasks: [{ title: '分析需求A', url: 'https://example.com/a', instruction: '分析页面并返回关键证据。' }] },
-          { reason: '读取子 Agent 分析结果', action: 'read', uuid: '123e4567-e89b-12d3-a456-426614174000' },
+          { reason: '读取已有子 Agent 结果', action: 'read', uuid: 'exact-uuid-returned-by-spawn' },
         ]).superRefine((input, context) => {
-          if (input.action === 'spawn') {
-            const hasFlatTask = Boolean(input.title && input.instruction && input.url);
-            if (!input.tasks?.length && !hasFlatTask) {
-              context.addIssue({
-                code: z.ZodIssueCode.custom,
-                message: 'spawn requires tasks, or the flat title, url, and instruction fields.',
-              });
-            }
-          } else if (!input.uuid) {
-            context.addIssue({ code: z.ZodIssueCode.custom, message: 'read requires uuid.' });
+          if (input.action === 'read' && !input.uuid) {
+            context.addIssue({ code: z.ZodIssueCode.custom, message: 'read requires the exact uuid returned by spawn.' });
+          }
+          if (input.action === 'spawn' && !input.tasks?.length && !(input.title && input.instruction)) {
+            context.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: 'spawn requires tasks, or the flat title and instruction fields.',
+            });
           }
         }),
         execute: (input, execution) => {
-          if (input.action === 'spawn') {
-            const tasks = normalizeBrowserChatSubagentTasks(input.tasks ?? input);
-            return record('subagent', input, (abortSignal, trace) => {
-              if (!tasks.length) {
-                return Promise.resolve({ ok: false, actual: 'subagent action=spawn requires at least one valid task.' });
-              }
-              return referenceOptions?.runSubagents
-                ? referenceOptions.runSubagents(tasks, abortSignal, trace?.id)
-                : Promise.resolve({ ok: false, actual: 'subagent action=spawn is unavailable in this runtime.' });
-            }, execution);
-          }
-          return record('subagent', input, () => {
-            const uuid = input.uuid?.trim() || '';
-            if (!uuid) return Promise.resolve({ ok: false, actual: 'subagent action=read requires one UUID.' });
-            const requiredUuid = referenceOptions?.requiredSubagentUuid || pendingSubagentUuidsFromTraces(traces)[0];
-            if (requiredUuid && uuid !== requiredUuid) {
-              return Promise.resolve({
-                ok: false,
-                actual: `Read rejected: child Agent results must be read in order. The required UUID is ${requiredUuid}.`,
-              });
+          if (input.action === 'read') return record('subagent', input, abortSignal => referenceOptions.readSubagentResult
+            ? referenceOptions.readSubagentResult({ uuid: input.uuid! }, abortSignal)
+            : Promise.resolve({ ok: false, actual: 'subagent action=read is unavailable in this runtime.' }), execution);
+          const tasks = normalizeBrowserChatSubagentTasks(input.tasks ?? input);
+          return record('subagent', input, (abortSignal, trace) => {
+            if (!tasks.length) {
+              return Promise.resolve({ ok: false, actual: 'subagent action=spawn requires a non-empty batch where every task has a non-blank title and instruction, and every supplied URL is a valid absolute URL. No child task was started.' });
             }
-            return referenceOptions?.readSubagent
-              ? referenceOptions.readSubagent(uuid)
-              : Promise.resolve({ ok: false, actual: 'subagent action=read is unavailable in this runtime.' });
+            return referenceOptions.runSubagents ? referenceOptions.runSubagents(tasks, abortSignal, trace?.id)
+              : Promise.resolve({ ok: false, actual: 'subagent action=spawn is unavailable in this runtime.' });
           }, execution);
         },
       }),
@@ -1545,8 +1553,8 @@ async function makeBrowserTools(
       description: runtimeBuiltinToolPrompts.finalResponse,
       onAccept: async (input, execution) => {
         const result = await record('finalResponse', input, async () => {
-          const completionError = browserChatFinalResponseCompletionError(input)
-            || (referenceOptions ? await referenceOptions.reviewFinalResponse(input) : 'Completion review is unavailable; final response was not accepted.');
+          const completionError = referenceOptions ? await referenceOptions.reviewFinalResponse(input)
+            : browserChatFinalResponseCompletionError(input) || 'Completion review is unavailable; final response was not accepted.';
           return completionError ? { ok: false, actual: completionError }
             : { ok: true, actual: JSON.stringify({ accepted: true, blockCount: input.blocks.length }) };
         }, execution);
@@ -1637,6 +1645,7 @@ function runtimePrompt(runtimeRecord: BrowserChatRuntimeRecord) {
     '- When a select, cascader, tree picker, dropdown menu, or date/time option surface remains open and the intent is only to dismiss it, first call browser(action="dismissSurface"). This directly clicks viewport (0,0); do not replace it with a code or coordinate click. Verify closure from closureConfirmed, postActionState when available, and the latest screenshot before interacting behind it. If the click did not close that surface, choose a different observed action instead of repeating it. A dialog with an explicit Close/Cancel button should use that button first; a pending selection that needs Apply/Done/Confirm should use its commit control.',
     '- Use web research when the user asks for it or the answer depends on current external facts. Read relevant pages, prefer primary sources, check dates, cite factual claims, and reuse valid evidence already collected for this task. Respect requests limited to local work, supplied material, or a specific operation; do not start unrelated research before executing a supplied procedure.',
     '- Follow the current tool schema, capability Skill, and user-disabled tool restrictions. When a required Skill is absent from context, the host executes the tool through its normal validation and approval flow and includes the complete current instructions in result.runtimeSkill. Apply them directly in later steps; inspect the original tool outcome and do not reread the Skill or repeat the operation merely to load it. Use only capabilities that help the request.',
+    '- subagent(action="spawn") is synchronous: the tool call waits for its concurrent child tasks and directly returns their full results. Use the returned findings, sources, partial results and errors before finalResponse; do not poll or re-spawn to collect output. subagent(action="read", uuid=the exact child UUID) returns an entire saved result for older or resumed children. Failed/stopped children are terminal outcomes to assess.',
     '- Tool routing for existing documents: use file for PDF/Word/Excel/PPT text and tables. For a discovered remote PDF, call file action=download with the exact urlOrPath, then file action=readContent with the returned artifactId (includeVisuals=false; contentPages for specific PDF pages; offset/limit for text pagination). For an uploaded or already downloaded file, readContent with its attachmentId/artifactId directly. Keep source URL and page numbers with extracted research facts. Reading a PDF needs no Office plan/render or package installation. Use codeSandbox for calculations/transformations on extracted data, explicitly requested code, or a concrete parsing capability that file lacks after inspecting its result; do not start with requests/pypdf/pdfplumber/cryptography installation just to read a PDF. Empty/scanned or malformed text calls for a targeted file visualRead when available; a password-required error needs the password, not repeated parser installs. Respect disabled tools and report access failures without claiming the PDF was read.',
     '- Native tool calling supports multiple tool calls in the same model step; there is no one-tool-per-step limit. Proactively batch independent calls whose inputs are already known, including reading multiple required Skills or downloading multiple known assets. Emit each call separately with its own tool name and schema-valid arguments; do not invent a batch tool or wrap calls in an unsupported array. The runtime schedules execution according to each tool\'s concurrency policy, so submitting a batch does not guarantee simultaneous execution.',
     '- Keep result-dependent calls in later steps: read and inspect a required Skill before invoking its governed capability, inspect a lookup result before using its returned IDs or URLs, and observe a changed page before choosing dependent actions. Batch independent Skill reads together, then use their results in the next step. Call finalResponse only after all required tool results have been received and assessed.',
@@ -1806,14 +1815,13 @@ function modelMessagesTextAndImageStats(messages: unknown, tools?: RuntimeToolDe
 }
 
 function runtimeModelToolReceipt(message: ModelMessage) {
-  if (hasSourceFileReceipt(message)) return message;
-  // Exact paging and Skill read bodies must survive the model projection,
-  // including historical versions that no longer satisfy the current receipt.
-  // This includes tool results that carry automatically supplied instructions.
-  if (message.role === 'tool' && (message.content.some(part => part.type === 'tool-result'
-    && [contextReadToolName, 'skill'].includes(part.toolName)) || skillBodyKeysForPreservation([message]).size)) return message;
-  return boundToolResult(message, 1200);
+  // Deliver tool output intact. Context pressure is handled by the normal
+  // history-compaction boundary, never by silently replacing a fresh result.
+  return subagentModelMessages([message])[0];
 }
+
+const browserLoopFinalizationInstruction = 'Host execution boundary: the same browser calls and returned evidence repeated through four cycles without new evidence, despite recovery guidance. Tool execution is now disabled for this turn. This overrides the normal finalResponse tool protocol for this recovery response only: write a plain-text partial report in the user\'s language. Summarize verified findings with their existing source URLs, identify what remains unverified, and explain that repeated execution was stopped. Do not claim full completion, call tools, emit a tool protocol, or promise further work. Use only evidence already in context.';
+const browserLoopStoppedReply = '检测到相同浏览器操作和结果持续重复，已停止本轮工具执行。已有工具结果已保留，任务尚未完整完成。';
 
 function fullLogDetails(value: unknown) {
   return {
@@ -1972,8 +1980,8 @@ async function executeRuntimeStep(input: {
   allowedToolTypes?: string[];
   disabledTools?: string[];
   runSubagents?: BrowserChatSubagentRunner;
-  readSubagent?: BrowserChatSubagentReader;
-  requiredSubagentUuid?: string;
+  readSubagentResult?: BrowserChatSubagentReader;
+  subagentModelCallAliases?: BrowserChatSubagentModelCallAliases;
   readFile?: (input: BrowserChatReadFileInput, context?: import('@cjfclonedeep/capability-sdk').CapabilityExecutionContext) => Promise<BrowserActionResult>;
   readFileVisuals?: (input: BrowserChatFileVisualInput) => Promise<BrowserActionResult>;
   readSkill?: BrowserChatReadSkill;
@@ -2012,6 +2020,9 @@ async function executeRuntimeStep(input: {
   const imageInputAvailable = modelSupportsImageInput();
   const markerEnabled = false;
   const loadedHiddenRuntimeSkillIds = input.loadedHiddenRuntimeSkillIds || new Set<string>();
+  const subagentModelCallAliases = input.subagentModelCallAliases || new Map<string, string>();
+  restoreSubagentModelCallAliases(Object.values(input.contextRecords || {}), subagentModelCallAliases);
+  restoreSubagentModelCallAliases(input.conversation || [], subagentModelCallAliases);
   const ensureActive = () => throwIfStopped(abortSignal, input.shouldContinue);
   ensureActive();
   await onDebug?.({
@@ -2109,7 +2120,7 @@ async function executeRuntimeStep(input: {
     const externalTools: ToolSet = { ...(!codexMode ? input.memoryTools : {}), [contextReadToolName]: createRuntimeContextReadTool(() => contextRecords) };
     const externalToolNames = new Set(Object.keys(externalTools));
     const availableRuntimeToolNames = [...runtimeToolNames(), ...externalToolNames].filter((name) => (
-      name !== 'subagent' || Boolean(input.runSubagents || input.readSubagent)
+      name !== 'subagent' || Boolean(input.runSubagents || input.readSubagentResult)
     ));
     const runtimeTools = runtimeAllowedToolTypes({
       browserChatMode: true,
@@ -2125,6 +2136,9 @@ async function executeRuntimeStep(input: {
     const allowedToolTypes = requestedAllowedToolTypes.filter((name) => !disabledToolNames.has(name));
     const nativeToolsRef: { current?: RuntimeToolDefinitions } = {};
     let requestAllowedToolNames: ReadonlySet<string> | undefined;
+    let loopFinalization = false;
+    const loopFinalizationInstruction = browserLoopFinalizationInstruction;
+    const loopStoppedReply = browserLoopStoppedReply;
     const visualContext = new VisualContextManager();
     if (journal.state.observations) visualContext.restore(journal.state.observations);
     let decisionReady = Promise.withResolvers<void>();
@@ -2212,7 +2226,7 @@ async function executeRuntimeStep(input: {
       return messages;
     };
     const durableContinuationSummary = durableSummary;
-    const historyMessages = omitRuntimeModelToolNames(withoutRuntimePromptCacheMetadata([...(input.conversation || [])] as RuntimeModelMessage[]), retiredRuntimeToolNames);
+    const historyMessages = omitRuntimeModelToolNames(withoutRuntimePromptCacheMetadata(subagentModelMessages(input.conversation || []) as RuntimeModelMessage[]), retiredRuntimeToolNames);
     const initialImagePaths = [...initialVisualPaths, ...initialUserReferenceImagePaths];
     const initialImages: Awaited<ReturnType<typeof readScreenshotForAi>>[] = [];
     for (const imagePath of initialImagePaths) {
@@ -2265,10 +2279,11 @@ async function executeRuntimeStep(input: {
         return content.length ? [{ ...message, content } as ModelMessage] : [];
       });
       await checkpointContext(recovery);
-      initialMessages.push(...recovery.map(runtimeModelToolReceipt));
+      initialMessages.push(...recovery.map(message => runtimeModelToolReceipt(message)));
       await input.onActiveModelCheckpoint?.(initialMessages);
       await journal.clear(); recoveredMessages = [];
     }
+    initialMessages = remapSubagentModelCallIds(initialMessages, subagentModelCallAliases);
     let messageImagePaths = retryState?.messages.length ? [...retryState.imagePaths] : [...initialImagePaths];
     rememberRetryState({
       messages: initialMessages,
@@ -2295,6 +2310,7 @@ async function executeRuntimeStep(input: {
     let lastPreparedMessages = [...initialMessages];
     let completionReviewMessages = [...initialMessages];
     let completionReviewFailure: CompletionReviewUnavailableError | undefined;
+    let subagentHumanPauseRequired = false;
     let lastPreparedResponsePrefixLength = 0;
     let rawResponseMessages: ModelMessage[] = [];
     let latestContextCompression: BrowserChatModelContextCompression | undefined;
@@ -2303,13 +2319,12 @@ async function executeRuntimeStep(input: {
     let consumedResponseCount = 0;
     const currentUserSourceIndex = latestBrowserChatUserMessageIndex(initialMessages);
 
-    function runtimeOperationalContextText(requiredSubagentDirective: string) {
+    function runtimeOperationalContextText() {
       const sections = [
         activeOperationalContext
           ? `Relevant Skill summaries, memory, and secure capabilities supplied by the runtime:\n${activeOperationalContext}`
           : '',
         userReferenceImagePrompt,
-        requiredSubagentDirective,
       ].filter(Boolean);
       if (!sections.length) return '';
       return [
@@ -2465,7 +2480,18 @@ async function executeRuntimeStep(input: {
     };
 
     const reviewFinalResponse = async (response: StructuredResponse) => {
-      try { return await performCompletionReview(response); }
+      try {
+        if (decisionCalls.some(call => call.toolName === 'subagent')) {
+          return 'Child spawn/read calls and final synthesis are dependent steps. Finish these tool calls, then assess their returned results in a later model step before finalResponse.';
+        }
+        if (subagentHumanPauseReplyFromTraces(traces)) {
+          subagentHumanPauseRequired = true;
+          return 'A child Agent has a pending human-input request. The host will pause this turn and show the child request directly; finalResponse is not accepted as successful completion.';
+        }
+        const completionError = browserChatFinalResponseCompletionError(response);
+        if (completionError) return completionError;
+        return await performCompletionReview(response);
+      }
       catch (error) {
         if (isBrowserChatAbortError(error, abortSignal)) throw error;
         // Persistence/projection failures must escape the acting model's tool
@@ -2477,6 +2503,7 @@ async function executeRuntimeStep(input: {
 
     async function prepareStep(turnIndex: number, previousMessages?: RuntimeModelMessage[]) {
       await onAttemptDebug?.({ phase: 'ai:runtime:prepare', stepIndex, message: '正在检查上下文与压缩阈值' });
+      if (previousMessages) previousMessages = remapSubagentModelCallIds(previousMessages, subagentModelCallAliases);
       // Visibility is a property of the request, not a lifetime read receipt.
       loadedHiddenRuntimeSkillIds.clear();
       const newResponses = previousMessages?.slice(initialMessages.length + consumedResponseCount) || [];
@@ -2500,16 +2527,9 @@ async function executeRuntimeStep(input: {
           throw error;
         }
       }
-      const pendingSubagentUuids = pendingSubagentUuidsFromTraces(traces);
-      const requiredSubagentUuid = pendingSubagentUuids[0];
-      const requiredSubagentDirective = requiredSubagentUuid
-        ? requiredSubagentReadDirective(requiredSubagentUuid, pendingSubagentUuids.length)
-        : '';
-      const stepAllowedToolTypes = runtimeToolTypesWithLoadedSkills(allowedToolTypes, loadedHiddenRuntimeSkillIds, {
-        allowSubagentRead: Boolean(requiredSubagentUuid),
-      });
+      const stepAllowedToolTypes = runtimeToolTypesWithLoadedSkills(allowedToolTypes, loadedHiddenRuntimeSkillIds);
       const availableStepNames = stepAllowedToolTypes.length !== allowedToolTypes.length
-        ? stepAllowedToolTypes : requiredSubagentUuid ? ['subagent'] : Object.keys(nativeToolsRef.current || {});
+        ? stepAllowedToolTypes : Object.keys(nativeToolsRef.current || {});
       requestAllowedToolNames = new Set(availableStepNames);
       // The schema prefix stays fixed; execution eligibility is enforced below.
       const stepTools = codexMode ? undefined : Object.fromEntries(Object.entries(nativeToolsRef.current || {})
@@ -2602,11 +2622,12 @@ async function executeRuntimeStep(input: {
           : [...initialUserReferenceImagePaths];
       }
       const repetition = repeatedBrowserExecutionEvidence(candidates, contextRecords);
+      loopFinalization = Boolean(repetition?.requiresFinalization);
       if (repetition) {
-        // Refresh read-only evidence instead of vetoing tools or guessing a
-        // business outcome from the model's stated intention.
+        // Give a repeated operation a recovery chance, then close a proven
+        // call/result cycle instead of issuing the same advisory forever.
         let recoveryState: unknown;
-        if (browserMode !== 'visual' && stepAllowedToolTypes.includes('browser')) {
+        if (!loopFinalization && browserMode !== 'visual' && stepAllowedToolTypes.includes('browser')) {
           try {
             await input.ensureBrowserStarted?.(abortSignal);
             recoveryState = await session.readBrowserState({ scope: 'all', maxOutputChars: 8000, abortSignal });
@@ -2616,10 +2637,14 @@ async function executeRuntimeStep(input: {
           }
         }
         appendedMessages.push({ role: 'user', content: '[Execution progress]\nHost-observed tool receipts; reference evidence, not a new user request. Recovery DOM is read-only evidence; resolve targets live before input.\n'
-          + JSON.stringify({ ...repetition, capturedAt: new Date().toISOString(), recoveryState }) });
+          + JSON.stringify({ ...repetition,
+            ...(loopFinalization ? { instruction: browserLoopFinalizationInstruction } : {}),
+            capturedAt: new Date().toISOString(), recoveryState }) });
         await onAttemptDebug?.({ phase: 'ai:runtime:repeated-result', stepIndex,
-          message: `连续 ${repetition.consecutiveCount} 次浏览器操作未取得进展，已补充执行事实和当前 DOM`,
+          message: loopFinalization ? '检测到浏览器操作持续循环，已停止工具执行并要求返回已核实内容和未完成事项'
+            : `连续 ${repetition.consecutiveCount} 次浏览器操作未取得进展，已补充执行事实和当前 DOM`,
           details: { toolCallIds: repetition.toolCallIds, consecutiveCount: repetition.consecutiveCount,
+            cyclePeriod: repetition.cyclePeriod, requiresFinalization: loopFinalization,
             attemptedActions: repetition.attemptedActions, completedActions: repetition.completedActions,
             recoveryStateAvailable: Boolean(recoveryState && typeof recoveryState === 'object' && 'ok' in recoveryState && recoveryState.ok) } });
       }
@@ -2633,7 +2658,7 @@ async function executeRuntimeStep(input: {
       }
       if (appendedMessages.length) messageImagePaths = [...messageImagePaths, ...appendedImagePaths];
       await checkpointContext([...source, ...appendedMessages]);
-      requestSystemPrompt = baseSystemPrompt;
+      requestSystemPrompt = loopFinalization ? `${baseSystemPrompt}\n\n${loopFinalizationInstruction}` : baseSystemPrompt;
       const savedPinnedRef = parseContextSummary(continuationSummaryText)?.pinnedUserRef;
       // A prior handoff can belong to an earlier user turn. Prefer the latest
       // exact user message retained in the active window over its old pin.
@@ -2649,7 +2674,7 @@ async function executeRuntimeStep(input: {
         version: 1, text: browserSkillBody, digest: runtimeContextMessageRef({ role: 'user', content: browserSkillBody }),
         required: true, priority: 100, bodyAvailable: true, cacheHit: false,
         reason: 'current protocol for an enabled tool without an explicit Skill-read gate' });
-      const operationalContext = [runtimeOperationalContextText(requiredSubagentDirective),
+      const operationalContext = [runtimeOperationalContextText(),
         !codexMode && availableStepNames.length !== Object.keys(nativeToolsRef.current || {}).length
           ? `Tools executable in this step: ${[...availableStepNames].sort().join(', ')}. Other visible tool schemas are reference only; finish the prerequisite before calling them.` : '',
       ].filter(Boolean).join('\n\n');
@@ -2794,13 +2819,16 @@ async function executeRuntimeStep(input: {
         const partiallyCompleted = Boolean(assembled.manifest.compactionFailure);
         const stoppedBeforeTarget = Boolean(assembled.manifest.compactionStopReason);
         await publishToolTrace({ id: compressionToolCallId,
-          name: 'contextCompression', input: { summarizedMessageCount: assembled.compressedMessages },
+          name: 'contextCompression', input: { summarizedMessageCount: assembled.compressedMessages,
+            estimatedTokensBefore: compressionBeforeStats.estimatedTotalTokens, estimatedTokensAfter: finalStats.estimatedTotalTokens },
           result: { ok: true, data: { kind: 'context-compression', status: partiallyCompleted ? 'partial' : stoppedBeforeTarget ? 'limited' : 'completed',
             committed: true, summarizedMessageCount: assembled.compressedMessages,
             estimatedTokensBefore: compressionBeforeStats.estimatedTotalTokens, estimatedTokensAfter: finalStats.estimatedTotalTokens,
             targetReached: finalStats.estimatedTotalTokens <= targetTokens,
+            compression: assembled.manifest.compression,
             failure: assembled.manifest.compactionFailure, stopReason: assembled.manifest.compactionStopReason }, actual: partiallyCompleted
             ? 'Some history was summarized and saved, but a later batch failed. Continuing with saved summaries and remaining original messages.'
+            : stoppedBeforeTarget ? 'History was summarized and saved, but the target was not reached. Exact user instructions, loaded Skills and the latest tool exchange remain intact. See data.stopReason and data.compression; original records remain available through contextRead.'
             : 'Earlier dialogue summarized and saved; original records remain available through contextRead.' },
           startedAt, completedAt: Date.now(), elapsedMs: Date.now() - startedAt, actionElapsedMs: Date.now() - startedAt,
           contextBefore: toolContextFromStats(compressionBeforeStats), contextAfter: toolContextFromStats(finalStats) });
@@ -2810,7 +2838,8 @@ async function executeRuntimeStep(input: {
           details: { toolCallId: compressionToolCallId,
             estimatedTokensBefore: compressionBeforeStats.estimatedTotalTokens, estimatedTokensAfter: finalStats.estimatedTotalTokens,
             summarizedMessageCount: assembled.compressedMessages, targetTokens, targetReached: finalStats.estimatedTotalTokens <= targetTokens,
-            committed: true, stopReason: assembled.manifest.compactionStopReason, modelContextStats: { ...finalStats, windowTokens } } });
+            committed: true, stopReason: assembled.manifest.compactionStopReason, compression: assembled.manifest.compression,
+            modelContextStats: { ...finalStats, windowTokens } } });
       }
       committedWindow = [...assembled.activeMessages];
       consumedResponseCount = responseCount;
@@ -2833,9 +2862,9 @@ async function executeRuntimeStep(input: {
         allowedTypes: stepAllowedToolTypes,
         // Keep the serialized tool list stable for provider prefix caching.
         // The execution wrapper enforces the current prerequisite restrictions.
-        activeTools: Object.entries(nativeToolsRef.current || {}).some(([name, definition]) =>
+        activeTools: loopFinalization ? [] : Object.entries(nativeToolsRef.current || {}).some(([name, definition]) =>
           !definition.execute && !availableStepNames.includes(name)) ? availableStepNames : undefined,
-        toolChoice: 'auto' as const,
+        toolChoice: loopFinalization ? 'none' as const : 'auto' as const,
       };
     }
 
@@ -2844,6 +2873,8 @@ async function executeRuntimeStep(input: {
       const { system, messages, modelMessagesForLog, allowedTypes: stepAllowedToolTypes } = await prepareStep(0);
       ensureActive();
       await reportRequestAttempt(executionIdentity);
+      const outputPerformance = createBrowserChatOutputPerformance(Date.now());
+      let completedOutputPerformance: ReturnType<typeof outputPerformance.finish> | undefined;
       await onAttemptDebug?.({
         phase: 'ai:runtime:dispatch', stepIndex, message: '正在等待模型响应',
         details: { modelContextStats: aiRequest?.options?.modelContextStats, firstChunkTimeoutMs: streamTimeouts.firstChunkMs, requestTimeoutMs: runtimeRequestTimeoutMs, retryAttempt: consecutiveRequestFailures },
@@ -2858,6 +2889,9 @@ async function executeRuntimeStep(input: {
         abortSignal: requestWatchdog.abortSignal,
         timeout: runtimeRequestTimeoutMs,
         telemetry: aiTelemetry('browser-chat-codex-runtime'),
+        onLanguageModelCallEnd: async event => {
+          completedOutputPerformance = outputPerformance.finish(event);
+        },
       })).finally(() => requestWatchdog.dispose());
       await onAttemptDebug?.({ phase: 'ai:runtime:request', stepIndex, message: '模型请求已发送',
         details: aiRequestLogDetails(aiRequest, modelRequestBody(result.request?.body,
@@ -2865,6 +2899,18 @@ async function executeRuntimeStep(input: {
             reasoning: aiReasoningEffort() })) });
       const aiElapsedMs = elapsedSince(aiStartedAt);
       ensureActive();
+      if (loopFinalization) {
+        const text = containsPrivateToolProtocol(result.text) ? loopStoppedReply
+          : cleanFinalDisplayText(result.text) || loopStoppedReply;
+        const response: ModelMessage = { role: 'assistant', content: text };
+        await checkpointContext([response]);
+        await input.onActiveModelCheckpoint?.([...lastPreparedMessages, response]);
+        await journal.clear();
+        return { text, traces, aiRequest, modelMessages: [...lastPreparedMessages, response],
+          turnMessages: [...attemptTranscriptBase, response], contextCompression: latestContextCompression,
+          visualContext: visualContext.snapshot(), finishReason: result.finishReason,
+          responseFinished: true, responseStatus: 'failed' as const, subagentHumanPauseRequired };
+      }
       const object = alignCodexRuntimeObjectTool(
         codexRuntimeObjectFromText(result.text),
         stepAllowedToolTypes,
@@ -2895,8 +2941,7 @@ async function executeRuntimeStep(input: {
         shouldContinue: input.shouldContinue,
         requestToolConfirmation: input.requestToolConfirmation,
         runSubagents: input.runSubagents,
-        readSubagent: input.readSubagent,
-        requiredSubagentUuid: input.requiredSubagentUuid,
+        readSubagentResult: input.readSubagentResult,
         readFile: input.readFile,
         readFileVisuals: input.readFileVisuals,
         readSkill: input.readSkill,
@@ -2938,12 +2983,13 @@ async function executeRuntimeStep(input: {
         details: aiResponseLogDetails({
           aiRequest,
           modelMessages: modelMessagesForLog,
-          response: { result, object, execution },
+          response: { result, object, execution, finishReason: result.finishReason, usage: result.usage,
+            content: codexDecision.content },
           elapsedMs: elapsedSince(aiStartedAt),
           aiElapsedMs,
           traces,
           visualContext: visualContext.snapshot(),
-          extra: { responseType: 'object', objectType: object.type, usage: result.usage },
+          extra: { responseType: 'object', objectType: object.type, usage: result.usage, performance: completedOutputPerformance },
         }),
       });
       const finishState = aiSdkFinishState(result.finishReason, {
@@ -2957,13 +3003,14 @@ async function executeRuntimeStep(input: {
         text: execution.text,
         traces,
         aiRequest,
-        modelMessages: [...lastPreparedMessages, codexDecision, activeReceipt],
-        turnMessages: [...attemptTranscriptBase, codexDecision, codexReceipt],
+        modelMessages: remapSubagentModelCallIds([...lastPreparedMessages, codexDecision, activeReceipt], subagentModelCallAliases),
+        turnMessages: remapSubagentModelCallIds([...attemptTranscriptBase, codexDecision, codexReceipt], undefined),
         contextCompression: latestContextCompression,
         visualContext: visualContext.snapshot(),
         finishReason: finishState.finishReason,
         responseFinished: finishState.terminatesTurn,
         responseStatus: finishState.status,
+        subagentHumanPauseRequired,
       };
     }
 
@@ -3002,8 +3049,7 @@ async function executeRuntimeStep(input: {
       shouldContinue: input.shouldContinue,
       requestToolConfirmation: input.requestToolConfirmation,
       runSubagents: input.runSubagents,
-      readSubagent: input.readSubagent,
-      requiredSubagentUuid: input.requiredSubagentUuid,
+      readSubagentResult: input.readSubagentResult,
       readFile: input.readFile,
       readFileVisuals: input.readFileVisuals,
       readSkill: input.readSkill,
@@ -3050,6 +3096,13 @@ async function executeRuntimeStep(input: {
           await raceWithAbort(decisionReady.promise, requestWatchdog.abortSignal);
           const callId = args[1].toolCallId;
           const receipt = (value: unknown, error = false): ModelMessage => ({ role: 'tool', content: [{ type: 'tool-result', toolName: name, toolCallId: callId, output: { type: error ? 'error-json' : 'json', value: jsonSafe(value) } }] });
+          // Enforce locally as well: an incompatible provider may ignore
+          // tool_choice=none, but must not execute another repeated action.
+          if (loopFinalization) {
+            const result = { ok: false, outcome: 'not-executed', reason: browserLoopFinalizationInstruction };
+            await journal.result(receipt(result, true));
+            return result;
+          }
           if (input.requestToolConfirmation && browserToolApprovalRequest({ toolName: name, toolInput: args[0] })) {
             await journal.save('awaiting_approval', n => { n.pending!.phase = 'awaiting-approval'; });
             requestWatchdog.pause();
@@ -3097,23 +3150,26 @@ async function executeRuntimeStep(input: {
     const stopAfterHumanVerification: StopCondition<typeof toolsForRequest> = ({ steps }) => steps.some((step) => (
       step.toolCalls.some((call) => isBrowserHumanPauseCall(call.toolName, call.input))
     ));
-    stopWhen.push(stopAfterHumanVerification, () => Boolean(completionReviewFailure));
+    stopWhen.push(stopAfterHumanVerification, () => Boolean(completionReviewFailure), () => subagentHumanPauseRequired, () => loopFinalization);
     try {
       let streamedStepText = '';
       let publishedStepText = '';
       let publishedDraftId = '';
       let publishedDraftSignature = '';
       const streamedToolInputs = new Map<string, { json: string; toolName: string }>();
+      const measuredToolInputIds = new Set<string>();
+      let outputPerformance = createBrowserChatOutputPerformance(Date.now());
       let receivedChunks = 0;
       let lastReceiveProgressAt = 0;
       let lastReceiveKind = '';
-      const reportReceiving = async (kind: string) => {
+      const reportReceiving = async (kind: string, output = '') => {
         if (requestWatchdog.abortSignal.aborted) return;
         requestWatchdog.firstChunkReceived();
         requestWatchdog.touch();
         receivedChunks += 1;
         const timestamp = Date.now();
-        if (kind === lastReceiveKind && timestamp - lastReceiveProgressAt < 10_000) return;
+        outputPerformance.record(output, timestamp);
+        if (kind === lastReceiveKind && timestamp - lastReceiveProgressAt < 1000) return;
         lastReceiveProgressAt = timestamp;
         lastReceiveKind = kind;
         const elapsedMs = timestamp - (stepStartedAt.get(toolExecutionGate.stepNumber) || timestamp);
@@ -3121,7 +3177,8 @@ async function executeRuntimeStep(input: {
           phase: 'ai:runtime:receiving',
           stepIndex,
           message: `正在接收 AI 响应（${kind}） · ${attemptLabel()}`,
-          details: { elapsedMs, receivedChunks, kind, agentStepIndex: retryAgentStepOffset + toolExecutionGate.stepNumber + 1 },
+          details: { elapsedMs, receivedChunks, kind, performance: outputPerformance.snapshot(timestamp),
+            agentStepIndex: retryAgentStepOffset + toolExecutionGate.stepNumber + 1 },
         });
       };
       const publishStepText = async (text: string, stepNumber: number) => {
@@ -3209,7 +3266,10 @@ async function executeRuntimeStep(input: {
         await reportRequestAttempt(executionIdentity);
         stepModelMessagesForLog.set(stepNumber, prepared.modelMessagesForLog);
         toolExecutionGate.stepNumber = stepNumber;
-        stepStartedAt.set(stepNumber, Date.now());
+        const requestStartedAt = Date.now();
+        stepStartedAt.set(stepNumber, requestStartedAt);
+        outputPerformance = createBrowserChatOutputPerformance(requestStartedAt);
+        measuredToolInputIds.clear();
         streamedStepText = '';
         publishedStepText = '';
         receivedChunks = 0;
@@ -3239,8 +3299,9 @@ async function executeRuntimeStep(input: {
         content: ReadonlyArray<unknown>;
         finishReason?: string;
         usage?: unknown;
-        performance: { responseTimeMs: number };
+        performance: { responseTimeMs: number; outputTokensPerSecond?: number; timeToFirstOutputMs?: number };
       }) => {
+        const completedOutputPerformance = outputPerformance.finish(event);
         requestWatchdog.firstChunkReceived();
         // Persist pending calls BEFORE any local tool can mutate external state. The
         // SDK's completed step later supplies the canonical complete exchange.
@@ -3255,6 +3316,14 @@ async function executeRuntimeStep(input: {
         ]));
         decisionCalls = event.content.map(recordFromUnknown).filter(part => part.type === 'tool-call').map(part => ({ toolCallId: String(part.toolCallId), toolName: String(part.toolName), input: part.input }));
         if (decisionCalls.length) await journal.plan(serializableBrowserChatModelMessages([{ role: 'assistant', content: pendingContent } as ModelMessage]), decisionCalls);
+        const modelText = event.content
+          .map((part) => recordFromUnknown(part))
+          .filter((part) => part.type === 'text' && typeof part.text === 'string')
+          .map((part) => String(part.text))
+          .join('');
+        const visibleText = containsPrivateToolProtocol(modelText)
+          ? ''
+          : normalizeBrowserChatFinalReplyText(modelText);
         decisionReady.resolve();
         const responseTimeMs = finiteContextStat(event.performance.responseTimeMs);
         const turnIndex = toolExecutionGate.stepNumber;
@@ -3264,14 +3333,6 @@ async function executeRuntimeStep(input: {
             aiRequestElapsedByToolCallId.set(record.toolCallId, responseTimeMs);
           }
         }
-        const modelText = event.content
-          .map((part) => recordFromUnknown(part))
-          .filter((part) => part.type === 'text' && typeof part.text === 'string')
-          .map((part) => String(part.text))
-          .join('');
-        const visibleText = containsPrivateToolProtocol(modelText)
-          ? ''
-          : normalizeBrowserChatFinalReplyText(modelText);
         const startedAt = stepStartedAt.get(turnIndex) || Date.now();
         const elapsedMs = responseTimeMs ?? elapsedSince(startedAt);
         const toolCallCount = event.content.filter((part) => recordFromUnknown(part).type === 'tool-call').length;
@@ -3299,6 +3360,7 @@ async function executeRuntimeStep(input: {
               agentStepIndex: retryAgentStepOffset + turnIndex + 1,
               nativeToolLoop: true,
               toolLoopAgent: input.useToolLoopAgent === true,
+              performance: completedOutputPerformance,
             },
           }),
         });
@@ -3350,10 +3412,10 @@ async function executeRuntimeStep(input: {
         requestWatchdog.touch();
         ensureActive();
         rawResponseMessages.push(...event.response.messages);
-        durableTurnMessages = [...attemptTranscriptBase, ...rawResponseMessages];
+        durableTurnMessages = remapSubagentModelCallIds([...attemptTranscriptBase, ...rawResponseMessages], undefined);
         await input.onTurnModelCheckpoint?.(durableTurnMessages);
         await checkpointContext(event.response.messages);
-        const checkpoint = [...lastPreparedMessages, ...event.response.messages];
+        const checkpoint = remapSubagentModelCallIds([...lastPreparedMessages, ...event.response.messages], subagentModelCallAliases);
         rememberRetryState({ messages: checkpoint, imagePaths: [...messageImagePaths], agentStepOffset: retryAgentStepOffset + (event.stepNumber || 0) + 1 });
         await input.onActiveModelCheckpoint?.(withoutRuntimePromptCacheMetadata(checkpoint));
         await journal.clear();
@@ -3365,14 +3427,16 @@ async function executeRuntimeStep(input: {
         if (visibleText) await publishStepText(visibleText, turnIndex);
       };
       const subagentTimeoutMs = boundedInteger(process.env.AI_SUBAGENT_LOOP_TIMEOUT_MS, 600_000, 1_000, 3_600_000);
+      const mediaTimeoutMs = Math.max(streamTimeouts.toolMs, await agentMediaToolTimeoutMs());
       const timeout = {
-        ...streamTimeouts,
-        // The SDK's chunk timer also spans tools; a child batch has its own
-        // deadline and must not be interrupted by the default tool window.
-        chunkMs: input.runSubagents ? Math.max(streamTimeouts.chunkMs, subagentTimeoutMs + runtimeRequestTimeoutMs) : streamTimeouts.chunkMs,
-        tools: {
-          subagentMs: subagentTimeoutMs,
-        },
+        firstChunkMs: streamTimeouts.firstChunkMs,
+        // The SDK's chunk timer also spans tool execution. The request watchdog
+        // already times model output and pauses for tools, so use it instead.
+        // No default toolMs: an omitted novel override must mean no deadline,
+        // rather than falling back to the generic tool timeout.
+        tools: Object.fromEntries(stableToolOrder.filter(name => name !== 'novel').map(name => [
+          `${name}Ms`, name === 'subagent' ? subagentTimeoutMs : name === 'media' ? mediaTimeoutMs : streamTimeouts.toolMs,
+        ])),
       };
       const runtimeModel = getModel();
       const observedModel = typeof runtimeModel !== 'string' && runtimeModel.specificationVersion === 'v4'
@@ -3402,9 +3466,17 @@ async function executeRuntimeStep(input: {
                 ...response,
                 stream: response.stream.pipeThrough(new TransformStream({
                   async transform(part, controller) {
-                    if (part.type === 'reasoning-delta') await reportReceiving('推理');
-                    else if (part.type === 'text-delta') await reportReceiving('正文');
-                    else if (part.type === 'tool-input-start' || part.type === 'tool-input-delta' || part.type === 'tool-call') await reportReceiving('工具参数');
+                    if (part.type === 'reasoning-delta') await reportReceiving('推理', part.delta);
+                    else if (part.type === 'text-delta') await reportReceiving('正文', part.delta);
+                    else if (part.type === 'tool-input-delta') {
+                      if (part.delta) measuredToolInputIds.add(part.id);
+                      await reportReceiving('工具参数', part.delta);
+                    } else if (part.type === 'tool-input-start') await reportReceiving('工具参数');
+                    else if (part.type === 'tool-call') {
+                      // A completed tool call mirrors its deltas. Count its
+                      // arguments only when the provider sent no deltas.
+                      await reportReceiving('工具参数', measuredToolInputIds.has(part.toolCallId) ? '' : part.input);
+                    }
                     await observeReasoning?.(part);
                     controller.enqueue(part);
                   },
@@ -3519,13 +3591,13 @@ async function executeRuntimeStep(input: {
       const displayableResultText = containsPrivateToolProtocol(resultText || latestText)
         ? ''
         : normalizeBrowserChatFinalReplyText(resultText || latestText);
-      if (containsPrivateToolProtocol(resultText || latestText) && toolCallCount === 0) {
+      if (!loopFinalization && containsPrivateToolProtocol(resultText || latestText) && toolCallCount === 0) {
         const error = new Error('Provider emitted a private textual tool protocol instead of a standard structured tool call.');
         error.name = 'AI_PrivateToolProtocolError';
         Object.assign(error, { privateToolProtocolRetryable: true });
         throw error;
       }
-      if (aiSdkEmptyStopRequiresRetry({
+      if (!loopFinalization && aiSdkEmptyStopRequiresRetry({
         finishReason: resultFinishReason,
         responseText: displayableResultText,
         toolCallCount,
@@ -3534,7 +3606,9 @@ async function executeRuntimeStep(input: {
         error.name = 'AI_NoOutputGeneratedError';
         throw error;
       }
-      const finishState = aiSdkFinishState(resultFinishReason, {
+      const finishState = loopFinalization
+        ? { finishReason: resultFinishReason, retryRequest: false, terminatesTurn: true, status: 'failed' as const }
+        : aiSdkFinishState(resultFinishReason, {
         runtimeContinuationRequired: aiSdkToolResultRequiresContinuation({
           finishReason: resultFinishReason,
           responseText: displayableResultText,
@@ -3543,7 +3617,7 @@ async function executeRuntimeStep(input: {
         }),
       });
       ensureActive();
-      latestText = finishState.terminatesTurn
+      latestText = loopFinalization ? cleanFinalDisplayText(displayableResultText) || loopStoppedReply : finishState.terminatesTurn
         ? cleanFinalDisplayText(resultText || latestText) || ''
         : toolConsistentAssistantText(resultText || latestText, traces.at(-1)?.name);
       if (finishState.retryRequest) {
@@ -3554,13 +3628,14 @@ async function executeRuntimeStep(input: {
         text: latestText,
         traces,
         aiRequest,
-        modelMessages: [...lastPreparedMessages, ...responseMessages.slice(lastPreparedResponsePrefixLength)],
-        turnMessages: [...attemptTranscriptBase, ...responseMessages],
+        modelMessages: remapSubagentModelCallIds([...lastPreparedMessages, ...responseMessages.slice(lastPreparedResponsePrefixLength)], subagentModelCallAliases),
+        turnMessages: remapSubagentModelCallIds([...attemptTranscriptBase, ...responseMessages], undefined),
         contextCompression: latestContextCompression,
         visualContext: visualContext.snapshot(),
         finishReason: finishState.finishReason,
         responseFinished: finishState.terminatesTurn,
         responseStatus: finishState.status,
+        subagentHumanPauseRequired,
       };
     } catch (error) {
       requestWatchdog.dispose();
@@ -3692,6 +3767,16 @@ async function executeRuntimeStep(input: {
           ...lastRetryState,
           messages: omitRuntimeModelToolExchange(lastRetryState.messages, missingToolCallId),
         };
+        const knownSubagentCall = [...Object.values(contextRecords), ...(input.conversation || [])].some(message =>
+          message.role === 'assistant' && Array.isArray(message.content) && message.content.some(part =>
+            part.type === 'tool-call' && part.toolName === 'subagent'
+            && subagentModelToolCallId(part.toolCallId, subagentModelCallAliases) === missingToolCallId));
+        if (knownSubagentCall) {
+          // Preserve the known batch output without restoring the provider-
+          // rejected ID. Only historical model context is rebound; no spawn
+          // is executed and the owning service/UI retains its original ID.
+          subagentModelCallAliases.set(missingToolCallId, `call_${randomUUID()}`);
+        }
       }
       const retryExhausted = lastRetryDecision.retryable
         && consecutiveRequestFailures >= consecutiveFailureLimit;
@@ -3875,7 +3960,7 @@ export async function executeInteractiveBrowserTurn(input: {
   shouldContinue?: () => boolean;
   requestToolConfirmation?: (request: BrowserToolConfirmationRequest) => Promise<BrowserToolConfirmationDecision>;
   runSubagents?: BrowserChatSubagentRunner;
-  readSubagent?: BrowserChatSubagentReader;
+  readSubagentResult?: BrowserChatSubagentReader;
   readFile?: (input: BrowserChatReadFileInput, context?: import('@cjfclonedeep/capability-sdk').CapabilityExecutionContext) => Promise<BrowserActionResult>;
   readFileVisuals?: (input: BrowserChatFileVisualInput) => Promise<BrowserActionResult>;
   readSkill?: BrowserChatReadSkill;
@@ -3890,7 +3975,7 @@ export async function executeInteractiveBrowserTurn(input: {
   const ensureActive = () => throwIfStopped(input.abortSignal, input.shouldContinue);
   const steps = [...(input.completedSteps || [])];
   const newSteps: StepExecutionResult[] = [];
-  let activeModelMessages = [...(input.conversation || [])];
+  let activeModelMessages = subagentModelMessages(input.conversation || []);
   let activeContinuationSummary = (parseContextSummary(input.continuationSummary) ? input.continuationSummary! : '');
   let contextRecords = { ...input.contextRecords };
   const turnModelMessages: ModelMessage[] = [];
@@ -3905,10 +3990,14 @@ export async function executeInteractiveBrowserTurn(input: {
   let finalBlocks: BrowserChatFinalBlock[] = [];
   let acceptedFinalResponse: StructuredResponse | undefined;
   let endedWithFinalAnswer = false;
+  let pausedForSubagentHumanInput = false;
   let missingFinalResponseAttempts = 0;
   // A resumed run may already contain the full installed Skill in completed
   // tool evidence. Reuse it only on exact content match, never from summaries.
   const loadedHiddenRuntimeSkillIds = hiddenRuntimeSkillIdsInModelContext(input.conversation || []);
+  const subagentModelCallAliases: BrowserChatSubagentModelCallAliases = new Map();
+  restoreSubagentModelCallAliases(Object.values(contextRecords), subagentModelCallAliases);
+  restoreSubagentModelCallAliases(activeModelMessages, subagentModelCallAliases);
   while (true) {
     ensureActive();
     const stepIndex = Math.max(input.initialStepIndex || 0, ...steps.map((step) => step.index)) + 1;
@@ -3927,12 +4016,7 @@ export async function executeInteractiveBrowserTurn(input: {
     const completedTurnMessages = [...turnModelMessages];
 
     try {
-      const pendingSubagentUuids = pendingSubagentUuidsFromSteps(newSteps);
-      const requiredSubagentUuid = pendingSubagentUuids[0];
       const initialRuntimeStep = turnModelMessages.length === 0;
-      const requiredSubagentInstruction = requiredSubagentUuid
-        ? requiredSubagentReadDirective(requiredSubagentUuid, pendingSubagentUuids.length)
-        : '';
       let checkpointTurnMessageCount = 0;
       actionResult = await executeRuntimeStep({
         session: input.session,
@@ -3943,11 +4027,8 @@ export async function executeInteractiveBrowserTurn(input: {
         userId: input.userId,
         turnId: input.turnId || input.runId,
         stepIndex,
-        instruction: [
-          initialRuntimeStep ? input.modelInstruction || input.instruction : '',
-          requiredSubagentInstruction,
-        ].filter(Boolean).join('\n\n'),
-        appendInstruction: initialRuntimeStep || Boolean(requiredSubagentInstruction),
+        instruction: initialRuntimeStep ? input.modelInstruction || input.instruction : '',
+        appendInstruction: initialRuntimeStep,
         operationalContext: input.operationalContext,
         conversation: activeModelMessages,
         continuationSummary: activeContinuationSummary,
@@ -3962,11 +4043,11 @@ export async function executeInteractiveBrowserTurn(input: {
         abortSignal: input.abortSignal,
         shouldContinue: input.shouldContinue,
         requestToolConfirmation: input.requestToolConfirmation,
-        allowedToolTypes: requiredSubagentUuid ? [browserCapabilityToolNames.browser, 'subagent'] : input.allowedToolTypes,
+        allowedToolTypes: input.allowedToolTypes,
         disabledTools: input.disabledTools,
-        requiredSubagentUuid,
         runSubagents: input.runSubagents,
-        readSubagent: input.readSubagent,
+        readSubagentResult: input.readSubagentResult,
+        subagentModelCallAliases,
         readFile: input.readFile,
         readFileVisuals: input.readFileVisuals,
         readSkill: input.readSkill,
@@ -3979,7 +4060,8 @@ export async function executeInteractiveBrowserTurn(input: {
         onTextStream: input.onTextStream,
         onReasoningStream: input.onReasoningStream,
         onTurnModelCheckpoint: async (messages) => {
-          activeModelMessages = [...activeModelMessages, ...messages.slice(checkpointTurnMessageCount)];
+          messages = remapSubagentModelCallIds(messages, undefined);
+          activeModelMessages = remapSubagentModelCallIds([...activeModelMessages, ...messages.slice(checkpointTurnMessageCount)], subagentModelCallAliases);
           checkpointTurnMessageCount = messages.length;
           await input.onModelMessages?.({ activeMessages: activeModelMessages, turnMessages: [...turnModelMessages, ...messages] });
         },
@@ -4104,6 +4186,21 @@ export async function executeInteractiveBrowserTurn(input: {
       await input.onProgress?.(completedStep);
       ensureActive();
     };
+    const childHumanPauseReply = subagentHumanPauseReplyFromTraces(actionResult.traces);
+    if ((actionResult.subagentHumanPauseRequired || childHumanPauseReply)
+      && !browserChatHasPendingHumanInput(completedStep.tools || [])) {
+      await persistCompletedToolStep();
+      if (childHumanPauseReply) {
+        finalStatus = 'blocked';
+        reply = childHumanPauseReply;
+        finalBlocks = [markdownBlock(reply)];
+        pausedForSubagentHumanInput = true;
+        endedWithFinalAnswer = true;
+        await input.onDebug?.({ phase: 'chat:subagent-human-pause', stepIndex, message: '子 Agent 等待人工处理，已保留执行状态' });
+        break;
+      }
+      continue;
+    }
     const structuredFinalResponse = finalResponseFromTraces(actionResult.traces);
     if (structuredFinalResponse?.blocks.length) {
       acceptedFinalResponse = structuredFinalResponse;
@@ -4126,7 +4223,7 @@ export async function executeInteractiveBrowserTurn(input: {
         endedWithFinalAnswer = true;
         break;
       }
-      const correction: ModelMessage = { role: 'user', content: 'Runtime response protocol: your previous text did not complete this turn. Submit the answer using finalResponse with registered blocks. Reuse completed tool results; do not repeat their operations.' };
+      const correction: ModelMessage = { role: 'user', content: '[Runtime response protocol]\nHost reminder for the existing task, not a new user request. Your previous text did not complete this turn. Submit the answer using finalResponse with registered blocks. Reuse completed tool results; do not repeat their operations.' };
       activeModelMessages.push(correction);
       turnModelMessages.push(correction);
       await input.onModelMessages?.({ activeMessages: [...activeModelMessages], turnMessages: [...turnModelMessages] });
@@ -4168,16 +4265,6 @@ export async function executeInteractiveBrowserTurn(input: {
     }
 
     await persistCompletedToolStep();
-    const pendingSubagentUuids = pendingSubagentUuidsFromSteps(newSteps);
-    if (pendingSubagentUuids.length) {
-      await input.onDebug?.({
-        phase: 'chat:subagent-read-required',
-        stepIndex,
-        message: `${pendingSubagentUuids.length} completed child Agent result(s) remain unread; forcing subagent action=read before final synthesis.`,
-        details: { pendingSubagentUuids },
-      });
-      continue;
-    }
     if (actionResult.responseFinished) {
       reply = aiSdkFinishMessage(actionResult.finishReason);
       finalBlocks = [markdownBlock(reply)];
@@ -4201,11 +4288,12 @@ export async function executeInteractiveBrowserTurn(input: {
 
   if (!endedWithFinalAnswer) reply = '';
 
-  // A final report or request for more information completes this turn. Only
-  // an actual successful browser verification request may suspend execution.
-  if (finalStatus === 'blocked' && !browserChatHasPendingHumanInput(
+  // Only a real pending user interaction can pause this turn for resumption.
+  // Provider filtering or another blocked terminal response does not establish
+  // task completion merely because it created no human-input tool receipt.
+  if (finalStatus === 'blocked' && !pausedForSubagentHumanInput && !browserChatHasPendingHumanInput(
     newSteps.flatMap((step) => step.tools || []),
-  )) finalStatus = 'passed';
+  )) finalStatus = 'failed';
 
   const completedTools = newSteps.flatMap((step) => (step.tools || []).map((toolCall) => ({
       name: toolCall.name,
@@ -4452,8 +4540,7 @@ async function executeCodexRuntimeObject(input: {
   shouldContinue?: () => boolean;
   requestToolConfirmation?: (request: BrowserToolConfirmationRequest) => Promise<BrowserToolConfirmationDecision>;
   runSubagents?: BrowserChatSubagentRunner;
-  readSubagent?: BrowserChatSubagentReader;
-  requiredSubagentUuid?: string;
+  readSubagentResult?: BrowserChatSubagentReader;
   readFile?: (input: BrowserChatReadFileInput, context?: import('@cjfclonedeep/capability-sdk').CapabilityExecutionContext) => Promise<BrowserActionResult>;
   readFileVisuals?: (input: BrowserChatFileVisualInput) => Promise<BrowserActionResult>;
   readSkill?: BrowserChatReadSkill;
@@ -4465,7 +4552,7 @@ async function executeCodexRuntimeObject(input: {
   onToolTrace?: (trace: ToolTrace, progress?: ToolTraceProgress) => void | Promise<void>;
   onReferenceImage?: (input: { path: string; source: string; label?: string }) => void;
 }) {
-  const { session, runId, stepIndex, type, message, params, allowedTypes, traces, aiRequest, visualContext, abortSignal, shouldContinue, requestToolConfirmation, runSubagents, readSubagent, requiredSubagentUuid, readFile, readFileVisuals, readSkill, attachmentBindings, credentialBindings, ensureBrowserStarted, onVisualContextChange, onToolTrace, onReferenceImage } = input;
+  const { session, runId, stepIndex, type, message, params, allowedTypes, traces, aiRequest, visualContext, abortSignal, shouldContinue, requestToolConfirmation, runSubagents, readFile, readFileVisuals, readSkill, attachmentBindings, credentialBindings, ensureBrowserStarted, onVisualContextChange, onToolTrace, onReferenceImage } = input;
   const recordContextDispatch = async (result: BrowserActionResult) => {
     const completedAt = Date.now();
     const trace: ToolTrace = { id: input.toolCallId, name: type, input: params, result,
@@ -4503,7 +4590,7 @@ async function executeCodexRuntimeObject(input: {
 
   if (type === 'finalResponse') {
     const parsed = (() => {
-      try { return { success: true as const, data: responseRegistry.forTools(new Set(allowedTypes)).parseResponse(params) }; }
+      try { return { success: true as const, data: responseRegistry.forTools(new Set(allowedTypes)).parseInput(params) }; }
       catch (error) { return { success: false as const, error: { issues: [{ path: [] as string[], message: error instanceof Error ? error.message : String(error) }] } }; }
     })();
     if (!parsed.success) {
@@ -4512,7 +4599,7 @@ async function executeCodexRuntimeObject(input: {
         executed: true,
       };
     }
-    const completionError = browserChatFinalResponseCompletionError(parsed.data) || await input.reviewFinalResponse(parsed.data);
+    const completionError = await input.reviewFinalResponse(parsed.data);
     if (completionError) return recordContextDispatch({ ok: false, actual: completionError });
     const completedAt = Date.now();
     const trace: ToolTrace = {
@@ -4572,21 +4659,16 @@ async function executeCodexRuntimeObject(input: {
     if (type === 'subagent' && normalizedParams.action === 'spawn') {
       if (!runSubagents) return { ok: false, actual: 'subagent action=spawn is unavailable in this runtime.' };
       const tasks = normalizeBrowserChatSubagentTasks(normalizedParams.tasks ?? normalizedParams);
-      if (!tasks.length) return { ok: false, actual: 'subagent action=spawn requires at least one valid task.' };
+      if (!tasks.length) return { ok: false, actual: 'subagent action=spawn requires a non-empty batch where every task has a non-blank title and instruction, and every supplied URL is a valid absolute URL. No child task was started.' };
       return runSubagents(tasks, abortSignal, toolCallId);
     }
     if (type === 'subagent' && normalizedParams.action === 'read') {
-      if (!readSubagent) return { ok: false, actual: 'subagent action=read is unavailable in this runtime.' };
+      if (!input.readSubagentResult) return { ok: false, actual: 'subagent action=read is unavailable in this runtime.' };
       const uuid = typeof normalizedParams.uuid === 'string' ? normalizedParams.uuid.trim() : '';
-      if (!uuid) return { ok: false, actual: 'subagent action=read requires one UUID.' };
-      if (requiredSubagentUuid && uuid !== requiredSubagentUuid) {
-        return {
-          ok: false,
-          actual: `Read rejected: child Agent results must be read in order. The required UUID is ${requiredSubagentUuid}.`,
-        };
-      }
-      return readSubagent(uuid);
+      if (!uuid) return { ok: false, actual: 'subagent action=read requires one exact child uuid returned by spawn.' };
+      return input.readSubagentResult({ uuid }, abortSignal);
     }
+    if (type === 'subagent') return { ok: false, actual: 'subagent supports action=spawn and action=read.' };
     if (type === 'skill' && normalizedParams.action === 'read') {
       const skillId = typeof normalizedParams.skillId === 'string' ? normalizedParams.skillId.trim() : '';
       if (!skillId) return { ok: false, actual: 'skill action=read requires one Skill id.' };
@@ -4597,6 +4679,24 @@ async function executeCodexRuntimeObject(input: {
       }
       if (!readSkill) return { ok: false, actual: 'skill action=read is unavailable in this runtime.' };
       return readSkill(skillId);
+    }
+    const providers = createAgentInfrastructureProviders({
+      attachmentBindings,
+      requestNovelConfirmation: novelPlanConfirmationHandler(requestToolConfirmation, stepIndex),
+    }).filter((provider) => provider.manifest.skills?.some((skill) => skill.activation?.some((activation) => activation.toolName === type)));
+    if (providers.length) {
+      // JSON-mode models must reach the same providers and validation as native tool calls.
+      const runtime = await mountCapabilities({
+        providers, context: { runId, sessionId: runId, userId: input.userId, abortSignal },
+        configStore: new EnvironmentCapabilityConfigStore(process.env), allowedToolNames: new Set([type]),
+      });
+      try {
+        const tool = runtime.tools[type]?.tool;
+        if (!tool) return { ok: false, actual: `Tool ${type} is unavailable.` };
+        return capabilityResultToBrowserActionResult(await tool.execute(tool.input.parse(normalizedParams), {
+          invocationId: toolCallId || input.toolCallId, abortSignal,
+        }));
+      } finally { await runtime.dispose(); }
     }
     return executeRecordedBrowserOperation(session, flow, {
       browserInteractionMode: input.browserInteractionMode,

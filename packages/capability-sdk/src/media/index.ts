@@ -3,23 +3,27 @@ import { defineCapabilityInput, defineCapabilityTool, normalizeBoundedInteger, t
 import { mediaRuntimeSkill } from './runtime-skill.ts';
 import { mediaCapabilitySettings } from './settings.ts';
 import type { MediaGenerationInput, MediaGenerationOperations } from './generation.ts';
+import { videoSceneSchema } from './video-project.ts';
 export * from './runtime-skill.ts';
 export * from './settings.ts';
 export * from './generation.ts';
 
 export const mediaCapabilityToolNames = Object.freeze({ media: 'media' } as const);
 export type MediaArtifact = { artifactId: string; mediaType?: string; url?: string; downloadUrl?: string; fileName?: string; description?: string };
+export type ComposeVideoInput = { scenes: Array<z.infer<typeof videoSceneSchema>>; audioRef?: string; size?: string; audioOffset?: number; audioTrimStart?: number; audioDuration?: number; audioVolume?: number };
 export interface MediaOperations extends MediaGenerationOperations {
+  videoRenderer?: 'remotion' | 'ffmpeg';
   inspect(sourceRef: string, context: CapabilityExecutionContext): Promise<unknown>;
   extractFrames?(input: { sourceRef: string; intervalSeconds?: number; maxFrames: number }, context: CapabilityExecutionContext): Promise<MediaArtifact[]>;
   ocr?(input: { sourceRef: string; language?: string }, context: CapabilityExecutionContext): Promise<unknown>;
   transcribe?(input: { sourceRef: string; language?: string; timestamps: boolean }, context: CapabilityExecutionContext): Promise<unknown>;
+  composeVideo?(input: ComposeVideoInput, context: CapabilityExecutionContext): Promise<MediaArtifact[]>;
   health?(): Promise<CapabilityHealth>;
   dispose?(): Promise<void>;
 }
 export const mediaGenerationActions = ['generateImage', 'generateVideo', 'generateSpeech'] as const;
 const parser = z.object({
-  action: z.enum(['listModels', 'inspect', 'extractFrames', 'ocr', 'transcribe', ...mediaGenerationActions]),
+  action: z.enum(['listModels', 'inspect', 'extractFrames', 'ocr', 'transcribe', 'composeVideo', ...mediaGenerationActions]),
   reason: z.string().trim().min(1).max(300),
   sourceRef: z.string().trim().min(1).max(8_000).optional(),
   sourceRefs: z.array(z.string().trim().min(1).max(8_000)).max(10).optional(),
@@ -36,10 +40,26 @@ const parser = z.object({
   duration: z.number().positive().max(600).optional(),
   voice: z.string().trim().min(1).max(200).optional(),
   outputFormat: z.string().trim().min(1).max(40).optional(),
+  scenes: z.array(videoSceneSchema).min(1).max(60).optional(),
+  audioRef: z.string().trim().min(1).max(8_000).optional(),
+  audioOffset: z.number().min(0).max(600).optional(),
+  audioTrimStart: z.number().min(0).max(86_400).optional(),
+  audioDuration: z.number().min(0.1).max(600).optional(),
+  audioVolume: z.number().min(0).max(1).optional(),
 }).strict().superRefine((input, context) => {
   const generation = mediaGenerationActions.some((action) => action === input.action);
   const issue = (path: string, message: string) => context.addIssue({ code: 'custom', path: [path], message });
-  if (!generation && input.action !== 'listModels' && !input.sourceRef) issue('sourceRef', `${input.action} requires sourceRef.`);
+  if (!generation && !['listModels', 'composeVideo'].includes(input.action) && !input.sourceRef) issue('sourceRef', `${input.action} requires sourceRef.`);
+  if (input.action === 'composeVideo') {
+    if (!input.scenes?.length) issue('scenes', 'composeVideo requires ordered image scenes with durations in seconds.');
+    if (input.scenes && input.scenes.reduce((total, scene) => total + scene.duration, 0) > 600) issue('scenes', 'Total video duration must not exceed 600 seconds.');
+    if (input.size) {
+      const [width, height] = input.size.split('x').map(Number);
+      if (![width, height].every((value) => Number.isInteger(value) && value >= 128 && value <= 1920 && value % 2 === 0)) issue('size', 'Composition dimensions must be even integers between 128 and 1920.');
+    }
+    if (input.sourceRef || input.sourceRefs || input.prompt || input.modelRef || input.duration || input.aspectRatio || input.outputFormat) issue('scenes', 'composeVideo uses scenes, optional audioRef and size; output is MP4.');
+  } else if (input.scenes || input.audioRef) issue('scenes', 'scenes and audioRef are only used by composeVideo.');
+  if ([input.audioOffset, input.audioTrimStart, input.audioDuration, input.audioVolume].some(value => value !== undefined) && (input.action !== 'composeVideo' || !input.audioRef)) issue('audioRef', 'Audio edit options require composeVideo and audioRef.');
   if (generation && !input.prompt) issue('prompt', `${input.action} requires prompt.`);
   if (generation && input.sourceRef) issue('sourceRef', 'Use sourceRefs for generation reference images.');
   if (input.maskRef && (input.action !== 'generateImage' || !input.sourceRefs?.length)) issue('maskRef', 'A mask requires generateImage and reference images.');
@@ -57,19 +77,33 @@ export const mediaCapabilityManifest = Object.freeze({
 
 export function createMediaTool(operations: MediaOperations, configuration: CapabilityRunContext['configuration']) {
   return defineCapabilityTool<MediaToolInput, unknown>({
-    name: 'media', description: 'List built-in and configured image/video/speech models; generate or edit images, generate videos or text-to-speech audio; inspect media, extract video frames, run OCR or transcription. Generation returns saved artifacts.',
+    name: 'media', description: 'List image/video/speech models and local composition capabilities. For complete image-based videos use generateImage then composeVideo: Remotion renders scenes, camera motion, captions and optional narration into an editable MP4 without a video generation model. generateVideo is ONLY for a configured generative video model, not for assembling an image-based movie. Generate speech only when listModels includes a speech model. Scene controls: duration, motion (none/zoomIn/zoomOut/panLeft/panRight), caption, trimStart, muted; audio offset, trim, duration and volume. Also inspect media, extract frames, OCR and transcription.',
     input: mediaToolInput, policy: { concurrency: 'serial', concurrencyGroup: 'media-processing', permissions: mediaCapabilityManifest.permissions },
     async execute(input, context) {
       try {
         context.abortSignal?.throwIfAborted();
         let data: unknown;
         const unavailable = (name: string) => ({ ok: false as const, error: { code: 'media-operation-unavailable', message: `${name} is not configured.` } });
-        if (input.action === 'listModels') data = await operations.listModels?.() || [];
+        if (input.action === 'listModels') data = {
+          models: await operations.listModels?.() || [],
+          capabilities: { composeVideo: {
+            available: Boolean(operations.composeVideo), engine: operations.videoRenderer || 'ffmpeg', requiresVideoModel: false,
+            maxDurationSeconds: 600, maxScenes: 60,
+            renderTimeoutMs: Number(configuration.AGENT_VIDEO_RENDER_TIMEOUT_MS) || 900_000,
+            sceneKinds: ['image', 'video'],
+            animation: 'Whole-frame camera movement and captions; no character rigging, articulated motion or custom React/SVG scene authoring.',
+            note: 'Use generateImage followed by composeVideo for image-based movies. Speech requires a listed speech model or a supplied audio artifact; never probe an unconfigured model.',
+          } },
+        };
         else if (input.action === 'inspect') data = await operations.inspect(input.sourceRef!, context);
         else if (input.action === 'extractFrames') {
           if (!operations.extractFrames) return unavailable('Frame extraction');
           const limit = normalizeBoundedInteger(configuration.AGENT_MEDIA_MAX_FRAMES, 12, 1, 60);
           data = await operations.extractFrames({ sourceRef: input.sourceRef!, intervalSeconds: input.intervalSeconds, maxFrames: Math.min(input.maxFrames || limit, limit) }, context);
+        } else if (input.action === 'composeVideo') {
+          if (!operations.composeVideo) return unavailable('Video composition');
+          data = await operations.composeVideo({ scenes: input.scenes!, audioRef: input.audioRef, size: input.size,
+            audioOffset: input.audioOffset, audioTrimStart: input.audioTrimStart, audioDuration: input.audioDuration, audioVolume: input.audioVolume }, context);
         } else if (input.action === 'ocr') {
           if (!operations.ocr) return unavailable('OCR');
           data = await operations.ocr({ sourceRef: input.sourceRef!, language: input.language }, context);

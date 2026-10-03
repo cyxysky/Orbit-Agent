@@ -3,6 +3,7 @@ import { responseRegistry } from '@/lib/response-registry';
 import { browserChatCapabilityResult } from './browser-chat-capability-result';
 import type { DynamicToolUIPart, UIMessage } from 'ai';
 import { z } from 'zod';
+import type { BrowserChatActivity } from './browser-chat-activity';
 import type {
   BrowserChatAiOutputCycle,
   BrowserChatSubagentRecord,
@@ -29,6 +30,7 @@ export type BrowserChatUIMessageMetadata = {
   responseDraft?: { id: string; blocks: ResponseBlock[] } | null;
   attachments?: unknown[];
   skillIds?: string[];
+  subagentId?: string;
 };
 
 export type BrowserChatUIDataTypes = {
@@ -36,7 +38,7 @@ export type BrowserChatUIDataTypes = {
   step: StepExecutionResult;
   outputCycle: BrowserChatAiOutputCycle;
   subagent: BrowserChatSubagentRecord;
-  activity: { phase: string; label: string; updatedAt: string; startedAt?: string; operationId?: string };
+  activity: BrowserChatActivity;
 };
 
 export type BrowserChatUIMessage = UIMessage<BrowserChatUIMessageMetadata, BrowserChatUIDataTypes>;

@@ -286,7 +286,7 @@ const apiModules: EChartsApiModule[] = [
     title: '标题、图例、提示与工具栏',
     summary: 'title、legend、tooltip、axisPointer、toolbox 与 graphic。',
     optionPaths: ['title', 'legend', 'tooltip', 'axisPointer', 'toolbox', 'graphic'],
-    notes: ['tooltip.formatter 支持 "{b}: {c}" 等字符串模板，省略时显示默认提示；多系列固定模板可使用 "{b0}<br/>{a0}: {c0}<br/>{a1}: {c1}"。', 'formatter/valueFormatter 不能传入函数或 "function(...) {...}"、"(...) => ..." 这样的函数字符串，create/update 会拒绝并指出字段路径。瀑布图的透明辅助系列应设 tooltip: { show: false }。', 'toolbox 可配置 saveAsImage、dataView、dataZoom、magicType 与 restore。', 'graphic 支持 group、image、text、rect、circle、ring、sector、arc、polygon、polyline、line、bezierCurve 等图形。'],
+    notes: ['tooltip.formatter 支持 "{b}: {c}" 等字符串模板，省略时显示默认提示；多系列固定模板可使用 "{b0}<br/>{a0}: {c0}<br/>{a1}: {c1}"。', 'formatter 只能传入字符串模板，不能传入函数或 "function(...) {...}"、"(...) => ..." 这样的函数字符串。valueFormatter 只接受 JavaScript 函数，不支持字符串模板；持久化 JSON 图表必须省略此字段，改用 formatter 或默认提示。create/update 会拒绝无效值并指出字段路径。瀑布图的透明辅助系列应设 tooltip: { show: false }。', 'toolbox 可配置 saveAsImage、dataView、dataZoom、magicType 与 restore。', 'graphic 支持 group、image、text、rect、circle、ring、sector、arc、polygon、polyline、line、bezierCurve 等图形。'],
     examples: [{ title: { text: '季度趋势', left: 'center' }, tooltip: { trigger: 'axis' }, legend: { top: 30 }, toolbox: { feature: { saveAsImage: {}, restore: {} } } }],
   },
   {

@@ -50,7 +50,7 @@ export class BrowserStateReader {
       } else {
         const page = this.host.page();
         const revision = this.host.revision(page);
-        const [observation, title] = await raceWithAbort(Promise.all([this.host.observation(), page.title().catch(() => '')]), options.abortSignal);
+        const [observation, title] = await raceWithAbort(Promise.all([this.host.observation(), page.title()]), options.abortSignal);
         const allFrames = page.frames();
         const explicit = options.frame ? allFrames.find((frame) => this.host.framePath(frame) === options.frame) : undefined;
         if (options.frame && !explicit) throw new Error('Frame not found. Use an exact frame path from the page observation.');
@@ -66,9 +66,10 @@ export class BrowserStateReader {
             if (await surface.count().catch(() => 0)) target = surface;
           }
           const tree = await raceWithAbort(target.ariaSnapshot({ timeout: 5_000 }).catch(async (error) => {
-            const text = await target.innerText({ timeout: 1_500 }).catch(() => '');
+            // An empty accessible document is valid; two failed reads are not.
+            const text = await target.innerText({ timeout: 1_500 });
             if (!text && options.selector) throw error;
-            return text ? `[text-fallback]\n${text}` : '[snapshot unavailable]';
+            return `[text-fallback]\n${text}`;
           }), options.abortSignal);
           let selectedTree = tree;
           if (options.query) {
@@ -85,7 +86,7 @@ export class BrowserStateReader {
           if (characterCount > 2_000_000) throw new Error('State capture exceeds 2 million characters. Narrow frame, selector or query.');
           parts.push(heading, selectedTree);
         }
-        if (page !== this.host.page() || revision !== this.host.revision(page)) throw new Error('Page navigated during capture. Read state again.');
+        if (page.isClosed() || page !== this.host.page() || revision !== this.host.revision(page)) throw new Error('Page changed or became unavailable during capture. Read state again.');
         capture = { id: randomUUID(), page, revision, capturedAt: Date.now(), criteria: {
           scope: options.scope, frame: options.frame, selector: options.selector, query: options.query,
         }, payload: { tabs: this.host.tabs(), activePage: { url: page.url(), title }, pageState: parts.join('\n') } };
@@ -119,6 +120,7 @@ export class BrowserStateReader {
       }
       return { ok: true, data: payload, summary: `Read browser state characters ${offset}-${offset + length} of ${source.pageState.length}.` };
     } catch (error) {
+      this.clear();
       return { ok: false, actual: error instanceof Error ? error.message : String(error), failureCategory: options.abortSignal?.aborted ? 'aborted' : 'browser-state-failed' };
     }
   }

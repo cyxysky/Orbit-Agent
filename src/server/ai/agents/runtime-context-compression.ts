@@ -1,5 +1,17 @@
 import type { ModelMessage } from 'ai';
 
+type ToolResult = Extract<Extract<ModelMessage, { role: 'tool' }>['content'][number], { type: 'tool-result' }>;
+function isInterruptedPlaceholder(part: ToolResult) {
+  const output = part.output;
+  if (output.type !== 'error-json' || !output.value || typeof output.value !== 'object' || Array.isArray(output.value)) return false;
+  if (output.value.code === 'interrupted-tool-outcome' && output.value.hostGenerated === true) return true;
+  // Durable journals written before the host marker was added used this exact
+  // envelope. Do not mistake arbitrary tool errors for repair placeholders.
+  return output.value.next === 'Inspect current state and make a new decision. This receipt does not establish business success; the previous call is not replayed.'
+    && (output.value.outcome === 'not-executed' && output.value.reason === 'Interrupted before execution.'
+      || output.value.outcome === 'unknown' && output.value.reason === 'Execution was interrupted without a recorded result.');
+}
+
 function modelMessageContainsToolCall(message: ModelMessage) {
   return message.role === 'assistant'
     && Array.isArray(message.content)
@@ -21,29 +33,41 @@ export function completeRuntimeModelToolChain(messages: ModelMessage[]) {
       const calls = Array.isArray(message.content) ? message.content.filter(part => part.type === 'tool-call') : [];
       if (calls.length !== callIds.size) throw new Error('Duplicate tool call IDs in a model decision.');
       const callNames = new Map(calls.map(part => [part.toolCallId, part.toolName]));
+      let nextIndex = index + 1;
+      while (messages[nextIndex]?.role === 'tool') nextIndex++;
+      // A repaired active window can acquire its delayed durable receipt later.
+      // Select across the entire exchange before filtering: the placeholder must
+      // never hide a real success or failure merely because it appeared first.
+      const preferredResults = new Map<string, ToolResult>();
+      for (const candidate of messages.slice(index, nextIndex)) {
+        if (!Array.isArray(candidate.content)) continue;
+        for (const part of candidate.content) {
+          if (part.type !== 'tool-result' || callNames.get(part.toolCallId) !== part.toolName) continue;
+          const previous = preferredResults.get(part.toolCallId);
+          if (!previous || isInterruptedPlaceholder(previous) && !isInterruptedPlaceholder(part)) preferredResults.set(part.toolCallId, part);
+        }
+      }
       const toolMessages: ModelMessage[] = [];
       const resultIds = new Set<string>();
       const assistantContent = Array.isArray(message.content)
         ? message.content.filter((part) => {
             if (part.type !== 'tool-result' || typeof part.toolCallId !== 'string') return true;
-            if (callNames.get(part.toolCallId) !== part.toolName || resultIds.has(part.toolCallId)) return false;
+            if (preferredResults.get(part.toolCallId) !== part || resultIds.has(part.toolCallId)) return false;
             resultIds.add(part.toolCallId);
             return true;
           })
         : message.content;
-      let nextIndex = index + 1;
-      while (messages[nextIndex]?.role === 'tool') {
-        const toolMessage = messages[nextIndex];
+      for (let resultIndex = index + 1; resultIndex < nextIndex; resultIndex++) {
+        const toolMessage = messages[resultIndex];
         const content = Array.isArray(toolMessage.content)
           ? toolMessage.content.filter((part) => {
               if (part.type !== 'tool-result' || typeof part.toolCallId !== 'string') return false;
-              if (callNames.get(part.toolCallId) !== part.toolName || resultIds.has(part.toolCallId)) return false;
+              if (preferredResults.get(part.toolCallId) !== part || resultIds.has(part.toolCallId)) return false;
               resultIds.add(part.toolCallId);
               return true;
             })
           : [];
         if (content.length) toolMessages.push({ ...toolMessage, content } as ModelMessage);
-        nextIndex += 1;
       }
       if ([...callIds].every((toolCallId) => resultIds.has(toolCallId))) {
         complete.push({ ...message, content: assistantContent } as ModelMessage, ...toolMessages);

@@ -128,13 +128,23 @@ export function prepareRuntimeSourceFiles(input: {
   }
   const reads = [...unique.values()];
   if (!reads.length && !unavailable.size) return { messages: input.messages, knowledge: [] as RuntimeKnowledgeBlock[], archiveRecords: [] as ModelMessage[], stats: undefined };
-  const materialCapacity = Math.floor(input.inputBudgetTokens * 0.45);
+  // Keep active tool bodies intact until normal history compaction removes the
+  // exchange. Background retrieval must not prematurely replace a read with
+  // excerpts, including after the first response or a request retry.
+  const activeBodies = new Set(input.messages.flatMap(message => message.role === 'tool'
+    ? message.content.flatMap(part => part.type === 'tool-result' && 'value' in part.output
+      && object(part.output.value)?.actual !== undefined ? [`${part.toolName}:${part.toolCallId}`] : []) : []));
+  const inlineCalls = new Set([...byCall.keys()].filter(key => activeCalls.has(key)
+    && (freshCalls.has(key) || activeBodies.has(key))));
+  const inlineReads = new Set([...inlineCalls].map(key => byCall.get(key)!.key));
+  const inlineTokens = [...inlineCalls].reduce((sum, key) => sum + estimateRuntimeTextTokens(byCall.get(key)!.body), 0);
+  const materialCapacity = Math.max(0, Math.floor(input.inputBudgetTokens * 0.45) - inlineTokens);
   const indexCapacity = Math.min(materialCapacity, Math.max(256, Math.min(4096, Math.floor(materialCapacity / 4))));
   const contentCapacity = Math.max(0, materialCapacity - indexCapacity);
   // An agent-authored report is a historical output, not an immutable source of
   // requirements. Deliver an explicit new read, then keep its retrieval locator
   // instead of pinning the old conclusions into every subsequent request.
-  const retainedReads = reads.filter(read => !read.generated || read.fresh);
+  const retainedReads = reads.filter(read => !inlineReads.has(read.key) && (!read.generated || read.fresh));
   const fullSize = retainedReads.reduce((sum, read) => sum + estimateRuntimeTextTokens(read.body) + 100, 0);
   const latestRead = reads.reduce<Read | undefined>((latest, read) => !latest || read.order >= latest.order ? read : latest, undefined);
   type Selection = { read: Read; start: number; end: number; text: string; score: number };
@@ -181,9 +191,11 @@ export function prepareRuntimeSourceFiles(input: {
     kind: 'file-content', id, title: id, version: 1, digest: knowledgeDigest(text), text,
     required: true, priority: 95, reason: 'exact source-file content retained independently of execution summaries', cacheHit: false,
   });
+  const includedRanges = (read: Read) => inlineReads.has(read.key) ? [{ offset: 0, length: read.body.length }]
+    : selected.filter(item => item.read.key === read.key).map(item => ({ offset: item.start, length: item.end - item.start }));
   const entries = reads.map(read => ({ fileRead: read.request, ref: read.ref, pointer: read.pointer, totalCharacters: read.body.length,
       provenance: read.generated ? 'historical-generated-artifact' : 'source-material',
-      includedRanges: selected.filter(item => item.read.key === read.key).map(item => ({ offset: item.start, length: item.end - item.start })),
+      includedRanges: includedRanges(read),
       readWith: 'contextRead' }));
   const allEntries = [...entries, ...[...unavailable.values()].map(read => ({ ...read, available: false,
     instruction: 'Original result unavailable; repeat the listed read-only fileRead.' }))];
@@ -201,26 +213,38 @@ export function prepareRuntimeSourceFiles(input: {
   const catalogue = block('source-file-index', indexText);
   const knowledge = [catalogue, ...selected.sort((a, b) => a.read.order - b.read.order || a.start - b.start).map(item => block(
     `${item.read.key}:${item.start}`, `[Exact file content]\n${JSON.stringify({ ref: item.read.ref, pointer: item.read.pointer, offset: item.start, end: item.end, totalCharacters: item.read.body.length })}\n${item.text}`))];
-  // Do not duplicate large file bodies in both the active transcript and the
-  // source context. The full original remains archived with an exact locator.
+  // Active bodies are in their tool receipts; historical excerpts are in source
+  // context. A body is never duplicated across both delivery channels.
   const messages: ModelMessage[] = input.messages.map(message => message.role !== 'tool' ? message : ({ ...message,
     content: message.content.map(part => {
       if (part.type !== 'tool-result') return part;
-      const read = byCall.get(`${part.toolName}:${part.toolCallId}`);
-      const delivery = deliveries.get(`${part.toolName}:${part.toolCallId}`);
-      const includedRanges = read ? selected.filter(item => item.read.key === read.key)
-        .map(item => ({ offset: item.start, length: item.end - item.start })) : [];
+      const callKey = `${part.toolName}:${part.toolCallId}`;
+      const read = byCall.get(callKey);
+      const delivery = deliveries.get(callKey);
+      if (read && inlineCalls.has(callKey)) {
+        const original = records[read.ref];
+        const source = original?.role === 'tool' ? original.content.find(item => item.type === 'tool-result'
+          && item.toolName === part.toolName && item.toolCallId === part.toolCallId) : undefined;
+        const value = source?.type === 'tool-result' && 'value' in source.output ? object(source.output.value) : undefined;
+        if (value) return { ...part, output: { type: 'json' as const, value: JSON.parse(JSON.stringify({
+          ...value, sourceFile: read.request, sourceRef: read.ref, pointer: read.pointer,
+          sourceDelivery: delivery?.acknowledged === true ? delivery
+            : { offeredAfter: offerBoundary, includedRanges: [{ offset: 0, length: read.body.length }] },
+        })) } };
+      }
+      const ranges = read ? includedRanges(read) : [];
       return read ? { ...part, output: { type: 'text' as const, value: JSON.stringify({ ok: true, sourceFile: read.request,
         sourceRef: read.ref, pointer: read.pointer, totalCharacters: read.body.length, readWith: 'contextRead',
         sourceDelivery: delivery?.acknowledged === true ? delivery
-          : includedRanges.length ? { offeredAfter: offerBoundary, includedRanges } : undefined,
+          : ranges.length ? { offeredAfter: offerBoundary, includedRanges: ranges } : undefined,
         instruction: 'File read completed. Exact content and included ranges are in Source file index / Exact file content; retrieve omitted details before dependent work.' }) } } : part;
     }),
   }));
   const stats: SourceFileContextStats = { readRangeCount: reads.length, unavailableReadRanges: unavailable.size,
-    deferredGeneratedReadRanges: reads.length - retainedReads.length,
-    fullyIncludedReadRanges: reads.filter(read => selected.filter(item => item.read.key === read.key).reduce((sum, item) => sum + item.text.length, 0) === read.body.length).length,
+    deferredGeneratedReadRanges: reads.filter(read => read.generated && !read.fresh && !inlineReads.has(read.key)).length,
+    fullyIncludedReadRanges: reads.filter(read => includedRanges(read).reduce((sum, range) => sum + range.length, 0) === read.body.length).length,
     originalCharacters: reads.reduce((sum, read) => sum + read.body.length, 0),
-    includedCharacters: selected.reduce((sum, item) => sum + item.text.length, 0) };
-  return { messages, knowledge, archiveRecords: [indexRecord], stats };
+    includedCharacters: reads.reduce((sum, read) => sum + includedRanges(read).reduce((count, range) => count + range.length, 0), 0) };
+  return { messages, knowledge, archiveRecords: [...new Set(reads.map(read => read.ref))]
+    .flatMap(id => records[id] ? [records[id]] : []).concat(indexRecord), stats };
 }

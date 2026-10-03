@@ -1,5 +1,5 @@
 import { readBrowserChatSessionPage } from '@/server/ai/agents/browser-chat-read.service';
-import { selectBrowserChatSessionRuntime, updateBrowserChatSessionTitle } from '@/server/ai/agents/browser-chat.service';
+import { selectBrowserChatSessionRuntime, updateBrowserChatSessionTitle, updateBrowserChatSessionReasoning } from '@/server/ai/agents/browser-chat.service';
 import { updateBrowserChatSessionRequestSchema } from '@/server/http/browser-chat-request.schema';
 import { ApiRequestError, apiError, apiJson, parseJsonRequest } from '@/server/http/api-request';
 import { requestApplicationUserId } from '@/server/auth/user-context';
@@ -23,7 +23,9 @@ export async function PUT(request: Request, context: BrowserChatSessionRouteCont
   try {
     const { sessionId } = await context.params;
     const body = await parseJsonRequest(request, updateBrowserChatSessionRequestSchema, { maxBytes: 16 * 1024 });
-    const session = await updateBrowserChatSessionTitle(sessionId, body.title, requestApplicationUserId(request));
+    const userId = requestApplicationUserId(request);
+    let session = body.reasoningEffort !== undefined ? await updateBrowserChatSessionReasoning(sessionId, body.reasoningEffort, userId) : undefined;
+    if (body.title !== undefined) session = await updateBrowserChatSessionTitle(sessionId, body.title, userId);
     if (!session) throw new ApiRequestError('Browser chat session not found', { code: 'not_found', status: 404 });
     return apiJson(request, { session });
   } catch (error) {

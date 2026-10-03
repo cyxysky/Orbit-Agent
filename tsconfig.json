@@ -24,6 +24,11 @@
       }
     ],
     "paths": {
+      "@cjfclonedeep/capability-sdk/media/video-editor": ["./packages/capability-sdk/src/media/video-editor.tsx"],
+      "@cjfclonedeep/capability-sdk/media/video-project": ["./packages/capability-sdk/src/media/video-project.ts"],
+      "@cjfclonedeep/capability-sdk/novel": ["./packages/capability-sdk/src/novel/index.ts"],
+      "@cjfclonedeep/capability-sdk/novel/node": ["./packages/capability-sdk/src/novel/node.ts"],
+      "@cjfclonedeep/capability-sdk/novel/runtime-skill": ["./packages/capability-sdk/src/novel/runtime-skill.ts"],
       "@/*": [
         "./src/*"
       ],

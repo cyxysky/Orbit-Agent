@@ -14,7 +14,7 @@ export async function resolveOwnedArtifact(segments: string[], userId: string | 
   }
   const ownerId = normalizeApplicationUserId(userId);
   let owned = ownerId === normalizeApplicationUserId(undefined);
-  if (segments[0] === 'uploads') {
+  if (segments[0] === 'uploads' || segments[0] === 'media-projects') {
     owned = segments.length >= 3 && segments[1] === ownerId;
   } else if (segments[0].startsWith('chat_')) {
     const session = await readBrowserChatSessionHeader<BrowserChatSessionSnapshot>(segments[0]);

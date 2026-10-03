@@ -1,3 +1,4 @@
+import { reasoningEffortValues } from '@/lib/reasoning-effort';
 import { z } from 'zod';
 import { sendBrowserChatMessage } from '@/server/ai/agents/browser-chat.service';
 import {
@@ -19,7 +20,9 @@ const messageSchema = z.object({
   safetyMode: z.unknown().optional(),
   modelProvider: z.string().max(200).optional(),
   model: z.string().max(500).optional(),
+  reasoningEffort: z.enum(reasoningEffortValues).optional(),
   clientMessageId: z.string().max(200).optional(),
+  subagentId: z.string().trim().min(1).max(160).optional(),
   attachments: z.unknown().optional(),
   skillIds: z.unknown().optional(),
 }).strict();
@@ -44,6 +47,9 @@ export async function POST(request: Request, context: RouteContext) {
       body.attachments,
       body.skillIds,
       auth.userId,
+      undefined,
+      body.subagentId,
+      body.reasoningEffort,
     );
     return embedJson({ session });
   } catch (error) {

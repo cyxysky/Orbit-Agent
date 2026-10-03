@@ -2,7 +2,8 @@ import type { ModelMessage } from 'ai';
 import type { LanguageModelV4Usage } from '@ai-sdk/provider';
 
 // Generated request metadata, including legacy backgrounds, must never become dialogue history.
-const generatedPrefixes = ['[Conversation background]', '[Source file context]', '[Execution progress]', '[WebPilot task state]', '[WebPilot material reference]',
+export const runtimeReferenceContextMarker = '[WebPilot runtime reference context]';
+const generatedPrefixes = [runtimeReferenceContextMarker, '[Conversation background]', '[Source file context]', '[Execution progress]', '[WebPilot task state]', '[WebPilot material reference]',
   '[WebPilot continuation summary]', '[WebPilot continuation directive]', '[WebPilot knowledge context]',
   '[WebPilot runtime operational context]', '[WebPilot runtime current time]', '[Current browser observation]', '[Historical browser observation]'];
 export function isRuntimePromptCacheMetadataMessage(message: ModelMessage) {

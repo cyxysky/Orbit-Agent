@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { BrowserChatOutputPerformance } from '@/lib/browser-chat-activity';
 
 export const browserOperationRecordSchema = z.object({
   index: z.number(),
@@ -189,6 +190,7 @@ export type BrowserChatAiOutputCycle = {
   revision?: number;
   messageId?: string;
   output: BrowserChatAiOutputView;
+  performance?: BrowserChatOutputPerformance;
   stepIndex?: number;
   agentStepIndex?: number;
   streamingReasoningIndex?: number;

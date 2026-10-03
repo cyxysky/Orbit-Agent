@@ -83,7 +83,7 @@ test('running child Agent progress exposes tool calls and results before complet
   assert.match(serialized, /正在整理页面证据/);
 });
 
-test('a recovered child Agent result with a usable summary is passed', () => {
+test('a child Agent summary cannot overwrite its final failed status', () => {
   const recoveredSteps = [{
     index: 1,
     action: '截图失败后改用页面文本',
@@ -95,6 +95,11 @@ test('a recovered child Agent result with a usable summary is passed', () => {
   assert.equal(resolvedBrowserChatSubagentStatus({
     status: 'failed',
     summary: '已基于文本证据完成工资明细总结。',
+    steps: recoveredSteps,
+  }), 'failed');
+  assert.equal(resolvedBrowserChatSubagentStatus({
+    status: 'passed',
+    summary: '已通过后续文本读取完成任务。',
     steps: recoveredSteps,
   }), 'passed');
 });

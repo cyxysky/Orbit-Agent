@@ -1,5 +1,7 @@
 // Explicit lazy imports keep Node route loading independent of Next.
 export const routes = [
+  { path: '/api/novels/workspace', load: () => import('./routes/novels/workspace/route') },
+  { path: '/api/media/video-projects', load: () => import('./routes/media/video-projects/route') },
   { path: '/embed/orbit.js', load: () => import('./routes/embed-scripts/orbit.js/route') },
   { path: '/embed/webpilot.js', load: () => import('./routes/embed-scripts/webpilot.js/route') },
   { path: '/api/workspace/context', load: () => import('./routes/workspace/context/route') },
@@ -37,6 +39,8 @@ export const routes = [
   { path: '/api/browser-chat/[sessionId]/skills', load: () => import('./routes/browser-chat/[sessionId]/skills/route') },
   { path: '/api/browser-chat/[sessionId]/state', load: () => import('./routes/browser-chat/[sessionId]/state/route') },
   { path: '/api/browser-chat/[sessionId]/subagents/[subagentId]/stop', load: () => import('./routes/browser-chat/[sessionId]/subagents/[subagentId]/stop/route') },
+  { path: '/api/browser-chat/[sessionId]/subagents/[subagentId]/preview', load: () => import('./routes/browser-chat/[sessionId]/subagents/[subagentId]/preview/route') },
+  { path: '/api/browser-chat/[sessionId]/subagents/preview', load: () => import('./routes/browser-chat/[sessionId]/subagents/preview/route') },
   { path: '/api/browser-chat/[sessionId]/tabs/[index]', load: () => import('./routes/browser-chat/[sessionId]/tabs/[index]/route') },
   { path: '/api/browser-chat/[sessionId]/tool-confirmation', load: () => import('./routes/browser-chat/[sessionId]/tool-confirmation/route') },
   { path: '/api/browser-chat/[sessionId]/tools', load: () => import('./routes/browser-chat/[sessionId]/tools/route') },

@@ -1,4 +1,37 @@
-export type BrowserChatActivity = { phase: string; label: string; updatedAt: string; startedAt?: string; operationId?: string };
+export type BrowserChatOutputPerformance = {
+  outputTokens: number;
+  outputTokensPerSecond?: number;
+  outputDurationMs: number;
+  timeToFirstOutputMs?: number;
+  includesFirstOutputWait?: boolean;
+  estimated: boolean;
+};
+
+export type BrowserChatActivity = {
+  phase: string;
+  label: string;
+  updatedAt: string;
+  startedAt?: string;
+  operationId?: string;
+  performance?: BrowserChatOutputPerformance;
+};
+
+export function browserChatOutputPerformanceFromUnknown(value: unknown): BrowserChatOutputPerformance | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const nonNegative = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+  const outputTokens = nonNegative(record.outputTokens);
+  const outputDurationMs = nonNegative(record.outputDurationMs);
+  if (outputTokens === undefined || outputDurationMs === undefined) return undefined;
+  return {
+    outputTokens,
+    outputTokensPerSecond: nonNegative(record.outputTokensPerSecond),
+    outputDurationMs,
+    timeToFirstOutputMs: nonNegative(record.timeToFirstOutputMs),
+    ...(record.includesFirstOutputWait === true ? { includesFirstOutputWait: true } : {}),
+    estimated: record.estimated === true,
+  };
+}
 
 function operationKind(phase: string, previous?: BrowserChatActivity) {
   if (phase.startsWith('tool:') || phase === 'ai:tool') return 'tool';
@@ -25,5 +58,6 @@ export function nextBrowserChatActivity(input: {
     || (typeof input.elapsedMs === 'number' && Number.isFinite(input.elapsedMs)
       ? new Date(Date.parse(input.timestamp) - Math.max(0, input.elapsedMs)).toISOString()
       : input.timestamp);
-  return { phase: input.phase, label: input.label, updatedAt: input.timestamp, startedAt, operationId };
+  return { phase: input.phase, label: input.label, updatedAt: input.timestamp, startedAt, operationId,
+    ...(sameOperation && input.previous?.performance ? { performance: input.previous.performance } : {}) };
 }

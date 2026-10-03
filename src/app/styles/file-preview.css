@@ -66,6 +66,12 @@
   width: 100%;
 }
 
+.file-preview-header:has(> .file-preview-edit-button) { grid-template-columns: auto minmax(0, 1fr) auto auto; }
+.file-preview-edit-button { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.file-preview-video-editor-dialog .file-preview-stage { display: block; overflow: auto; padding: 16px; }
+.browser-chat-video-edit-panel { width: 100%; min-width: 0; }
+.browser-chat-video-edit-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
+
 .file-preview-stage > .ofv-root,
 .file-preview-stage > div:has(> .ofv-root) {
   height: 100% !important;

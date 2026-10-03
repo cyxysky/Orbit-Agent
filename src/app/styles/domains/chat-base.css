@@ -1554,6 +1554,8 @@
 
 .browser-chat-ai-cycle {
   display: grid;
+  /* Tool rows must not widen the shared text column past its clipped parent. */
+  grid-template-columns: minmax(0, 1fr);
   max-width: 100%;
   min-width: 0;
 }
@@ -1963,6 +1965,8 @@
   display: flex;
   flex-direction: column;
   gap: 7px;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .browser-chat-ai-cycle-text {
@@ -2707,6 +2711,14 @@ button.browser-chat-output-file-main {
   font-weight: 680;
 }
 
+.browser-chat-novel-plan-review {
+  max-height: min(60vh, 640px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 12px;
+}
+
+
 .browser-chat-tool-confirmation-message .browser-chat-agent-markdown {
   font-size: inherit;
   line-height: 1.7;
@@ -3031,6 +3043,23 @@ html .browser-chat-tool-confirmation button.browser-chat-tool-confirm:hover:not(
   bottom: auto;
   flex: 0 0 auto;
   position: relative;
+}
+
+.browser-chat-subagent-reply-target {
+  align-items: center;
+  color: var(--muted-foreground);
+  display: flex;
+  font-size: 12px;
+  gap: 8px;
+  padding: 0 4px;
+}
+
+.browser-chat-subagent-reply-target > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .browser-chat-reference-chip {

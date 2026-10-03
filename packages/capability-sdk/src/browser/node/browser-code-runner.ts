@@ -366,7 +366,7 @@ type PendingExecution = {
 const maxDiagnosticChars = 4_000;
 const defaultBrowserCodeKernelReadyTimeoutMs = 10_000;
 const defaultBrowserCodeExecutionTimeoutMs = 90_000;
-export const BROWSER_CODE_KERNEL_RUNTIME_REVISION = 51;
+export const BROWSER_CODE_KERNEL_RUNTIME_REVISION = 52;
 
 function boundedInteger(value: unknown, fallback: number, min: number, max: number) {
   const parsed = typeof value === 'number' ? value : Number(value);
@@ -2172,6 +2172,14 @@ function browserCodeKernelMain() {
         Object.defineProperty(pageRecord, name, {
           configurable: true,
           value: async (...args: unknown[]) => {
+            if (name === 'setContent') {
+              // Chromium can crash when document.open/write is used on an image
+              // document. Reject before changing it; preserve the source tab.
+              const contentType = await page.evaluate(() => document.contentType);
+              if (contentType !== 'text/html') {
+                throw new Error(`UNSUPPORTED_DOCUMENT: page.setContent requires an HTML document; the current document is ${contentType}. Open a new about:blank tab with browser action=tabs, tabOperation=open, then build the preview there using absolute asset URLs. The source page was not modified.`);
+              }
+            }
             const selectorAction = ['fill', 'type', 'press', 'selectOption', 'setInputFiles'].includes(name);
             let actionableLocator: import('patchright').Locator | undefined;
             if (activeExecution && selectorAction && typeof args[0] === 'string') {
@@ -2972,7 +2980,14 @@ function browserCodeKernelMain() {
     } catch (error: unknown) {
       await publishPendingCoordinateClickEvidence();
       const diagnosticPage = selectedRuntimePage && !selectedRuntimePage.isClosed() ? selectedRuntimePage : page;
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const pageUnavailable = /page crashed|target crashed|target page, context or browser has been closed|browser has been closed/i.test(errorMessage);
       const diagnosticRead = await settleKernelTask((async () => {
+        if (pageUnavailable) return { unavailable: errorMessage,
+          note: 'The renderer or browser target is unavailable. Open a new about:blank tab with browser action=tabs, tabOperation=open, or explicitly navigate to a known URL. Read fresh state before continuing. Do not replay the failed cell or treat an unavailable snapshot as an empty page.' };
+        if (errorMessage.startsWith('UNSUPPORTED_DOCUMENT:')) return { unavailable: errorMessage };
+        // Do not fabricate an empty live diagnosis when renderer reads fail.
+        await diagnosticPage.title();
         const observation = await readUnifiedPageObservation(diagnosticPage);
         const fields = await Promise.all(diagnosticPage.frames().slice(0, 24).map(async frame => {
           const read = await settleKernelTask(frame.evaluate(() => {
@@ -3028,7 +3043,7 @@ function browserCodeKernelMain() {
         type: 'result',
         requestId: input.requestId,
         ok: false,
-        error: error instanceof Error ? error.message : String(error),
+        error: errorMessage,
         diagnostics: diagnosticRead.ok ? diagnosticRead.value : { unavailable: diagnosticRead.error },
         selectedTargetId: selectedRuntimePage && !selectedRuntimePage.isClosed()
           ? await targetIdForPage(selectedRuntimePage).catch(() => undefined) : undefined,
@@ -3283,9 +3298,11 @@ export class BrowserCodeKernel {
       return { ...this.interrupted('crashed', 'browserCode JavaScript kernel is not connected.', 'startup'), elapsedMs: Date.now() - startedAt };
     }
 
-    const maxOutputChars = typeof input.maxOutputChars === 'number'
-      ? Math.min(200_000, Math.max(1_000, Math.floor(input.maxOutputChars)))
-      : 40_000;
+    // The cell's explicit output is evidence. Only shorten it when the caller
+    // requested an output limit; the host owns conversation compaction.
+    const maxOutputChars = typeof input.maxOutputChars === 'number' && Number.isFinite(input.maxOutputChars)
+      ? Math.max(1_000, Math.floor(input.maxOutputChars))
+      : undefined;
     let attachmentBindings: BrowserCodeAttachmentBinding[] = [];
     if (/\battachmentVault\s*\.\s*setInputFiles\s*\(/i.test(browserCodeWithoutComments(input.code))) {
       try {
@@ -3614,7 +3631,7 @@ export class BrowserCodeKernel {
     pending.abortSignal?.removeEventListener('abort', pending.onAbort);
     pending.resolve({ ...result,
       executionState: result.executionState || {
-        status: result.ok ? 'completed' : 'failed', phase: 'finished',
+        status: result.ok ? 'completed' : /page crashed|target crashed/i.test(result.error || '') ? 'crashed' : 'failed', phase: 'finished',
         attemptedActions: pending.attemptedActions, completedActions: pending.completedActions,
         outcome: result.ok ? 'returned' : 'unknown', requiresStateRefresh: !result.ok, safeToRetry: false,
       }, elapsedMs: Date.now() - pending.startedAt });

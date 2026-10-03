@@ -11,9 +11,13 @@ import { createHttpCodeSandboxExecutor } from '@cjfclonedeep/capability-sdk/exec
 import { createNodeConnectorsCapability } from '@cjfclonedeep/capability-sdk/integrations/connectors/node';
 import type { AgentConnector } from '@cjfclonedeep/capability-sdk/integrations/connectors';
 import { createNodeKnowledgeCapability } from '@cjfclonedeep/capability-sdk/knowledge/node';
+import { createNovelCapability, type NovelConfirmationRequest } from '@cjfclonedeep/capability-sdk/novel';
+import { createFileNovelOperations } from '@cjfclonedeep/capability-sdk/novel/node';
+import { novelUserDirectory } from './novel-storage';
+import { saveCompositionProject } from './video-projects';
 import { createDataCapability, createDataSourceRegistry, type AgentDataSource } from '@cjfclonedeep/capability-sdk/data';
 import { createMediaCapability, type MediaOperations } from '@cjfclonedeep/capability-sdk/media';
-import { createFfmpegMediaOperations } from '@cjfclonedeep/capability-sdk/media/node';
+import { createRemotionMediaOperations } from '@cjfclonedeep/capability-sdk/media/node';
 import { fileFormatForMimeType } from '@cjfclonedeep/capability-sdk/file';
 import { createAiSdkMediaGenerationOperations } from '@cjfclonedeep/capability-sdk/media/ai-sdk';
 import { store } from '@/server/db/store';
@@ -96,7 +100,8 @@ export async function createConfiguredMediaOperations(input: { context: Capabili
     if (relative.some((segment) => !segment || segment === '.' || segment === '..' || /[\\/]/.test(segment))) throw new Error('Invalid media artifact reference.');
     const inRun = relative[0] === safeSegment(input.context.runId, 'shared');
     const ownUpload = relative[0] === 'uploads' && relative[1] === input.context.userId;
-    if (!inRun && !ownUpload) throw new Error('Media sourceRef must belong to this run or be a registered attachment.');
+    const ownVideoProject = relative[0] === 'media-projects' && relative[1] === input.context.userId;
+    if (!inRun && !ownUpload && !ownVideoProject) throw new Error('Media sourceRef must belong to this run or be a registered attachment.');
     const resolved = path.resolve(root, ...relative);
     const relativeCheck = path.relative(root, resolved);
     if (relativeCheck.startsWith('..') || path.isAbsolute(relativeCheck)) throw new Error('Media artifact reference escapes the artifact root.');
@@ -128,9 +133,10 @@ export async function createConfiguredMediaOperations(input: { context: Capabili
       return { artifactId, fileName, mediaType: file.mediaType, url, downloadUrl: `${url}?download=1`, description: `Generated ${file.kind}, already saved. For document use, file plan/list exposes it in availableAssets (ref = artifactId). Use assetName directly; do not download it again.` };
     },
   });
-  const processing: MediaOperations = ffmpegStaticPath ? createFfmpegMediaOperations({
-    ffmpegPath: ffmpegStaticPath,
+  const processing: MediaOperations = createRemotionMediaOperations({
+    ffmpegPath: ffmpegStaticPath || undefined,
     timeoutMs: Number(input.context.configuration.AGENT_MEDIA_TIMEOUT_MS) || 120_000,
+    renderTimeoutMs: Number(input.context.configuration.AGENT_VIDEO_RENDER_TIMEOUT_MS) || 900_000,
     resolveSource,
     async publishArtifact(filePath) {
       const extension = path.extname(filePath).toLowerCase() || '.bin';
@@ -140,19 +146,56 @@ export async function createConfiguredMediaOperations(input: { context: Capabili
       const destination = path.join(directory, artifactId);
       await copyFile(filePath, destination);
       const url = artifactApiUrl(destination, { artifactsRoot: root });
-      return { artifactId: path.relative(root, destination).split(path.sep).join('/'), fileName: artifactId, mediaType: extension === '.jpg' || extension === '.jpeg' ? 'image/jpeg' : extension === '.png' ? 'image/png' : undefined, url, downloadUrl: `${url}?download=1` };
+      return { artifactId: path.relative(root, destination).split(path.sep).join('/'), fileName: artifactId, mediaType: extension === '.jpg' || extension === '.jpeg' ? 'image/jpeg' : extension === '.png' ? 'image/png' : extension === '.mp4' ? 'video/mp4' : undefined, url, downloadUrl: `${url}?download=1` };
     },
-  }) : { inspect: async () => { throw new Error('FFmpeg runtime is unavailable.'); } };
-  return { ...processing, ...generation };
+  });
+  const composeVideo = processing.composeVideo;
+  return { ...processing, ...generation, ...(composeVideo ? { async composeVideo(request, execution) {
+    const artifacts = await composeVideo(request, execution);
+    for (const artifact of artifacts) {
+      const project = await saveCompositionProject({ userId: input.context.userId, composition: request, output: artifact, resolveSource, signal: execution.abortSignal });
+      artifact.description = `${artifact.description || ''} Editable project ${project.id} saved. Open the video in chat and choose Edit video to change scenes, timing and audio.`;
+    }
+    return artifacts;
+  } } satisfies Pick<MediaOperations, 'composeVideo'> : {}) };
+}
+
+/** The agent's outer deadline must cover the media operation's own budget,
+ * including saving the resulting artifact and editable project. */
+export async function agentMediaToolTimeoutMs() {
+  const configuration = mediaModelsForConfig(await store.getModelConfig());
+  return Math.max(
+    Number(process.env.AGENT_VIDEO_RENDER_TIMEOUT_MS) || 900_000,
+    Number(process.env.AGENT_MEDIA_TIMEOUT_MS) || 120_000,
+    ...configuration.models.filter(model => model.enabled).map(model => model.timeoutMs),
+  ) + 30_000;
 }
 
 export function createAgentInfrastructureProviders(input: {
   attachmentBindings?: readonly BrowserCodeAttachmentBinding[];
+  requestNovelConfirmation?: (request: NovelConfirmationRequest) => Promise<'confirmed' | 'cancelled'>;
 } = {}): CapabilityProvider[] {
   return [
     createAgentCodeSandboxCapability(),
     createNodeConnectorsCapability({ connectors: configuredConnectors }),
     createNodeKnowledgeCapability({ directory: (context) => artifactPath('agent-infrastructure', 'knowledge', safeSegment(context.userId, 'shared')) }),
+    createNovelCapability({ createOperations(context) {
+      return createFileNovelOperations({
+        directory: novelUserDirectory(context.userId),
+        requestConfirmation: input.requestNovelConfirmation,
+        async publishArtifact(fileName, content, execution) {
+          execution.abortSignal?.throwIfAborted();
+          const directory = artifactPath(safeSegment(context.runId, 'shared'), 'novels', randomUUID());
+          await mkdir(directory, { recursive: true });
+          const destination = path.join(directory, fileName);
+          await writeFile(destination, content, { encoding: 'utf8', signal: execution.abortSignal });
+          const artifactId = path.relative(artifactsRoot(), destination).split(path.sep).join('/');
+          const url = artifactApiUrl(destination, { artifactsRoot: artifactsRoot() });
+          if (!url) throw new Error('Cannot create a download URL for the novel artifact.');
+          return { artifactId, fileName, mediaType: 'text/markdown', url, downloadUrl: `${url}?download=1` };
+        },
+      });
+    } }),
     createDataCapability({ createRegistry: async () => createDataSourceRegistry(await configuredDataSources()) }),
     createMediaCapability({ createOperations: (context) => createConfiguredMediaOperations({ context, attachments: input.attachmentBindings || [] }) }),
     createNodeCommunicationCapability({ channels: configuredCommunicationChannels, draftDirectory: (context) => artifactPath('agent-infrastructure', 'communication', safeSegment(context.userId, 'shared')) }),

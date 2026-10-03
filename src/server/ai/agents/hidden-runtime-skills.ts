@@ -14,6 +14,7 @@ import { dataCapabilityManifest } from '@cjfclonedeep/capability-sdk/data';
 import { terminalCapabilityManifest } from '@cjfclonedeep/capability-sdk/execution/terminal';
 import { knowledgeCapabilityManifest } from '@cjfclonedeep/capability-sdk/knowledge';
 import { mediaCapabilityManifest } from '@cjfclonedeep/capability-sdk/media';
+import { novelCapabilityManifest } from '@cjfclonedeep/capability-sdk/novel';
 import { subagentRuntimeSkill } from './subagent-runtime-skill';
 import { fileToolSourceOutputMarker } from './browser-chat-file-model-output';
 
@@ -34,6 +35,7 @@ const capabilityRuntimeSkills = [
   knowledgeCapabilityManifest,
   dataCapabilityManifest,
   mediaCapabilityManifest,
+  novelCapabilityManifest,
   communicationCapabilityManifest,
   terminalCapabilityManifest,
   computerCapabilityManifest,
@@ -230,13 +232,9 @@ export function hiddenRuntimeSkillForToolCall(
 export function runtimeToolTypesWithLoadedSkills(
   toolTypes: readonly string[],
   loadedSkillIds: ReadonlySet<string>,
-  options: { allowSubagentRead?: boolean } = {},
 ) {
   return toolTypes.filter((toolName) => {
     if (defaultVisibleCapabilityToolNames.has(toolName)) return true;
-    // subagent action=read must remain available for collecting a result after
-    // a resume. action=spawn follows the same lazy Skill delivery as other tools.
-    if (toolName === 'subagent' && options.allowSubagentRead) return true;
     const policy = hiddenRuntimeSkillPolicies[toolName];
     return !policy || loadedSkillIds.has(policy.skillId) || Boolean(hiddenRuntimeSkillContent(policy.skillId));
   });

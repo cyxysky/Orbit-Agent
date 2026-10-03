@@ -204,12 +204,7 @@ export function resolvedBrowserChatSubagentStatus(input: {
   summary: string;
   steps: readonly StepExecutionResult[];
 }) {
-  if (input.status !== 'failed' || !input.summary.trim()) return input.status;
-  const terminalStep = input.steps.at(-1);
-  if (/request.*failed|retries were exhausted|response handling failed/i.test(terminalStep?.action || '')) {
-    return 'failed';
-  }
-  return 'passed';
+  return input.status;
 }
 
 export function browserChatSubagentSuggestedSummaryChars() {

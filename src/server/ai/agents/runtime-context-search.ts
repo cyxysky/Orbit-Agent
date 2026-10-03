@@ -40,6 +40,14 @@ function sections(value: unknown, pointer = ''): Section[] {
   return Object.entries(record).flatMap(([key, child]) => sections(child, `${pointer}/${key.replace(/~/g, '~0').replace(/\//g, '~1')}`));
 }
 
+function isProjectedReceipt(value: Record<string, unknown> | undefined) {
+  const projection = object(value?.contextProjection);
+  return value?.archived === true && typeof value.contextRef === 'string'
+    || value?.historical === true && value.complete === false && typeof value.ref === 'string'
+    || projection?.complete === false && typeof projection.ref === 'string'
+    || value?.sourceFile && value.actual === undefined && typeof value.sourceRef === 'string';
+}
+
 function searchable(message: ModelMessage) {
   if (message.role === 'system') return false;
   if (isRuntimePromptCacheMetadataMessage(message)) return false;
@@ -48,7 +56,7 @@ function searchable(message: ModelMessage) {
   if (message.role === 'tool') return message.content.some((part) => {
     if (part.type !== 'tool-result' || part.toolName === 'contextRead') return false;
     const value = object('value' in part.output ? parsed(part.output.value) : undefined);
-    return !((value?.archived === true && typeof value.contextRef === 'string') || (value?.historical === true && value?.complete === false && typeof value?.ref === 'string'));
+    return !isProjectedReceipt(value);
   });
   return true;
 }
@@ -60,7 +68,10 @@ function messageSections(message: ModelMessage): Section[] {
       if (part.type !== 'tool-result' || part.toolName === 'contextRead') return [];
       const result = message.content.length === 1 ? value : (value as unknown[])[index];
       const envelope = object(result);
-      if ((envelope?.archived === true && typeof envelope.contextRef === 'string') || (envelope?.historical === true && envelope?.complete === false && typeof envelope?.ref === 'string')) return [];
+      // A shorter preview often outranks its original. Searching it would return
+      // a locator whose "remaining" text is itself missing. Index the archived
+      // source instead; direct reads of old receipts remain available.
+      if (isProjectedReceipt(envelope)) return [];
       return sections(result, message.content.length === 1 ? '' : `/${index}`);
     });
   }

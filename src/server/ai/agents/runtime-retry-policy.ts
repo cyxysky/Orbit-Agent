@@ -158,7 +158,32 @@ export function isProviderBillingLimitMessage(value: string) {
   return /(?:已达到|达到|超过|超出).{0,24}(?:Token Plan|用量|额度|套餐|积分).{0,16}(?:上限|限制)/i.test(message)
     || /(?:用量|额度|积分|余额).{0,16}(?:已用完|已用尽|不足)/.test(message)
     || /\b(?:token plan|billing quota|credit balance|credits?|account balance|quota).{0,48}(?:exhausted|exceeded|insufficient|depleted|limit reached)\b/i.test(message)
-    || /\b(?:exhausted|exceeded|insufficient|depleted).{0,32}(?:credits?|quota|balance)\b/i.test(message);
+    || /\b(?:exhausted|exceeded|insufficient|depleted).{0,32}(?:credits?|quota|balance)\b/i.test(message)
+    || /\b(?:go|monthly) usage (?:limit|quota) (?:exceeded|exhausted|reached)\b/i.test(message);
+}
+
+function providerBillingLimitRecord(record: Record<string, unknown>) {
+  const billingCodes = new Set(['INSUFFICIENT_QUOTA', 'INSUFFICIENT_BALANCE', 'CREDIT_BALANCE_TOO_LOW', 'GOUSAGELIMITERROR']);
+  const matches = (value: unknown) => {
+    if (typeof value === 'string') return isProviderBillingLimitMessage(value);
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const item = value as Record<string, unknown>;
+    return typeof item.message === 'string' && isProviderBillingLimitMessage(item.message)
+      || [item.code, item.type].some(field => billingCodes.has(String(field || '').toUpperCase()));
+  };
+  if (matches(record) || matches(record.error)) return true;
+  // SDK wrappers may replace the error message with "Too Many Requests".
+  // The provider's structured body still distinguishes exhausted usage from
+  // temporary rate limiting, even when both use HTTP 429 and Retry-After.
+  for (const body of [record.responseBody, record.body]) {
+    let parsed = body;
+    if (typeof body === 'string') {
+      try { parsed = JSON.parse(body); } catch { if (matches(body)) return true; }
+    }
+    if (matches(parsed)) return true;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && matches((parsed as Record<string, unknown>).error)) return true;
+  }
+  return false;
 }
 
 export function classifyRuntimeRetry(error: unknown, signal?: AbortSignal): RuntimeRetryDecision {
@@ -195,8 +220,7 @@ export function classifyRuntimeRetry(error: unknown, signal?: AbortSignal): Runt
   }
   if (statusCode === 402 || isProviderBillingLimitMessage(message)
     || /\b(insufficient balance|payment required|billing quota)\b/.test(normalizedMessage)
-    || records.some((record) => [record.code, record.type].some((value) =>
-      ['INSUFFICIENT_QUOTA', 'INSUFFICIENT_BALANCE', 'CREDIT_BALANCE_TOO_LOW'].includes(String(value || '').toUpperCase())))) {
+    || records.some(providerBillingLimitRecord)) {
     return { category: 'billing', reason: `provider balance is unavailable${statusCode ? ` (${statusCode})` : ''}`, retryable: false, statusCode };
   }
   if (/context[_ -]?(?:length|window|limit|overflow)|maximum context|too many (?:input )?tokens|prompt (?:is )?too long|input.*exceeds.*token/i.test(message)) {

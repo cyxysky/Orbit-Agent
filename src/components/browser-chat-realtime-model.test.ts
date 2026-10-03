@@ -71,3 +71,59 @@ test('stale tool-start snapshots cannot regress a completed realtime tool', () =
     { id: 'tool-2', name: 'file', ok: undefined },
   ]);
 });
+
+test('a delayed asynchronous spawn acknowledgement cannot erase its completed result or another batch', () => {
+  const completedTool = {
+    id: 'batch-1',
+    name: 'subagent',
+    ok: false,
+    rawResult: {
+      ok: false,
+      actual: JSON.stringify({
+        batchId: 'batch-1', asynchronous: true, status: 'completed',
+        subagents: [{ uuid: 'child-1', status: 'failed', summary: 'Retained evidence', error: 'Timeout' }],
+      }),
+    },
+  };
+  const pendingTool = (id: string) => ({
+    id,
+    name: 'subagent',
+    ok: true,
+    rawResult: { ok: true, actual: JSON.stringify({ batchId: id, asynchronous: true, status: 'running' }) },
+  });
+  const current = { messages: [], logs: [], steps: [{ index: 4, tools: [completedTool] }] };
+  const merged = mergeBrowserChatRealtimeCollections(current, {
+    steps: [{ index: 4, tools: [pendingTool('batch-1'), pendingTool('batch-2')] }],
+  });
+  assert.deepEqual(merged.steps[0].tools, [completedTool, pendingTool('batch-2')]);
+  const completedWithRevision: typeof completedTool & { error?: string } = { ...completedTool, error: 'Old failure', rawResult: {
+    ...completedTool.rawResult,
+    actual: JSON.stringify({ ...JSON.parse(completedTool.rawResult.actual), revision: 4 }),
+  } };
+  const resumedTool = { ...pendingTool('batch-1'), error: undefined, rawResult: {
+    ok: true,
+    actual: JSON.stringify({ batchId: 'batch-1', asynchronous: true, status: 'running', revision: 5 }),
+  } };
+  const resumed = mergeBrowserChatRealtimeCollections({
+    ...current, steps: [{ index: 4, tools: [completedWithRevision] }],
+  }, { steps: [{ index: 4, tools: [resumedTool] }] });
+  assert.equal(resumed.steps[0].tools[0].error, undefined);
+  assert.equal(resumed.steps[0].tools[0].ok, true);
+  const lateCompletion = mergeBrowserChatRealtimeCollections(resumed, {
+    steps: [{ index: 4, tools: [completedWithRevision] }],
+  });
+  assert.deepEqual(lateCompletion.steps[0].tools, resumed.steps[0].tools);
+});
+
+test('a parent turn finished in the same millisecond cannot be revived by its delayed running message', () => {
+  const message = { id: 'parent', status: 'blocked', updatedAt: '2026-10-02T00:00:00.000Z' };
+  const current = { messages: [message], logs: [], steps: [] };
+  const stale = mergeBrowserChatRealtimeCollections(current, {
+    messages: [{ ...message, status: 'running' }],
+  });
+  assert.strictEqual(stale.messages[0], message);
+  const resumed = mergeBrowserChatRealtimeCollections(current, {
+    messages: [{ ...message, status: 'running', updatedAt: '2026-10-02T00:00:01.000Z' }],
+  });
+  assert.equal(resumed.messages[0].status, 'running');
+});

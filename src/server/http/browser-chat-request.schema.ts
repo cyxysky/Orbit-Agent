@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { reasoningEffortValues } from '@/lib/reasoning-effort';
 
 const text = (max: number) => z.string().trim().max(max);
 const optionalText = (max: number) => text(max).optional();
@@ -19,6 +20,7 @@ const browserChatSettingsSchema = z.object({
   disabledTools: z.array(text(80)).max(64).optional(),
   modelProvider: optionalText(120),
   model: optionalText(240),
+  reasoningEffort: z.enum(reasoningEffortValues).optional(),
 });
 
 export const createBrowserChatSessionRequestSchema = browserChatSettingsSchema.extend({
@@ -29,6 +31,7 @@ export const createBrowserChatSessionRequestSchema = browserChatSettingsSchema.e
 export const sendBrowserChatMessageRequestSchema = browserChatSettingsSchema.extend({
   content: text(100_000).default(''),
   clientMessageId: optionalText(120),
+  subagentId: text(160).min(1).optional(),
   attachments: z.array(browserChatAttachmentSchema).max(8).default([]),
   skillIds: z.array(text(120)).max(200).default([]),
 }).strict();
@@ -42,8 +45,9 @@ export const setBrowserChatGroupRequestSchema = z.object({
 }).strict();
 
 export const updateBrowserChatSessionRequestSchema = z.object({
-  title: text(240).min(1),
-}).strict();
+  title: text(240).min(1).optional(),
+  reasoningEffort: z.enum(reasoningEffortValues).optional(),
+}).strict().refine(value => value.title !== undefined || value.reasoningEffort !== undefined, 'Supply a title or reasoning effort.');
 
 export const browserChatToolConfirmationRequestSchema = z.object({
   confirmationId: text(120).min(1),

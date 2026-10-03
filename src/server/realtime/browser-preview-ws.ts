@@ -10,3 +10,4 @@ const preview = createBrowserPreviewServer({
 });
 export const ensureBrowserPreviewWebSocketServer = preview.ensure;
 export const closeBrowserPreviewWebSocketServer = preview.close;
+export const resetBrowserChatPreview = preview.resetSession;
