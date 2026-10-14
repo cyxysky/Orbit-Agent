@@ -128,15 +128,17 @@ async function startManagedRunner({ appDir, environment, url }) {
 
 function createCodeSandboxRunnerManager({ appDir }) {
   let runner, key, latestEnvironment, closed = false, lastCheck = 0, retryAfter = 0;
+  let pending;
   let queue = Promise.resolve();
   const sync = (environment = process.env) => {
     const snapshot = { ...environment };
     latestEnvironment = snapshot;
+    const url = managedRunnerUrl(snapshot);
+    const nextKey = JSON.stringify([url?.href, snapshot.AGENT_CODE_SANDBOX_RUNNER_TOKEN,
+      snapshot.AGENT_CODE_SANDBOX_MAX_CONCURRENCY, snapshot.CODE_SANDBOX_PYTHON_PATH, snapshot.GLINER_PYTHON_PATH]);
+    if (pending?.key === nextKey) return pending.operation;
     const operation = queue.then(async () => {
       if (closed) return;
-      const url = managedRunnerUrl(snapshot);
-      const nextKey = JSON.stringify([url?.href, snapshot.AGENT_CODE_SANDBOX_RUNNER_TOKEN,
-        snapshot.AGENT_CODE_SANDBOX_MAX_CONCURRENCY, snapshot.CODE_SANDBOX_PYTHON_PATH, snapshot.GLINER_PYTHON_PATH]);
       if (nextKey !== key) {
         await runner?.stop(); runner = undefined; key = nextKey; retryAfter = 0;
       }
@@ -149,6 +151,9 @@ function createCodeSandboxRunnerManager({ appDir }) {
         lastCheck = Date.now();
       } catch (error) { retryAfter = Date.now() + 5_000; throw error; }
     });
+    pending = { key: nextKey, operation };
+    const clearPending = () => { if (pending?.operation === operation) pending = undefined; };
+    operation.then(clearPending, clearPending);
     queue = operation.catch(() => undefined);
     return operation;
   };

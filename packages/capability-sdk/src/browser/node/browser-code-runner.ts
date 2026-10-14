@@ -13,6 +13,7 @@ import {
   type BrowserTextSelectionSpec,
 } from './editable-text-selection.ts';
 import type { BrowserPageObservation } from './browser-page-observation.ts';
+import { AI_DOM_RUNTIME_VERSION, installAiBrowserPageRuntime } from './browser-page-runtime.ts';
 
 export type BrowserCodeConnection = {
   protocol: 'playwright' | 'cdp';
@@ -68,6 +69,8 @@ export type BrowserCodeActivity = {
 export type BrowserCodeRunResult = {
   ok: boolean;
   value?: unknown;
+  /** Explicit outputs written before a failed cell; never a completion receipt. */
+  partialResults?: unknown;
   error?: string;
   diagnostics?: unknown;
   elapsedMs: number;
@@ -691,9 +694,7 @@ function browserCodeKernelMain() {
   const screenshotDecoratedPagePrototypes = new WeakSet<object>();
   const pointerDecoratedLocatorPrototypes = new WeakSet<object>();
   const credentialLocatorPrototypes = new WeakSet<object>();
-  const rawLocatorByExistingLocator = new WeakMap<object, import('patchright').Locator>();
   let nativeFrameLocator: ((this: object, selector: string) => import('patchright').Locator) | undefined;
-  let nativeLocatorFilter: ((this: object, options?: unknown) => import('patchright').Locator) | undefined;
   let nativeLocatorFill: ((this: object, value: string) => Promise<void>) | undefined;
   const nativeLocatorActions = new Map<
     string,
@@ -718,13 +719,6 @@ function browserCodeKernelMain() {
       return [{ ...options, timeout: browserCodeScreenshotTimeoutMs }, ...args.slice(1)];
     }
     return [{ timeout: browserCodeScreenshotTimeoutMs }, ...args];
-  };
-
-  const existingLocator = (locator: import('patchright').Locator) => {
-    if (!nativeLocatorFilter) return locator;
-    const filtered = Reflect.apply(nativeLocatorFilter, locator, [{ visible: true }]);
-    rawLocatorByExistingLocator.set(filtered, locator);
-    return filtered;
   };
 
   const createSessionPage = async (targetContext: import('patchright').BrowserContext) => {
@@ -882,12 +876,25 @@ function browserCodeKernelMain() {
     }));
   };
 
+  const ensureFrameRuntime = async (frame: import('patchright').Frame) => {
+    const installed = await frame.evaluate(() => (
+      (window as Window & { __aiDomRuntime?: { version?: number } }).__aiDomRuntime?.version
+    ));
+    if (installed !== AI_DOM_RUNTIME_VERSION) {
+      // Init scripts and evaluations can use different execution worlds. Check
+      // the current document in the same world used for observations/actions.
+      await frame.evaluate(installAiBrowserPageRuntime, AI_DOM_RUNTIME_VERSION);
+    }
+  };
+
   const readUnifiedPageObservation = async (
     page: import('patchright').Page,
   ): Promise<KernelPageObservation> => {
     const mainFrame = page.mainFrame();
     const observations = await Promise.all(page.frames().slice(0, 25).map(async (frame) => {
-      const observationResult = await settleKernelTask(frame.evaluate(() => {
+      const observationResult = await settleKernelTask((async () => {
+        await ensureFrameRuntime(frame);
+        return frame.evaluate(() => {
         const browserWindow = window as Window & {
           __aiDomMutationState?: { epoch?: number };
           __aiDomRuntime?: { pageObservation?: () => KernelPageObservation };
@@ -978,7 +985,8 @@ function browserCodeKernelMain() {
           topSurfaceIds: surfaces.map((surface) => surface.id),
           surfaceTransition: 'initial' as const,
         };
-      }), browserCodeFrameObservationTimeoutMs, `frame observation ${compactObservationUrl(frame.url()) || 'about:blank'}`);
+        });
+      })(), browserCodeFrameObservationTimeoutMs, `frame observation ${compactObservationUrl(frame.url()) || 'about:blank'}`);
       const observation = observationResult.ok ? observationResult.value : undefined;
       if (!observation) return undefined;
       return {
@@ -1252,6 +1260,9 @@ function browserCodeKernelMain() {
       );
     }
     const originalCandidate = locator as import('patchright').Locator;
+    const targetPage = locatorPage(originalCandidate);
+    const targetFrames = targetPage?.frames() || (locatorFrame(originalCandidate) ? [locatorFrame(originalCandidate)!] : []);
+    await Promise.all(targetFrames.filter(frame => !frame.isDetached()).map(ensureFrameRuntime));
     if (String(Reflect.get(originalCandidate, '_selector') || '').includes(browserCodeUidAttribute)) {
       const bindings = activeExecution?.uidBindings;
       const states = await originalCandidate.evaluateAll(elements => elements.map(element => ({
@@ -1270,6 +1281,23 @@ function browserCodeKernelMain() {
     const candidateSet = skipVisibleFilter
       ? originalCandidate
       : originalCandidate.filter({ visible: true });
+    // Playwright visibility ignores opacity. A newly mounted dialog can have a
+    // box while its finite entrance animation still makes input imperceptible.
+    // Wait without altering styles; static hiding is still rejected below.
+    await settleKernelTask(candidateSet.evaluateAll(async elements => {
+      const animations = new Set<Animation>();
+      for (const element of elements) {
+        let current: Element | null = element;
+        while (current) {
+          for (const animation of current.getAnimations()) {
+            if (animation.playState === 'running'
+              && Number.isFinite(animation.effect?.getComputedTiming().endTime)) animations.add(animation);
+          }
+          current = current.parentElement || (current.getRootNode() as ShadowRoot).host || null;
+        }
+      }
+      await Promise.all([...animations].map(animation => animation.finished.catch(() => undefined)));
+    }), browserCodeActionTimeoutMs, 'target rendering animations');
     let results = await candidateSet.evaluateAll((elements, operation) => {
       const browserWindow = window as Window & {
         __aiDomRuntime?: {
@@ -1507,7 +1535,9 @@ function browserCodeKernelMain() {
         };
         try {
           await Reflect.apply(nativeTrialAction, trialCandidate, [{
-            timeout: supplementalOcclusion || results.length > 1
+            // A small sticky header can be cleared by native scrolling/retries.
+            // Keep short trials for ambiguous matches and viewport blockers.
+            timeout: result.preserveScroll || results.length > 1
               ? browserCodePointerLookupTimeoutMs
               : browserCodeActionTimeoutMs,
             trial: true,
@@ -1665,10 +1695,10 @@ function browserCodeKernelMain() {
   ) => {
     const current = await captureCoordinateClickState(page);
     if (!current || !Number.isFinite(x) || !Number.isFinite(y)) {
-      throw new Error('Coordinate clicking requires finite viewport coordinates and current page evidence.');
+      throw new Error('BROWSER_INPUT_PREFLIGHT_FAILED: Coordinate clicking requires finite viewport coordinates and current page evidence.');
     }
     if (x < 0 || y < 0 || x > current.width || y > current.height) {
-      throw new Error(`Coordinate (${x}, ${y}) is outside the current ${current.width}x${current.height} viewport.`);
+      throw new Error(`BROWSER_INPUT_PREFLIGHT_FAILED: Coordinate (${x}, ${y}) is outside the current ${current.width}x${current.height} viewport.`);
     }
 
     const screenshotEvidence = current
@@ -1695,7 +1725,7 @@ function browserCodeKernelMain() {
       await resolveActionableLocator(evidence.locator, 'click');
       const afterTrial = await captureCoordinateClickState(page);
       if (!sameCoordinateClickState(evidence, afterTrial)) {
-        throw new Error('Coordinate evidence changed during actionability checking. Read a fresh boundingBox before clicking.');
+        throw new Error('BROWSER_INPUT_PREFLIGHT_FAILED: Coordinate evidence changed during actionability checking. Read a fresh boundingBox before clicking.');
       }
       return;
     }
@@ -1705,7 +1735,7 @@ function browserCodeKernelMain() {
     }
 
     throw new Error(
-      'Coordinate clicking requires either a recent automatic or emitted viewport screenshot visible to the model, '
+      'BROWSER_INPUT_PREFLIGHT_FAILED: Coordinate clicking requires either a recent automatic or emitted viewport screenshot visible to the model, '
       + 'or a point inside the current rect returned by boundingBox() for one exact visible actionable Locator. '
       + 'Viewport evidence expires after document, URL, viewport, browser zoom, scroll change, or five minutes. Reobserve before another coordinate action; semantic locators can be resolved live.',
     );
@@ -1822,7 +1852,7 @@ function browserCodeKernelMain() {
       if (!locator || typeof locator !== 'object') {
         throw new Error('attachmentVault.setInputFiles() requires a real Playwright Locator.');
       }
-      const sourceLocator = rawLocatorByExistingLocator.get(locator) || locator;
+      const sourceLocator = locator;
       const locatorPrototype = Object.getPrototypeOf(sourceLocator) as object | null;
       const targetFrame = Reflect.get(sourceLocator, '_frame') as import('patchright').Frame | undefined;
       const selector = Reflect.get(sourceLocator, '_selector');
@@ -1870,7 +1900,6 @@ function browserCodeKernelMain() {
     credentialLocatorPrototypes.add(prototype);
     const framePrototype = Object.getPrototypeOf(page.mainFrame()) as Record<string, unknown> | null;
     const frameLocator = framePrototype && Reflect.get(framePrototype, 'locator');
-    const locatorFilter = Reflect.get(prototype, 'filter');
     const locatorFill = Reflect.get(prototype, 'fill');
     const locatorBoundingBox = Reflect.get(prototype, 'boundingBox');
     if (!nativeFrameLocator && typeof frameLocator === 'function') {
@@ -1878,9 +1907,6 @@ function browserCodeKernelMain() {
     }
     if (!nativeLocatorFill && typeof locatorFill === 'function') {
       nativeLocatorFill = locatorFill as (this: object, value: string) => Promise<void>;
-    }
-    if (!nativeLocatorFilter && typeof locatorFilter === 'function') {
-      nativeLocatorFilter = locatorFilter as (this: object, options?: unknown) => import('patchright').Locator;
     }
     pointerDecoratedLocatorPrototypes.add(prototype);
     if (typeof locatorBoundingBox === 'function') {
@@ -1923,23 +1949,6 @@ function browserCodeKernelMain() {
         });
       } catch {
         // Keep the native boundingBox implementation when the Playwright prototype is immutable.
-      }
-    }
-    for (const name of ['locator', 'getByAltText', 'getByLabel', 'getByPlaceholder', 'getByRole', 'getByTestId', 'getByText', 'getByTitle']) {
-      const original = Reflect.get(prototype, name);
-      if (typeof original !== 'function') continue;
-      try {
-        Object.defineProperty(prototype, name, {
-          configurable: true,
-          value: function existingChainedLocator(this: import('patchright').Locator, ...args: unknown[]) {
-            const rawBase = rawLocatorByExistingLocator.get(this) || this;
-            const locator = Reflect.apply(original, rawBase, args) as import('patchright').Locator;
-            return existingLocator(locator);
-          },
-          writable: true,
-        });
-      } catch {
-        // Keep the native locator factory when its prototype is immutable.
       }
     }
     const patch = (name: string, kind: 'click' | 'double' | 'move', changesState = true) => {
@@ -2022,20 +2031,16 @@ function browserCodeKernelMain() {
         Object.defineProperty(prototype, name, {
           configurable: true,
           value: async function observedLocatorAction(this: object, ...args: unknown[]) {
-            recordAction(`locator.${name}`);
             if (name === 'setInputFiles' && activeExecution) {
               throw new Error('Use attachmentVault.setInputFiles(locator, attachmentId); direct file paths and reconstructed payloads are unavailable to browserCode.');
             }
             const targetPage = locatorPage(this);
             let actionableLocator = this as import('patchright').Locator;
             if (targetPage && activeExecution) {
-              const locatorToResolve = name === 'setInputFiles'
-                ? rawLocatorByExistingLocator.get(this) || this
-                : this;
-              actionableLocator = await resolveActionableLocator(locatorToResolve, name);
+              actionableLocator = await resolveActionableLocator(this, name);
               await moveVisibleAiPointer(targetPage, await locatorCenter(actionableLocator), 'click');
             }
-            if (targetPage) await prepareStateChangingAction(targetPage, `locator.${name}`, false);
+            if (targetPage) await prepareStateChangingAction(targetPage, `locator.${name}`);
             const result = await Reflect.apply(original, actionableLocator, args);
             await completeStateChangingAction(targetPage, `locator.${name}`);
             return result;
@@ -2054,21 +2059,6 @@ function browserCodeKernelMain() {
     decorateLocatorPrototype(page);
     decoratePageScreenshotPrototype(page);
     const pageRecord = page as unknown as Record<string, unknown>;
-    for (const name of ['locator', 'getByAltText', 'getByLabel', 'getByPlaceholder', 'getByRole', 'getByTestId', 'getByText', 'getByTitle']) {
-      const original = Reflect.get(pageRecord, name);
-      if (typeof original !== 'function') continue;
-      try {
-        Object.defineProperty(pageRecord, name, {
-          configurable: true,
-          value: (...args: unknown[]) => existingLocator(
-            Reflect.apply(original, page, args) as import('patchright').Locator,
-          ),
-          writable: true,
-        });
-      } catch {
-        // Keep the native page locator factory when the page object is immutable.
-      }
-    }
     const patchPageAction = (
       name: string,
       kind: 'click' | 'double' | 'move',
@@ -2089,14 +2079,11 @@ function browserCodeKernelMain() {
               for (const targetIndex of targetIndices) {
                 if (typeof normalizedArgs[targetIndex] !== 'string') continue;
                 const locator = page.locator(normalizedArgs[targetIndex] as string);
-                const locatorToResolve = name === 'setInputFiles'
-                  ? rawLocatorByExistingLocator.get(locator) || locator
-                  : locator;
                 targetLocators.set(
                   targetIndex,
                   forced
-                    ? locatorToResolve
-                    : await resolveActionableLocator(locatorToResolve, name === 'dragAndDrop' ? 'dragTo' : name),
+                    ? locator
+                    : await resolveActionableLocator(locator, name === 'dragAndDrop' ? 'dragTo' : name),
                 );
               }
               if (changesState) await prepareStateChangingAction(page, `page.${name}`);
@@ -2184,10 +2171,7 @@ function browserCodeKernelMain() {
             let actionableLocator: import('patchright').Locator | undefined;
             if (activeExecution && selectorAction && typeof args[0] === 'string') {
               const locator = page.locator(args[0]);
-              const locatorToResolve = name === 'setInputFiles'
-                ? rawLocatorByExistingLocator.get(locator) || locator
-                : locator;
-              actionableLocator = await resolveActionableLocator(locatorToResolve, name);
+              actionableLocator = await resolveActionableLocator(locator, name);
               await moveVisibleAiPointer(page, await locatorCenter(actionableLocator), 'click');
             }
             await prepareStateChangingAction(page, `page.${name}`);
@@ -2456,7 +2440,7 @@ function browserCodeKernelMain() {
           if (binding.page !== page || binding.frame.isDetached()) {
             throw new Error(`STALE_DOM_EVIDENCE: UID ${uid} belongs to another page or a detached iframe. Capture fresh DOM evidence.`);
           }
-          return existingLocator(binding.frame.locator(`[${browserCodeUidAttribute}~="${binding.token}"]`));
+          return binding.frame.locator(`[${browserCodeUidAttribute}~="${binding.token}"]`);
         },
         writable: false,
       });
@@ -2791,13 +2775,14 @@ function browserCodeKernelMain() {
       terminal: false,
       useGlobal: false,
     });
-    const sharedBindings: PropertyDescriptorMap = {
-      Buffer: { configurable: false, enumerable: false, value: undefined, writable: false },
-      global: { configurable: false, enumerable: false, value: undefined, writable: false },
-      module: { configurable: false, enumerable: false, value: undefined, writable: false },
-      process: { configurable: false, enumerable: false, value: undefined, writable: false },
-      require: { configurable: false, enumerable: false, value: undefined, writable: false },
-    };
+    const sharedBindings: PropertyDescriptorMap = Object.fromEntries(
+      ['Buffer', 'global', 'module', 'process', 'require'].map(name => [name, {
+        configurable: false,
+        enumerable: false,
+        get: () => undefined,
+        set: () => { throw new Error(`BROWSER_RUNTIME_BINDING_RESERVED: ${name} is a reserved runtime name. Use a task-specific variable name; the assignment was not applied.`); },
+      }]),
+    );
     Object.defineProperties(replServer.context, {
       ...sharedBindings,
       console: { configurable: false, enumerable: true, value: safeConsole, writable: false },
@@ -3044,6 +3029,7 @@ function browserCodeKernelMain() {
         requestId: input.requestId,
         ok: false,
         error: errorMessage,
+        ...(activeExecution.outputs.length ? { partialResults: jsonSafe(activeExecution.outputs, input.maxOutputChars) } : {}),
         diagnostics: diagnosticRead.ok ? diagnosticRead.value : { unavailable: diagnosticRead.error },
         selectedTargetId: selectedRuntimePage && !selectedRuntimePage.isClosed()
           ? await targetIdForPage(selectedRuntimePage).catch(() => undefined) : undefined,
@@ -3135,6 +3121,8 @@ function childSource() {
     `const applyEditableTextSelection = ${applyEditableTextSelection.toString()};`,
     `const resolveEditableTextSelection = ${resolveEditableTextSelection.toString()};`,
     `const createBrowserCodeCdpScope = ${createBrowserCodeCdpScope.toString()};`,
+    `const AI_DOM_RUNTIME_VERSION = ${AI_DOM_RUNTIME_VERSION};`,
+    `const installAiBrowserPageRuntime = ${installAiBrowserPageRuntime.toString()};`,
     `(${browserCodeKernelMain.toString()})();`,
   ].join('\n');
 }
@@ -3143,7 +3131,7 @@ function childSource() {
 // with dynamic paths to undefined. Both resolvers must use Node's real loader
 // so dependency paths and the child's read permissions match the deployed tree.
 const browserCodeNodeModule = process.getBuiltinModule('node:module');
-const browserCodeHostRequire = browserCodeNodeModule.createRequire(path.join(process.cwd(), 'package.json'));
+const browserCodeHostRequire = browserCodeNodeModule.createRequire(import.meta.url);
 
 function browserCodeResolvedPackageReadRoots(playwrightEntryPath: string) {
   const roots: string[] = [];
@@ -3575,6 +3563,7 @@ export class BrowserCodeKernel {
       this.finishPending({
         ok: false,
         error: typeof record.error === 'string' ? record.error : 'browserCode execution failed.',
+        partialResults: record.partialResults,
         diagnostics: record.diagnostics,
         selectedTargetId: typeof record.selectedTargetId === 'string' ? record.selectedTargetId : undefined,
         ownedTargetIds: Array.isArray(record.ownedTargetIds) ? record.ownedTargetIds.filter((id): id is string => typeof id === 'string') : undefined,
@@ -3629,11 +3618,15 @@ export class BrowserCodeKernel {
     this.pending = undefined;
     this.clearExecutionTimer();
     pending.abortSignal?.removeEventListener('abort', pending.onAbort);
+    // A normally returned actionability rejection happens before input. A lost
+    // or interrupted kernel can have unreported effects and stays unknown.
+    const rejectedBeforeInput = !result.ok && /(?:ACTIONABILITY_FAILED|BROWSER_INPUT_PREFLIGHT_FAILED):/.test(result.error || '')
+      && pending.attemptedActions.length === 0 && pending.completedActions.length === 0;
     pending.resolve({ ...result,
       executionState: result.executionState || {
         status: result.ok ? 'completed' : /page crashed|target crashed/i.test(result.error || '') ? 'crashed' : 'failed', phase: 'finished',
         attemptedActions: pending.attemptedActions, completedActions: pending.completedActions,
-        outcome: result.ok ? 'returned' : 'unknown', requiresStateRefresh: !result.ok, safeToRetry: false,
+        outcome: result.ok ? 'returned' : rejectedBeforeInput ? 'not-started' : 'unknown', requiresStateRefresh: !result.ok, safeToRetry: false,
       }, elapsedMs: Date.now() - pending.startedAt });
   }
 

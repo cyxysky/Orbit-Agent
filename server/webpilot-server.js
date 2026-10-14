@@ -557,8 +557,8 @@ async function main() {
     dir: appDir,
     hostname,
     port,
-    // Use Next's incremental development compiler by default. Keep Webpack an
-    // explicit diagnostic choice: npm run dev -- --webpack.
+    // Use Turbopack for development. Webpack is an explicit diagnostic option,
+    // never an automatic response to a slow route or a refresh problem.
     turbopack: dev && !developmentWebpack,
     webpack: developmentWebpack,
     ...(compiledConfig ? { conf: compiledConfig } : {}),

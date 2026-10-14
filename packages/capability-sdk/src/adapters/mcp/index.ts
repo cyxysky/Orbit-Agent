@@ -72,32 +72,22 @@ function mcpContent(content: CapabilityContent): CallToolResult['content'][numbe
 }
 
 export function capabilityResultToMcpResult(result: CapabilityResult): CallToolResult {
-  if (!result.ok) {
-    return {
-      isError: true,
-      content: [{ type: 'text', text: result.error.message }, ...(result.content?.map(mcpContent) || [])],
-      structuredContent: {
-        ok: false,
-        error: result.error,
-      },
-    };
-  }
-  const content = result.content?.map(mcpContent) || [];
-  if (!content.some((item) => item.type === 'text')) {
-    content.unshift({ type: 'text', text: result.summary });
-  }
+  const structuredContent = result.ok ? {
+    ok: true,
+    summary: result.summary,
+    ...(result.data === undefined ? {} : { data: result.data }),
+    ...(result.content?.length ? { capabilityContent: result.content.map((item) => {
+      // Pixels belong only in MCP image blocks, never in structured/text context.
+      if (item.type !== 'image') return item;
+      return { type: item.type, artifactId: item.artifactId, mediaType: item.mediaType };
+    }) } : {}),
+  } : { ok: false, error: result.error };
+  // MCP consumers may use only content. Give them the same complete result as
+  // structuredContent, including output, identifiers and recoverable errors.
   return {
-    content,
-    structuredContent: {
-      ok: true,
-      summary: result.summary,
-      ...(result.data === undefined ? {} : { data: result.data }),
-      ...(result.content?.length ? { capabilityContent: result.content.map((item) => {
-        // Pixels belong only in MCP image blocks, never in structured/text context.
-        if (item.type !== 'image') return item;
-        return { type: item.type, artifactId: item.artifactId, mediaType: item.mediaType };
-      }) } : {}),
-    },
+    ...(!result.ok ? { isError: true } : {}),
+    content: [{ type: 'text', text: JSON.stringify(structuredContent) }, ...(result.content?.map(mcpContent) || [])],
+    structuredContent,
   };
 }
 
@@ -155,10 +145,9 @@ export async function createCapabilityMcpServer(
         const skillId = typeof value.skillId === 'string' ? value.skillId.trim() : '';
         const skill = value.action === 'read' ? snapshot.skillCatalog.get(skillId) : undefined;
         if (!skill) {
-          return {
-            isError: true,
-            content: [{ type: 'text', text: `Unknown Capability Skill: ${skillId || '(empty)'}.` }],
-          };
+          return capabilityResultToMcpResult({ ok: false, error: {
+            code: 'capability-skill-not-found', message: `Unknown Capability Skill: ${skillId || '(empty)'}.`,
+          } });
         }
         return {
           content: [{ type: 'text', text: skill.content }],
@@ -215,8 +204,17 @@ export async function createCapabilityMcpServer(
           if (result.content?.some((item) => item.type === 'image' && !item.data) && options.resolveImage) {
             const content = await Promise.all(result.content.map(async (item): Promise<CapabilityContent> => {
               if (item.type !== 'image' || item.data) return item;
-              const image = await options.resolveImage!(item);
-              return { ...item, data: image.data, mediaType: image.mimeType };
+              try {
+                const image = await options.resolveImage!(item);
+                return { ...item, data: image.data, mediaType: image.mimeType };
+              } catch (error) {
+                if (abortSignal?.aborted) throw error;
+                // Rendering is secondary to the original operation. Retain its
+                // saved artifacts and outcome so a missing preview cannot cause replay.
+                return { type: 'text', text: JSON.stringify({ code: 'mcp-image-unavailable', artifactId: item.artifactId,
+                  message: error instanceof Error ? error.message : String(error),
+                  instruction: 'The original operation outcome is preserved. Inspect the saved artifact or request its bytes/text before retrying.' }) };
+              }
             }));
             result = { ...result, content };
           }
@@ -234,13 +232,9 @@ export async function createCapabilityMcpServer(
           }
           return response;
         } catch (error) {
-          return {
-            isError: true,
-            content: [{
-              type: 'text',
-              text: error instanceof Error ? error.message : String(error),
-            }],
-          };
+          return capabilityResultToMcpResult({ ok: false, error: {
+            code: 'mcp-tool-failed', message: error instanceof Error ? error.message : String(error),
+          } });
         }
       });
     }

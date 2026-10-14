@@ -207,8 +207,22 @@ export const browserPreviewStyles = String.raw`
   cursor: default;
 }
 
-.cap-browser-preview-stage:focus-visible {
+.cap-browser-preview-stage:focus-visible,
+.cap-browser-preview-stage:has(> .cap-browser-preview-keyboard-input:focus-visible) {
   box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent-strong, #36583f) 72%, transparent);
+}
+
+.cap-browser-preview-keyboard-input {
+  border: 0;
+  height: 1px;
+  left: 0;
+  opacity: 0;
+  padding: 0;
+  pointer-events: none;
+  position: absolute;
+  resize: none;
+  top: 0;
+  width: 1px;
 }
 
 .cap-browser-preview-stage img,

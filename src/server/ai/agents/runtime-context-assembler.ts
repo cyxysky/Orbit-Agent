@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { tool, type ModelMessage } from 'ai';
 import { z } from 'zod';
-import { browserChatContextRecordId, serializableBrowserChatModelMessages } from './browser-chat-model-context';
+import { browserChatContextRecordId, projectCompletedTurnReasoning, serializableBrowserChatModelMessages } from './browser-chat-model-context';
 import { estimateRuntimeMessageContext, estimateRuntimeTextTokens } from './runtime-context-budget';
 import { type RuntimeKnowledgeBlock } from './runtime-knowledge-context';
 import { runtimeContextMaterialValue as materialValue, searchRuntimeContextRecords } from './runtime-context-search';
@@ -23,6 +23,7 @@ export type RuntimeContextManifest = {
   messageCount: number; summaryMessageCount: number; messageRefs?: string[];
   browserScreenshotCount?: number;
   suppressedRepeatedNoActionExchanges?: number;
+  omittedHistoricalReasoningParts?: number;
   sourceFiles?: SourceFileContextStats;
   knowledge: Array<{ kind: string; id: string; digest: string; selected: boolean; estimatedTokens: number; reason?: string }>;
 };
@@ -168,7 +169,8 @@ export function latestBrowserObservationOnly(messages: ModelMessage[]) {
   return messages.filter((message, index) => !automatic(message) || index === current);
 }
 export function assembleRuntimeContext(input: RuntimeContextInput) {
-  const history = projectRepeatedNoActionHistory(withoutRuntimePromptCacheMetadata(input.messages));
+  const reasoning = projectCompletedTurnReasoning(withoutRuntimePromptCacheMetadata(input.messages));
+  const history = projectRepeatedNoActionHistory(reasoning.messages);
   const backgroundBudget = Math.min(12000, Math.floor(input.inputBudgetTokens * 0.12));
   let knowledgeTokens = 0;
   const selected = new Set<number>();
@@ -224,6 +226,7 @@ export function assembleRuntimeContext(input: RuntimeContextInput) {
       && message.content.some(part => part.type === 'text' && part.text.startsWith('[Current browser observation]'))
       ? message.content.filter(part => part.type === 'image' || part.type === 'file' && part.mediaType.startsWith('image/')).length : 0), 0),
     suppressedRepeatedNoActionExchanges: history.suppressed,
+    omittedHistoricalReasoningParts: reasoning.omittedParts,
     prefixHash: createHash('sha256').update(JSON.stringify([input.system, input.tools])).digest('hex'),
     countKind: 'heuristic',
     knowledge: selections.map(entry => ({ kind: entry.block.kind, id: entry.block.id, digest: entry.block.digest, selected: selected.has(entry.index), estimatedTokens: entry.tokens, reason: entry.reason })),

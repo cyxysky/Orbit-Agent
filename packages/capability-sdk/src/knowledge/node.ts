@@ -3,12 +3,14 @@ import { createCapabilityDocumentDatabase } from '../node.ts';
 import { createKnowledgeCapability, type KnowledgeDocument, type KnowledgeSearchHit, type KnowledgeStore } from './index.ts';
 import type { CapabilityRunContext } from '../index.ts';
 
-function tokens(value: string) {
-  const words = value.toLowerCase().match(/[\p{L}\p{N}_-]+/gu) || [];
+function tokens(value: string, indexing = false) {
+  const words = (value.normalize('NFKC').toLowerCase().match(/[\p{L}\p{N}_-]+/gu) || [])
+    .flatMap(word => word.split(/(\p{Script=Han}+)/u).filter(Boolean));
   return [...new Set(words.flatMap((word) => {
-    if (!/\p{Script=Han}/u.test(word)) return word.length > 1 ? [word] : [];
+    if (!/\p{Script=Han}/u.test(word)) return [word];
     const characters = [...word];
-    return characters.length === 1 ? characters : characters.slice(1).map((character, i) => characters[i] + character);
+    const pairs = characters.slice(1).map((character, i) => characters[i] + character);
+    return indexing || characters.length === 1 ? [...characters, ...pairs] : pairs;
   }))];
 }
 
@@ -27,7 +29,15 @@ export function createFileKnowledgeStore(input: { directory: string }): Knowledg
     if (!initialized) {
       db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_chunks USING fts5(
         document_id UNINDEXED, chunk_index UNINDEXED, chunk_chars UNINDEXED, text UNINDEXED, terms);
-        CREATE TABLE IF NOT EXISTS knowledge_sizes (size INTEGER PRIMARY KEY);`);
+        CREATE TABLE IF NOT EXISTS knowledge_sizes (size INTEGER PRIMARY KEY);
+        CREATE TABLE IF NOT EXISTS knowledge_index_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);`);
+      store.transaction(() => {
+        const version = db.prepare("SELECT value FROM knowledge_index_meta WHERE key='tokenizer'").get();
+        if (version?.value !== '2') {
+          db.exec('DELETE FROM knowledge_chunks; DELETE FROM knowledge_sizes;');
+          db.prepare("INSERT OR REPLACE INTO knowledge_index_meta VALUES ('tokenizer', '2')").run();
+        }
+      });
       initialized = true;
     }
     return db;
@@ -37,7 +47,7 @@ export function createFileKnowledgeStore(input: { directory: string }): Knowledg
     const stride = Math.max(1, size - Math.min(120, Math.floor(size / 10)));
     for (let start = 0, index = 0; start < document.content.length; start += stride, index++) {
       const text = document.content.slice(start, start + size);
-      insert.run(document.id, index, size, text, tokens(document.title + ' ' + text).join(' '));
+      insert.run(document.id, index, size, text, tokens(document.title + ' ' + text, true).join(' '));
       if (start + size >= document.content.length) break;
     }
   }

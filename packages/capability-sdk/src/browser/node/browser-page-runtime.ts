@@ -13,7 +13,7 @@ import type {
   WindowWithAiDomRuntime,
 } from './browser-session.ts';
 
-export const AI_DOM_RUNTIME_VERSION = 31;
+export const AI_DOM_RUNTIME_VERSION = 34;
 
 export function installAccessibilitySnapshotExportControl() {
   if (window.top !== window) return;
@@ -910,6 +910,39 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
     const name = element.getAttribute('name');
     if (name) addAttribute('name', name, tag);
     return Array.from(new Set(values)).slice(0, 8);
+  }
+
+  function uniqueDomSelector(element: Element): string | undefined {
+    const root = element.getRootNode();
+    if (!(root instanceof Document || root instanceof ShadowRoot)) return undefined;
+    const isUnique = (selector: string) => {
+      try {
+        const matches = root.querySelectorAll(selector);
+        return matches.length === 1 && matches[0] === element;
+      } catch {
+        return false;
+      }
+    };
+    const qualify = (selector: string): string | undefined => {
+      if (!(root instanceof ShadowRoot)) return selector;
+      const host = uniqueDomSelector(root.host);
+      return host ? `${host} ${selector}` : undefined;
+    };
+    for (const candidate of visibleDomLocatorCandidates(element)) {
+      if (isUnique(candidate)) return qualify(candidate);
+    }
+    const parts: string[] = [];
+    let current: Element | null = element;
+    while (current) {
+      const tag = CSS.escape(current.localName);
+      const siblings: Element[] = Array.from(current.parentElement?.children || root.children)
+        .filter(child => child.localName === current!.localName);
+      parts.unshift(`${tag}:nth-of-type(${siblings.indexOf(current) + 1})`);
+      const selector = parts.join(' > ');
+      if (isUnique(selector)) return qualify(selector);
+      current = current.parentElement;
+    }
+    return undefined;
   }
 
   function visibleDomRect(element: Element, viewportClip: BrowserUseViewportClip) {
@@ -2345,8 +2378,13 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
         || (controlled && !edgeChrome)
         || (['menu', 'listbox', 'tree'].includes(role)
           && ['absolute', 'fixed'].includes(style.position) && topAtCenterInside && !edgeChrome)
-        || (zIndexOutlier && topAtCenterInside && !edgeChrome);
+        || (zIndexOutlier && topAtCenterInside && !edgeChrome)
+        // A nested overlay can cover the center of its still-rendered parent.
+        // Retain an established overlay in the inventory until it is hidden.
+        || (recognizedDynamicOverlayElements.has(element) && zIndexOutlier
+          && ['absolute', 'fixed'].includes(style.position) && !edgeChrome);
       const id = `surface-${visibleDomState().instanceId}-${visibleDomRef(element)}`;
+      const selector = uniqueDomSelector(element);
       const surface: BrowserActiveSurface = {
           id,
           descriptor: descriptor(element),
@@ -2358,7 +2396,7 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
           zIndex: normalizedZIndex,
           rect: { bottom, height, left, right, top, width },
           signals,
-          ...(element.id ? { selector: `#${CSS.escape(element.id)}` } : {}),
+          ...(selector ? { selector } : {}),
           depth: 0,
           activationOrder: 0,
         };
@@ -2391,10 +2429,16 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
         if (
           entry.element !== pendingSurfaceParent.element
           && entry.surface.likelyOverlay
-          && entry.surface.kind !== 'overlay'
           && (
             entry.surface.modal && pendingParentEntry?.surface.modal
             || ['popover', 'menu', 'listbox'].includes(entry.surface.kind)
+            || entry.surface.kind === 'overlay'
+              && entry.surface.signals.includes('interactive-descendant')
+              && (entry.surface.signals.includes('position:absolute')
+                || entry.surface.signals.includes('position:fixed'))
+              && pendingParentEntry?.surface.likelyOverlay
+              && entry.surface.rect.width * entry.surface.rect.height
+                <= pendingParentEntry.surface.rect.width * pendingParentEntry.surface.rect.height
           )
         ) {
           inferredSurfaceParents.set(entry.element, pendingSurfaceParent.element);
@@ -2486,6 +2530,9 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
   }
 
   function pageObservation(): BrowserPageObservation {
+    // CSS animations and transitions can change visibility without a DOM
+    // mutation. A public observation must sample the current rendered state.
+    cachedSurfaceEpoch = -1;
     const { activeEntry, entries, focused, scopeEntries, surfaceStack } = resolveSurfaceState();
     const activeSurface = activeEntry?.surface;
     const topSurfaceIds = scopeEntries.map((entry) => entry.surface.id);
@@ -2537,6 +2584,7 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
       .filter((candidate) => composedContains(candidate.element, element))
       .sort((left, right) => right.surface.depth - left.surface.depth || right.score - left.score)[0];
     if (!entry) return;
+    if (entry.surface.likelyOverlay) recognizedDynamicOverlayElements.add(entry.element);
     surfaceActivationOrder.set(entry.element, ++surfaceActivationSequence);
     pendingSurfaceParent = { element: entry.element, at: performance.now() };
     cachedSurfaceEpoch = -1;

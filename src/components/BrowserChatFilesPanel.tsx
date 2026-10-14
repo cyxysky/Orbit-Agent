@@ -8,7 +8,7 @@ import { useI18n } from '@/i18n/I18nProvider';
 import { AppInput } from '@/components/ui/app-input';
 import { ExpandableActionLabel } from '@/components/ui/expandable-action-label';
 import { FileTypeIcon } from '@/components/FileTypeIcon';
-import { useFilePreview } from '@/components/FilePreviewProvider';
+import { useFilePreview } from '@/components/file-preview-context';
 import { WorkspaceHistoryList } from '@/components/WorkspaceSidebarArchive';
 import { browserChatArtifactKey, browserChatArtifactOpenUrl, type BrowserChatMessageFileGroup } from '@/lib/browser-chat-artifacts';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';

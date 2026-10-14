@@ -218,7 +218,7 @@ import { BrowserChatOnboarding } from '@/components/BrowserChatOnboarding';
 import { BrowserChatRuntimeStateControl } from '@/components/BrowserChatRuntimeStateControl';
 import { BrowserChatTerminalPanel } from '@/components/BrowserChatTerminalPanel';
 import { BeautifulLoadingState, formatOutputTokensPerSecond, outputTokensPerSecondTitle } from '@/components/BeautifulLoadingState';
-import { useFilePreview } from '@/components/FilePreviewProvider';
+import { useFilePreview } from '@/components/file-preview-context';
 import {
   useBrowserChatSkillCatalog,
   type BrowserChatSkillListPage,
@@ -278,7 +278,7 @@ import {
   visibleBrowserChatExecutionLogs,
 } from '@/components/browser-chat-log-model';
 import { useI18n } from '@/i18n/I18nProvider';
-import { readApiJson } from '@/lib/api-client';
+import { readApiGet, readApiJson } from '@/lib/api-client';
 import { browserSessionGroupLabel } from '@cjfclonedeep/capability-sdk/browser/session-group';
 import { fuzzyRetrievalScore } from '@/lib/fuzzy-retrieval';
 import {
@@ -473,19 +473,12 @@ const browserChatInitialRequests = new Map<string, Promise<Record<string, unknow
 function readBrowserChatInitialRequest(url: string, errorMessage: string) {
   const existing = browserChatInitialRequests.get(url);
   if (existing) return existing;
-  const request = fetch(url, { cache: 'no-store' })
-    .then((response) => readApiJson<Record<string, unknown>>(response, errorMessage))
-    .finally(() => browserChatInitialRequests.delete(url));
+  const request = readApiGet<Record<string, unknown>>(url, errorMessage)
+    .finally(() => {
+      if (browserChatInitialRequests.get(url) === request) browserChatInitialRequests.delete(url);
+    });
   browserChatInitialRequests.set(url, request);
   return request;
-}
-
-function waitForBrowserPaint() {
-  return new Promise<void>((resolve) => {
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => resolve());
-    });
-  });
 }
 
 type BrowserChatSessionRealtimePatch = {
@@ -8651,8 +8644,9 @@ export function BrowserChatWorkspace({
   const querySessionId = searchParams.get('sessionId')?.trim() || '';
   const queryTargetUrl = searchParams.get('targetUrl')?.trim() || '';
   const mountedIdentityRef = useRef<{ sessionId: string; targetUrl: string; userId: string } | null>(null);
-  const initialDataLoadStartedRef = useRef(false);
   const sessionHistoryLoadSequenceRef = useRef(0);
+  const initialDataLoadedRef = useRef(false);
+  const [initialDataError, setInitialDataError] = useState('');
   if (!mountedIdentityRef.current && searchParams.get('webpilotEmbed') === '1') {
     mountedIdentityRef.current = { sessionId: querySessionId, targetUrl: queryTargetUrl, userId: queryUserId };
   }
@@ -8679,6 +8673,7 @@ export function BrowserChatWorkspace({
   const initialModelSelection = resolveRuntimeModelSelection(null);
   const sendingRef = useRef(false);
   const loadingSessionRef = useRef<string | null>(null);
+  const sessionActivationRequestRef = useRef<{ sessionId: string; promise: Promise<BrowserChatSession> } | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const embeddedWorkspaceRef = useRef<HTMLDivElement | null>(null);
   const recentSessionListRef = useRef<HTMLOListElement | null>(null);
@@ -9600,39 +9595,46 @@ export function BrowserChatWorkspace({
   }, [browserChatApiUrl, modelConfig, upsertSession]);
 
   const activateSession = useCallback(async (sessionId: string) => {
-    if (loadingSessionRef.current === sessionId) return undefined;
-    const previousSessionId = activeSessionIdRef.current;
-    const activationSequence = ++sessionActivationSequenceRef.current;
-    loadingSessionRef.current = sessionId;
-    activeSessionIdRef.current = sessionId;
-    setSession((current) => current?.id === sessionId ? current : null);
-    if (previousSessionId && previousSessionId !== sessionId) releaseSessionRuntime(previousSessionId);
-    const loadingStartedAt = Date.now();
-    setLoadingSessionId(sessionId);
-    setSessionMinimumLoadingElapsed(false);
-    setMessageViewportReady(false);
-    setMessageViewportGeneration((current) => current + 1);
-    await waitForBrowserPaint();
-    try {
-      const loadedSession = await refreshSession(sessionId, {
-        activateIf: () => (
-          sessionActivationSequenceRef.current === activationSequence
-          && activeSessionIdRef.current === sessionId
-        ),
-      });
-      if (sessionActivationSequenceRef.current === activationSequence && !loadedSession.messages.length) {
-        setMessageViewportReady(true);
+    const pending = sessionActivationRequestRef.current;
+    if (pending?.sessionId === sessionId) return pending.promise;
+    const load = async () => {
+      const previousSessionId = activeSessionIdRef.current;
+      const activationSequence = ++sessionActivationSequenceRef.current;
+      loadingSessionRef.current = sessionId;
+      activeSessionIdRef.current = sessionId;
+      setSession((current) => current?.id === sessionId ? current : null);
+      if (previousSessionId && previousSessionId !== sessionId) releaseSessionRuntime(previousSessionId);
+      const loadingStartedAt = Date.now();
+      setLoadingSessionId(sessionId);
+      setSessionMinimumLoadingElapsed(false);
+      setMessageViewportReady(false);
+      setMessageViewportGeneration((current) => current + 1);
+      try {
+        const loadedSession = await refreshSession(sessionId, {
+          activateIf: () => (
+            sessionActivationSequenceRef.current === activationSequence
+            && activeSessionIdRef.current === sessionId
+          ),
+        });
+        if (sessionActivationSequenceRef.current === activationSequence && !loadedSession.messages.length) {
+          setMessageViewportReady(true);
+        }
+        return loadedSession;
+      } catch (loadError) {
+        if (sessionActivationSequenceRef.current === activationSequence) setMessageViewportReady(true);
+        throw loadError;
+      } finally {
+        await waitForMinimumLoading(loadingStartedAt);
+        if (sessionActivationSequenceRef.current === activationSequence) {
+          setSessionMinimumLoadingElapsed(true);
+        }
       }
-      return loadedSession;
-    } catch (loadError) {
-      if (sessionActivationSequenceRef.current === activationSequence) setMessageViewportReady(true);
-      throw loadError;
-    } finally {
-      await waitForMinimumLoading(loadingStartedAt);
-      if (sessionActivationSequenceRef.current === activationSequence) {
-        setSessionMinimumLoadingElapsed(true);
-      }
-    }
+    };
+    const promise = load().finally(() => {
+      if (sessionActivationRequestRef.current?.promise === promise) sessionActivationRequestRef.current = null;
+    });
+    sessionActivationRequestRef.current = { sessionId, promise };
+    return promise;
   }, [refreshSession, releaseSessionRuntime]);
 
   const applyLoadedSessions = useCallback(async (items: BrowserChatSession[]) => {
@@ -9652,7 +9654,13 @@ export function BrowserChatWorkspace({
         requestedSessionId,
         selectionIntent,
       })) return undefined;
-      if (mountedSessionActivationRef.current === requestedSessionId) return;
+      if (mountedSessionActivationRef.current === requestedSessionId) {
+        // An effect restarted during loading must share the original outcome,
+        // including errors, instead of treating a started request as completed.
+        const pending = sessionActivationRequestRef.current;
+        if (pending?.sessionId === requestedSessionId) await pending.promise;
+        return;
+      }
       mountedSessionActivationRef.current = requestedSessionId;
       if (!mountedIdentityRef.current) {
         window.history.replaceState(null, '', browserChatSessionNavigationHref(window.location.href, requestedSessionId));
@@ -9666,52 +9674,63 @@ export function BrowserChatWorkspace({
     });
   }, [activateSession, requestedSessionId]);
 
-  const loadSessions = useCallback(async () => {
-    const loadingSequence = ++sessionHistoryLoadSequenceRef.current;
+  const loadSessions = useCallback(async (options: { showLoading?: boolean } = {}) => {
+    const loadingSequence = options.showLoading === false ? undefined : ++sessionHistoryLoadSequenceRef.current;
     const loadingStartedAt = Date.now();
-    setLoadingSessionHistory(true);
+    if (loadingSequence !== undefined) setLoadingSessionHistory(true);
     try {
-      const response = await fetch(browserChatApiUrl('/api/browser-chat?limit=10'), { cache: 'no-store' });
-      const data = await readApiJson<{ page?: BrowserChatSessionListPage; sessions?: BrowserChatSession[] }>(response, '加载对话历史失败');
+      const data = await readApiGet<{ page?: BrowserChatSessionListPage; sessions?: BrowserChatSession[] }>(browserChatApiUrl('/api/browser-chat?limit=10'), '加载对话历史失败');
       initializeSessionListPage(data.page || {});
+      if (loadingSequence !== undefined && sessionHistoryLoadSequenceRef.current === loadingSequence) setLoadingSessionHistory(false);
       await applyLoadedSessions(Array.isArray(data.sessions) ? data.sessions as BrowserChatSession[] : []);
-      await waitForBrowserPaint();
     } finally {
-      await waitForMinimumLoading(loadingStartedAt);
-      if (sessionHistoryLoadSequenceRef.current === loadingSequence) setLoadingSessionHistory(false);
+      if (loadingSequence !== undefined) {
+        await waitForMinimumLoading(loadingStartedAt);
+        if (sessionHistoryLoadSequenceRef.current === loadingSequence) setLoadingSessionHistory(false);
+      }
     }
   }, [applyLoadedSessions, browserChatApiUrl, initializeSessionListPage]);
 
-  const loadInitialBrowserChatData = useCallback(async () => {
+  const loadInitialBrowserChatData = useCallback(async (loadingSequence: number) => {
     const data = await readBrowserChatInitialRequest(
       browserChatApiUrl('/api/browser-chat/bootstrap?sessionLimit=10'),
       '加载对话初始化数据失败',
     ) as BrowserChatBootstrapData;
+    if (sessionHistoryLoadSequenceRef.current !== loadingSequence) return;
     initializeSkills(Array.isArray(data.skills) ? data.skills : [], data.skillPage || {});
     initializeSessionListPage(data.sessionPage || {});
     applyModelConfig(data.model?.config);
     applyBrowserRuntimeSettings(Array.isArray(data.runtime) ? data.runtime : []);
+    initialDataLoadedRef.current = true;
+    setLoadingSessionHistory(false);
     await applyLoadedSessions(Array.isArray(data.sessions) ? data.sessions : []);
   }, [applyBrowserRuntimeSettings, applyLoadedSessions, applyModelConfig, browserChatApiUrl, initializeSessionListPage, initializeSkills]);
 
-  useEffect(() => {
-    if (initialDataLoadStartedRef.current) return;
-    initialDataLoadStartedRef.current = true;
+  const initialDataLoaderRef = useRef(loadInitialBrowserChatData);
+  initialDataLoaderRef.current = loadInitialBrowserChatData;
+  const reloadInitialBrowserChatData = useCallback(async () => {
     const loadingSequence = ++sessionHistoryLoadSequenceRef.current;
     const loadingStartedAt = Date.now();
-    setLoadingSessionHistory(true);
-    void (async () => {
-      try {
-        await loadInitialBrowserChatData();
-        await waitForBrowserPaint();
-      } catch (loadError) {
-        setError(loadError instanceof Error ? loadError.message : '加载对话历史失败');
-      } finally {
-        await waitForMinimumLoading(loadingStartedAt);
-        if (sessionHistoryLoadSequenceRef.current === loadingSequence) setLoadingSessionHistory(false);
+    setInitialDataError('');
+    setLoadingSessionHistory(!initialDataLoadedRef.current);
+    try {
+      await initialDataLoaderRef.current(loadingSequence);
+    } catch (loadError) {
+      if (sessionHistoryLoadSequenceRef.current === loadingSequence) {
+        setInitialDataError(loadError instanceof Error ? loadError.message : '加载对话历史失败');
       }
-    })();
-  }, [loadInitialBrowserChatData]);
+    } finally {
+      await waitForMinimumLoading(loadingStartedAt);
+      if (sessionHistoryLoadSequenceRef.current === loadingSequence) setLoadingSessionHistory(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void reloadInitialBrowserChatData();
+    // Fast Refresh reruns effects while retaining refs. Do not keep a permanent
+    // "started" latch that can strand loading after the previous effect exits.
+    return () => { sessionHistoryLoadSequenceRef.current += 1; };
+  }, [reloadInitialBrowserChatData]);
 
   useEffect(() => {
     if (session?.id || !modelConfig?.provider) return;
@@ -9791,8 +9810,10 @@ export function BrowserChatWorkspace({
 
   const resyncRealtimeSessions = useCallback(async () => {
     const activeSessionId = activeSessionIdRef.current;
-    await loadSessions();
-    if (activeSessionId) await refreshSession(activeSessionId, { activate: true });
+    await loadSessions({ showLoading: false });
+    if (activeSessionId) await refreshSession(activeSessionId, {
+      activateIf: () => activeSessionIdRef.current === activeSessionId,
+    });
   }, [loadSessions, refreshSession]);
 
   useBrowserChatRealtime({
@@ -10942,6 +10963,13 @@ export function BrowserChatWorkspace({
   const renderChatPane = () => (
     <div className={`${hasChatContent ? 'browser-chat-chat-pane has-messages' : 'browser-chat-chat-pane'}${embeddedBrowserActive ? ' embedded-chat' : ''}`}>
       {renderChatPaneHeader()}
+
+      {initialDataError ? (
+        <div className="browser-chat-initial-error" role="alert">
+          <span>{t(initialDataError)}</span>
+          <button type="button" className="ui-button" onClick={() => void reloadInitialBrowserChatData()}>{t('重试')}</button>
+        </div>
+      ) : null}
 
       {hasMessages ? (
         <BrowserChatMessageList

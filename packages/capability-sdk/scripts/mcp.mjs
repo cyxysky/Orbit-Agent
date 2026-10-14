@@ -3,6 +3,7 @@ import path from 'node:path';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { parseArgs } from 'node:util';
 import { createLocalProviders, defaultToolGroups, localToolGroups } from './mcp-providers.mjs';
 import { configFilename, configSchema, initConfig, loadConfig, toolConfiguration } from './mcp-config.mjs';
@@ -164,7 +165,10 @@ async function main() {
     ...custom,
     context: () => {
       const context = typeof custom.context === 'function' ? custom.context() : custom.context;
-      return { ...context, configuration: { ...configuration, ...context?.configuration } };
+      // The local workspace owns persistent drafts; a transport restart must
+      // not assign them a new run namespace.
+      return { ...context, runId: context?.runId || `mcp-${createHash('sha256').update(stateDirectory).digest('hex').slice(0, 24)}`,
+        configuration: { ...configuration, ...context?.configuration } };
     },
   };
   const handle = serveStdio(() => createCapabilityMcpServer(options), {

@@ -1,6 +1,7 @@
 'use client';
 
 import { memo } from 'react';
+import '@open-file-viewer/core/style.css';
 import { FileViewer } from '@open-file-viewer/react';
 import {
   archivePlugin,

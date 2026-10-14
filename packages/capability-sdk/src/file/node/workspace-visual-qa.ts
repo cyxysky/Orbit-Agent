@@ -241,9 +241,10 @@ export async function recordOfficeVisualQaProgress(input: {
           .every((pageNumber) => reviews.get(pageNumber)?.status === 'passed');
       const completeDeckReview = draft.visualQaDeckReview?.status === 'passed'
         && missingDesignReviewChecks(draft.design, draft.visualQaDeckReview?.checks).length === 0;
-      draft.visualQaDigest = completeCoverage && completePassingReview && completeDeckReview ? identity.renderedDigest : undefined;
+      const complete = completeCoverage && completePassingReview && completeDeckReview;
+      draft.visualQaDigest = complete ? identity.renderedDigest : undefined;
       draft.workflow = {
-        state: draft.visualQaDigest === identity.renderedDigest ? 'completed' : 'qa-pending',
+        state: complete ? 'completed' : 'qa-pending',
         checkpointAt: new Date().toISOString(),
         renderedDigest: identity.renderedDigest,
       };
@@ -252,6 +253,9 @@ export async function recordOfficeVisualQaProgress(input: {
         ...input.result,
         actual: JSON.stringify({
           ...payload,
+          ...(input.action === 'report' && complete ? {
+            instruction: 'All indexed pages and the required consistency review passed for this rendered artifact. Visual QA is complete.',
+          } : {}),
           visualQa: {
             artifactId: identity.artifactId,
             renderedDigest: identity.renderedDigest,
@@ -263,7 +267,7 @@ export async function recordOfficeVisualQaProgress(input: {
             failedPages: (draft.visualQaReviews || []).filter((review) => review.status === 'failed').map((review) => review.pageNumber),
             deckReviewStatus: draft.visualQaDeckReview?.status || null,
             requiredDesignChecks: officeDesignGuidance(draft).requiredDeckChecks,
-            complete: draft.visualQaDigest === identity.renderedDigest && completeCoverage && completePassingReview && completeDeckReview,
+            complete,
           },
         }),
       };

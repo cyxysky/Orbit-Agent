@@ -28,6 +28,8 @@ type ContextValue<T> = T | ((context: CapabilityRunContext) => T | Promise<T>);
 export type NodeFileCapabilityOptions = {
   workspace: ContextValue<NodeFileWorkspaceHost>;
   visualInputAvailable: boolean;
+  /** Local workspace hosts can read artifacts across calls and tool providers. */
+  artifactReadScope?: 'run' | 'workspace';
   attachmentBindings?: ContextValue<readonly FileAttachmentBinding[] | undefined>;
   sourcePageUrl?: ContextValue<string | undefined>;
   includeVisualVerification?: boolean;
@@ -96,7 +98,8 @@ export function fileOperationToCapabilityResult(
   const payload = record(data);
   const artifactId = typeof payload?.artifactId === 'string' ? payload.artifactId : undefined;
   const downloadUrl = typeof payload?.downloadUrl === 'string' ? payload.downloadUrl : undefined;
-  const mediaType = typeof payload?.mimeType === 'string' ? payload.mimeType : undefined;
+  const mediaType = typeof payload?.mimeType === 'string' ? payload.mimeType
+    : typeof payload?.mediaType === 'string' ? payload.mediaType : undefined;
   const content = [
     ...(artifactId ? [{
       type: 'artifact' as const,
@@ -154,7 +157,9 @@ export async function createNodeFileOperations(
     nodeArtifactRelativePath(root, candidate);
     const absolutePath = await realpath(candidate);
     const relative = nodeArtifactRelativePath(root, absolutePath).relativePath;
-    if (!relative.startsWith(`${sanitizeNodeArtifactFileName(runId, 'adhoc')}/`)) throw new Error('Artifact does not belong to this run.');
+    if (options.artifactReadScope !== 'workspace' && !relative.startsWith(`${sanitizeNodeArtifactFileName(runId, 'adhoc')}/`)) {
+      throw new Error('Artifact does not belong to this run.');
+    }
     return absolutePath;
   };
 

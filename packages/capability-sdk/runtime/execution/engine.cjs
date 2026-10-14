@@ -115,11 +115,21 @@ function createCodeExecutionEngine(options) {
       const append = (target, chunk) => {
         const text = String(chunk);
         const remaining = Math.max(0, input.maxOutputChars - outputLength);
-        const bounded = text.slice(0, remaining);
+        let end = Math.min(text.length, remaining);
+        // The budget uses UTF-16 code units. Never retain half of an astral
+        // character when truncating a decoded stdout/stderr chunk.
+        if (end > 0 && end < text.length && text.charCodeAt(end - 1) >= 0xd800 && text.charCodeAt(end - 1) <= 0xdbff
+          && text.charCodeAt(end) >= 0xdc00 && text.charCodeAt(end) <= 0xdfff) end--;
+        const bounded = text.slice(0, end);
         outputLength += bounded.length;
         if (target === 'stdout') stdout += bounded;
         else stderr += bounded;
-        if (bounded.length < text.length) outputLimitExceeded = true;
+        if (bounded.length < text.length) {
+          outputLimitExceeded = true;
+          // Once the prefix is truncated, later chunks must not fill the unused
+          // surrogate slot with unrelated text.
+          outputLength = input.maxOutputChars;
+        }
       };
       child.stdout.on('data', (chunk) => append('stdout', chunk));
       child.stderr.on('data', (chunk) => append('stderr', chunk));
@@ -156,6 +166,10 @@ function createCodeExecutionEngine(options) {
         APPDATA: process.env.APPDATA, LOCALAPPDATA: process.env.LOCALAPPDATA } : {}),
       ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
       PYTHONNOUSERSITE: '1',
+      // Pipes are decoded as UTF-8; Python must not use the host ANSI code page.
+      PYTHONUTF8: '1',
+      PYTHONIOENCODING: 'utf-8',
+      PYTHONUNBUFFERED: '1',
       // Job environments are deleted immediately; bytecode cannot be reused.
       PYTHONDONTWRITEBYTECODE: '1',
       PYTHONPATH: pythonPackages,

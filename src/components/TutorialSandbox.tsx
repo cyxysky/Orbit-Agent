@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { CheckCircle2, FileSearch, RotateCcw, ShieldCheck } from 'lucide-react';
 import { FormEvent, useRef, useState } from 'react';
-import { useFilePreview } from '@/components/FilePreviewProvider';
+import { useFilePreview } from '@/components/file-preview-context';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 import { AppInput } from '@/components/ui/app-input';
 import { useI18n } from '@/i18n/I18nProvider';

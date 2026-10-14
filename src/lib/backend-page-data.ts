@@ -1,8 +1,10 @@
 import { cookies, headers } from 'next/headers';
 import { SIDEBAR_COLLAPSED_COOKIE_NAME, sidebarCollapsedFromCookie } from '@/lib/sidebar-collapse';
+import { readBackendJson } from './backend-http';
 
 function retryableBackendConnection(error: unknown) {
-  const code = (error as { cause?: { code?: string } } | undefined)?.cause?.code;
+  const failure = error as { code?: string; cause?: { code?: string } } | undefined;
+  const code = failure?.code ?? failure?.cause?.code;
   return code === 'ECONNREFUSED' || code === 'ECONNRESET' || code === 'UND_ERR_SOCKET';
 }
 
@@ -24,17 +26,17 @@ export async function readBackendPageData<T>(pathname: string): Promise<T> {
   let delay = 200;
   for (;;) {
     try {
-      const response = await fetch(new URL(pathname, process.env.WEBPILOT_API_ORIGIN || origin), {
-        headers: forwarded,
-        cache: 'no-store',
-        signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())),
-      });
-      if (!response.ok) throw new Error(`Unable to load page data (${response.status})`);
-      return await response.json() as T;
+      return await readBackendJson<T>(
+        new URL(pathname, process.env.WEBPILOT_API_ORIGIN || origin),
+        Object.fromEntries(forwarded),
+        deadline - Date.now(),
+      );
     } catch (error) {
       // These are read-only initialization requests. Never replay mutations or
       // conceal authorization/application errors while the API recovers.
-      if (!retryableBackendConnection(error) || Date.now() + delay >= deadline) throw error;
+      if (!retryableBackendConnection(error) || Date.now() + delay >= deadline) {
+        throw new Error(`Unable to read backend page data: ${pathname}`, { cause: error });
+      }
       await new Promise(resolve => setTimeout(resolve, delay));
       delay = Math.min(delay * 2, 1000);
     }

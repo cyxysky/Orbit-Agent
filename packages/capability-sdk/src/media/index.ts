@@ -9,12 +9,18 @@ export * from './settings.ts';
 export * from './generation.ts';
 
 export const mediaCapabilityToolNames = Object.freeze({ media: 'media' } as const);
-export type MediaArtifact = { artifactId: string; mediaType?: string; url?: string; downloadUrl?: string; fileName?: string; description?: string };
+export type MediaArtifact = { artifactId: string; mediaType?: string; url?: string; downloadUrl?: string; fileName?: string; description?: string; sourceRef?: string; timestampSeconds?: number };
+export type ExtractFramesInput = { sourceRef: string; intervalSeconds?: number; maxFrames: number; startSeconds?: number; endSeconds?: number };
 export type ComposeVideoInput = { scenes: Array<z.infer<typeof videoSceneSchema>>; audioRef?: string; size?: string; audioOffset?: number; audioTrimStart?: number; audioDuration?: number; audioVolume?: number };
 export interface MediaOperations extends MediaGenerationOperations {
   videoRenderer?: 'remotion' | 'ffmpeg';
+  videoCompositionCapabilities?: {
+    motions: Array<NonNullable<ComposeVideoInput['scenes'][number]['motion']>>;
+    captions: boolean;
+    renderTimeoutMs: number;
+  };
   inspect(sourceRef: string, context: CapabilityExecutionContext): Promise<unknown>;
-  extractFrames?(input: { sourceRef: string; intervalSeconds?: number; maxFrames: number }, context: CapabilityExecutionContext): Promise<MediaArtifact[]>;
+  extractFrames?(input: ExtractFramesInput, context: CapabilityExecutionContext): Promise<MediaArtifact[]>;
   ocr?(input: { sourceRef: string; language?: string }, context: CapabilityExecutionContext): Promise<unknown>;
   transcribe?(input: { sourceRef: string; language?: string; timestamps: boolean }, context: CapabilityExecutionContext): Promise<unknown>;
   composeVideo?(input: ComposeVideoInput, context: CapabilityExecutionContext): Promise<MediaArtifact[]>;
@@ -33,6 +39,8 @@ const parser = z.object({
   language: z.string().trim().min(2).max(40).optional(),
   timestamps: z.boolean().optional(),
   intervalSeconds: z.number().min(0.1).max(3600).optional(),
+  startSeconds: z.number().min(0).max(86_400).optional().describe('extractFrames only: start of the source-video range, in seconds. Defaults to 0.'),
+  endSeconds: z.number().positive().max(86_400).optional().describe('extractFrames only: exclusive end of the source-video range, in seconds. Defaults to source duration.'),
   maxFrames: z.number().int().min(1).max(60).optional(),
   size: z.string().regex(/^\d+x\d+$/).optional(),
   aspectRatio: z.string().regex(/^\d+:\d+$/).optional(),
@@ -49,6 +57,10 @@ const parser = z.object({
 }).strict().superRefine((input, context) => {
   const generation = mediaGenerationActions.some((action) => action === input.action);
   const issue = (path: string, message: string) => context.addIssue({ code: 'custom', path: [path], message });
+  if (input.startSeconds !== undefined || input.endSeconds !== undefined) {
+    if (input.action !== 'extractFrames') issue('startSeconds', 'Time ranges are only supported by extractFrames.');
+    if (input.endSeconds !== undefined && input.endSeconds <= (input.startSeconds || 0)) issue('endSeconds', 'endSeconds must be greater than startSeconds.');
+  }
   if (!generation && !['listModels', 'composeVideo'].includes(input.action) && !input.sourceRef) issue('sourceRef', `${input.action} requires sourceRef.`);
   if (input.action === 'composeVideo') {
     if (!input.scenes?.length) issue('scenes', 'composeVideo requires ordered image scenes with durations in seconds.');
@@ -77,7 +89,7 @@ export const mediaCapabilityManifest = Object.freeze({
 
 export function createMediaTool(operations: MediaOperations, configuration: CapabilityRunContext['configuration']) {
   return defineCapabilityTool<MediaToolInput, unknown>({
-    name: 'media', description: 'List image/video/speech models and local composition capabilities. For complete image-based videos use generateImage then composeVideo: Remotion renders scenes, camera motion, captions and optional narration into an editable MP4 without a video generation model. generateVideo is ONLY for a configured generative video model, not for assembling an image-based movie. Generate speech only when listModels includes a speech model. Scene controls: duration, motion (none/zoomIn/zoomOut/panLeft/panRight), caption, trimStart, muted; audio offset, trim, duration and volume. Also inspect media, extract frames, OCR and transcription.',
+    name: 'media', description: 'List image/video/speech models and local composition capabilities. For image-based videos use generateImage then composeVideo with the renderer and features reported by listModels. Composition returns an MP4 without a video generation model. generateVideo requires a configured generative video model. Generate speech only when listModels includes a speech model. Also inspect media, extract frames, OCR and transcription; unavailable providers return an explicit error.',
     input: mediaToolInput, policy: { concurrency: 'serial', concurrencyGroup: 'media-processing', permissions: mediaCapabilityManifest.permissions },
     async execute(input, context) {
       try {
@@ -87,11 +99,11 @@ export function createMediaTool(operations: MediaOperations, configuration: Capa
         if (input.action === 'listModels') data = {
           models: await operations.listModels?.() || [],
           capabilities: { composeVideo: {
-            available: Boolean(operations.composeVideo), engine: operations.videoRenderer || 'ffmpeg', requiresVideoModel: false,
+            available: Boolean(operations.composeVideo), engine: operations.videoRenderer || 'host', requiresVideoModel: false,
             maxDurationSeconds: 600, maxScenes: 60,
-            renderTimeoutMs: Number(configuration.AGENT_VIDEO_RENDER_TIMEOUT_MS) || 900_000,
+            ...operations.videoCompositionCapabilities,
             sceneKinds: ['image', 'video'],
-            animation: 'Whole-frame camera movement and captions; no character rigging, articulated motion or custom React/SVG scene authoring.',
+            animation: 'Use only the motions and captions advertised by this provider; no character rigging or articulated motion.',
             note: 'Use generateImage followed by composeVideo for image-based movies. Speech requires a listed speech model or a supplied audio artifact; never probe an unconfigured model.',
           } },
         };
@@ -99,7 +111,8 @@ export function createMediaTool(operations: MediaOperations, configuration: Capa
         else if (input.action === 'extractFrames') {
           if (!operations.extractFrames) return unavailable('Frame extraction');
           const limit = normalizeBoundedInteger(configuration.AGENT_MEDIA_MAX_FRAMES, 12, 1, 60);
-          data = await operations.extractFrames({ sourceRef: input.sourceRef!, intervalSeconds: input.intervalSeconds, maxFrames: Math.min(input.maxFrames || limit, limit) }, context);
+          data = await operations.extractFrames({ sourceRef: input.sourceRef!, intervalSeconds: input.intervalSeconds,
+            startSeconds: input.startSeconds, endSeconds: input.endSeconds, maxFrames: Math.min(input.maxFrames || limit, limit) }, context);
         } else if (input.action === 'composeVideo') {
           if (!operations.composeVideo) return unavailable('Video composition');
           data = await operations.composeVideo({ scenes: input.scenes!, audioRef: input.audioRef, size: input.size,
@@ -120,7 +133,13 @@ export function createMediaTool(operations: MediaOperations, configuration: Capa
           };
           data = await generate(request, context);
         }
-        return { ok: true, summary: `Media ${input.action} completed.`, data };
+        const artifacts: MediaArtifact[] = Array.isArray(data)
+          ? data.filter((item): item is MediaArtifact => Boolean(item && typeof item === 'object' && typeof item.artifactId === 'string'))
+          : [];
+        return { ok: true, summary: `Media ${input.action} completed.`, data,
+          ...(artifacts.length ? { content: artifacts.map(artifact => ({ type: 'artifact' as const,
+            artifactId: artifact.artifactId, mediaType: artifact.mediaType, downloadUrl: artifact.downloadUrl })) } : {}),
+        };
       } catch (error) {
         return { ok: false, error: { code: context.abortSignal?.aborted ? 'media-operation-aborted' : 'media-operation-failed', message: error instanceof Error ? error.message : String(error), retryable: false } };
       }

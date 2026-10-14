@@ -46,15 +46,17 @@ export async function createLocalProviders({ projectRoot, stateDirectory, groups
       const { createCodeSandboxCapability } = await import('../dist/execution/code/index.js');
       const { createNodeProcessCodeSandbox } = await import('../dist/execution/code/node.js');
       const { withLocalCodeArtifacts } = await import('./mcp-code-artifacts.mjs');
-      return createCodeSandboxCapability({ createExecutor: () => withLocalCodeArtifacts(
+      return createCodeSandboxCapability({ createExecutor: context => withLocalCodeArtifacts(
         createNodeProcessCodeSandbox({ workspaceDirectory: path.join(stateDirectory, 'code', randomUUID()),
           maxConcurrent: config.tools?.code?.maxConcurrent ?? Number(process.env.AGENT_CODE_SANDBOX_MAX_CONCURRENCY || 2) }),
-        path.join(artifactsRoot, 'code'),
+        artifactsRoot, context.runId,
       ) });
     },
     async file() {
       const { createNodeFileCapability } = await import('../dist/file/node/capability.js');
-      return createNodeFileCapability({ workspace: { artifactsRoot }, visualInputAvailable: config.tools?.file?.visualInputAvailable !== false });
+      return createNodeFileCapability({ workspace: { artifactsRoot }, artifactReadScope: 'workspace',
+        visualInputAvailable: config.tools?.file?.visualInputAvailable !== false,
+        includeVisualVerification: config.tools?.file?.visualInputAvailable !== false });
     },
     async chart() {
       const { createNodeChartCapability } = await import('../dist/chart/node.js');
@@ -66,7 +68,8 @@ export async function createLocalProviders({ projectRoot, stateDirectory, groups
     },
     async media() {
       const { createNodeMediaCapability, createFfmpegMediaOperations } = await import('../dist/media/node.js');
-      return createNodeMediaCapability({ createOperations: () => createFfmpegMediaOperations({
+      const { sanitizeNodeArtifactFileName } = await import('../dist/file/node/artifacts.js');
+      return createNodeMediaCapability({ createOperations: context => createFfmpegMediaOperations({
         timeoutMs: config.tools?.media?.timeoutMs ?? Number(process.env.AGENT_MEDIA_TIMEOUT_MS || 120000),
         async resolveSource(sourceRef) {
           if (/^[a-z][a-z\d+.-]*:\/\//i.test(sourceRef) && !sourceRef.startsWith('file://')) {
@@ -79,11 +82,14 @@ export async function createLocalProviders({ projectRoot, stateDirectory, groups
         },
         async publishArtifact(filename) {
           const artifactId = randomUUID();
-          const directory = path.join(artifactsRoot, 'media', artifactId);
+          const namespace = path.posix.join(sanitizeNodeArtifactFileName(context.runId, 'adhoc'), 'media');
+          const directory = path.join(artifactsRoot, namespace, artifactId);
           await mkdir(directory, { recursive: true });
           const target = path.join(directory, path.basename(filename));
           await copyFile(filename, target);
-          return { artifactId, fileName: path.basename(target), mediaType: 'image/jpeg',
+          const { artifactContentType } = await import('../dist/file/formats.js');
+          return { artifactId: path.posix.join(namespace, artifactId, path.basename(target)),
+            fileName: path.basename(target), mediaType: artifactContentType(target),
             url: pathToFileURL(target).href, downloadUrl: pathToFileURL(target).href };
         },
       }) });

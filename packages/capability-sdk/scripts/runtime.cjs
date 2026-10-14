@@ -172,7 +172,7 @@ async function installOffice(cache) {
     if (process.platform === 'linux') {
       const version = await run(system.unoPython, ['-c', 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")'], { capture: true });
       const uv = findFile(path.join(cache, `uv-${spec.uvVersion}`), 'uv');
-      await run(uv, ['python', 'install', version], { env: pythonEnvironment(cache) });
+      await run(uv, ['python', 'install', '--no-bin', version], { env: pythonEnvironment(cache) });
       const python = await run(uv, ['python', 'find', '--managed-python', version], { env: pythonEnvironment(cache), capture: true });
       for (const module of ['uno', 'unohelper', 'pyuno']) {
         const filename = await run(system.unoPython, ['-c', `import ${module}; print(${module}.__file__)`], { env: unoEnvironment(system.libreoffice, system.unoPython), capture: true });
@@ -201,7 +201,7 @@ async function privileged(command, args) {
 }
 
 function pythonEnvironment(cache) {
-  return { ...process.env, UV_PYTHON_INSTALL_DIR: path.join(cache, 'python'), UV_PYTHON_BIN_DIR: path.join(cache, 'python-bin'), UV_CACHE_DIR: path.join(cache, 'uv-cache'), UV_NO_PROGRESS: '1' };
+  return { ...process.env, UV_PYTHON_INSTALL_DIR: path.join(cache, 'python'), UV_CACHE_DIR: path.join(cache, 'uv-cache'), UV_NO_PROGRESS: '1' };
 }
 
 async function installPython(cache, plan) {
@@ -219,10 +219,25 @@ async function installPython(cache, plan) {
   }
   if (!uv) throw new Error('The verified uv archive did not contain the expected executable.');
   const env = pythonEnvironment(cache);
-  await run(uv, ['python', 'install', spec.pythonVersion], { env });
+  // All consumers use explicit paths, so Python needs no bin launcher or Windows registry entry.
+  await run(uv, ['python', 'install', '--no-bin', ...(process.platform === 'win32' ? ['--no-registry'] : []), spec.pythonVersion], { env });
   const venv = path.join(cache, 'venv');
   const python = path.join(venv, process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python');
-  if (!fs.existsSync(python)) await run(uv, ['venv', '--seed', '--managed-python', '--python', spec.pythonVersion, venv], { env });
+  const probe = ['-c', [
+    'import os, sys',
+    'normalize = lambda value: os.path.normcase(os.path.realpath(value))',
+    'expected = tuple(map(int, sys.argv[1].split(".")))',
+    'assert sys.version_info[:len(expected)] == expected',
+    'assert normalize(sys.prefix) == normalize(sys.argv[2])',
+    'assert normalize(sys.prefix) != normalize(sys.base_prefix)',
+    'assert os.path.commonpath([normalize(sys.base_prefix), normalize(sys.argv[3])]) == normalize(sys.argv[3])',
+  ].join('\n'), spec.pythonVersion, venv, env.UV_PYTHON_INSTALL_DIR];
+  if (!await works(python, probe, { env })) {
+    log('Creating or repairing the project-local Python virtual environment.');
+    // This directory belongs to the SDK; clear broken and incomplete environments before recreating it.
+    await run(uv, ['venv', '--clear', '--force', '--seed', '--managed-python', '--python', spec.pythonVersion, venv], { env });
+    await run(python, probe, { env, capture: true });
+  }
   await run(uv, ['pip', 'install', '--python', python, '--index-url', 'https://download.pytorch.org/whl/cpu', 'torch>=2.2,<3'], { env });
   await run(uv, ['pip', 'install', '--python', python, '-r', requirements], { env });
   return python;

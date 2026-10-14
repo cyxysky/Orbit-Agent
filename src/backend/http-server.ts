@@ -33,7 +33,6 @@ export async function startBackend({ codeSandbox }: { codeSandbox?: CodeSandboxL
           }]);
           await store.applyRuntimeEnv();
         }
-        await codeSandbox.sync(process.env);
       } catch (error) {
         // A misconfigured sandbox must not prevent opening Settings to repair it.
         console.error('[code-sandbox] Runner startup failed', error);
@@ -43,6 +42,10 @@ export async function startBackend({ codeSandbox }: { codeSandbox?: CodeSandboxL
     return operation;
   };
   await refreshRuntime();
+  const syncCodeSandbox = () => codeSandbox?.sync(process.env).catch(error => {
+    console.error('[code-sandbox] Runner synchronization failed', error);
+  });
+  await syncCodeSandbox();
   const execution = process.env.WEBPILOT_SERVER_ROLE === 'execution';
   const supervisor = execution ? undefined : createExecutionSupervisor();
   const route = createRouter(routes);
@@ -63,10 +66,16 @@ export async function startBackend({ codeSandbox }: { codeSandbox?: CodeSandboxL
       // Settings are persisted in the shared database; each process refreshes
       // its own environment before serving the next request.
       await refreshRuntime();
+      // Runner health/recovery must not hold up unrelated page/API requests.
+      // Its manager coalesces concurrent checks and monitors recovery itself.
+      void syncCodeSandbox();
       if (supervisor && executionRequest(pathname, incoming.method)) { await supervisor.proxy(incoming, outgoing, pathname); return; }
       const request = webRequest(incoming, outgoing);
       const response = await route(request, pathname);
-      if (pathname === '/api/settings/env' && incoming.method === 'POST' && response.ok) await refreshRuntime();
+      if (pathname === '/api/settings/env' && incoming.method === 'POST' && response.ok) {
+        await refreshRuntime();
+        void syncCodeSandbox();
+      }
       await sendWebResponse(response, outgoing, request.method === 'HEAD');
     })().catch(error => {
       if (outgoing.destroyed) return;

@@ -348,7 +348,7 @@ export async function syncDocumentAssets(
       : (await visibleFiles(directory)).map((entry) => ({ name: entry.name, path: path.join(directory, entry.name) }));
     for (const entry of files) {
       sources.push({ name: entry.name, path: entry.path, origin: origin === 'downloads' ? 'download' : 'generated',
-        ...(origin === 'media' ? { ref: path.relative(currentNodeFileWorkspaceHost().artifactsRoot, entry.path).split(path.sep).join('/') } : {}) });
+        ref: path.relative(currentNodeFileWorkspaceHost().artifactsRoot, entry.path).split(path.sep).join('/') });
     }
   }
   const claimed = new Set<string>();
@@ -1768,7 +1768,7 @@ async function renderDraft(input: {
         qualityGate: officeQualityGate(
           candidate.validation,
           visualVerification,
-          'The selected model does not accept image input; this result is structurally verified only.',
+          'No visual evidence was requested or produced for this operation; this result is structurally verified only.',
         ),
         visualVerification: visualVerification ? {
           imageCount: visualVerification.imagePaths.length,
@@ -1782,7 +1782,7 @@ async function renderDraft(input: {
           requiredCondition: 'visualQaDigest === renderedDigest, every indexed page has an evidence-backed passed review with all visual checks, and the complete artifact has a passed cross-page consistency review',
         } : {
           status: 'not-performed',
-          reason: 'The selected model does not accept image input or the generated format has no page renderer; no visual conclusion was made.',
+          reason: 'No visual evidence was requested or produced for this operation; no visual conclusion was made.',
         },
       }),
       referenceImagePaths: visualVerification?.imagePaths.length ? visualVerification.imagePaths : undefined,

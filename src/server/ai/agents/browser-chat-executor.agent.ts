@@ -1,7 +1,7 @@
 import { RuntimeExecutionJournal } from './runtime-execution-journal';
 import { raceWithAbort } from '@cjfclonedeep/capability-sdk';
 import { prepareRuntimeContext } from './runtime-context-runtime';
-import { repeatedBrowserExecutionEvidence } from './runtime-execution-progress';
+import { repeatedAssistantNarration, repeatedBrowserExecutionEvidence } from './runtime-execution-progress';
 import { completionReviewInstructions, completionReviewEvidence, completionReviewArtifacts, completionReviewImages, CompletionReviewUnavailableError, parseCompletionReview } from './runtime-completion-review';
 import { browserInteractionSchema, browserInteractionInstructions, parseBrowserInteractionInput, executeBrowserInteraction } from './runtime-browser-interaction';
 import { normalizeBrowserChatInteractionMode, type BrowserChatInteractionMode } from '@/lib/browser-chat-interaction-mode';
@@ -2657,8 +2657,17 @@ async function executeRuntimeStep(input: {
         boundaryMemoryCommitted = true;
       }
       if (appendedMessages.length) messageImagePaths = [...messageImagePaths, ...appendedImagePaths];
+      const narration = repeatedAssistantNarration(candidates);
+      if (narration) {
+        appendedMessages.push({ role: 'user', content: '[Execution progress]\nReference evidence, not a new user request.\n'
+          + JSON.stringify({ kind: 'repeated-assistant-narration', ...narration }) });
+        await onAttemptDebug?.({ phase: 'ai:runtime:repeated-narration', stepIndex,
+          message: '近期进度说明反复复述相同内容，已提醒模型从最新执行结果继续。',
+          details: { similarMessageCount: narration.similarMessageCount, terminal: false } });
+      }
       await checkpointContext([...source, ...appendedMessages]);
-      requestSystemPrompt = loopFinalization ? `${baseSystemPrompt}\n\n${loopFinalizationInstruction}` : baseSystemPrompt;
+      requestSystemPrompt = `${baseSystemPrompt}\n\nBetween tool calls, keep progress updates incremental: describe new evidence or the next action briefly. Reuse established findings silently instead of repeating the task introduction, prior self-assessment or an unchanged diagnosis. A tool that edits a file does not make an older browser screenshot current; inspect the updated output before evaluating it.`;
+      if (loopFinalization) requestSystemPrompt += `\n\n${loopFinalizationInstruction}`;
       const savedPinnedRef = parseContextSummary(continuationSummaryText)?.pinnedUserRef;
       // A prior handoff can belong to an earlier user turn. Prefer the latest
       // exact user message retained in the active window over its old pin.
@@ -2770,6 +2779,11 @@ async function executeRuntimeStep(input: {
         phase: 'ai:runtime:repetition-projection', stepIndex,
         message: `已从本次模型输入折叠 ${assembled.manifest.suppressedRepeatedNoActionExchanges} 条连续重复且无实际动作的浏览器交换；数据库原始证据未删改。`,
         details: { suppressedExchanges: assembled.manifest.suppressedRepeatedNoActionExchanges },
+      });
+      if (assembled.manifest.omittedHistoricalReasoningParts) await onAttemptDebug?.({
+        phase: 'ai:runtime:reasoning-history', stepIndex,
+        message: '已从模型输入移除已结束轮次的旧推理；当前轮次推理与原始执行记录保留。',
+        details: { omittedParts: assembled.manifest.omittedHistoricalReasoningParts },
       });
       requestSystemPrompt = assembled.system;
       const messagesToSend = assembled.messages;

@@ -3,6 +3,7 @@ import { mkdir, open, readFile, realpath, stat, writeFile } from 'node:fs/promis
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { artifactContentType } from '../dist/file/formats.js';
+import { sanitizeNodeArtifactFileName } from '../dist/file/node/artifacts.js';
 import { decodeFile, relativeFile, MAX_TOTAL_BYTES } from '../runtime/execution/files.cjs';
 
 const MAX_FILES = 16;
@@ -10,7 +11,8 @@ const MAX_FILE_BYTES = 10 * 1024 * 1024;
 
 // The local executor deletes its temporary jobs. Persist its file transport before
 // returning MCP results, and support reading/remounting artifacts across calls.
-export function withLocalCodeArtifacts(executor, root) {
+export function withLocalCodeArtifacts(executor, root, runId) {
+  const namespace = path.posix.join(sanitizeNodeArtifactFileName(runId, 'adhoc'), 'generated');
   async function resolve(artifactId) {
     relativeFile(artifactId);
     const file = await realpath(path.join(root, artifactId));
@@ -52,7 +54,7 @@ export function withLocalCodeArtifacts(executor, root) {
       const artifacts = [];
       for (const { file, bytes } of decoded) {
         const filename = path.posix.basename(file.path).replace(/[<>:"|?*\x00-\x1f]/g, '_');
-        const artifactId = `${randomUUID()}/${filename}`;
+        const artifactId = `${namespace}/${randomUUID()}/${filename}`;
         const target = path.join(root, artifactId);
         await mkdir(path.dirname(target), { recursive: true });
         await writeFile(target, bytes, { flag: 'wx', signal: context.abortSignal });
@@ -64,6 +66,9 @@ export function withLocalCodeArtifacts(executor, root) {
       context.abortSignal?.throwIfAborted();
       const { file, size } = await resolve(input.artifactId);
       const artifact = describe(input.artifactId, size);
+      if (artifact.mediaType.startsWith('image/') && input.encoding === undefined && input.offset === undefined && input.limit === undefined) {
+        return { ...artifact, encoding: 'base64', content: '', offset: 0, totalBytes: size, imagePath: file };
+      }
       const encoding = input.encoding || (/^(text\/|application\/(json|xml))/.test(artifact.mediaType) ? 'utf8' : 'base64');
       const offset = Math.min(input.offset || 0, size);
       const length = Math.min(input.limit || 8192, size - offset);

@@ -104,6 +104,21 @@ export function latestBrowserChatUserMessageIndex(messages: ModelMessage[]) {
   return messages.findLastIndex(isOriginalBrowserChatUserMessage);
 }
 
+/** Old private reasoning is neither a user instruction nor execution evidence.
+ * Keep the active turn's reasoning intact for provider tool-continuation
+ * protocols. This projection never rewrites the archived messages. */
+export function projectCompletedTurnReasoning(messages: ModelMessage[]) {
+  const currentTurn = latestBrowserChatUserMessageIndex(messages);
+  let omittedParts = 0;
+  const projected = messages.flatMap((message, index) => {
+    if (index >= currentTurn || message.role !== 'assistant' || !Array.isArray(message.content)) return [message];
+    const content = message.content.filter(part => part.type !== 'reasoning');
+    omittedParts += message.content.length - content.length;
+    return content.length ? [{ ...message, content }] : [];
+  });
+  return { messages: projected, omittedParts };
+}
+
 function currentTurnContains(messages: ModelMessage[], role: 'user' | 'assistant', text: string) {
   const start = latestBrowserChatUserMessageIndex(messages);
   return messages.slice(Math.max(0, start)).some((message) => message.role === role && modelMessageText(message) === text.trim());

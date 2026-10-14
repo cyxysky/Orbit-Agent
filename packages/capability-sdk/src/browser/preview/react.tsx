@@ -1,6 +1,6 @@
 'use client';
 
-import { type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent, useCallback, useEffect, useLayoutEffect, useId, useRef, useState } from 'react';
+import { type ClipboardEvent as ReactClipboardEvent, type CompositionEvent as ReactCompositionEvent, type CSSProperties, type FormEvent as ReactFormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent, useCallback, useEffect, useLayoutEffect, useId, useRef, useState } from 'react';
 import { ArrowLeft, ArrowRight, Check, Download, Globe, Loader2, Plus, RotateCw, X } from 'lucide-react';
 import { FloatingWindow } from '../../ui/floating-window.tsx';
 import { browserPreviewStyles } from './styles.ts';
@@ -149,6 +149,8 @@ export function BrowserPreviewWindow({ onClose, client, translate: t = identity 
   const previewImageRef = useRef<HTMLImageElement | null>(null);
   const previewVideoRef = useRef<HTMLVideoElement | null>(null);
   const previewStageRef = useRef<HTMLDivElement | null>(null);
+  const previewKeyboardRef = useRef<HTMLTextAreaElement | null>(null);
+  const previewComposingRef = useRef(false);
   const addressInputRef = useRef<HTMLInputElement | null>(null);
   const [addressDraft, setAddressDraft] = useState<string | null>(null);
   const previewFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -879,6 +881,7 @@ export function BrowserPreviewWindow({ onClose, client, translate: t = identity 
   }, [frame, videoDisplayReady]);
 
   const beginPreviewPointer = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.target !== event.currentTarget) return;
     if (event.button !== 0 && event.button !== 1) return;
     const point = relativePoint(event.clientX, event.clientY, event.currentTarget);
     if (!point) return;
@@ -956,6 +959,7 @@ export function BrowserPreviewWindow({ onClose, client, translate: t = identity 
   }, []);
 
   const openPreviewContextMenu = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    if (event.target !== event.currentTarget) return;
     const point = relativePoint(event.clientX, event.clientY, event.currentTarget);
     if (!point) return;
     event.preventDefault();
@@ -984,9 +988,13 @@ export function BrowserPreviewWindow({ onClose, client, translate: t = identity 
   }, [relativePoint, sendInput]);
 
   const pressPreviewKey = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (event.nativeEvent.isComposing || event.key === 'Process') return;
+    if (event.target !== event.currentTarget && event.target !== previewKeyboardRef.current) return;
+    event.stopPropagation();
+    if (previewComposingRef.current || event.nativeEvent.isComposing || event.keyCode === 229
+      || ['Process', 'Dead', 'Unidentified'].includes(event.key)) return;
     if (['Control', 'Meta', 'Alt', 'Shift'].includes(event.key)) return;
-    const command = event.ctrlKey || event.metaKey;
+    const altGraph = event.getModifierState('AltGraph');
+    const command = !altGraph && (event.ctrlKey || event.metaKey);
     const letter = event.key.toLowerCase();
     // Let the local browser dispatch paste, then relay its clipboard text once.
     if ((command && letter === 'v') || (event.shiftKey && event.key === 'Insert')) {
@@ -1017,7 +1025,10 @@ export function BrowserPreviewWindow({ onClose, client, translate: t = identity 
       setNativeControl(null);
       return;
     }
-    const modifierShortcut = event.ctrlKey || event.metaKey || event.altKey;
+    const modifierShortcut = !altGraph && (event.ctrlKey || event.metaKey || event.altKey);
+    // Native input receives printable characters, dead keys and IME commits.
+    // Non-text keys and shortcuts still use the remote keyboard directly.
+    if (!modifierShortcut && Array.from(event.key).length === 1) return;
     let key = event.key;
     if (modifierShortcut) {
       const parts = [
@@ -1038,7 +1049,42 @@ export function BrowserPreviewWindow({ onClose, client, translate: t = identity 
     sendInput({ kind: 'key', key });
   }, [browserControl, nativeControl, sendInput]);
 
+  const inputPreviewText = useCallback((event: ReactFormEvent<HTMLTextAreaElement>) => {
+    event.stopPropagation();
+    if (previewComposingRef.current || (event.nativeEvent as InputEvent).isComposing) return;
+    const text = event.currentTarget.value;
+    event.currentTarget.value = '';
+    if (!text) return;
+    // Preserve keyboard events for ordinary typing; composed and Unicode text
+    // use the text channel because they need not correspond to a physical key.
+    if (text.length === 1 && text >= ' ' && text <= '~') {
+      sendInput({ kind: 'key', key: text === ' ' ? 'Space' : text });
+    } else {
+      sendInput({ kind: 'text', text });
+    }
+  }, [sendInput]);
+
+  const startPreviewComposition = useCallback((event: ReactCompositionEvent<HTMLTextAreaElement>) => {
+    event.stopPropagation();
+    previewComposingRef.current = true;
+  }, []);
+
+  const endPreviewComposition = useCallback((event: ReactCompositionEvent<HTMLTextAreaElement>) => {
+    event.stopPropagation();
+    const input = event.currentTarget;
+    const committedText = event.data;
+    // Browsers can deliver the final input before or after compositionend in
+    // the same task. Drain both events before clearing and forwarding once.
+    queueMicrotask(() => {
+      const text = input.value || committedText;
+      input.value = '';
+      previewComposingRef.current = false;
+      if (text) sendInput({ kind: 'text', text });
+    });
+  }, [sendInput]);
+
   const pastePreviewText = useCallback((event: ReactClipboardEvent<HTMLDivElement>) => {
+    if (event.target !== event.currentTarget && event.target !== previewKeyboardRef.current) return;
     event.stopPropagation();
     const text = event.clipboardData.getData('text');
     if (!text) return;
@@ -1196,6 +1242,9 @@ export function BrowserPreviewWindow({ onClose, client, translate: t = identity 
             aria-label={t('可操作的浏览器实时画面')}
             className={hasPreviewVisual ? 'cap-browser-preview-stage has-frame' : 'cap-browser-preview-stage'}
             onContextMenu={openPreviewContextMenu}
+            onFocus={event => {
+              if (event.target === event.currentTarget) previewKeyboardRef.current?.focus({ preventScroll: true });
+            }}
             onKeyDown={pressPreviewKey}
             onPaste={pastePreviewText}
             onPointerCancel={cancelPreviewPointer}
@@ -1207,6 +1256,18 @@ export function BrowserPreviewWindow({ onClose, client, translate: t = identity 
             role="application"
             tabIndex={0}
           >
+            <textarea
+              aria-label={t('浏览器键盘输入')}
+              autoCapitalize="off"
+              autoComplete="off"
+              className="cap-browser-preview-keyboard-input"
+              onCompositionEnd={endPreviewComposition}
+              onCompositionStart={startPreviewComposition}
+              onInput={inputPreviewText}
+              ref={previewKeyboardRef}
+              spellCheck={false}
+              tabIndex={-1}
+            />
             {frame?.imageUrl && !videoDisplayReady ? (
               <img
                 alt={t('浏览器实时画面')}

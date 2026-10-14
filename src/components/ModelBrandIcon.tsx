@@ -1,87 +1,43 @@
 'use client';
 
 import { Bot } from 'lucide-react';
-import Image, { type StaticImageData } from 'next/image';
+import Image from 'next/image';
+import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 import type { ModelProvider } from '@/server/ai/schemas/runtime.schema';
 import { useI18n } from '@/i18n/I18nProvider';
 
-import anthropicDark from '@lobehub/icons-static-png/dark/claude-color.png';
-import anthropicLight from '@lobehub/icons-static-png/light/claude-color.png';
-import azureDark from '@lobehub/icons-static-png/dark/azureai-color.png';
-import azureLight from '@lobehub/icons-static-png/light/azureai-color.png';
-import bedrockDark from '@lobehub/icons-static-png/dark/bedrock-color.png';
-import bedrockLight from '@lobehub/icons-static-png/light/bedrock-color.png';
-import cerebrasDark from '@lobehub/icons-static-png/dark/cerebras-color.png';
-import cerebrasLight from '@lobehub/icons-static-png/light/cerebras-color.png';
-import cohereDark from '@lobehub/icons-static-png/dark/cohere-color.png';
-import cohereLight from '@lobehub/icons-static-png/light/cohere-color.png';
-import deepseekDark from '@lobehub/icons-static-png/dark/deepseek-color.png';
-import deepseekLight from '@lobehub/icons-static-png/light/deepseek-color.png';
-import fireworksDark from '@lobehub/icons-static-png/dark/fireworks-color.png';
-import fireworksLight from '@lobehub/icons-static-png/light/fireworks-color.png';
-import geminiDark from '@lobehub/icons-static-png/dark/gemini-color.png';
-import geminiLight from '@lobehub/icons-static-png/light/gemini-color.png';
-import grokDark from '@lobehub/icons-static-png/dark/grok.png';
-import grokLight from '@lobehub/icons-static-png/light/grok.png';
-import groqDark from '@lobehub/icons-static-png/dark/groq.png';
-import groqLight from '@lobehub/icons-static-png/light/groq.png';
-import huggingFaceDark from '@lobehub/icons-static-png/dark/huggingface-color.png';
-import huggingFaceLight from '@lobehub/icons-static-png/light/huggingface-color.png';
-import lmStudioDark from '@lobehub/icons-static-png/dark/lmstudio.png';
-import lmStudioLight from '@lobehub/icons-static-png/light/lmstudio.png';
-import metaDark from '@lobehub/icons-static-png/dark/meta-color.png';
-import metaLight from '@lobehub/icons-static-png/light/meta-color.png';
-import minimaxDark from '@lobehub/icons-static-png/dark/minimax-color.png';
-import minimaxLight from '@lobehub/icons-static-png/light/minimax-color.png';
-import mistralDark from '@lobehub/icons-static-png/dark/mistral-color.png';
-import mistralLight from '@lobehub/icons-static-png/light/mistral-color.png';
-import ollamaDark from '@lobehub/icons-static-png/dark/ollama.png';
-import ollamaLight from '@lobehub/icons-static-png/light/ollama.png';
-import openaiDark from '@lobehub/icons-static-png/dark/openai.png';
-import openaiLight from '@lobehub/icons-static-png/light/openai.png';
-import openrouterDark from '@lobehub/icons-static-png/dark/openrouter.png';
-import openrouterLight from '@lobehub/icons-static-png/light/openrouter.png';
-import perplexityDark from '@lobehub/icons-static-png/dark/perplexity-color.png';
-import perplexityLight from '@lobehub/icons-static-png/light/perplexity-color.png';
-import qwenDark from '@lobehub/icons-static-png/dark/qwen-color.png';
-import qwenLight from '@lobehub/icons-static-png/light/qwen-color.png';
-import togetherDark from '@lobehub/icons-static-png/dark/together-color.png';
-import togetherLight from '@lobehub/icons-static-png/light/together-color.png';
-import vercelDark from '@lobehub/icons-static-png/dark/vercel.png';
-import vercelLight from '@lobehub/icons-static-png/light/vercel.png';
-import zhipuDark from '@lobehub/icons-static-png/dark/zhipu-color.png';
-import zhipuLight from '@lobehub/icons-static-png/light/zhipu-color.png';
-
+// Icons are static public assets; compiling the model selector should not
+// evaluate every provider PNG through the compiler image loader.
 type BrandIcon = {
-  dark: StaticImageData;
+  dark: string;
   label: string;
-  light: StaticImageData;
+  light: string;
 };
 
 const brands = {
-  anthropic: { dark: anthropicDark, label: 'Anthropic Claude', light: anthropicLight },
-  azure: { dark: azureDark, label: 'Azure AI', light: azureLight },
-  bedrock: { dark: bedrockDark, label: 'Amazon Bedrock', light: bedrockLight },
-  cerebras: { dark: cerebrasDark, label: 'Cerebras', light: cerebrasLight },
-  cohere: { dark: cohereDark, label: 'Cohere', light: cohereLight },
-  deepseek: { dark: deepseekDark, label: 'DeepSeek', light: deepseekLight },
-  fireworks: { dark: fireworksDark, label: 'Fireworks AI', light: fireworksLight },
-  gemini: { dark: geminiDark, label: 'Google Gemini', light: geminiLight },
-  grok: { dark: grokDark, label: 'xAI Grok', light: grokLight },
-  groq: { dark: groqDark, label: 'Groq', light: groqLight },
-  huggingface: { dark: huggingFaceDark, label: 'Hugging Face', light: huggingFaceLight },
-  lmstudio: { dark: lmStudioDark, label: 'LM Studio', light: lmStudioLight },
-  meta: { dark: metaDark, label: 'Meta Llama', light: metaLight },
-  minimax: { dark: minimaxDark, label: 'MiniMax', light: minimaxLight },
-  mistral: { dark: mistralDark, label: 'Mistral AI', light: mistralLight },
-  ollama: { dark: ollamaDark, label: 'Ollama', light: ollamaLight },
-  openai: { dark: openaiDark, label: 'OpenAI', light: openaiLight },
-  openrouter: { dark: openrouterDark, label: 'OpenRouter', light: openrouterLight },
-  perplexity: { dark: perplexityDark, label: 'Perplexity', light: perplexityLight },
-  qwen: { dark: qwenDark, label: 'Alibaba Qwen', light: qwenLight },
-  together: { dark: togetherDark, label: 'Together AI', light: togetherLight },
-  vercel: { dark: vercelDark, label: 'Vercel', light: vercelLight },
-  zhipu: { dark: zhipuDark, label: 'Zhipu GLM', light: zhipuLight },
+  anthropic: { dark: withWebPilotBasePath('/model-brands/dark/claude-color.png'), label: 'Anthropic Claude', light: withWebPilotBasePath('/model-brands/light/claude-color.png') },
+  azure: { dark: withWebPilotBasePath('/model-brands/dark/azureai-color.png'), label: 'Azure AI', light: withWebPilotBasePath('/model-brands/light/azureai-color.png') },
+  bedrock: { dark: withWebPilotBasePath('/model-brands/dark/bedrock-color.png'), label: 'Amazon Bedrock', light: withWebPilotBasePath('/model-brands/light/bedrock-color.png') },
+  cerebras: { dark: withWebPilotBasePath('/model-brands/dark/cerebras-color.png'), label: 'Cerebras', light: withWebPilotBasePath('/model-brands/light/cerebras-color.png') },
+  cohere: { dark: withWebPilotBasePath('/model-brands/dark/cohere-color.png'), label: 'Cohere', light: withWebPilotBasePath('/model-brands/light/cohere-color.png') },
+  deepseek: { dark: withWebPilotBasePath('/model-brands/dark/deepseek-color.png'), label: 'DeepSeek', light: withWebPilotBasePath('/model-brands/light/deepseek-color.png') },
+  fireworks: { dark: withWebPilotBasePath('/model-brands/dark/fireworks-color.png'), label: 'Fireworks AI', light: withWebPilotBasePath('/model-brands/light/fireworks-color.png') },
+  gemini: { dark: withWebPilotBasePath('/model-brands/dark/gemini-color.png'), label: 'Google Gemini', light: withWebPilotBasePath('/model-brands/light/gemini-color.png') },
+  grok: { dark: withWebPilotBasePath('/model-brands/dark/grok.png'), label: 'xAI Grok', light: withWebPilotBasePath('/model-brands/light/grok.png') },
+  groq: { dark: withWebPilotBasePath('/model-brands/dark/groq.png'), label: 'Groq', light: withWebPilotBasePath('/model-brands/light/groq.png') },
+  huggingface: { dark: withWebPilotBasePath('/model-brands/dark/huggingface-color.png'), label: 'Hugging Face', light: withWebPilotBasePath('/model-brands/light/huggingface-color.png') },
+  lmstudio: { dark: withWebPilotBasePath('/model-brands/dark/lmstudio.png'), label: 'LM Studio', light: withWebPilotBasePath('/model-brands/light/lmstudio.png') },
+  meta: { dark: withWebPilotBasePath('/model-brands/dark/meta-color.png'), label: 'Meta Llama', light: withWebPilotBasePath('/model-brands/light/meta-color.png') },
+  minimax: { dark: withWebPilotBasePath('/model-brands/dark/minimax-color.png'), label: 'MiniMax', light: withWebPilotBasePath('/model-brands/light/minimax-color.png') },
+  mistral: { dark: withWebPilotBasePath('/model-brands/dark/mistral-color.png'), label: 'Mistral AI', light: withWebPilotBasePath('/model-brands/light/mistral-color.png') },
+  ollama: { dark: withWebPilotBasePath('/model-brands/dark/ollama.png'), label: 'Ollama', light: withWebPilotBasePath('/model-brands/light/ollama.png') },
+  openai: { dark: withWebPilotBasePath('/model-brands/dark/openai.png'), label: 'OpenAI', light: withWebPilotBasePath('/model-brands/light/openai.png') },
+  openrouter: { dark: withWebPilotBasePath('/model-brands/dark/openrouter.png'), label: 'OpenRouter', light: withWebPilotBasePath('/model-brands/light/openrouter.png') },
+  perplexity: { dark: withWebPilotBasePath('/model-brands/dark/perplexity-color.png'), label: 'Perplexity', light: withWebPilotBasePath('/model-brands/light/perplexity-color.png') },
+  qwen: { dark: withWebPilotBasePath('/model-brands/dark/qwen-color.png'), label: 'Alibaba Qwen', light: withWebPilotBasePath('/model-brands/light/qwen-color.png') },
+  together: { dark: withWebPilotBasePath('/model-brands/dark/together-color.png'), label: 'Together AI', light: withWebPilotBasePath('/model-brands/light/together-color.png') },
+  vercel: { dark: withWebPilotBasePath('/model-brands/dark/vercel.png'), label: 'Vercel', light: withWebPilotBasePath('/model-brands/light/vercel.png') },
+  zhipu: { dark: withWebPilotBasePath('/model-brands/dark/zhipu-color.png'), label: 'Zhipu GLM', light: withWebPilotBasePath('/model-brands/light/zhipu-color.png') },
 } satisfies Record<string, BrandIcon>;
 
 type BrandName = keyof typeof brands;

@@ -14,7 +14,10 @@ export type { TerminalShell } from './shell-integration.ts';
 
 const plainOutput = (value: string) => {
   const output = splitTerminalOutput(value).flatMap(part => 'output' in part ? [part.output] : []).join('');
-  return stripVTControlCharacters(output.replace(new RegExp('\\x1b\\[[0-?]*[ -/]*[@-~]', 'g'), ''));
+  // Node's VT stripper does not consume ST-terminated OSC strings in all
+  // runtimes. Remove complete ECMA-48 control strings before stripping CSI.
+  const text = output.replace(/(?:\x1b\]|\x9d)[\s\S]*?(?:\x07|\x1b\\|\x9c)|(?:\x1b[P^_X]|[\x90\x98\x9e\x9f])[\s\S]*?(?:\x1b\\|\x9c)/g, '');
+  return stripVTControlCharacters(text.replace(new RegExp('\\x1b\\[[0-?]*[ -/]*[@-~]', 'g'), ''));
 };
 
 export type NodeTerminalOptions = {

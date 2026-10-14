@@ -52,13 +52,18 @@ export default function nextConfig(phase: string): NextConfig {
       pagesBufferLength: 10,
     },
     experimental: {
+      // Defer optional viewers/editors in both client and SSR graphs. Loading
+      // a route must not compile every dynamic import reachable from it.
+      turbopackLazyDynamicImports: phase === PHASE_DEVELOPMENT_SERVER,
+      turbopackLazyDynamicImportsSSR: phase === PHASE_DEVELOPMENT_SERVER,
+      turbopackGc: phase === PHASE_DEVELOPMENT_SERVER,
+      // Leave the plugin runtime at Next's default.
       // Keep the Webpack fallback/build path at a lower peak, and avoid eagerly
       // loading every route into the long-lived server process.
       webpackMemoryOptimizations: true,
       preloadEntriesOnStart: false,
-      // HeroUI's root entry re-exports the complete component library. Rewrite
-      // named imports to component entrypoints so Webpack does not parse the
-      // whole barrel whenever a workspace route is compiled for the first time.
+      // Optimize HeroUI barrel imports in the explicit Webpack path. Turbopack
+      // performs its own import analysis; it does not use this setting.
       optimizePackageImports: ['@heroui/react'],
     },
     webpack(config, { dev, isServer }) {

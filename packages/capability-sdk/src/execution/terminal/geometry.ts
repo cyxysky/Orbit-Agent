@@ -61,6 +61,10 @@ export function retainTerminalOutput(
       geometry = next;
       cut = Math.max(cut, marker.index + marker[0].length);
     }
+    // A retained tail must start at a complete Unicode scalar, even when the
+    // raw character budget cuts between an emoji's UTF-16 surrogate pair.
+    if (cut < output.length && output.charCodeAt(cut) >= 0xdc00 && output.charCodeAt(cut) <= 0xdfff
+      && output.charCodeAt(cut - 1) >= 0xd800 && output.charCodeAt(cut - 1) <= 0xdbff) cut++;
   }
   return { output: output.slice(cut), geometry };
 }

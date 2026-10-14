@@ -1,6 +1,5 @@
 import type { Metadata } from 'next';
 import Script from 'next/script';
-import '@open-file-viewer/core/style.css';
 import { WorkspaceBrandProvider } from '@/brand/WorkspaceBrandProvider';
 import { product } from '@/brand/product';
 import { InterfaceMotion } from '@/components/InterfaceMotion';

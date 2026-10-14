@@ -1271,6 +1271,15 @@
   display: none;
 }
 
+.browser-chat-initial-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 20px;
+  color: var(--muted);
+}
+
 .browser-chat-chat-pane:not(.embedded-chat) {
   height: 100%;
   min-height: 0;

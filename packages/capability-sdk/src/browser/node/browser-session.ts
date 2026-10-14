@@ -1346,7 +1346,7 @@ export class BrowserSession {
       }
       await this.refreshSessionGroupPages({ forceNativeRefresh: true });
       const result = () => ({ operation, url: this.page && !this.page.isClosed() ? this.page.url() : '', tabs: this.getTabsSnapshot(), businessOutcome: 'unverified' });
-      if (operation === 'list') return { ok: true, actual: JSON.stringify(result()) };
+      if (operation === 'list') return { ok: true, summary: 'Listed current browser tabs.', data: result() };
       let target: Page | undefined;
       if (operation === 'select' || operation === 'close') {
         target = this.sessionPages().find(page => this.livePreviewTabId(page) === input.tabId);
@@ -1379,7 +1379,8 @@ export class BrowserSession {
         }
         signal.throwIfAborted();
         this.notifyLivePreviewTabsChanged();
-        return { ok: true, actual: JSON.stringify({ ...result(), next: 'Read a fresh observation/state and verify the destination before dependent page actions.' }) };
+        return { ok: true, summary: `Browser control ${operation} returned; verify the current destination before dependent page actions.`,
+          data: { ...result(), next: 'Read a fresh observation/state and verify the destination before dependent page actions.' } };
       } catch (error) {
         return { ok: false, failureCategory: 'execution-uncertain',
           actual: 'Browser control outcome is uncertain. Inspect current tabs and observation; do not repeat automatically.',
@@ -2505,7 +2506,9 @@ export class BrowserSession {
 
   private async ensureBrowserPageRuntime(target: Page | Frame = this.activePage, signal?: AbortSignal) {
     signal?.throwIfAborted();
-    if ('mainFrame' in target) await this.applyConfiguredViewport(target, signal).catch(() => undefined);
+    if ('mainFrame' in target) {
+      await this.applyConfiguredViewport(target, signal).catch(() => undefined);
+    }
     signal?.throwIfAborted();
     const frame = 'mainFrame' in target ? target.mainFrame() : target;
     const navigationRevision = this.browserRuntimeRevisionByFrame.get(frame) || 0;
@@ -4145,7 +4148,11 @@ export class BrowserSession {
     return this.withSessionOperation(async (signal) => {
       const before = await this.readPageObservation().catch(() => undefined);
       const page = this.activePage;
-      const surfaceId = before?.activeSurface?.id;
+      // A popup already visible at the first observation may not yet belong to
+      // the active stack. Track it only when the overlay inventory is unambiguous.
+      const observedOverlays = before?.surfaces.filter((surface) => surface.likelyOverlay) || [];
+      const surfaceId = before?.activeSurface?.id
+        || (observedOverlays.length === 1 ? observedOverlays[0].id : undefined);
       const point = { x: 0, y: 0 };
       this.stateReader?.clear();
       this.browserViewportEvidence = undefined;
@@ -4171,8 +4178,8 @@ export class BrowserSession {
       }
       const closed = Boolean(surfaceId) && !after.surfaces.some((candidate) => candidate.id === surfaceId);
       const replacementPopup = Boolean(before && after.activeSurface?.likelyOverlay
-        && !after.activeSurface.modal && after.activeSurface.id !== surfaceId
-        && !before.surfaceStack.some((candidate) => candidate.id === after.activeSurface?.id));
+        && after.activeSurface.id !== surfaceId
+        && !before.surfaces.some((candidate) => candidate.id === after.activeSurface?.id));
       const navigated = Boolean(before && after.url !== before.url);
       const lostParentSurfaceIds = (before?.surfaceStack || [])
         .filter((candidate) => candidate.id !== surfaceId && !after.surfaces.some((next) => next.id === candidate.id))
@@ -4939,6 +4946,47 @@ export class BrowserSession {
           return { documentId: win.__aiCoordinateEvidenceDocumentId, url: location.href, domEpoch: Number(win.__aiDomMutationState?.epoch || 0),
             width: innerWidth, height: innerHeight, devicePixelRatio, scrollX, scrollY };
         });
+        const renderingSettled = await capture.step('viewport-render-settle', async () => {
+          const frames = page.frames().slice(0, 25).filter(frame => !frame.isDetached());
+          const settled = await Promise.all(frames.map(frame => frame.evaluate(async () => {
+            const finiteAnimations = () => document.getAnimations().filter(animation => {
+              const effect = animation.effect;
+              const target = effect instanceof KeyframeEffect ? effect.target : undefined;
+              return animation.playState === 'running'
+                && Number.isFinite(effect?.getComputedTiming().endTime)
+                && !(target instanceof Element && target.closest(
+                  '#__ai_candidate_overlay__, #__ai_mouse_cursor__, #__ai_dom_export_control__',
+                ));
+            });
+            const deadline = performance.now() + 1500;
+            let animations = finiteAnimations();
+            while (animations.length && performance.now() < deadline) {
+              let timer: ReturnType<typeof setTimeout> | undefined;
+              await Promise.race([
+                Promise.all(animations.map(animation => animation.finished.catch(() => undefined))),
+                new Promise<void>(resolve => {
+                  timer = setTimeout(resolve, Math.max(1, deadline - performance.now()));
+                }),
+              ]);
+              if (timer !== undefined) clearTimeout(timer);
+              animations = finiteAnimations();
+            }
+            if (animations.length) return false;
+            // Layout completion precedes paint. Do not rewrite styles or cancel
+            // application animations to manufacture a finished screenshot.
+            let painted = false;
+            await new Promise<void>(resolve => {
+              const timer = setTimeout(resolve, 250);
+              requestAnimationFrame(() => requestAnimationFrame(() => {
+                painted = true;
+                clearTimeout(timer);
+                resolve();
+              }));
+            });
+            return painted && finiteAnimations().length === 0;
+          }).catch(() => frame.isDetached())));
+          return settled.every(Boolean);
+        });
         const before = await capture.step('viewport-before', readGeometry);
         const dir = this.artifactDirectory(input.runId || 'browser-code');
         await capture.step('screenshot-directory', () => mkdir(dir, { recursive: true }));
@@ -4947,9 +4995,10 @@ export class BrowserSession {
           capture: 'viewport', filePath: imagePath, outputPixelRatio: 1, timeoutMs: capture.timeoutMs,
         }));
         const after = await capture.step('viewport-after', readGeometry);
-        if (JSON.stringify(before) === JSON.stringify(after)) this.browserViewportEvidence = { ...after, capturedAt: Date.now() };
+        if (renderingSettled && JSON.stringify(before) === JSON.stringify(after)) this.browserViewportEvidence = { ...after, capturedAt: Date.now() };
         observation = { status: 'available', id: randomUUID(), path: imagePath, url: page.url(), capturedAt: new Date().toISOString(),
-          actionable: Boolean(this.browserViewportEvidence), domEpoch: after.domEpoch, retention: input.observationMode || 'replace' };
+          actionable: Boolean(this.browserViewportEvidence), domEpoch: after.domEpoch, retention: input.observationMode || 'replace',
+          ...(!renderingSettled ? { error: 'Final page rendering has not settled. Observe again before coordinate input.' } : {}) };
       } catch (error) {
         if (signal.aborted) throw error;
         observation = { status: 'unavailable', error: error instanceof Error ? error.message : String(error) };
@@ -5135,6 +5184,7 @@ export class BrowserSession {
       ? execution.value as Record<string, unknown> : undefined;
     const payload = {
       result: execution.value ?? null,
+      ...(execution.partialResults !== undefined ? { partialResults: execution.partialResults } : {}),
       ...(noDeclaredActionExecuted ? {
         actionOutcome: 'skipped',
         actionNote: 'The code declared a browser action, but no browser action was attempted. A conditional target guard may have skipped it. The returned page data is still valid; inspect the current target before choosing a changed action.',

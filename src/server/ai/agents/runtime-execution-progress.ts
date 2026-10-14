@@ -12,6 +12,32 @@ function stable(value: unknown): string {
   return JSON.stringify(value) ?? 'null';
 }
 
+/** Narration similarity is an advisory, never a verdict on task completion. */
+export function repeatedAssistantNarration(messages: ModelMessage[]) {
+  const start = messages.findLastIndex(isOriginalBrowserChatUserMessage);
+  const recent = messages.slice(Math.max(0, start)).flatMap(message => {
+    if (message.role !== 'assistant') return [];
+    const text = typeof message.content === 'string' ? message.content
+      : message.content.flatMap(part => part.type === 'text' ? [part.text] : []).join('\n');
+    const normalized = text.replace(/[^\p{L}\p{N}]/gu, '').slice(0, 6000);
+    return normalized ? [normalized] : [];
+  }).slice(-6);
+  if (recent.length < 3 || recent.at(-1)!.length < 120) return undefined;
+  const shingles = (text: string) => new Set(Array.from({ length: Math.max(0, text.length - 4) }, (_, index) => text.slice(index, index + 5)));
+  const latest = shingles(recent.at(-1)!);
+  const repeated = recent.slice(0, -1).filter(text => {
+    if (text.length < 120) return false;
+    const previous = shingles(text);
+    const shared = [...latest].filter(part => previous.has(part)).length;
+    return shared / Math.max(latest.size, previous.size) >= 0.4;
+  });
+  if (repeated.length < 2) return undefined;
+  return {
+    similarMessageCount: repeated.length + 1,
+    instruction: 'Several recent assistant updates repeat substantially the same explanation. This is narration repetition, not evidence that tools failed or the task is complete. Continue the authorized task from the latest actual tool results and current observation. State only new findings, changes or the next concrete action; do not restart the task introduction, reissue an old diagnosis, or describe an already-inspected image as newly seen. If the latest tool only changed a file, an older browser image does not show that change: inspect the updated output before judging it. Preserve uncertainty when new evidence is unavailable.',
+  };
+}
+
 /** Collapse only complete, consecutive, identical no-action exchanges.
  * Different scripts, assistant text or returned fields remain in context. */
 export function projectRepeatedNoActionHistory(messages: ModelMessage[]) {

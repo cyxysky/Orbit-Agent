@@ -81,21 +81,20 @@ export async function executeBrowserSessionOperation(session: BrowserSession, co
     const executionState = data.executionState && typeof data.executionState === 'object'
       ? data.executionState as { attemptedActions?: unknown } : undefined;
     const attemptedAction = Array.isArray(executionState?.attemptedActions) && executionState.attemptedActions.length > 0;
-    if (!skippedAction && !attemptedAction && result.ok) return result;
+    if (!skippedAction && !attemptedAction && result.ok && (data.postActionState || data.recoveryState)) {
+      // Read-only cells can already carry a current observation. Reuse it so
+      // visible service errors are not lost just because no input was attempted.
+      return withVisiblePageErrors(result, data.postActionState || data.recoveryState);
+    }
     // Preserve the execution result and attach one bounded live observation
     // after attempted input or a failed cell whose input outcome is uncertain.
-    const recovery = skippedAction || !attemptedAction;
+    const recovery = skippedAction || (!attemptedAction && !result.ok);
     const currentState = await session.readBrowserState({ scope: 'active', maxOutputChars: recovery ? 8000 : 4000, abortSignal: signal })
       .catch((error) => ({ ok: false, actual: error instanceof Error ? error.message : String(error) }));
-    const pageErrorIndicators = visiblePageErrorIndicators(currentState);
-    return {
+    return withVisiblePageErrors({
       ...result,
-      data: { ...data, [recovery ? 'recoveryState' : 'postActionState']: currentState,
-        ...(pageErrorIndicators.length ? { pageErrorIndicators } : {}) },
-      ...(pageErrorIndicators.length ? {
-        summary: `${result.summary || 'Browser script returned.'} Visible page error indicator: ${pageErrorIndicators[0]}. Investigate before attributing an empty or unexpected view to business logic.`,
-      } : {}),
-    };
+      data: { ...data, [recovery ? 'recoveryState' : 'postActionState']: currentState },
+    }, currentState);
   }
   if (options.imageInputAvailable === false) return { ok: false, actual: 'Visual actions require a model with image input. Use DOM actions in hybrid mode or select an image-capable model.' };
   if (command.action === 'images') return options.selectImages
@@ -109,12 +108,23 @@ export async function executeBrowserSessionOperation(session: BrowserSession, co
   return session.executeVisualBrowserAction({ ...command, kind: command.kind!, observationId: command.observationId!, runId: options.runId || 'browser', abortSignal: signal });
 }
 
+function withVisiblePageErrors(result: BrowserActionResult, state: unknown): BrowserActionResult {
+  const indicators = visiblePageErrorIndicators(state);
+  if (!indicators.length) return result;
+  const data = result.data && typeof result.data === 'object' ? result.data as Record<string, unknown> : {};
+  return {
+    ...result,
+    data: { ...data, pageErrorIndicators: indicators },
+    summary: `${result.summary || 'Browser script returned.'} Visible page error indicator: ${indicators[0]}. Investigate before attributing an empty or unexpected view to business logic.`,
+  };
+}
+
 function visiblePageErrorIndicators(state: unknown) {
   const result = state && typeof state === 'object' ? state as { data?: unknown } : undefined;
   const data = result?.data && typeof result.data === 'object' ? result.data as { pageState?: unknown } : undefined;
   if (typeof data?.pageState !== 'string') return [];
   return data.pageState.split(/\r?\n/)
-    .filter((line) => /\[(?:4|5)\d\d\]|\b(?:HTTP|status)\s*:?\s*[45]\d\d\b/i.test(line))
+    .filter((line) => /\[(?:4|5)\d\d\]|\b(?:HTTP|status)\s*:?\s*[45]\d\d\b|\b[45]\d\d\s+(?:gateway time-?out|bad gateway|internal server error|service unavailable|unauthorized|forbidden|not found)\b|\b(?:internal server error|service unavailable|server error|network error|request failed)\b|(?:服务器|服务端)(?:出错|错误|异常)|内部服务器错误|服务(?:暂时)?不可用|网络(?:错误|异常)|请求失败/i.test(line))
     .slice(0, 3)
     .map((line) => line.trim().slice(0, 400));
 }

@@ -44,3 +44,5 @@ id_ed25519.*
 /.webpilot-dev-api/
 **/__pycache__/
 *.py[cod]
+/tut
+/lottie-act02
