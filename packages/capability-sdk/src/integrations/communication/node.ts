@@ -1,4 +1,4 @@
-export { createWeComBotConnection, normalizeWeComInboundMessage, WECOM_BOT_RUNTIME_REVISION, type WeComBotConnection, type WeComInboundMessage, type WeComInboundAttachment } from './wecom-bot.ts';
+export { createWeComBotConnection, normalizeWeComInboundMessage, normalizeWeComCardAction, WECOM_BOT_RUNTIME_REVISION, type WeComBotConnection, type WeComInboundMessage, type WeComInboundAttachment } from './wecom-bot.ts';
 import { randomUUID } from 'node:crypto';
 import { createCapabilityDocumentDatabase } from '../../node.ts';
 import type { AgentConnector } from '../connectors/index.ts';

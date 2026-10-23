@@ -32,7 +32,7 @@ Each search is Text Search Pro; each route uses Compute Routes Essentials. Do no
   }],
 } as const satisfies CapabilityManifest;
 
-export function createMapsTool(store: MapStore, options: GoogleMapsOptions, onView?: (record: MapRecord, view: MapView) => void) {
+export function createMapsTool(store: MapStore, options: GoogleMapsOptions, onView?: (record: MapRecord, view: MapView) => void | Promise<void>) {
   const client = createGoogleMapsClient(options);
   return defineCapabilityTool<z.infer<typeof parser>, unknown>({
     name: 'maps', description: 'Search Google places, compute a basic route, or create an interactive map. Supply request or read an existing mapId. Copy the returned response block into finalResponse.blocks to display the map.',
@@ -48,7 +48,7 @@ export function createMapsTool(store: MapStore, options: GoogleMapsOptions, onVi
         const view = await client.resolve(request, context.abortSignal);
         context.abortSignal?.throwIfAborted();
         const record = await store.create({ title: input.title || (request.action === 'search' ? request.query.slice(0, 200) : request.action === 'route' ? '路线规划' : '地图'), request });
-        onView?.(record, view);
+        await onView?.(record, view);
         // Route geometry is used by the renderer, not copied into model history.
         const routeSummary = view.route ? { distanceMeters: view.route.distanceMeters, durationSeconds: view.route.durationSeconds, warnings: view.route.warnings, travelMode: view.route.travelMode } : undefined;
         return { ok: true, summary: request.action === 'search' ? `Google Maps 找到 ${view.places.length} 个地点。` : 'Google 地图已创建。',
@@ -61,7 +61,7 @@ export function createMapsTool(store: MapStore, options: GoogleMapsOptions, onVi
     },
   });
 }
-export function createMapsCapability(options: { createStore(context: CapabilityRunContext): MapStore | Promise<MapStore>; createClientOptions(context: CapabilityRunContext): GoogleMapsOptions; onView?: (record: MapRecord, view: MapView) => void }): CapabilityProvider {
+export function createMapsCapability(options: { createStore(context: CapabilityRunContext): MapStore | Promise<MapStore>; createClientOptions(context: CapabilityRunContext): GoogleMapsOptions; onView?: (record: MapRecord, view: MapView) => void | Promise<void> }): CapabilityProvider {
   return { manifest: mapsCapabilityManifest, async createRuntime(context) {
     const store = await options.createStore(context);
     return { tools: { maps: createMapsTool(store, options.createClientOptions(context), options.onView) },

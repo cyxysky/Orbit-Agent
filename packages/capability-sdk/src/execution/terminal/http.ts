@@ -8,7 +8,7 @@ export async function terminalHttpResponse(request: Request, manager: NodeTermin
   if (request.method === 'POST') {
     try {
       const input = terminalToolInput.parse(await request.json());
-      if (['create', 'run', 'write'].includes(input.action) && (!options.enabled || options.closed)) {
+      if (['exec', 'create', 'run', 'write'].includes(input.action) && (!options.enabled || options.closed)) {
         return json({ error: options.closed ? 'Terminal workspace is closed.' : 'Local terminal is disabled.' }, 403);
       }
       return json(await manager.execute(input, { invocationId: randomUUID(), abortSignal: request.signal }));

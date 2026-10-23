@@ -22,6 +22,7 @@ export type BrowserCodeConnection = {
 
 type BrowserCodeKernelInit = {
   connection: BrowserCodeConnection;
+  ignoreHTTPSErrors?: boolean;
   playwrightEntryPath: string;
   websocketEntryPath: string;
   targetIds?: string[];
@@ -369,7 +370,7 @@ type PendingExecution = {
 const maxDiagnosticChars = 4_000;
 const defaultBrowserCodeKernelReadyTimeoutMs = 10_000;
 const defaultBrowserCodeExecutionTimeoutMs = 90_000;
-export const BROWSER_CODE_KERNEL_RUNTIME_REVISION = 52;
+export const BROWSER_CODE_KERNEL_RUNTIME_REVISION = 59;
 
 function boundedInteger(value: unknown, fallback: number, min: number, max: number) {
   const parsed = typeof value === 'number' ? value : Number(value);
@@ -534,6 +535,7 @@ function browserCodeKernelMain() {
   let replServer: import('node:repl').REPLServer | undefined;
   let selectedRuntimePage: import('patchright').Page | undefined;
   let sessionGroupId = '';
+  let browserIgnoreHTTPSErrors = false;
   let activeExecution: {
     actions: string[];
     logs: BrowserCodeExecutionLog[];
@@ -691,6 +693,10 @@ function browserCodeKernelMain() {
   const agentCreatedPages = new Set<import('patchright').Page>();
   const nativeContextNewPages = new WeakMap<import('patchright').BrowserContext, () => Promise<import('patchright').Page>>();
   const pointerDecoratedPages = new WeakSet<import('patchright').Page>();
+  const decoratedRequestContexts = new WeakSet<import('patchright').APIRequestContext>();
+  const redactRequestErrorHeaders = (message: string) => message
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/^([ \t]*(?:-[ \t]*)?(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token)[ \t]*:)[^\r\n]*/gim, '$1 [redacted]');
   const screenshotDecoratedPagePrototypes = new WeakSet<object>();
   const pointerDecoratedLocatorPrototypes = new WeakSet<object>();
   const credentialLocatorPrototypes = new WeakSet<object>();
@@ -787,6 +793,21 @@ function browserCodeKernelMain() {
       if (!frame) return undefined;
     }
     return frame;
+  };
+
+  const framePathForPage = (page: import('patchright').Page, target: import('patchright').Frame) => {
+    if (target === page.mainFrame()) return undefined;
+    const parts: number[] = [];
+    let frame = target;
+    for (let depth = 0; frame !== page.mainFrame() && depth < 64; depth += 1) {
+      const parent = frame.parentFrame();
+      if (!parent) return undefined;
+      const index = parent.childFrames().indexOf(frame);
+      if (index < 0) return undefined;
+      parts.unshift(index);
+      frame = parent;
+    }
+    return frame === page.mainFrame() ? parts.join('.') : undefined;
   };
 
   const bindExecutionUidReferences = async (
@@ -989,20 +1010,22 @@ function browserCodeKernelMain() {
       })(), browserCodeFrameObservationTimeoutMs, `frame observation ${compactObservationUrl(frame.url()) || 'about:blank'}`);
       const observation = observationResult.ok ? observationResult.value : undefined;
       if (!observation) return undefined;
+      const framePath = framePathForPage(page, frame);
+      if (frame !== mainFrame && framePath === undefined) return undefined;
       return {
         ...observation,
         surfaces: observation.surfaces.map((surface) => ({
           ...surface,
-          ...(frame !== mainFrame ? { framePath: frame.url() || 'iframe' } : {}),
+          ...(frame !== mainFrame ? { framePath } : {}),
         })),
         surfaceStack: observation.surfaceStack.map((surface) => ({
           ...surface,
-          ...(frame !== mainFrame ? { framePath: frame.url() || 'iframe' } : {}),
+          ...(frame !== mainFrame ? { framePath } : {}),
         })),
         ...(observation.activeSurface && frame !== mainFrame ? {
           activeSurface: {
             ...observation.activeSurface,
-            framePath: frame.url() || 'iframe',
+            framePath,
           },
         } : {}),
       } as KernelPageObservation;
@@ -1128,6 +1151,7 @@ function browserCodeKernelMain() {
         __aiDomMutationState?: { epoch?: number };
         __aiDomRuntime?: {
           pageObservation?: () => { activeSurface?: { id?: string } };
+          visibleDomSelector?: (ref: string) => string | undefined;
           visibleDomSnapshot?: (options: {
             maxChars: number;
             maxElements: number;
@@ -1203,6 +1227,7 @@ function browserCodeKernelMain() {
         .slice(0, 8)
         .map(({ item, score }) => ({
           ref: item.ref,
+          selector: item.ref ? runtime?.visibleDomSelector?.(item.ref) : undefined,
           score: Math.round(score),
           tag: item.tag,
           label: String(item.label || '').slice(0, 240),
@@ -1234,13 +1259,42 @@ function browserCodeKernelMain() {
       ...candidate,
       ref: undefined,
     }));
+    // Visible text is only an intent hint: icon text, aria-labelledby and
+    // aria-label can make the native accessible name differ. Read the actual
+    // AX representation for a few current, uniquely located candidates.
+    const enrichedCandidates = await Promise.all(candidates.map(async (candidate, index) => {
+      if (index >= 3 || !candidate.selector) return candidate;
+      const accessible = await settleKernelTask(
+        frame.locator(candidate.selector).ariaSnapshot({ timeout: 1_000 }),
+        1_500,
+        'zero-match candidate accessibility',
+      );
+      return accessible.ok
+        ? { ...candidate, accessibility: accessible.value.slice(0, 500) }
+        : candidate;
+    }));
     return ` ZERO_MATCH_DIAGNOSTICS ${JSON.stringify({
       selector,
       epoch: snapshotResult.value.epoch,
       activeSurfaceId: snapshotResult.value.activeSurfaceId,
       ...(staleUid ? { staleUid } : {}),
-      candidates,
+      candidates: enrichedCandidates,
     }).slice(0, 3_500)}`;
+  };
+
+  const ownerDisabled = (element: Element) => {
+    const runtime = (window as Window & { __aiDomRuntime?: { isDisabledElement?: (target: Element) => boolean } }).__aiDomRuntime;
+    if (!runtime?.isDisabledElement) throw new Error('BROWSER_INPUT_PREFLIGHT_FAILED: containing frame state is not ready.');
+    return runtime.isDisabledElement(element);
+  };
+
+  const assertContainingFramesEnabled = async (frame: import('patchright').Frame | undefined) => {
+    for (let currentFrame = frame; currentFrame?.parentFrame(); currentFrame = currentFrame.parentFrame() || undefined) {
+      const owner = await currentFrame.frameElement();
+      try {
+        if (await owner.evaluate(ownerDisabled)) throw new Error('BROWSER_INPUT_PREFLIGHT_FAILED: containing frame belongs to a disabled control.');
+      } finally { await owner.dispose(); }
+    }
   };
 
   const resolveActionableLocator = async (
@@ -1263,6 +1317,22 @@ function browserCodeKernelMain() {
     const targetPage = locatorPage(originalCandidate);
     const targetFrames = targetPage?.frames() || (locatorFrame(originalCandidate) ? [locatorFrame(originalCandidate)!] : []);
     await Promise.all(targetFrames.filter(frame => !frame.isDetached()).map(ensureFrameRuntime));
+    // A locator bound directly to a child Frame must also honor the state of
+    // its containing iframe and custom/ARIA-disabled hosts in parent documents.
+    await assertContainingFramesEnabled(locatorFrame(originalCandidate));
+    {
+      // FrameLocator keeps its root frame in _frame. Resolve each observed
+      // frame-entry prefix before every input; native trials must not bypass
+      // the semantic disabled state of a containing frame.
+      const selector = String(Reflect.get(originalCandidate, '_selector') || '');
+      const rootFrame = locatorFrame(originalCandidate);
+      const marker = ' >> internal:control=enter-frame >> ';
+      for (let index = selector.indexOf(marker); rootFrame && index >= 0; index = selector.indexOf(marker, index + marker.length)) {
+        if (await rootFrame.locator(selector.slice(0, index)).evaluate(ownerDisabled)) {
+          throw new Error('BROWSER_INPUT_PREFLIGHT_FAILED: containing frame belongs to a disabled control.');
+        }
+      }
+    }
     if (String(Reflect.get(originalCandidate, '_selector') || '').includes(browserCodeUidAttribute)) {
       const bindings = activeExecution?.uidBindings;
       const states = await originalCandidate.evaluateAll(elements => elements.map(element => ({
@@ -1273,14 +1343,27 @@ function browserCodeKernelMain() {
         throw new Error('STALE_DOM_EVIDENCE: the UID observation changed. Read current DOM or resolve a semantic locator before acting.');
       }
     }
-    const originalCount = await originalCandidate.count();
-    const zeroMatchDiagnostics = originalCount === 0
-      ? await zeroMatchCandidateDiagnostics(originalCandidate)
-      : '';
     const skipVisibleFilter = action.toLowerCase() === 'setinputfiles';
     const candidateSet = skipVisibleFilter
       ? originalCandidate
       : originalCandidate.filter({ visible: true });
+    // Locator factories resolve live. A menu or form field may mount after its
+    // trigger returns; preserve the normal bounded Playwright wait before
+    // evaluating uniqueness and actionability. Waiting never sends input.
+    if (await candidateSet.count() === 0) {
+      try {
+        await candidateSet.first().waitFor({
+          state: skipVisibleFilter ? 'attached' : 'visible',
+          timeout: browserCodeActionTimeoutMs,
+        });
+      } catch (error) {
+        if (!(error instanceof Error) || error.name !== 'TimeoutError') throw error;
+      }
+    }
+    const originalCount = await originalCandidate.count();
+    const zeroMatchDiagnostics = originalCount === 0
+      ? await zeroMatchCandidateDiagnostics(originalCandidate)
+      : '';
     // Playwright visibility ignores opacity. A newly mounted dialog can have a
     // box while its finite entrance animation still makes input imperceptible.
     // Wait without altering styles; static hiding is still rejected below.
@@ -1299,94 +1382,14 @@ function browserCodeKernelMain() {
       await Promise.all([...animations].map(animation => animation.finished.catch(() => undefined)));
     }), browserCodeActionTimeoutMs, 'target rendering animations');
     let results = await candidateSet.evaluateAll((elements, operation) => {
-      const browserWindow = window as Window & {
-        __aiDomRuntime?: {
-          pageObservation?: () => {
-            activeSurface?: { id: string };
-            surfaces: Array<{ id: string; descriptor: string }>;
-          };
-          actionability?: (
-            target: Element,
-            options?: { action?: string },
-          ) => {
-            ok: boolean;
-            reason: string;
-            descriptor: string;
-            coveredBy?: string;
-            coveredBySurfaceId?: string;
-            activeSurfaceId?: string;
-            failureKind?: 'occluded';
-            preserveScroll?: boolean;
-          };
-        };
-      };
-      const runtime = browserWindow.__aiDomRuntime;
-      return elements.map((element): {
-        ok: boolean;
-        reason: string;
-        descriptor: string;
-        coveredBy?: string;
-        coveredBySurfaceId?: string;
-        activeSurfaceId?: string;
-        failureKind?: 'occluded';
-        preserveScroll?: boolean;
-      } => {
-        const descriptor = `${element.tagName.toLowerCase()}${element.id ? `#${element.id}` : ''}`;
-        const pointerAction = /^(click|dblclick|hover|tap|check|uncheck|setchecked|dragto|draganddrop)$/.test(operation.toLowerCase());
-        const shared = runtime?.actionability?.(element, { action: operation });
-        if (shared) return shared;
-        if (!element.isConnected) {
-          return { ok: false, reason: 'target is detached from the current document', descriptor };
-        }
-        const fileInputAction = operation.toLowerCase() === 'setinputfiles';
-        const targetStyle = getComputedStyle(element);
-        if (pointerAction && targetStyle.pointerEvents === 'none') {
-          return { ok: false, reason: `${descriptor} has computed pointer-events:none`, descriptor };
-        }
-        let current: Element | null = element;
-        while (current) {
-          const currentDescriptor = `${current.tagName.toLowerCase()}${current.id ? `#${current.id}` : ''}`;
-          if (!fileInputAction && current.hasAttribute('hidden')) return { ok: false, reason: `${currentDescriptor} has the hidden attribute`, descriptor };
-          if ((current as HTMLElement).inert || current.hasAttribute('inert')) return { ok: false, reason: `${currentDescriptor} or an ancestor is inert`, descriptor };
-          const style = getComputedStyle(current);
-          if (!fileInputAction && style.display === 'none') return { ok: false, reason: `${currentDescriptor} or an ancestor has display:none`, descriptor };
-          if (!fileInputAction && (style.visibility === 'hidden' || style.visibility === 'collapse')) return { ok: false, reason: `${currentDescriptor} or an ancestor has visibility:${style.visibility}`, descriptor };
-          if (!fileInputAction && (style.contentVisibility === 'hidden' || Number(style.opacity || '1') <= 0.01)) return { ok: false, reason: `${currentDescriptor} or an ancestor is not visibly rendered`, descriptor };
-          current = current.parentElement;
-        }
-        const disabled = (() => {
-          try {
-            return element.matches(':disabled') || element.getAttribute('aria-disabled') === 'true';
-          } catch {
-            return element.getAttribute('aria-disabled') === 'true';
-          }
-        })();
-        if (disabled) return { ok: false, reason: `${descriptor} is disabled`, descriptor };
-        if (!fileInputAction) {
-          const rect = Array.from(element.getClientRects()).find((item) => item.width > 0 && item.height > 0);
-          if (!rect) return { ok: false, reason: `${descriptor} has no rendered client rectangle`, descriptor };
-          if (
-            pointerAction
-            && targetStyle.position === 'fixed'
-            && (rect.right <= 0 || rect.bottom <= 0 || rect.left >= innerWidth || rect.top >= innerHeight)
-          ) {
-            return { ok: false, reason: `${descriptor} is fixed outside the viewport`, descriptor };
-          }
-        }
-        if (/^(fill|type|clear|presssequentially)$/.test(operation.toLowerCase())) {
-          const field = element as HTMLInputElement | HTMLTextAreaElement;
-          if (!(element as HTMLElement).isContentEditable && !(element instanceof HTMLInputElement) && !(element instanceof HTMLTextAreaElement)) {
-            return { ok: false, reason: `${descriptor} is not editable`, descriptor };
-          }
-          if (!(element as HTMLElement).isContentEditable && (field.readOnly || field.disabled)) {
-            return { ok: false, reason: `${descriptor} is readonly or disabled`, descriptor };
-          }
-        }
-        if (operation.toLowerCase() === 'selectoption' && !(element instanceof HTMLSelectElement)) {
-          return { ok: false, reason: `${descriptor} is not a native select element`, descriptor };
-        }
-        return { ok: true, reason: 'exact live element is actionable', descriptor };
-      });
+      const runtime = (window as Window & { __aiDomRuntime?: { actionability?: (
+        element: Element, options?: { action?: string },
+      ) => { ok: boolean; reason: string; descriptor: string; coveredBy?: string;
+        coveredBySurfaceId?: string; activeSurfaceId?: string; failureKind?: 'occluded'; preserveScroll?: boolean } } }).__aiDomRuntime;
+      if (!runtime?.actionability) {
+        throw new Error('BROWSER_INPUT_PREFLIGHT_FAILED: actionability runtime is not ready; refresh state before input.');
+      }
+      return elements.map(element => runtime.actionability!(element, { action: operation }));
     }, action);
     const normalizedAction = action.toLowerCase();
     const trialMethod = normalizedAction === 'setchecked'
@@ -1463,8 +1466,8 @@ function browserCodeKernelMain() {
             coveredBy: ownerActionability.coveredBy,
             coveredBySurfaceId: ownerActionability.coveredBySurfaceId,
             activeSurfaceId: ownerActionability.activeSurfaceId,
-            failureKind: 'occluded' as const,
-            preserveScroll: true,
+            failureKind: ownerActionability.failureKind,
+            preserveScroll: ownerActionability.preserveScroll,
           }));
           break;
         }
@@ -1875,22 +1878,50 @@ function browserCodeKernelMain() {
       }
       const trustedLocator = Reflect.apply(nativeFrameLocator, targetFrame, [selector]);
       const fileInput = await resolveActionableLocator(trustedLocator, 'setInputFiles');
-      await prepareStateChangingAction(targetPage, 'attachment.setInputFiles');
-      await Reflect.apply(nativeSetInputFiles, fileInput, [attachment.path]);
-      await completeStateChangingAction(targetPage, 'attachment.setInputFiles');
-      const selectedFiles = await fileInput.evaluate((element) => Array.from(
-        (element as HTMLInputElement).files || [],
-        (file) => ({ name: file.name, size: file.size, type: file.type }),
-      ));
-      if (!selectedFiles.some((file) => file.name === attachment.name)) {
-        throw new Error(`The browser file input did not retain the selected attachment ${attachment.name}.`);
+      // Applications commonly consume files during input/change and clear or
+      // replace the input to allow selecting the same file again. Observe the
+      // selection before those handlers; a later empty FileList is not failure.
+      const selection = await fileInput.evaluateHandle((element) => {
+        const input = element as HTMLInputElement;
+        const state = { files: [] as Array<{ name: string; size: number; type: string }> };
+        const files = () => Array.from(input.files || [],
+          file => ({ name: file.name, size: file.size, type: file.type }));
+        const capture = (event: Event) => {
+          if (!event.composedPath().includes(input)) return;
+          const selected = files();
+          if (selected.length) state.files = selected;
+        };
+        window.addEventListener('input', capture, true);
+        window.addEventListener('change', capture, true);
+        return {
+          read: () => ({ selectedFiles: state.files, retainedFiles: files(), inputConnected: input.isConnected }),
+          dispose: () => {
+            window.removeEventListener('input', capture, true);
+            window.removeEventListener('change', capture, true);
+          },
+        };
+      });
+      try {
+        await prepareStateChangingAction(targetPage, 'attachment.setInputFiles');
+        await Reflect.apply(nativeSetInputFiles, fileInput, [attachment.path]);
+        await completeStateChangingAction(targetPage, 'attachment.setInputFiles');
+        const receipt = await selection.evaluate(state => state.read());
+        const selectedFiles = receipt.selectedFiles.length ? receipt.selectedFiles : receipt.retainedFiles;
+        return {
+          attachmentId: attachment.ref,
+          fileName: attachment.name,
+          inputActionCompleted: true,
+          selectionObserved: selectedFiles.some(file => file.name === attachment.name),
+          selectedFiles,
+          retainedFiles: receipt.retainedFiles,
+          inputState: !receipt.inputConnected ? 'detached'
+            : receipt.retainedFiles.length ? 'retained' : 'cleared',
+          uploadStatus: 'not-verified',
+        };
+      } finally {
+        try { await selection.evaluate(state => state.dispose()); } catch {}
+        await selection.dispose();
       }
-      return {
-        attachmentId: attachment.ref,
-        fileName: attachment.name,
-        selectedFiles,
-        uploaded: true,
-      };
     },
   });
 
@@ -2054,6 +2085,39 @@ function browserCodeKernelMain() {
   };
 
   const decoratePage = (page: import('patchright').Page) => {
+    const request = page.context().request;
+    if (!decoratedRequestContexts.has(request)) {
+      decoratedRequestContexts.add(request);
+      // CDP attachments do not inherit the launch context TLS setting in
+      // their APIRequestContext. Apply the declared session default while
+      // preserving an explicit per-request override.
+      for (const name of ['fetch', 'get', 'head', 'post', 'put', 'patch', 'delete']) {
+        const original = Reflect.get(request, name);
+        if (typeof original !== 'function') continue;
+        Object.defineProperty(request, name, {
+          configurable: true,
+          value: async function (this: unknown, resource: unknown, options?: Record<string, unknown>) {
+            const requestOptions = browserIgnoreHTTPSErrors
+              ? { ...options, ignoreHTTPSErrors: options?.ignoreHTTPSErrors ?? true }
+              : options;
+            try {
+              return await Reflect.apply(original, this, [resource, requestOptions]);
+            } catch (error) {
+              // Native protocol call logs can contain session and auth headers.
+              // Redact before rethrowing so caught errors and their stacks are
+              // safe to return through either result or console channels.
+              if (error instanceof Error) {
+                const stack = error.stack;
+                error.message = redactRequestErrorHeaders(error.message);
+                if (stack) error.stack = redactRequestErrorHeaders(stack);
+                throw error;
+              }
+              throw new Error(redactRequestErrorHeaders(String(error)));
+            }
+          },
+        });
+      }
+    }
     if (pointerDecoratedPages.has(page)) return;
     pointerDecoratedPages.add(page);
     decorateLocatorPrototype(page);
@@ -2246,11 +2310,14 @@ function browserCodeKernelMain() {
     // framework events or exposing entered values (which may contain credentials).
     const observeTextDelivery = async () => {
       for (const frame of page.frames()) {
+        await ensureFrameRuntime(frame);
         const handle = await frame.evaluateHandle(() => {
           if (!document.hasFocus()) return null;
           let element = document.activeElement;
           while (element?.shadowRoot?.activeElement) element = element.shadowRoot.activeElement;
+          const runtime = (window as Window & { __aiDomRuntime?: { isDisabledElement?: (target: Element) => boolean } }).__aiDomRuntime;
           if (!(element instanceof HTMLElement) || element.matches(':disabled, [readonly]')
+            || runtime?.isDisabledElement?.(element)
             || !(element.isContentEditable || element.matches('textarea, input:not([type]), input[type="text"], input[type="search"], input[type="email"], input[type="url"], input[type="tel"], input[type="password"], input[type="number"]'))) return null;
           const value = () => element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement ? element.value : element.textContent || '';
           const before = value();
@@ -2259,10 +2326,18 @@ function browserCodeKernelMain() {
           for (const name of Object.keys(counts)) element.addEventListener(name, observe, true);
           return { element, value, before, counts, observe };
         });
-        if (await handle.evaluate(state => state !== null)) return handle;
+        if (await handle.evaluate(state => state !== null)) {
+          try { await assertContainingFramesEnabled(frame); }
+          catch (error) {
+            await handle.evaluate(state => { if (state) for (const name of Object.keys(state.counts)) state.element.removeEventListener(name, state.observe, true); });
+            await handle.dispose();
+            throw error;
+          }
+          return handle;
+        }
         await handle.dispose();
       }
-      throw new Error('TEXT_INPUT_NOT_EDITABLE: No focused editable text control. Inspect data.diagnostics and focus the actual editor before typing; a picker trigger or decorative caret is not an editable input.');
+      throw new Error('BROWSER_INPUT_PREFLIGHT_FAILED: TEXT_INPUT_NOT_EDITABLE: No focused editable text control. Inspect data.diagnostics and focus the actual editor before typing; a picker trigger or decorative caret is not an editable input.');
     };
     const patchInputDevice = (
       device: Record<string, unknown>,
@@ -2280,9 +2355,9 @@ function browserCodeKernelMain() {
               await prepareStateChangingAction(page, action);
               return Reflect.apply(original, device, args);
             }
-            await prepareStateChangingAction(page, action);
             const textEntry = (name === 'type' || name === 'insertText') && typeof args[0] === 'string' && args[0].length > 0;
             const delivery = textEntry ? await observeTextDelivery() : undefined;
+            await prepareStateChangingAction(page, action);
             let result: unknown;
             try {
               result = await Reflect.apply(original, device, args);
@@ -2467,18 +2542,20 @@ function browserCodeKernelMain() {
               surfaceTransition: 'initial',
             };
           const scope = options.scope || 'active';
-          const targetFrame = observation.activeSurface?.framePath
-            ? page.frames().find((frame) => frame.url() === observation.activeSurface?.framePath) || page.mainFrame()
-            : page.mainFrame();
+          const targetFrame = frameFromUidPath(page, observation.activeSurface?.framePath);
+          if (!targetFrame || targetFrame.isDetached()) {
+            throw new Error('STALE_FRAME_EVIDENCE: the observed surface frame is unavailable; read fresh state.');
+          }
           const axResult = await settleKernelTask((async () => {
             if (scope === 'active' && observation.activeSurface) {
-              const semanticSurfaceSelector = 'dialog[open], [aria-modal="true"], [role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]';
-              const selectedSurface = observation.activeSurface.selector
-                ? targetFrame.locator(observation.activeSurface.selector).filter({ visible: true })
-                : targetFrame.locator(semanticSurfaceSelector).filter({ visible: true }).last();
-              return await selectedSurface.count()
-                ? selectedSurface.first().ariaSnapshot({ timeout: browserCodeActionTimeoutMs })
-                : targetFrame.locator('body').ariaSnapshot({ timeout: browserCodeActionTimeoutMs });
+              if (!observation.activeSurface.selector) {
+                throw new Error('STALE_SURFACE_EVIDENCE: the active surface has no live selector; read fresh state.');
+              }
+              const selectedSurface = targetFrame.locator(observation.activeSurface.selector).filter({ visible: true });
+              if (await selectedSurface.count() !== 1) {
+                throw new Error('STALE_SURFACE_EVIDENCE: the observed surface is no longer uniquely visible; read fresh state.');
+              }
+              return selectedSurface.ariaSnapshot({ timeout: browserCodeActionTimeoutMs });
             }
             return page.locator('body').ariaSnapshot({ timeout: browserCodeActionTimeoutMs });
           })(), browserCodeAxSnapshotTimeoutMs, 'AX snapshot');
@@ -2743,6 +2820,7 @@ function browserCodeKernelMain() {
   const initialize = async (input: BrowserCodeKernelInit) => {
     if (browser || replServer) return;
     sessionGroupId = String(input.sessionGroupId || '').trim();
+    browserIgnoreHTTPSErrors = input.ignoreHTTPSErrors === true;
     // A bare import here probes ancestors of the temporary kernel directory
     // before NODE_PATH, which can fail the permission check during resolution.
     const { chromium } = childRequire(input.playwrightEntryPath) as typeof import('patchright');
@@ -2981,7 +3059,10 @@ function browserCodeKernelMain() {
               'input, textarea, [contenteditable=""], [contenteditable="true"], [role="combobox"], button, [role="button"], [class*="close-icon"]',
             ));
             if (focused && !controls.includes(focused)) controls.unshift(focused);
-            const runtime = (window as Window & { __aiDomRuntime?: { activeSurfaceElement?: () => Element | undefined } }).__aiDomRuntime;
+            const runtime = (window as Window & { __aiDomRuntime?: {
+              activeSurfaceElement?: () => Element | undefined;
+              isDisabledElement?: (element: Element) => boolean;
+            } }).__aiDomRuntime;
             const activeSurfaceElement = runtime?.activeSurfaceElement?.();
             return controls.flatMap(element => {
               const rect = element.getBoundingClientRect();
@@ -2989,6 +3070,7 @@ function browserCodeKernelMain() {
               if (!rect.width || !rect.height || style.visibility !== 'visible' || style.display === 'none') return [];
               if (rect.bottom <= 0 || rect.right <= 0 || rect.top >= innerHeight || rect.left >= innerWidth) return [];
               const input = element as HTMLInputElement;
+              const disabled = runtime?.isDisabledElement?.(element) ?? Boolean(input.disabled || element.getAttribute('aria-disabled') === 'true');
               const hit = document.elementFromPoint(Math.max(0, Math.min(innerWidth - 1, rect.x + rect.width / 2)), Math.max(0, Math.min(innerHeight - 1, rect.y + rect.height / 2)));
               const topmost = hit === element || Boolean(hit && element.contains(hit));
               const buttonText = element.matches('button, [role="button"], [class*="close-icon"]')
@@ -3002,8 +3084,8 @@ function browserCodeKernelMain() {
                 name: element.getAttribute('name'), placeholder: element.getAttribute('placeholder'),
                 label,
                 focused: element === focused, editable: ((element as HTMLElement).isContentEditable || element.matches('input:read-write, textarea:read-write'))
-                  && !input.readOnly && !input.disabled && element.getAttribute('aria-disabled') !== 'true',
-                readOnly: Boolean(input.readOnly), disabled: Boolean(input.disabled), topmost,
+                  && !input.readOnly && !disabled,
+                readOnly: Boolean(input.readOnly), disabled, topmost,
                 inActiveSurface: Boolean(activeSurfaceElement?.contains(element)),
                 ...(!topmost && hit ? { blocker: hit.tagName.toLowerCase()
                   + (hit.id ? '#' + hit.id : '')
@@ -3465,6 +3547,7 @@ export class BrowserCodeKernel {
     child.send({
       type: 'init',
       connection: this.connection,
+      ignoreHTTPSErrors: (this.options.environment?.BROWSER_IGNORE_HTTPS_ERRORS ?? process.env.BROWSER_IGNORE_HTTPS_ERRORS) === 'true',
       playwrightEntryPath,
       websocketEntryPath: browserCodeHostRequire.resolve('ws'),
       targetIds,

@@ -6,11 +6,12 @@ export * from './runtime-skill.ts'; export * from './settings.ts';
 
 export const knowledgeCapabilityToolNames = Object.freeze({ knowledge: 'knowledge' } as const);
 export type KnowledgeDocument = { id: string; title: string; source?: string; content: string; metadata?: Record<string, unknown>; createdAt: string; updatedAt: string };
+export type KnowledgeDocumentSummary = Omit<KnowledgeDocument, 'content'> & { contentChars: number };
 export type KnowledgeSearchHit = { documentId: string; title: string; source?: string; chunkIndex: number; text: string; score: number; metadata?: Record<string, unknown> };
 export interface KnowledgeStore {
   put(input: Omit<KnowledgeDocument, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }): Promise<KnowledgeDocument>;
   get(id: string): Promise<KnowledgeDocument | undefined>;
-  list(limit: number, offset: number): Promise<KnowledgeDocument[]>;
+  list(limit: number, offset: number): Promise<KnowledgeDocumentSummary[]>;
   search(query: string, limit: number, chunkChars: number): Promise<KnowledgeSearchHit[]>;
   delete(id: string): Promise<boolean>;
   health?(): Promise<CapabilityHealth>;
@@ -40,7 +41,7 @@ export function createKnowledgeTool(store: KnowledgeStore, configuration: Capabi
         if (input.action === 'ingest') { const document = await store.put({ id: input.documentId, title: input.title!, content: input.content!, source: input.source, metadata: input.metadata }); return { ok: true, summary: `Knowledge document ${document.id} indexed.`, data: { ...document, content: undefined, contentChars: document.content.length } }; }
         if (input.action === 'search') { const hits = await store.search(input.query!, input.limit || normalizeBoundedInteger(configuration.AGENT_KNOWLEDGE_SEARCH_LIMIT, 8, 1, 30), normalizeBoundedInteger(configuration.AGENT_KNOWLEDGE_CHUNK_CHARS, 1800, 400, 8000)); return { ok: true, summary: `Found ${hits.length} knowledge chunk(s).`, data: hits }; }
         if (input.action === 'get') { const document = await store.get(input.documentId!); return document ? { ok: true, summary: `Knowledge document ${document.id}.`, data: document } : { ok: false, error: { code: 'knowledge-document-not-found', message: `Unknown knowledge document: ${input.documentId}.` } }; }
-        if (input.action === 'list') { const documents = await store.list(input.limit || 50, input.offset || 0); return { ok: true, summary: `${documents.length} knowledge document(s).`, data: documents.map((item) => ({ ...item, content: undefined, contentChars: item.content.length })) }; }
+        if (input.action === 'list') { const documents = await store.list(input.limit || 50, input.offset || 0); return { ok: true, summary: `${documents.length} knowledge document(s).`, data: documents }; }
         const deleted = await store.delete(input.documentId!); return deleted ? { ok: true, summary: `Knowledge document ${input.documentId} deleted.`, data: { documentId: input.documentId, deleted: true } } : { ok: false, error: { code: 'knowledge-document-not-found', message: `Unknown knowledge document: ${input.documentId}.` } };
       } catch (error) { return { ok: false, error: { code: 'knowledge-operation-failed', message: error instanceof Error ? error.message : String(error) } }; }
     },

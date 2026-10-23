@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createCapabilityDocumentDatabase } from '../node.ts';
-import { createKnowledgeCapability, type KnowledgeDocument, type KnowledgeSearchHit, type KnowledgeStore } from './index.ts';
+import { createKnowledgeCapability, type KnowledgeDocument, type KnowledgeDocumentSummary, type KnowledgeSearchHit, type KnowledgeStore } from './index.ts';
 import type { CapabilityRunContext } from '../index.ts';
 
 function tokens(value: string, indexing = false) {
@@ -67,8 +67,15 @@ export function createFileKnowledgeStore(input: { directory: string }): Knowledg
     },
     async get(id) { return store.get(id); },
     async list(limit, offset) {
-      return store.database().prepare('SELECT record_json FROM records ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?')
-        .all(Math.max(1, Math.min(100, limit)), Math.max(0, offset)).map((row) => JSON.parse(String(row.record_json)) as KnowledgeDocument);
+      const documents: KnowledgeDocumentSummary[] = [];
+      // Iterate one document at a time. A 100-item list must not retain 100 full bodies.
+      const rows = store.database().prepare('SELECT record_json FROM records ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?')
+        .iterate(Math.max(1, Math.min(100, limit)), Math.max(0, offset));
+      for (const row of rows) {
+        const { content, ...summary } = JSON.parse(String(row.record_json)) as KnowledgeDocument;
+        documents.push({ ...summary, contentChars: content.length });
+      }
+      return documents;
     },
     async search(query, limit, chunkChars) {
       const words = tokens(query).slice(0, 100);

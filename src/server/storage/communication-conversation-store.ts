@@ -20,7 +20,7 @@ export type CommunicationInbound = {
   media?: WeComInboundAttachment[];
   attachments?: BrowserChatAttachment[];
   attachmentMessageIds?: string[];
-  noticeSent?: boolean;
+  confirmationNotice?: { id: string; status: 'sending' | 'sent' | 'unknown' };
   replyStream?: {
     requestId: string; id: string; startedAt: number;
     status: 'opening' | 'open' | 'finished' | 'unavailable';
@@ -53,6 +53,13 @@ export async function receiveCommunicationMessage(value: CommunicationInbound) {
   const now = new Date(Math.max(Date.now(), previous ? Date.parse(previous.created_at) + 1 : 0)).toISOString();
   await executeDatabase(`INSERT INTO communication_inbound (id, conversation_id, status, record_json, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`, [value.id, value.conversationId, value.status, JSON.stringify(value), now, now]);
+}
+
+export async function readCommunicationConfirmationSource(conversationId: string, confirmationId: string) {
+  const rows = await queryDatabase<{ record_json: string }>(
+    "SELECT record_json FROM communication_inbound WHERE conversation_id = ? AND status = 'running'", [conversationId]);
+  return rows.map(row => JSON.parse(row.record_json) as CommunicationInbound)
+    .find(item => item.confirmationNotice?.id === confirmationId);
 }
 
 export async function readWaitingCommunicationAttachments(conversationId: string, sessionId: string, senderId: string) {

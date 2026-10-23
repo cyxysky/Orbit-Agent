@@ -64,6 +64,7 @@ import {
   ArrowDown,
   ArrowLeft,
   ArrowRight,
+  ArrowUpRight,
   BadgeCheck,
   BookOpen,
   Brain,
@@ -8697,6 +8698,45 @@ export function BrowserChatWorkspace({
   const [sidebarCollapsed, setSidebarCollapsed] = useState(initialSidebarCollapsed);
   const [session, setSession] = useState<BrowserChatSession | null>(null);
   const [sessions, setSessions] = useState<BrowserChatSession[]>([]);
+  const [confirmationNotices, setConfirmationNotices] = useState<Array<{
+    sessionId: string; title: string; confirmation: BrowserChatToolConfirmation;
+  }>>([]);
+  const [confirmationNoticeError, setConfirmationNoticeError] = useState('');
+  const confirmationRevisionRef = useRef(0);
+  const resolvedConfirmationIdsRef = useRef(new Set<string>());
+  const confirmationEventVersionsRef = useRef(new Map<string, number>());
+  const confirmationLoadSequenceRef = useRef(0);
+  const loadToolConfirmations = useCallback(async (signal?: AbortSignal) => {
+    if (mountedIdentityRef.current) return;
+    const sequence = ++confirmationLoadSequenceRef.current;
+    const baseline = confirmationRevisionRef.current;
+    try {
+      const response = await fetch(browserChatApiUrl('/api/browser-chat/tool-confirmations'), { signal });
+      const data = await readApiJson<{ confirmations: typeof confirmationNotices }>(response, '加载待确认操作失败');
+      if (signal?.aborted || sequence !== confirmationLoadSequenceRef.current) return;
+      setConfirmationNotices(current => {
+        const next = new Map(data.confirmations.filter(notice => !resolvedConfirmationIdsRef.current.has(notice.confirmation.id)).map(notice => [notice.sessionId, notice]));
+        const live = new Map(current.map(notice => [notice.sessionId, notice]));
+        for (const [id, revision] of confirmationEventVersionsRef.current) {
+          if (revision <= baseline) continue;
+          const notice = live.get(id);
+          if (notice) next.set(id, notice);
+          else next.delete(id);
+        }
+        return [...next.values()].sort((a, b) => a.confirmation.requestedAt.localeCompare(b.confirmation.requestedAt));
+      });
+      setConfirmationNoticeError('');
+    } catch (loadError) {
+      if (!signal?.aborted && sequence === confirmationLoadSequenceRef.current) {
+        setConfirmationNoticeError(loadError instanceof Error ? loadError.message : '加载待确认操作失败');
+      }
+    }
+  }, [browserChatApiUrl]);
+  useEffect(() => {
+    const controller = new AbortController();
+    void loadToolConfirmations(controller.signal);
+    return () => controller.abort();
+  }, [loadToolConfirmations]);
   const applySessionListPage = useCallback((incoming: BrowserChatSession[]) => {
     const normalized = incoming.map((item) => compactBrowserChatSessionForList(normalizeSession(item)));
     setSessions((current) => {
@@ -8779,6 +8819,7 @@ export function BrowserChatWorkspace({
   const [toolDialogLoadState, setToolDialogLoadState] = useState<'idle' | 'loading' | 'loaded' | 'failed'>('idle');
   const toolDialogAbortRef = useRef<AbortController | null>(null);
   const [resolvingConfirmationId, setResolvingConfirmationId] = useState<string | null>(null);
+  const resolvingConfirmationRef = useRef<string | null>(null);
   const [resolvingConfirmationAction, setResolvingConfirmationAction] = useState<BrowserChatToolConfirmationAction | null>(null);
   const [resumingHumanVerification, setResumingHumanVerification] = useState(false);
   const [stoppingSubagentIds, setStoppingSubagentIds] = useState<Set<string>>(() => new Set());
@@ -9760,6 +9801,25 @@ export function BrowserChatWorkspace({
       if (patch) updates.push({ event, patch });
     }
     if (!updates.length) return;
+    for (const { event } of updates) {
+      confirmationEventVersionsRef.current.set(event.id, ++confirmationRevisionRef.current);
+    }
+    setConfirmationNotices(current => {
+      let next = current;
+      for (const { event, patch } of updates) {
+        const pending = event.deleted ? undefined : normalizeToolConfirmation(patch?.session.pendingToolConfirmation ?? undefined);
+        if (pending && resolvedConfirmationIdsRef.current.has(pending.id)) continue;
+        const previous = next.find(notice => notice.sessionId === event.id);
+        if (!pending) {
+          if (previous) next = next.filter(notice => notice.sessionId !== event.id);
+          continue;
+        }
+        const title = patch?.session.title || '';
+        if (previous?.confirmation.id === pending.id && previous.title === title) continue;
+        next = [...next.filter(notice => notice.sessionId !== event.id), { sessionId: event.id, title, confirmation: pending }];
+      }
+      return next === current ? current : next.sort((a, b) => a.confirmation.requestedAt.localeCompare(b.confirmation.requestedAt));
+    });
     if (activeSessionIdRef.current && deletedIds.has(activeSessionIdRef.current)) {
       activeSessionIdRef.current = null;
     }
@@ -9810,11 +9870,11 @@ export function BrowserChatWorkspace({
 
   const resyncRealtimeSessions = useCallback(async () => {
     const activeSessionId = activeSessionIdRef.current;
-    await loadSessions({ showLoading: false });
+    await Promise.all([loadSessions({ showLoading: false }), loadToolConfirmations()]);
     if (activeSessionId) await refreshSession(activeSessionId, {
       activateIf: () => activeSessionIdRef.current === activeSessionId,
     });
-  }, [loadSessions, refreshSession]);
+  }, [loadSessions, refreshSession, loadToolConfirmations]);
 
   useBrowserChatRealtime({
     onRefresh: handleRealtimeRefresh,
@@ -10158,9 +10218,10 @@ export function BrowserChatWorkspace({
     }
   }
 
-  async function resolveToolConfirmation(confirmationId: string, action: BrowserChatToolConfirmationAction) {
-    const sessionId = session?.id;
-    if (!sessionId || resolvingConfirmationId) return;
+  async function resolveToolConfirmation(confirmationId: string, action: BrowserChatToolConfirmationAction, targetSessionId?: string) {
+    const sessionId = targetSessionId || session?.id;
+    if (!sessionId || resolvingConfirmationRef.current) return;
+    resolvingConfirmationRef.current = confirmationId;
     setResolvingConfirmationId(confirmationId);
     setResolvingConfirmationAction(action);
     setError('');
@@ -10171,10 +10232,20 @@ export function BrowserChatWorkspace({
         body: JSON.stringify({ action, confirmationId }),
       });
       const data = await readApiJson<{ session: BrowserChatSession }>(response, '工具确认失败');
-      if (data.session) upsertSession(data.session, { activate: activeSessionIdRef.current === sessionId });
+      if (data.session) {
+        upsertSession(data.session, { activate: activeSessionIdRef.current === sessionId });
+        resolvedConfirmationIdsRef.current.add(confirmationId);
+        confirmationEventVersionsRef.current.set(sessionId, ++confirmationRevisionRef.current);
+        setConfirmationNotices(current => current.filter(notice => notice.sessionId !== sessionId || notice.confirmation.id !== confirmationId));
+      }
+      setConfirmationNoticeError('');
     } catch (resolveError) {
-      setError(resolveError instanceof Error ? resolveError.message : '工具确认失败');
+      const message = resolveError instanceof Error ? resolveError.message : '工具确认失败';
+      setError(message);
+      await loadToolConfirmations();
+      setConfirmationNoticeError(message);
     } finally {
+      resolvingConfirmationRef.current = null;
       setResolvingConfirmationId(null);
       setResolvingConfirmationAction(null);
     }
@@ -11098,6 +11169,28 @@ export function BrowserChatWorkspace({
 
   return (
     <BrowserChatReasoningVisibilityContext.Provider value={showReasoning}>
+    {!mountedIdentityRef.current && (confirmationNotices.length > 0 || confirmationNoticeError) && typeof document !== 'undefined'
+      ? createPortal(
+        <aside className="browser-chat-confirmation-notifications" aria-label={t('待确认操作')} aria-live="polite">
+          {confirmationNoticeError ? <div className="browser-chat-confirmation-notification-error" role="status">
+            <span>{t(confirmationNoticeError)}</span>
+            <button type="button" onClick={() => void loadToolConfirmations()}>{t('刷新')}</button>
+          </div> : null}
+          {confirmationNotices.map(notice => <article className="browser-chat-confirmation-notification" key={notice.confirmation.id}>
+            <button className="browser-chat-confirmation-notification-source" type="button" onClick={() => void loadSession(notice.sessionId)}>
+              <MessageSquare aria-hidden="true" size={15} />
+              <span>{notice.title || t('新对话')}</span>
+              <ArrowUpRight aria-hidden="true" size={14} />
+            </button>
+            <BrowserChatToolConfirmationActions
+              pending={notice.confirmation}
+              resolvingConfirmationAction={resolvingConfirmationAction}
+              resolvingConfirmationId={resolvingConfirmationId}
+              onResolveToolConfirmation={(id, action) => resolveToolConfirmation(id, action, notice.sessionId)}
+            />
+          </article>)}
+        </aside>, document.body,
+      ) : null}
     <section className={sidebarCollapsed ? 'browser-chat-layout browser-chat-conversation-layout sidebar-collapsed' : 'browser-chat-layout browser-chat-conversation-layout'}>
       <WorkspaceNavigationSidebar
         activeKey="/browser-chat"

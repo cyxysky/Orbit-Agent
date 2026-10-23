@@ -9,16 +9,12 @@ import { managedProcessEnvironment } from '../../runtime.ts';
 import { normalizeBoundedInteger, type CapabilityRunContext, type CapabilityExecutionContext } from '../../index.ts';
 import { createTerminalCapability, type TerminalOperations, type TerminalResult, type TerminalSummary, type TerminalEvent, type TerminalCommand } from './index.ts';
 import { terminalShellInvocation, terminalCommandInvocation, type TerminalShell } from './shell-integration.ts';
-import { retainTerminalOutput, splitTerminalOutput, terminalGeometryAt, terminalGeometrySequence, type TerminalGeometry } from './geometry.ts';
+import { retainTerminalOutput, terminalGeometryAt, terminalGeometrySequence, type TerminalGeometry } from './geometry.ts';
+import { plainTerminalOutput, terminalOutputPage, type TerminalOutputOptions } from './output.ts';
+import { spawnPipeTerminal } from './pipe.ts';
 export type { TerminalShell } from './shell-integration.ts';
 
-const plainOutput = (value: string) => {
-  const output = splitTerminalOutput(value).flatMap(part => 'output' in part ? [part.output] : []).join('');
-  // Node's VT stripper does not consume ST-terminated OSC strings in all
-  // runtimes. Remove complete ECMA-48 control strings before stripping CSI.
-  const text = output.replace(/(?:\x1b\]|\x9d)[\s\S]*?(?:\x07|\x1b\\|\x9c)|(?:\x1b[P^_X]|[\x90\x98\x9e\x9f])[\s\S]*?(?:\x1b\\|\x9c)/g, '');
-  return stripVTControlCharacters(text.replace(new RegExp('\\x1b\\[[0-?]*[ -/]*[@-~]', 'g'), ''));
-};
+const plainOutput = plainTerminalOutput;
 
 export type NodeTerminalOptions = {
   cwd: string; shell?: TerminalShell; env?: NodeJS.ProcessEnv;
@@ -34,7 +30,7 @@ type TerminalSession = {
 export interface NodeTerminalOperations extends TerminalOperations {
   configure(options: NodeTerminalOptions): void;
   list(): TerminalSummary[];
-  read(terminalId: string, cursor?: number, raw?: boolean): TerminalResult;
+  read(terminalId: string, cursor?: number, raw?: boolean, outputOptions?: TerminalOutputOptions): TerminalResult;
   subscribe(listener: (event: TerminalEvent) => void): () => void;
   dispose(): Promise<void>;
 }
@@ -140,6 +136,7 @@ export function createNodeTerminalOperations(initialOptions: NodeTerminalOptions
   };
   const interrupt = (s: TerminalSession, status: 'interrupted' | 'timed_out' = 'interrupted') => {
     if (s.summary.status === 'closed') return;
+    if (s.summary.transport === 'pipe') { s.interruption = status; kill(s); return; }
     s.interruption = status;
     // A Ctrl+C sent while the shell is still accepting the invocation line can
     // cancel its echo yet leave the command queued. Deliver it at the start
@@ -168,7 +165,7 @@ export function createNodeTerminalOperations(initialOptions: NodeTerminalOptions
         if (context.reportProgress && Date.now() - lastReport >= 200) {
           lastReport = Date.now();
           void Promise.resolve(context.reportProgress({ phase: 'terminal:output', message: `${s.summary.name}: ${s.summary.status}`,
-            data: { terminalId: s.summary.terminalId, cursor: s.summary.cursor, output: plainOutput(s.output.slice(-4000)) } })).catch(() => undefined);
+            data: { terminalId: s.summary.terminalId, cursor: s.summary.cursor } })).catch(() => undefined);
         }
         if (s.summary.status !== 'running' && s.summary.status !== 'starting' || outputCursor !== undefined && s.summary.cursor > outputCursor) finish();
       };
@@ -183,13 +180,42 @@ export function createNodeTerminalOperations(initialOptions: NodeTerminalOptions
     s.interruption = 'interrupted'; kill(s);
     await s.closed;
   };
+  const reply = async (s: TerminalSession, cursor = 0, outputOptions: TerminalOutputOptions = {}): Promise<TerminalResult> => {
+    const result = operations.read(s.summary.terminalId, cursor, false, outputOptions);
+    // A completed one-shot process needs no resident shell. Keep its transcript
+    // only while more output remains to be delivered, then release its handle.
+    if (s.summary.transport === 'pipe' && isClosed(s) && !result.hasMore) {
+      await rm(s.directory, { recursive: true, force: true });
+      sessions.delete(s.summary.terminalId); emit({ type: 'deleted', terminalId: s.summary.terminalId });
+      return { ...result, released: true };
+    }
+    return result;
+  };
+  const checkCapacity = () => {
+    const max = normalizeBoundedInteger(options.maxProcesses, 4, 1, 16);
+    if (creating + [...sessions.values()].filter(s => s.summary.status !== 'closed').length >= max) throw new Error(`At most ${max} terminals may be open. Close one first.`);
+    if (sessions.size + creating >= 64) throw new Error('Delete a closed terminal before creating more terminals.');
+  };
+  const reserveCreation = () => {
+    checkCapacity(); creating++;
+    let released = false;
+    return () => { if (!released) { released = true; creating--; events.emit('creation-settled'); } };
+  };
+  const resolveShell = (requested?: TerminalShell): Exclude<TerminalShell, 'auto'> => {
+    const configured = requested || options.shell || 'auto';
+    const shell = configured === 'auto' ? (process.platform === 'win32' ? 'powershell' : 'bash') : configured;
+    if (!['powershell', 'pwsh', 'bash'].includes(shell)) throw new Error('Unsupported terminal shell.');
+    if (process.platform === 'win32' && shell === 'bash') throw new Error('Windows terminals require PowerShell or pwsh for process-tree ownership.');
+    return shell;
+  };
 
   const operations: NodeTerminalOperations = {
     configure(next) { options = next; },
     list() { return [...sessions.values()].map(copy); },
     subscribe(listener) { events.on('update', listener); return () => { events.off('update', listener); }; },
-    read(id, cursor = 0, raw = false) {
+    read(id, cursor = 0, raw = false, outputOptions) {
       const s = get(id);
+      if (!raw && outputOptions) return { terminal: copy(s), ...terminalOutputPage(s.output, s.summary.startCursor, cursor, outputOptions) };
       const offset = Math.max(s.summary.startCursor, Math.min(cursor, s.summary.cursor));
       const output = s.output.slice(offset - s.summary.startCursor);
       return { terminal: copy(s), output: raw ? output : plainOutput(output),
@@ -200,20 +226,54 @@ export function createNodeTerminalOperations(initialOptions: NodeTerminalOptions
       if (disposed) throw new Error('Terminal manager is closed.');
       context.abortSignal?.throwIfAborted();
       if (request.action === 'list') return { terminals: operations.list() };
+      if (request.action === 'exec') {
+        const releaseCreation = reserveCreation();
+        let directory: string | undefined;
+        let session: TerminalSession | undefined;
+        try {
+          const cwd = await realpath(path.resolve(options.cwd, request.cwd || '.'));
+          if (!(await stat(cwd)).isDirectory()) throw new Error('Terminal cwd must be a directory.');
+          const shell = resolveShell(request.shell);
+          directory = await mkdtemp(path.join(tmpdir(), 'orbit-terminal-'));
+          context.abortSignal?.throwIfAborted();
+          if (disposed) throw new Error('Terminal manager is closed.');
+          const child = await spawnPipeTerminal(shell, request.command, directory, cwd, managedProcessEnvironment(options.env || process.env), context.abortSignal);
+          let closed!: () => void;
+          const s: TerminalSession = session = {
+            summary: { terminalId: randomUUID(), name: 'exec', shell, cwd, transport: 'pipe', pid: child.pid,
+              status: 'running', createdAt: new Date().toISOString(), cols: 100, rows: 30, exitCode: null, cursor: 0, startCursor: 0,
+              command: { id: randomUUID(), command: request.command, startedAt: new Date().toISOString(), status: 'running',
+                exitCode: null, timeoutMs: request.timeoutMs ?? normalizeBoundedInteger(options.timeoutMs, 0, 0, 3600000) } },
+            process: child, directory, nonce: '', output: '', outputGeometry: { cols: 100, rows: 30 }, pending: '', pendingGeometry: [],
+            suppressEcho: false, awaitingStart: false, files: [], closed: new Promise(resolve => { closed = resolve; }),
+          };
+          sessions.set(s.summary.terminalId, s);
+          child.onData(data => append(s, data));
+          child.onExit(event => { complete(s, event.exitCode); s.summary.status = 'closed'; s.summary.exitCode = event.exitCode; state(s); closed(); });
+          state(s);
+          releaseCreation();
+          const abort = () => interrupt(s);
+          try {
+            if (s.summary.command!.timeoutMs > 0) s.timer = setTimeout(() => interrupt(s, 'timed_out'), s.summary.command!.timeoutMs);
+            context.abortSignal?.addEventListener('abort', abort, { once: true });
+            if (context.abortSignal?.aborted || disposed) { abort(); context.abortSignal?.throwIfAborted(); throw new Error('Terminal manager is closed.'); }
+            await wait(s, request.yieldMs ?? 1000, context);
+            return await reply(s, 0, request);
+          } finally { context.abortSignal?.removeEventListener('abort', abort); }
+        } catch (error) {
+          if (session) { await close(session); sessions.delete(session.summary.terminalId); emit({ type: 'deleted', terminalId: session.summary.terminalId }); }
+          if (directory) await rm(directory, { recursive: true, force: true });
+          throw error;
+        } finally { releaseCreation(); }
+      }
       if (request.action === 'create') {
-        const max = normalizeBoundedInteger(options.maxProcesses, 4, 1, 16);
-        if (creating + [...sessions.values()].filter(s => s.summary.status !== 'closed').length >= max) throw new Error(`At most ${max} terminals may be open. Close one first.`);
-        if (sessions.size + creating >= 64) throw new Error('Delete a closed terminal before creating more terminals.');
-        creating++;
+        const releaseCreation = reserveCreation();
         let directory: string | undefined;
         let s: TerminalSession | undefined;
         try {
           const cwd = await realpath(path.resolve(options.cwd, request.cwd || '.'));
           if (!(await stat(cwd)).isDirectory()) throw new Error('Terminal cwd must be a directory.');
-          const configured = options.shell || 'auto';
-          const shell = configured === 'auto' ? (process.platform === 'win32' ? 'powershell' : 'bash') : configured;
-          if (!['powershell', 'pwsh', 'bash'].includes(shell)) throw new Error('Unsupported terminal shell.');
-          if (process.platform === 'win32' && shell === 'bash') throw new Error('Windows terminals require PowerShell or pwsh for process-tree ownership.');
+          const shell = resolveShell(request.shell);
           directory = await mkdtemp(path.join(tmpdir(), 'orbit-terminal-'));
           const nonce = randomUUID();
           const invocation = await terminalShellInvocation(shell, directory, nonce);
@@ -234,7 +294,7 @@ export function createNodeTerminalOperations(initialOptions: NodeTerminalOptions
           }
           let closed!: () => void;
           s = { summary: { terminalId: randomUUID(), name: request.name || `Terminal ${sessions.size + 1}`,
-            shell, cwd, pid: child.pid, status: 'starting', createdAt: new Date().toISOString(),
+            shell, cwd, transport: 'pty', pid: child.pid, status: 'starting', createdAt: new Date().toISOString(),
             cols, rows, exitCode: null, cursor: 0, startCursor: 0, ...(windowsPty ? { windowsPty } : {}) },
             process: child, directory, nonce, pending: '', pendingGeometry: [], output: '', outputGeometry: { cols, rows }, suppressEcho: false, awaitingStart: false, files: [],
             closed: new Promise(resolve => { closed = resolve; }) };
@@ -254,28 +314,33 @@ export function createNodeTerminalOperations(initialOptions: NodeTerminalOptions
           });
           state(current);
           append(current, terminalGeometrySequence({ cols, rows }), true);
+          releaseCreation();
           if (disposed) throw new Error('Terminal manager is closed.');
           await wait(current, 15000, context);
           if (current.summary.status !== 'ready') throw new Error(`Terminal could not initialize: ${stripVTControlCharacters(current.output).slice(-2000)}`);
-          return operations.read(current.summary.terminalId);
+          return reply(current);
         } catch (error) {
           if (s) { await close(s); sessions.delete(s.summary.terminalId); emit({ type: 'deleted', terminalId: s.summary.terminalId }); }
           if (directory) await rm(directory, { recursive: true, force: true });
           throw error;
-        } finally { creating--; events.emit('creation-settled'); }
+        } finally { releaseCreation(); }
       }
       const s = get(request.terminalId);
+      if ((request.action === 'read' || request.action === 'wait') && request.commandId && request.commandId !== s.summary.command?.id) {
+        throw new Error('Terminal command changed. Read the current terminal state before continuing.');
+      }
       if (request.action === 'delete') {
         await close(s); await rm(s.directory, { recursive: true, force: true });
         sessions.delete(request.terminalId); emit({ type: 'deleted', terminalId: request.terminalId });
         return { deleted: request.terminalId };
       }
       if (request.action === 'close') { await close(s); return operations.read(request.terminalId, s.summary.cursor); }
-      if (request.action === 'read') return operations.read(request.terminalId, request.cursor);
+      if (request.action === 'read') return reply(s, request.cursor, request);
       if (request.action === 'rename') { s.summary.name = request.name; state(s); return { terminal: copy(s) }; }
       if (request.action === 'wait') {
         await wait(s, request.yieldMs ?? 30000, context);
-        return operations.read(request.terminalId, request.cursor);
+        if (request.commandId && request.commandId !== s.summary.command?.id) throw new Error('Terminal command changed while waiting.');
+        return reply(s, request.cursor, request);
       }
       if (s.summary.status === 'closed') throw new Error('Terminal is closed. Create a new terminal.');
       if (request.action === 'resize') {
@@ -292,8 +357,9 @@ export function createNodeTerminalOperations(initialOptions: NodeTerminalOptions
         }
         s.process.write(request.input);
       } else if (request.action === 'run') {
+        if (s.summary.transport === 'pipe') throw new Error('exec uses a fresh shell. Use exec again, or create a reusable PTY.');
         if (s.summary.status !== 'ready') throw new Error('Terminal is busy. Wait, send interactive input, interrupt it, or create another terminal.');
-        const cursor = s.summary.cursor;
+        let cursor = s.summary.cursor;
         const command: TerminalCommand = { id: randomUUID(), command: request.command, startedAt: new Date().toISOString(),
           status: 'running', exitCode: null, timeoutMs: request.timeoutMs ?? normalizeBoundedInteger(options.timeoutMs, 0, 0, 3600000) };
         s.summary.command = command; s.summary.status = 'running'; s.awaitingStart = true; state(s);
@@ -303,13 +369,14 @@ export function createNodeTerminalOperations(initialOptions: NodeTerminalOptions
           s.files = invocation.files;
           context.abortSignal?.throwIfAborted();
           if (isClosed(s)) throw new Error('Terminal was closed before the command started.');
-          if (s.interruption) { complete(s, 130); s.summary.status = 'ready'; state(s); return operations.read(request.terminalId, cursor); }
+          if (s.interruption) { complete(s, 130); s.summary.status = 'ready'; state(s); return reply(s, cursor, request); }
           append(s, request.command + '\r\n'); s.suppressEcho = true;
+          cursor = s.summary.cursor;
           s.process.write(invocation.input);
           if (command.timeoutMs > 0) s.timer = setTimeout(() => interrupt(s, 'timed_out'), command.timeoutMs);
           context.abortSignal?.addEventListener('abort', abort, { once: true });
           await wait(s, request.yieldMs ?? 1000, context);
-          return operations.read(request.terminalId, cursor);
+          return reply(s, cursor, request);
         } catch (error) {
           if (context.abortSignal?.aborted) abort();
           else if (s.summary.command?.id === command.id && s.summary.command.status === 'running') {

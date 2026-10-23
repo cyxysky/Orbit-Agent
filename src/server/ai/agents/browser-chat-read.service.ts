@@ -239,6 +239,18 @@ function resolvedContextUsage(
   };
 }
 
+export async function listBrowserChatToolConfirmations(userId?: string | number) {
+  return (await readBrowserChatSessionSummaries<BrowserChatPersistedHeader>({
+    status: 'running', userId: normalizeApplicationUserId(userId),
+  }))
+    .filter(session => session?.id && belongsToUser(session, userId))
+    .map(recoverOrphanedBrowserChatSession)
+    .flatMap(session => session.busy && session.status === 'running' && session.pendingToolConfirmation
+      ? [{ sessionId: session.id, title: session.title, confirmation: session.pendingToolConfirmation }]
+      : [])
+    .sort((a, b) => a.confirmation.requestedAt.localeCompare(b.confirmation.requestedAt));
+}
+
 export async function listBrowserChatSessionSummaries(
   userId?: string | number,
   input: { beforeId?: string; beforeCreatedAt?: string; limit?: number } = {},

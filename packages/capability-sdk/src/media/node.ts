@@ -3,11 +3,9 @@ import path from 'node:path';
 import os from 'node:os';
 import { readManagedRuntime } from '../runtime.ts';
 import ffmpegStatic from 'ffmpeg-static';
-import sharp from 'sharp';
 import { runCapabilityProcess } from '../node.ts';
 import { createMediaCapability, mediaToolInput, type MediaArtifact, type MediaOperations } from './index.ts';
 import type { CapabilityExecutionContext, CapabilityRunContext } from '../index.ts';
-import { createRemotionVideoComposer } from './remotion-renderer.ts';
 
 function run(executable: string, args: string[], timeoutMs: number, context: CapabilityExecutionContext) {
   return runCapabilityProcess({ executable, args, timeoutMs, signal: context.abortSignal, maxOutputChars: 100_000 });
@@ -36,6 +34,7 @@ export function createFfmpegMediaOperations(input: {
         throw new Error('The FFmpeg composer does not support captions or camera motion. Use a provider advertising those features, such as createRemotionMediaOperations; no video was rendered.');
       }
       context.abortSignal?.throwIfAborted();
+      const { default: sharp } = await import('sharp');
       const [width, height] = (request.size || '1280x720').split('x').map(Number);
       const directory = await mkdtemp(path.join(os.tmpdir(), 'webpilot-video-'));
       const deadline = Date.now() + (input.timeoutMs || 120_000);
@@ -101,6 +100,7 @@ export function createFfmpegMediaOperations(input: {
     async inspect(sourceRef, context) {
       context.abortSignal?.throwIfAborted();
       const source = await input.resolveSource(sourceRef, context);
+      const { default: sharp } = await import('sharp');
       // Image formats supported by composition (including SVG) need no FFmpeg decoder.
       const image = await sharp(source, { limitInputPixels: 40_000_000, animated: false }).metadata().catch(() => undefined);
       if (image?.width && image.height) {
@@ -152,6 +152,7 @@ export function createFfmpegMediaOperations(input: {
         const pattern = path.join(directory, 'frame-%04d.jpg');
         let timestamps: number[];
         if (stillImage) {
+          const { default: sharp } = await import('sharp');
           await sharp(source, { limitInputPixels: 40_000_000, animated: false }).rotate().jpeg().toFile(path.join(directory, 'frame-0001.jpg'));
           timestamps = [0];
         } else {
@@ -196,8 +197,13 @@ export function createRemotionMediaOperations(input: Parameters<typeof createFfm
   return { ...operations, videoRenderer: 'remotion',
     videoCompositionCapabilities: { motions: ['none', 'zoomIn', 'zoomOut', 'panLeft', 'panRight'], captions: true,
       renderTimeoutMs: input.renderTimeoutMs || 900_000 },
-    composeVideo: createRemotionVideoComposer({
-    resolveSource: input.resolveSource, publishArtifact: input.publishArtifact, inspect: operations.inspect,
-    timeoutMs: input.renderTimeoutMs, browserExecutable: input.browserExecutable,
-  }) };
+    async composeVideo(request, context) {
+      context.abortSignal?.throwIfAborted();
+      const { createRemotionVideoComposer } = await import('./remotion-renderer.ts');
+      return createRemotionVideoComposer({
+        resolveSource: input.resolveSource, publishArtifact: input.publishArtifact, inspect: operations.inspect,
+        timeoutMs: input.renderTimeoutMs, browserExecutable: input.browserExecutable,
+      })(request, context);
+    },
+  };
 }

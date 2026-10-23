@@ -225,7 +225,7 @@ export const browserPreviewStyles = String.raw`
   width: 1px;
 }
 
-.cap-browser-preview-stage img,
+.cap-browser-preview-stage canvas,
 .cap-browser-preview-stage video {
   background: #111318;
   contain: paint;
@@ -234,6 +234,8 @@ export const browserPreviewStyles = String.raw`
   object-fit: contain;
   object-position: center;
   pointer-events: none;
+  position: absolute;
+  inset: 0;
   width: 100%;
 }
 
@@ -248,7 +250,7 @@ export const browserPreviewStyles = String.raw`
   opacity: 0;
 }
 
-.cap-browser-preview-stage img {
+.cap-browser-preview-stage canvas {
   image-rendering: auto;
 }
 
@@ -413,9 +415,20 @@ export const browserPreviewStyles = String.raw`
   display: flex;
   flex-direction: column;
   gap: 9px;
-  max-width: 420px;
+  inset: 0;
+  justify-content: center;
+  min-width: 0;
+  overflow: auto;
   padding: 28px;
+  position: absolute;
   text-align: center;
+  z-index: 1;
+}
+
+.cap-browser-preview-empty > strong,
+.cap-browser-preview-empty > span {
+  max-width: 420px;
+  overflow-wrap: anywhere;
 }
 
 .cap-browser-preview-empty strong {

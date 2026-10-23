@@ -7,6 +7,7 @@ import {
 import { terminalRuntimeSkill } from './runtime-skill.ts';
 import { terminalCapabilitySettings } from './settings.ts';
 import type { TerminalGeometry } from './geometry.ts';
+export type { TerminalOutputOptions } from './output.ts';
 export * from './runtime-skill.ts';
 export * from './settings.ts';
 export * from './geometry.ts';
@@ -19,20 +20,31 @@ const cursor = z.number().int().min(0).optional();
 const yieldMs = z.number().int().min(0).max(30000).optional()
   .describe('Maximum wait for this call. The terminal and its command continue after this call returns.');
 const dimensions = { cols: z.number().int().min(20).max(500), rows: z.number().int().min(5).max(200) };
+const outputOptions = {
+  maxOutputChars: z.number().int().min(2).max(200000).optional().describe('Returned text budget in UTF-16 code units; default 8000. Does not change retained history.'),
+  outputMode: z.enum(['head', 'tail']).optional().describe('head (default) pages forward using cursor; tail skips older text and reports omittedChars.'),
+};
+const commandOptions = {
+  command: z.string().trim().min(1).max(100000),
+  timeoutMs: z.number().int().min(0).max(3600000).optional().describe('Command deadline; 0 means none. Independent of yieldMs.'),
+  yieldMs, ...outputOptions,
+};
+const cwd = z.string().trim().min(1).max(4000).optional();
+const shell = z.enum(['powershell', 'pwsh', 'bash']).optional();
+const detail = z.boolean().optional().describe('Include full terminal metadata; default compact. Output remains budgeted.');
 const parser = z.discriminatedUnion('action', [
-  z.object({ action: z.literal('create'), reason, name: name.optional(), cwd: z.string().trim().min(1).max(4000).optional(), cols: dimensions.cols.optional(), rows: dimensions.rows.optional() }).strict(),
-  z.object({ action: z.literal('list'), reason }).strict(),
-  z.object({ action: z.literal('run'), reason, terminalId, command: z.string().trim().min(1).max(100000),
-    timeoutMs: z.number().int().min(0).max(3600000).optional().describe('Command timeout; 0 means no deadline. Timeout interrupts the foreground command.'),
-    yieldMs }).strict(),
-  z.object({ action: z.literal('read'), reason, terminalId, cursor }).strict(),
-  z.object({ action: z.literal('wait'), reason, terminalId, cursor, yieldMs }).strict(),
-  z.object({ action: z.literal('write'), reason, terminalId, input: z.string().min(1).max(100000) }).strict(),
-  z.object({ action: z.literal('interrupt'), reason, terminalId }).strict(),
-  z.object({ action: z.literal('resize'), reason, terminalId, ...dimensions }).strict(),
-  z.object({ action: z.literal('rename'), reason, terminalId, name }).strict(),
-  z.object({ action: z.literal('close'), reason, terminalId }).strict(),
-  z.object({ action: z.literal('delete'), reason, terminalId }).strict(),
+  z.object({ action: z.literal('exec'), reason, detail, cwd, shell, ...commandOptions }).strict(),
+  z.object({ action: z.literal('create'), reason, detail, shell, name: name.optional(), cwd, cols: dimensions.cols.optional(), rows: dimensions.rows.optional() }).strict(),
+  z.object({ action: z.literal('list'), reason, detail }).strict(),
+  z.object({ action: z.literal('run'), reason, detail, terminalId, ...commandOptions }).strict(),
+  z.object({ action: z.literal('read'), reason, detail, terminalId, cursor, commandId: terminalId.optional(), ...outputOptions }).strict(),
+  z.object({ action: z.literal('wait'), reason, detail, terminalId, cursor, commandId: terminalId.optional(), yieldMs, ...outputOptions }).strict(),
+  z.object({ action: z.literal('write'), reason, detail, terminalId, input: z.string().min(1).max(100000) }).strict(),
+  z.object({ action: z.literal('interrupt'), reason, detail, terminalId }).strict(),
+  z.object({ action: z.literal('resize'), reason, detail, terminalId, ...dimensions }).strict(),
+  z.object({ action: z.literal('rename'), reason, detail, terminalId, name }).strict(),
+  z.object({ action: z.literal('close'), reason, detail, terminalId }).strict(),
+  z.object({ action: z.literal('delete'), reason, detail, terminalId }).strict(),
 ]);
 export type TerminalToolInput = z.infer<typeof parser>;
 export type TerminalCommand = {
@@ -45,12 +57,27 @@ export type TerminalSummary = {
   status: 'starting' | 'ready' | 'running' | 'closed';
   createdAt: string; cols: number; rows: number; exitCode: number | null;
   command?: TerminalCommand; cursor: number; startCursor: number;
+  transport: 'pty' | 'pipe';
   windowsPty?: { backend: 'conpty' | 'winpty'; buildNumber?: number };
 };
 export type TerminalResult = {
   terminals?: TerminalSummary[]; terminal?: TerminalSummary;
   output?: string; outputGeometry?: TerminalGeometry; cursor?: number; truncated?: boolean; deleted?: string;
+  outputStartCursor?: number; endCursor?: number; hasMore?: boolean; omittedChars?: number; released?: boolean;
 };
+export type CompactTerminal = Pick<TerminalSummary, 'terminalId' | 'shell' | 'cwd' | 'status' | 'transport'> & { name?: string };
+export type CompactTerminalResult = Omit<TerminalResult, 'terminal' | 'terminals'> & {
+  terminals?: CompactTerminal[]; terminalId?: string; shell?: string; cwd?: string; transport?: 'pty' | 'pipe';
+  status?: TerminalCommand['status'] | TerminalSummary['status']; commandId?: string; exitCode?: number | null;
+};
+function compactResult(data: TerminalResult): CompactTerminalResult {
+  const { terminal, terminals, released, ...output } = data;
+  return { ...output,
+    ...(terminal ? { ...(!released ? { terminalId: terminal.terminalId } : {}), shell: terminal.shell, cwd: terminal.cwd, transport: terminal.transport,
+      status: terminal.command?.status ?? terminal.status, ...(terminal.command ? { commandId: terminal.command.id, exitCode: terminal.command.exitCode } : {}) } : {}),
+    ...(terminals ? { terminals: terminals.map(t => ({ terminalId: t.terminalId, name: t.name, shell: t.shell, cwd: t.cwd, status: t.status, transport: t.transport })) } : {}),
+  };
+}
 export type TerminalEvent =
   | { type: 'reset' }
   | { type: 'output'; terminalId: string; output: string; startCursor: number; cursor: number }
@@ -72,9 +99,10 @@ export const terminalCapabilityManifest = Object.freeze({
 } satisfies CapabilityManifest);
 
 export function createTerminalTool(operations: TerminalOperations, configuration: CapabilityRunContext['configuration']) {
-  return defineCapabilityTool<TerminalToolInput, TerminalResult>({
+  return defineCapabilityTool<TerminalToolInput, TerminalResult | CompactTerminalResult>({
     name: 'terminal',
-    description: 'Manage persistent PTY terminals: list/create, run multiple commands in the same terminalId, read/wait using a cursor, write interactive input, interrupt (Ctrl+C), resize, rename, close or delete. Working directory and environment persist. Output streams live; a running command survives tool calls. Run commands directly without Start-Process or log-file polling.',
+    description: 'exec runs a command directly in a fresh noninteractive shell; cwd and shell are optional. Long commands return terminalId for read/wait/interrupt. create/run provides a reusable interactive PTY. maxOutputChars budgets each response; head pages with cursor, tail reports skipped text. Results are compact by default; detail includes terminal metadata.',
+    resultText: 'summary',
     input: terminalToolInput,
     policy: { concurrency: 'parallel', permissions: terminalCapabilityManifest.permissions },
     async execute(input, context) {
@@ -82,13 +110,14 @@ export function createTerminalTool(operations: TerminalOperations, configuration
         return { ok: false, error: { code: 'terminal-disabled', message: 'Local terminal is disabled in host settings.' } };
       }
       try {
-        const data = await operations.execute(input, context);
-        const command = data.terminal?.command;
-        if ((input.action === 'run' || input.action === 'wait') && command && ['failed', 'timed_out', 'interrupted'].includes(command.status)) {
-          return { ok: false, error: { code: `terminal-${command.status}`,
-            message: `Command ${command.status} (exit ${command.exitCode ?? 'unknown'}). See terminal state in details.`, details: data } };
+        const result = await operations.execute(input, context);
+        const command = result.terminal?.command;
+        const data = input.detail ? result : compactResult(result);
+        const summary = command ? `${command.status}${command.exitCode === null ? '' : ` (exit ${command.exitCode})`}` : 'Terminal operation completed.';
+        if (['exec', 'run', 'read', 'wait'].includes(input.action) && command && ['failed', 'timed_out', 'interrupted'].includes(command.status)) {
+          return { ok: false, summary, data, error: { code: `terminal-${command.status}`, message: summary } };
         }
-        return { ok: true, summary: data.terminal ? `Terminal ${data.terminal.name}: ${data.terminal.status}.` : 'Terminal management completed.', data };
+        return { ok: true, summary, data };
       } catch (error) {
         context.abortSignal?.throwIfAborted();
         return { ok: false, error: { code: 'terminal-operation-failed', message: error instanceof Error ? error.message : String(error) } };

@@ -13,7 +13,7 @@ import type {
   WindowWithAiDomRuntime,
 } from './browser-session.ts';
 
-export const AI_DOM_RUNTIME_VERSION = 34;
+export const AI_DOM_RUNTIME_VERSION = 47;
 
 export function installAccessibilitySnapshotExportControl() {
   if (window.top !== window) return;
@@ -465,6 +465,21 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
     const parentStyle = runtimeComputedStyle(parent);
     if (!/\bpointer\b/i.test(parentStyle.cursor || '')) return true;
     return /(?:^|;)\s*cursor\s*:\s*pointer\b/i.test(element.getAttribute('style') || '');
+  }
+
+  function isDisabledElement(element: Element) {
+    try { if (element.matches(':disabled')) return true; } catch { /* Non-HTML nodes may not support the pseudo-class. */ }
+    let ariaDisabled: boolean | undefined;
+    let current: Element | undefined = element;
+    for (let guard = 0; current && guard < 256; guard += 1) {
+      const aria = current.getAttribute('aria-disabled');
+      if (ariaDisabled === undefined && (aria === 'true' || aria === 'false')) ariaDisabled = aria === 'true';
+      // Custom controls commonly reflect a boolean disabled state on the
+      // host while their inner native input lacks its own disabled flag.
+      if (current.localName.includes('-') && current.hasAttribute('disabled')) return true;
+      current = flatParentElement(current);
+    }
+    return ariaDisabled === true;
   }
 
   function isContentEditableOwner(element: Element) {
@@ -1329,7 +1344,7 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
       if (value) attrs.push(`${name}="${escapeVisibleDomText(value)}"`);
     }
     for (const name of visibleDomBooleanAttributes) {
-      if (element.hasAttribute(name)) attrs.push(`${name}="true"`);
+      if (name === 'disabled' ? isDisabledElement(element) : element.hasAttribute(name)) attrs.push(`${name}="true"`);
     }
     if (signals.length) {
       attrs.push(`signals="${escapeVisibleDomText(Array.from(new Set(signals)).join('|'))}"`);
@@ -1622,7 +1637,7 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
       if (value) attrs.push(`${name}="${escapeVisibleDomText(value)}"`);
     }
     for (const name of visibleDomBooleanAttributes) {
-      if (element.hasAttribute(name)) attrs.push(`${name}="true"`);
+      if (name === 'disabled' ? isDisabledElement(element) : element.hasAttribute(name)) attrs.push(`${name}="true"`);
     }
     const text = visibleDomTextContent(element, 400);
     return `<${tag} ${attrs.join(' ')}>${text ? ` ${escapeVisibleDomText(text)}` : ''}`;
@@ -1892,6 +1907,11 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
     return actionableTargetFor(element);
   }
 
+  function visibleDomSelector(ref: string) {
+    const element = visibleDomElement(ref);
+    return element ? uniqueDomSelector(element) : undefined;
+  }
+
   function scrollVisibleDomVirtualList(ref: string, input: { advance?: boolean; top?: number } = {}) {
     const element = visibleDomState().refToElement.get(ref) as HTMLElement | undefined;
     if (!element?.isConnected || element.clientHeight <= 0 || element.scrollHeight <= element.clientHeight) return undefined;
@@ -2066,6 +2086,29 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
     return element?.isConnected ? textResultForElement(element, options.maxChars) : undefined;
   }
 
+  const observedSurfaceShadowRoots = new WeakSet<ShadowRoot>();
+
+  function surfaceTreeElements() {
+    const elements: Element[] = [];
+    const roots: Array<Document | ShadowRoot> = [document];
+    for (let index = 0; index < roots.length; index += 1) {
+      for (const element of Array.from(roots[index].querySelectorAll('*'))) {
+        elements.push(element);
+        const root = shadowRootOf(element);
+        if (!root) continue;
+        roots.push(root);
+        if (!observedSurfaceShadowRoots.has(root)) {
+          mutationState.observer?.observe(root, {
+            attributes: true, childList: true, characterData: true, subtree: true,
+          });
+          observedSurfaceShadowRoots.add(root);
+          mutationState.epoch += 1;
+        }
+      }
+    }
+    return elements;
+  }
+
   let cachedSurfaceEpoch = -1;
   let cachedSurfaceFocus: Element | null = null;
   let surfaceActivationSequence = 0;
@@ -2084,17 +2127,22 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
   } | undefined;
 
   function resolveSurfaceState() {
-    const focused = document.activeElement instanceof Element && document.activeElement !== document.body
+    let focused = document.activeElement instanceof Element && document.activeElement !== document.body
       ? document.activeElement
       : undefined;
+    while (focused?.shadowRoot?.activeElement instanceof Element) {
+      focused = focused.shadowRoot.activeElement;
+    }
     if (
       cachedSurfaceState
       && cachedSurfaceEpoch === mutationState.epoch
       && cachedSurfaceFocus === (focused || null)
     ) return cachedSurfaceState;
+    const treeElements = surfaceTreeElements();
     const candidates = new Set<Element>();
     const controlledCandidates = new Set<Element>();
     const interactiveSurfaceCandidates = new Set<Element>();
+    const pointerEnabledSurfaceCandidates = new Set<Element>();
     const surfaceControllers = new Map<Element, Element[]>();
     const explicitSurfaceSelector = [
       'dialog[open]',
@@ -2106,15 +2154,17 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
       '[role="tree"]',
       '[role="grid"]',
     ].join(',');
-    for (const element of Array.from(document.querySelectorAll(explicitSurfaceSelector))) candidates.add(element);
+    for (const element of treeElements) if (element.matches(explicitSurfaceSelector)) candidates.add(element);
     try {
-      for (const element of Array.from(document.querySelectorAll(':popover-open'))) candidates.add(element);
+      for (const element of treeElements) if (element.matches(':popover-open')) candidates.add(element);
     } catch {
       // Older Chromium builds may not support :popover-open.
     }
-    for (const controller of Array.from(document.querySelectorAll('[aria-expanded="true"][aria-controls]'))) {
+    for (const controller of treeElements.filter(element => element.matches('[aria-expanded="true"][aria-controls]'))) {
+      const controllerRoot = controller.getRootNode();
+      if (!(controllerRoot instanceof Document || controllerRoot instanceof ShadowRoot)) continue;
       for (const id of normalize(controller.getAttribute('aria-controls')).split(/\s+/).filter(Boolean)) {
-        const controlled = document.getElementById(id);
+        const controlled = controllerRoot.getElementById(id);
         if (!controlled) continue;
         candidates.add(controlled);
         controlledCandidates.add(controlled);
@@ -2136,7 +2186,9 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
       '[tabindex]',
       '[contenteditable="true"]',
     ].join(',');
-    for (const item of Array.from(document.querySelectorAll(interactiveSurfaceItemSelector))) {
+    for (const item of treeElements.filter(element => element.matches(interactiveSurfaceItemSelector))) {
+      if (isOverlay(item) || isVisibleDomSubtreeHidden(item)) continue;
+      const pointerEnabled = visibleDomStyle(item)?.pointerEvents !== 'none';
       let current: Element | undefined = item;
       for (let guard = 0; current && guard < 16; guard += 1) {
         const style = visibleDomStyle(current);
@@ -2149,19 +2201,37 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
         ) {
           candidates.add(current);
           interactiveSurfaceCandidates.add(current);
+          if (pointerEnabled) pointerEnabledSurfaceCandidates.add(current);
           break;
         }
         current = flatParentElement(current);
       }
     }
 
-    const allElements = Array.from(document.body?.querySelectorAll('*') || []);
+    const allElements = treeElements.filter(element => document.body && composedContains(document.body, element));
     const all = allElements.length <= 6000
       ? allElements
       : [...allElements.slice(0, 3000), ...allElements.slice(-3000)];
     for (const element of all) {
       if (isOverlay(element) || isVisibleDomSubtreeHidden(element)) continue;
       const style = visibleDomStyle(element);
+      // Custom click targets may be plain list items or spans without roles.
+      // Reuse the same generic event and cursor evidence as DOM observation.
+      if (style && (hasVisibleDomOwnClickBoundary(element) || hasPointerCursor(element))) {
+        let ancestor: Element | undefined = element;
+        for (let guard = 0; ancestor && guard < 16; guard += 1) {
+          const ancestorStyle = visibleDomStyle(ancestor);
+          const ancestorZ = Number.parseInt(ancestorStyle?.zIndex || '', 10);
+          if (ancestorStyle && ['absolute', 'fixed'].includes(ancestorStyle.position)
+            && Number.isFinite(ancestorZ) && ancestorZ >= 500) {
+            candidates.add(ancestor);
+            interactiveSurfaceCandidates.add(ancestor);
+            if (style.pointerEvents !== 'none') pointerEnabledSurfaceCandidates.add(ancestor);
+            break;
+          }
+          ancestor = flatParentElement(ancestor);
+        }
+      }
       if (!style || !['absolute', 'fixed', 'sticky'].includes(style.position)) continue;
       const rect = element.getBoundingClientRect();
       if (rect.width <= 2 || rect.height <= 2) continue;
@@ -2216,7 +2286,9 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
     const scored = Array.from(candidates).flatMap((element, order) => {
       if (!element.isConnected || isOverlay(element) || isVisibleDomSubtreeHidden(element)) return [];
       const style = visibleDomStyle(element);
-      if (!style || style.pointerEvents === 'none') return [];
+      // A transparent overlay host can contain children that opt back into input.
+      // Keep that surface only when a rendered interactive descendant does so.
+      if (!style || style.pointerEvents === 'none' && !pointerEnabledSurfaceCandidates.has(element)) return [];
       const rect = element.getBoundingClientRect();
       const role = normalize(element.getAttribute('role')).toLowerCase();
       const modal = element.getAttribute('aria-modal') === 'true'
@@ -2253,6 +2325,25 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
       const zIndexOutlier = normalizedZIndex >= 500;
       const viewportArea = Math.max(1, window.innerWidth * window.innerHeight);
       const areaRatio = Math.min(1, width * height / viewportArea);
+      // A small positioned action (including its icon/text descendants) is
+      // still a control of its parent, not a new interaction surface. Keep
+      // actual panels with independently actionable content and all explicit
+      // dialog/popover/controlled surfaces. Bound the scan conservatively.
+      if (!semanticSurface && !controlled && areaRatio < 0.015
+        && (hasVisibleDomOwnClickBoundary(element) || hasPointerCursor(element))) {
+        const descendants = children(element);
+        let independentControl = false;
+        for (let visited = 0; descendants.length && visited < 128; visited += 1) {
+          const child = descendants.shift()!;
+          if (!isVisibleDomSubtreeHidden(child)
+            && (hasVisibleDomOwnClickBoundary(child) || hasPointerCursor(child))) {
+            independentControl = true;
+            break;
+          }
+          descendants.push(...children(child));
+        }
+        if (!independentControl && !descendants.length) return [];
+      }
       const surfaceRole = ['dialog', 'alertdialog', 'menu', 'listbox', 'tree'].includes(role);
       const positioned = ['absolute', 'fixed', 'sticky'].includes(style.position);
       const persistentLandmark = element.matches(
@@ -2268,6 +2359,15 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
       ) {
         return [];
       }
+      // Fixed/sticky page toolbars may sit below application chrome rather
+      // than exactly on the viewport edge. Their ordinary controls (including
+      // focused ones) must not scope away the rest of the page. Explicit
+      // surface semantics and ARIA-controlled panels still take precedence.
+      const peripheralFixedBand = ['fixed', 'sticky'].includes(style.position)
+        && width >= window.innerWidth * 0.72
+        && height <= window.innerHeight * 0.28
+        && (rect.top <= window.innerHeight * 0.2 || rect.bottom >= window.innerHeight * 0.8);
+      if (peripheralFixedBand && !semanticSurface && !controlled) return [];
       if (
         positioned
         && !modal
@@ -2412,7 +2512,7 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
     }
     for (const entry of scored) {
       let activationOrder = surfaceActivationOrder.get(entry.element);
-      if (activationOrder === undefined) {
+      if (activationOrder === undefined || newlyVisibleSurfaceElements.has(entry.element)) {
         activationOrder = ++surfaceActivationSequence;
         surfaceActivationOrder.set(entry.element, activationOrder);
       }
@@ -2433,7 +2533,7 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
             entry.surface.modal && pendingParentEntry?.surface.modal
             || ['popover', 'menu', 'listbox'].includes(entry.surface.kind)
             || entry.surface.kind === 'overlay'
-              && entry.surface.signals.includes('interactive-descendant')
+              && (entry.surface.signals.includes('interactive-descendant') || Boolean(entry.surface.label))
               && (entry.surface.signals.includes('position:absolute')
                 || entry.surface.signals.includes('position:fixed'))
               && pendingParentEntry?.surface.likelyOverlay
@@ -2499,9 +2599,14 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
     const activeCandidates = scopeEntries;
     const activeEntry = [...activeCandidates].sort((left, right) => (
       Number(right.surface.likelyOverlay) - Number(left.surface.likelyOverlay)
-      || Number(right.surface.focusedInside) - Number(left.surface.focusedInside)
+      // Focus can remain on a covered trigger after another overlay opens.
+      // Prefer painted content over its covered parent or an empty backdrop.
+      || Number(right.surface.signals.includes('topmost')) - Number(left.surface.signals.includes('topmost'))
+      || Number(Boolean(right.surface.label) || right.surface.signals.includes('interactive-descendant'))
+        - Number(Boolean(left.surface.label) || left.surface.signals.includes('interactive-descendant'))
       || right.surface.activationOrder - left.surface.activationOrder
       || right.surface.depth - left.surface.depth
+      || Number(right.surface.focusedInside) - Number(left.surface.focusedInside)
       || right.score - left.score
       || right.surface.zIndex - left.surface.zIndex
       || right.order - left.order
@@ -2597,6 +2702,9 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
       return { ok: false, reason: 'target is detached from the current document', descriptor: targetDescriptor };
     }
     const fileInputAction = action === 'setinputfiles';
+    if (fileInputAction && (!(element instanceof HTMLInputElement) || element.type !== 'file')) {
+      return { ok: false, reason: `${targetDescriptor} is not a file input`, descriptor: targetDescriptor };
+    }
     const pointerAction = /^(click|dblclick|hover|tap|check|uncheck|setchecked|dragto|draganddrop)$/.test(action);
     const viewportBlockingLayer = (candidate: Element | undefined) => {
       if (!candidate || composedContains(candidate, element) || composedContains(element, candidate)) return undefined;
@@ -2631,7 +2739,7 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
       if (isOverlay(current)) {
         return { ok: false, reason: `${descriptor(current)} belongs to the automation overlay`, descriptor: targetDescriptor };
       }
-      if (current.hasAttribute('hidden')) {
+      if (!fileInputAction && current.hasAttribute('hidden')) {
         return { ok: false, reason: `${descriptor(current)} has the hidden attribute`, descriptor: targetDescriptor };
       }
       if ((current as HTMLElement).inert || current.hasAttribute('inert')) {
@@ -2652,13 +2760,7 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
       }
       current = flatParentElement(current);
     }
-    const disabled = (() => {
-      try {
-        return element.matches(':disabled') || element.getAttribute('aria-disabled') === 'true';
-      } catch {
-        return element.getAttribute('aria-disabled') === 'true';
-      }
-    })();
+    const disabled = isDisabledElement(element);
     if (disabled) return { ok: false, reason: `${targetDescriptor} is disabled`, descriptor: targetDescriptor };
     if (!fileInputAction) {
       const renderedRect = Array.from(element.getClientRects()).find((rect) => rect.width > 0 && rect.height > 0);
@@ -2802,6 +2904,7 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
     hasActionAttribute,
     hasPointerCursor,
     isContentEditableOwner,
+    isDisabledElement,
     labelControlFor,
     visibleDomHoverElements,
     isActionable,
@@ -2820,6 +2923,7 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
     discardDomJournal,
     elementText,
     visibleDomElement,
+    visibleDomSelector,
     visibleDomPoint,
     visibleDomText,
     selectVisibleDomOption,
@@ -3362,11 +3466,7 @@ export function collectAiDomObservation(input: { includeInteractiveCandidates?: 
       },
       clickable,
       input: isInput,
-      disabled: Boolean(
-        inputElement.disabled ||
-        (labelControl && (labelControl as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | HTMLButtonElement).disabled) ||
-        element.getAttribute('aria-disabled') === 'true',
-      ),
+      disabled: runtime.isDisabledElement(element) || Boolean(labelControl && runtime.isDisabledElement(labelControl)),
       hasIndependentClickArea,
       shadow: isInsideShadow(element),
     };

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { browserVerificationInstructions } from './runtime-skill.ts';
 export const browserControlShape = {
   url: z.string().max(16000).refine(value => {
     try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) || value === 'about:blank'; }
@@ -56,6 +57,7 @@ export const visualBrowserSkill = {
   id: 'system-browser-visual-runtime', title: 'Visual Browser', required: true,
   summary: '<system_skill><id>system-browser-visual-runtime</id><title>Visual Browser</title><description>Observe screenshots and perform one verified mouse or keyboard action.</description></system_skill>',
   content: `${visualBrowserDescription}
+${browserVerificationInstructions}
 Model-facing screenshots wait briefly for document loading and stable pixels, with a bounded timeout so animations and live pages cannot block forever. This is not proof that asynchronous content has finished loading. If the screenshot is blank, shows a skeleton/loading indicator, or lacks the expected results, call observe again before concluding the page is empty, repeating an action, or abandoning the site. A later observe also waits for rendering; do not repeatedly navigate to the same URL to wait.
 Screenshots mark the last successfully executed visual click on the current tab with a red dot of 3 CSS pixels in diameter. This host annotation shows the previous viewport coordinates, not a page element or proof of business success. Rejected actions do not move the dot. The annotation is excluded from visualChanged.
 Read the current screenshot before choosing a target. All coordinates are CSS pixels in the full current viewport, using the observation width/height, not a resized preview. observe refreshes without acting. act requires kind and observationId. click/hover/move/drag/scroll require x,y. click supports button left/right/middle and clickCount 1/2/3. A real double click is ONE act with clickCount:2, never separate clicks across model turns. drag moves from x,y to endX,endY while holding button (default left); steps controls intermediate moves. hover/move moves without pressing a button. scroll accepts deltaX/deltaY at x,y. Mouse gestures accept modifiers ["Control","Shift","Alt","Meta"] held for the entire gesture and released afterwards; for example Control+click, Shift+drag, Control+scroll.

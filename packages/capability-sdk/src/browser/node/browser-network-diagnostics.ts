@@ -11,6 +11,7 @@ type HttpRequestRecord = {
   resourceType: string;
   status?: number;
   statusText?: string;
+  responseSequence?: number;
   ok?: boolean;
   failed?: boolean;
   errorText?: string;
@@ -23,11 +24,13 @@ export class BrowserNetworkDiagnostics {
   private httpRequestByRequest = new WeakMap<Request, HttpRequestRecord>();
   private httpRequestById = new Map<string, Request>();
   private httpRequestSequence = 0;
+  private httpResponseSequence = 0;
   private listeners = new Map<Page, () => void>();
 
   constructor(private configuredValue: (name: string) => string | undefined,
     private recordDomChangeError: (page: Page, source: 'network', message: string) => void) {}
   get sequence() { return this.httpRequestSequence; }
+  get responseSequence() { return this.httpResponseSequence; }
   records(page: Page): readonly HttpRequestRecord[] { return this.httpRequestsByPage.get(page) || []; }
   errors() { return [...this.networkErrors]; }
   private forgetRequest(id: string) {
@@ -44,11 +47,13 @@ export class BrowserNetworkDiagnostics {
       record.status = response.status();
       record.statusText = response.statusText();
       record.ok = response.ok();
+      record.responseSequence = ++this.httpResponseSequence;
     };
     const onRequestFailed = (request: Request) => {
       const record = this.httpRequestByRequest.get(request) || this.recordHttpRequest(page, request);
       const errorText = request.failure()?.errorText || '';
       record.failed = true;
+      // A transport abort must not reannounce an earlier HTTP error response.
       record.ok = false;
       record.errorText = errorText;
       if (shouldIgnoreNetworkFailure(request.url(), errorText)) return;

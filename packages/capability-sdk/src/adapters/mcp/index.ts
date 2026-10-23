@@ -26,6 +26,8 @@ import {
 } from '../../host/index.ts';
 
 export type CapabilityMcpServerOptions = {
+  /** Override a tool's text projection, e.g. full for clients without structured-result support. */
+  resultText?: 'full' | 'summary';
   /** Shared MCP Apps UI and loopback preview for chart/maps. Enabled by default. */
   visualization?: McpVisualizationOptions;
   policy?: CapabilityExecutionPolicyOptions;
@@ -71,7 +73,7 @@ function mcpContent(content: CapabilityContent): CallToolResult['content'][numbe
   };
 }
 
-export function capabilityResultToMcpResult(result: CapabilityResult): CallToolResult {
+export function capabilityResultToMcpResult(result: CapabilityResult, textMode: 'full' | 'summary' = 'full'): CallToolResult {
   const structuredContent = result.ok ? {
     ok: true,
     summary: result.summary,
@@ -81,12 +83,11 @@ export function capabilityResultToMcpResult(result: CapabilityResult): CallToolR
       if (item.type !== 'image') return item;
       return { type: item.type, artifactId: item.artifactId, mediaType: item.mediaType };
     }) } : {}),
-  } : { ok: false, error: result.error };
-  // MCP consumers may use only content. Give them the same complete result as
-  // structuredContent, including output, identifiers and recoverable errors.
+  } : { ok: false, error: result.error, ...(result.data === undefined ? {} : { data: result.data }) };
   return {
     ...(!result.ok ? { isError: true } : {}),
-    content: [{ type: 'text', text: JSON.stringify(structuredContent) }, ...(result.content?.map(mcpContent) || [])],
+    content: [{ type: 'text', text: textMode === 'full' ? JSON.stringify(structuredContent)
+      : result.ok ? result.summary : `${result.error.code}: ${result.error.message}` }, ...(result.content?.map(mcpContent) || [])],
     structuredContent,
   };
 }
@@ -202,23 +203,25 @@ export async function createCapabilityMcpServer(
             },
           }, (execution) => resolved.tool.execute(parsed, execution));
           if (result.content?.some((item) => item.type === 'image' && !item.data) && options.resolveImage) {
-            const content = await Promise.all(result.content.map(async (item): Promise<CapabilityContent> => {
-              if (item.type !== 'image' || item.data) return item;
+            const content: CapabilityContent[] = [];
+            for (const item of result.content) {
+              abortSignal?.throwIfAborted();
+              if (item.type !== 'image' || item.data) { content.push(item); continue; }
               try {
                 const image = await options.resolveImage!(item);
-                return { ...item, data: image.data, mediaType: image.mimeType };
+                content.push({ ...item, data: image.data, mediaType: image.mimeType });
               } catch (error) {
                 if (abortSignal?.aborted) throw error;
                 // Rendering is secondary to the original operation. Retain its
                 // saved artifacts and outcome so a missing preview cannot cause replay.
-                return { type: 'text', text: JSON.stringify({ code: 'mcp-image-unavailable', artifactId: item.artifactId,
+                content.push({ type: 'text', text: JSON.stringify({ code: 'mcp-image-unavailable', artifactId: item.artifactId,
                   message: error instanceof Error ? error.message : String(error),
-                  instruction: 'The original operation outcome is preserved. Inspect the saved artifact or request its bytes/text before retrying.' }) };
+                  instruction: 'The original operation outcome is preserved. Inspect the saved artifact or request its bytes/text before retrying.' }) });
               }
-            }));
+            }
             result = { ...result, content };
           }
-          const response = capabilityResultToMcpResult(result);
+          const response = capabilityResultToMcpResult(result, options.resultText ?? resolved.tool.resultText ?? 'full');
           if (visualization) {
             try {
               const view = await visualization.decorate(publicName, result);

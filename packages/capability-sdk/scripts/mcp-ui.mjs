@@ -1,7 +1,6 @@
 import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { readExcalidrawFont } from '../dist/chart/node.js';
 
 const mime = 'text/html;profile=mcp-app';
 const uri = 'ui://capability-sdk/visualization.html';
@@ -14,7 +13,6 @@ export async function createMcpVisualization({ tools, invoke, options = {} }) {
     resolved.capabilityId === 'com.webpilot.chart' ? [[name, 'chart']]
       : resolved.capabilityId === 'com.webpilot.maps' ? [[name, 'maps']] : []));
   if (!visualTools.size || options.enabled === false) return undefined;
-  const template = await readFile(new URL('viewer.html', root), 'utf8');
   const views = new Map(); const byArtifact = new Map();
   const serviceKey = randomBytes(24).toString('hex');
   let http; let origin; let starting; let closing = false;
@@ -28,7 +26,10 @@ export async function createMcpVisualization({ tools, invoke, options = {} }) {
     const map = options.loadMap ? await options.loadMap(record.mapId, record) : undefined;
     return {...view, record, map};
   }
-  function page(initial) {
+  async function page(initial) {
+    // The 5 MB UI bundle is only needed for resource/page requests, never tool discovery.
+    // Do not retain it in every mounted server between requests.
+    const template = await readFile(new URL('viewer.html', root), 'utf8');
     const encoded = JSON.stringify(initial).replace(/</g,'\\u003c').replace(/\u2028/g,'\\u2028').replace(/\u2029/g,'\\u2029');
     return template.replace('/*CAPABILITY_BOOTSTRAP*/',`window.__CAPABILITY_UI__=${encoded};`);
   }
@@ -53,6 +54,7 @@ export async function createMcpVisualization({ tools, invoke, options = {} }) {
     const segments = url.pathname.split('/').filter(Boolean);
     if (segments[0] !== serviceKey) return json(res,404,{error:'Preview not found'});
     if (segments[1] === 'fonts' && req.method === 'GET') {
+      const { readExcalidrawFont } = await import('../dist/chart/node.js');
       const bytes = await readExcalidrawFont(segments.slice(1));
       if (!bytes) return json(res,404,{error:'Font not found'});
       res.writeHead(200,{'content-type':'font/woff2','cache-control':'private, max-age=3600'});return res.end(bytes);
@@ -72,14 +74,14 @@ export async function createMcpVisualization({ tools, invoke, options = {} }) {
     if (segments.length!==2 || req.method!=='GET') return json(res,404,{error:'Preview not found'});
     res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store',
       'content-security-policy':"default-src 'none'; script-src 'unsafe-inline' 'wasm-unsafe-eval' https://maps.googleapis.com https://maps.gstatic.com; style-src 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: https://*.googleapis.com https://*.gstatic.com https://*.google.com; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' https://*.googleapis.com https://*.gstatic.com https://*.google.com; worker-src blob:; frame-ancestors 'none'; base-uri 'none'"});
-    res.end(page({mode:'browser',dataUrl:`${origin}/${serviceKey}/${view.token}/data`,assetPath:`${origin}/${serviceKey}/`,readOnly:options.readOnly===true}));
+    res.end(await page({mode:'browser',dataUrl:`${origin}/${serviceKey}/${view.token}/data`,assetPath:`${origin}/${serviceKey}/`,readOnly:options.readOnly===true}));
   }
   if (options.preview !== false) await start();
   return {
     toolMeta(name) { return visualTools.has(name) ? {ui:{resourceUri:uri}} : {}; },
     register(server) {
       server.registerResource('capability-visualization',uri,{mimeType:mime,description:'Interactive charts and maps'},async()=>({contents:[{
-        uri,mimeType:mime,text:page({mode:'app',readOnly:options.readOnly===true}),
+        uri,mimeType:mime,text:await page({mode:'app',readOnly:options.readOnly===true}),
         _meta:{ui:{prefersBorder:true,csp:{
           resourceDomains:['https://maps.googleapis.com','https://maps.gstatic.com','https://*.googleapis.com','https://*.gstatic.com','https://*.google.com','https://fonts.googleapis.com','https://fonts.gstatic.com',...(origin?[origin]:[])],
           connectDomains:['https://*.googleapis.com','https://*.gstatic.com','https://*.google.com',...(origin?[origin]:[])],
@@ -96,11 +98,10 @@ export async function createMcpVisualization({ tools, invoke, options = {} }) {
       const content=view.previewUrl?[{type:'text',text:`Interactive preview: ${view.previewUrl} (available while this MCP server is running)`}]:[];
       if (options.staticImages!==false && kind==='chart' && (!initial.record.engine || initial.record.engine==='echarts')) {
         try {
-          const echarts=await import('echarts');const {default:sharp}=await import('sharp');
-          for(const map of initial.record.maps||[])echarts.registerMap(map.name,typeof map.geoJson==='string'?{svg:map.geoJson}:map.geoJson,map.specialAreas);
-          const chart=echarts.init(null,undefined,{renderer:'svg',ssr:true,width:960,height:initial.record.height||480});
-          try {chart.setOption({...initial.record.option,animation:false});const bytes=await sharp(Buffer.from(chart.renderToSVGString())).png().toBuffer();content.push({type:'image',mimeType:'image/png',data:bytes.toString('base64')});}
-          finally{chart.dispose();}
+          const { renderECharts } = await import('../dist/chart/renderer.js');
+          const data = await renderECharts({ option: initial.record.option, maps: initial.record.maps,
+            height: initial.record.height, image: true });
+          content.push({ type: 'image', mimeType: 'image/png', data });
         } catch(error){content.push({type:'text',text:`Static preview unavailable: ${error.message}`});}
       }
       return { _meta:{'capability/visualization':initial},

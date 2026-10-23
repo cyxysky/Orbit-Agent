@@ -22,6 +22,7 @@ type PersistentUnoHost = {
   directory: string;
   executable: string;
   pipeName: string;
+  preparedKinds: Set<OfficeDocumentKind>;
 };
 
 let persistentUnoHost: PersistentUnoHost | undefined;
@@ -261,7 +262,7 @@ async function inspectUnoApiUncached(input: {
   if (!worker) throw new Error('LibreOffice UNO program worker is missing from the application runtime.');
   const directory = await mkdtemp(path.join(os.tmpdir(), 'webpilot-uno-api-'));
   try {
-    return await runWorker({
+    const inspect = (host?: PersistentUnoHost, signal?: AbortSignal) => runWorker({
       executable: python,
       args: [
         worker,
@@ -272,10 +273,17 @@ async function inspectUnoApiUncached(input: {
         '--api-offset', String(Math.max(0, input.offset || 0)),
         '--api-limit', String(Math.min(120, Math.max(1, input.limit || 40))),
         ...(input.query ? ['--api-query', input.query] : []),
+        ...(host ? ['--uno-pipe', host.pipeName] : []),
       ],
       libreOfficeProgramDirectory: path.dirname(soffice),
+      abortSignal: signal,
       requireBytes: false,
     });
+    // Catalog-only queries need no Office process. Native property discovery
+    // borrows the same serialized host instead of cold-starting another one.
+    return (input.query || '').toLowerCase().startsWith('office.properties.')
+      ? await withPersistentUnoHost(soffice, inspect)
+      : await inspect();
   } finally {
     await rm(directory, { force: true, recursive: true, maxRetries: 3, retryDelay: 150 }).catch(() => undefined);
   }
@@ -304,7 +312,7 @@ async function ensurePersistentUnoHost(executable: string) {
     stdio: 'ignore',
     windowsHide: true,
   });
-  const host: PersistentUnoHost = { child, directory, executable, pipeName };
+  const host: PersistentUnoHost = { child, directory, executable, pipeName, preparedKinds: new Set() };
   persistentUnoHost = host;
   child.once('error', () => {
     if (persistentUnoHost === host) persistentUnoHost = undefined;
@@ -332,6 +340,45 @@ async function withPersistentUnoHost<T>(
     signal.throwIfAborted();
     return operation(await ensurePersistentUnoHost(executable), signal);
   }, { abortSignal });
+}
+
+const unoWarmupFlights = new Map<string, Promise<void>>();
+
+/** Prepare only an explicitly planned Office kind; source execution stays separate. */
+export async function prepareUnoRuntime(documentType: OfficeDocumentKind) {
+  const soffice = await resolveLibreOfficeExecutable();
+  if (!soffice) throw new Error('LibreOffice warmup requires a configured LibreOffice executable.');
+  const key = `${soffice}\n${documentType}`;
+  const existing = unoWarmupFlights.get(key);
+  if (existing) return existing;
+  const pending = (async () => {
+    const [python, worker] = await Promise.all([
+      resolveLibreOfficePythonExecutable(soffice), resolveUnoProgramWorker(),
+    ]);
+    if (!python || !worker) throw new Error('LibreOffice warmup requires PyUNO and the Office worker.');
+    await withPersistentUnoHost(soffice, async (host, signal) => {
+      if (host.preparedKinds.has(documentType)) return;
+      const directory = await mkdtemp(path.join(os.tmpdir(), 'webpilot-uno-warmup-'));
+      try {
+        const report = await runWorker({
+          executable: python,
+          args: [worker, '--warmup', '--document-type', documentType,
+            '--profile', path.join(directory, 'profile'), '--soffice', soffice, '--uno-pipe', host.pipeName],
+          libreOfficeProgramDirectory: path.dirname(soffice), abortSignal: signal, requireBytes: false,
+        });
+        if (report.ready !== true) throw new Error('LibreOffice warmup did not confirm readiness.');
+        host.preparedKinds.add(documentType);
+      } catch (error) {
+        await stopPersistentUnoHost(host);
+        throw error;
+      } finally {
+        await rm(directory, { force: true, recursive: true, maxRetries: 3, retryDelay: 150 }).catch(() => undefined);
+      }
+    });
+  })();
+  unoWarmupFlights.set(key, pending);
+  try { await pending; }
+  finally { if (unoWarmupFlights.get(key) === pending) unoWarmupFlights.delete(key); }
 }
 
 export async function inspectUnoApi(input: {

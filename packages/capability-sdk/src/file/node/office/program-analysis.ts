@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import ts from 'typescript';
+import type ts from 'typescript';
 import { resolveLibreOfficePythonExecutable } from '../libreoffice.ts';
 import { isUnoStylePropertyInfoError, isUnoWorkerInternalError, resolveUnoProgramWorker } from './uno.ts';
 
@@ -76,7 +76,8 @@ function lineAndColumn(sourceFile: ts.SourceFile, position: number | undefined) 
   return { line: location.line + 1, column: location.character + 1 };
 }
 
-function javascriptDiagnostics(source: string): OfficeProgramDiagnostic[] {
+async function javascriptDiagnostics(source: string): Promise<OfficeProgramDiagnostic[]> {
+  const { default: ts } = await import('typescript');
   const sourceFile = ts.createSourceFile('draft.mjs', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
   const syntaxDiagnostics = ts.transpileModule(source, {
     compilerOptions: { allowJs: true, module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
@@ -721,7 +722,7 @@ export async function analyzeOfficeProgram(source: string, generator: 'javascrip
     catch (error) { return { diagnostics: [{ code: 'HTML_SOURCE_INVALID', message: error instanceof Error ? error.message : String(error), severity: 'error' as const }], passed: false }; }
   }
   const rawDiagnostics = generator === 'javascript'
-    ? javascriptDiagnostics(source)
+    ? await javascriptDiagnostics(source)
     : await pythonDiagnostics(source);
   const diagnostics = rawDiagnostics.map((diagnostic) => {
     const sourceExcerpt = diagnosticSourceExcerpt(source, diagnostic);

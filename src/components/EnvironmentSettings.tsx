@@ -775,7 +775,9 @@ function evaluationCaseDisplayName(name: string, index: number, t: (value: strin
 }
 
 function isSecret(item: EnvRow) {
-  return Boolean(item.secret || runtimeEnvDefinition(item.key)?.secret || /KEY|TOKEN|SECRET|PASSWORD|COOKIE|DATABASE_URL/i.test(item.key));
+  const definition = runtimeEnvDefinition(item.key);
+  if (definition) return Boolean(item.secret || definition.secret || definition.control === 'secret');
+  return Boolean(item.secret || /(?:^|_)(?:KEY|TOKEN|SECRET|PASSWORD|COOKIE)(?:_|$)|(?:^|_)DATABASE_URL$/i.test(item.key));
 }
 
 export function EnvironmentSettings({

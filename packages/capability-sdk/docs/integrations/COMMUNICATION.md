@@ -350,13 +350,21 @@ a 50 MB limit. No separate HTTP upload endpoint is needed. Reuse one connection
 per bot for message ingestion and uploads; disconnect it when the channel is disabled.
 `onMessage` exposes normalized text/voice-transcription, mixed text/images,
 image/file/video media descriptors and authenticated single/group targets.
+Card button callbacks also reach `onMessage` with `cardAction: { taskId, key }` and an empty
+text/media payload; `normalizeWeComCardAction` validates the callback identity and target.
+`sendTemplateCard(targetId, card)` sends a native card. `updateTemplateCard(requestId, card, userIds?)`
+updates it using the card event request ID; the host should reply within five seconds.
 `download` uses the official SDK to download and decrypt each descriptor using
 its own AES key. Replies to those callbacks use that connection's `sendText`
 and `sendMedia`, rather than passing WebSocket IDs into the MCP's encrypted-ID API.
 
 The Orbit host persists a current session for each bot and WeCom conversation.
 Incoming text starts or continues the existing Browser Chat Agent
-under the channel owner's account in full mode, without per-tool confirmation.
+under the channel owner's account. New sessions default to full mode; selecting an existing
+session preserves its safety mode. Pending tool confirmations send native action cards
+and correlated `/confirm confirmation_id` / `/cancel confirmation_id` commands.
+The host checks the originating conversation, sender, owning web account, and live confirmation ID
+before applying a decision. Each new confirmation in a turn receives its own notice.
 Group callback text has its leading routing mention removed before command
 parsing and Agent submission; single-chat text and mentions within the body remain intact.
 `/help` lists the available commands. `/start` creates and selects a new session;
@@ -387,7 +395,7 @@ inbound record after entering its conversation queue, so a polling snapshot take
 during upload or send cannot replay a completed reply or overwrite its receipt.
 Completed output can
 be delivered after restart; interrupted tool execution is not repeated automatically.
-Bot-created sessions and turns submitted from the bot explicitly use full mode.
+Bot-created sessions default to full mode. Turns preserve the selected session's safety mode.
 Final text and output media are returned to the
 originating conversation automatically. Mixed text/images enter one Agent turn.
 Attachment-only messages are downloaded into account-owned uploads and persisted

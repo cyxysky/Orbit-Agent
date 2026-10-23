@@ -1,6 +1,5 @@
 import type { BrowserSession, BrowserActionResult } from './browser-session.ts';
 import type { BrowserCodeAttachmentBinding, BrowserCodeCredentialBinding } from './browser-code-runner.ts';
-import { browserCodeHasImageOperation } from './browser-code-runner.ts';
 import { z } from 'zod';
 import { visualBrowserInputSchema } from '../interaction-schema.ts';
 export const browserSessionCommandShape = {
@@ -72,7 +71,7 @@ export async function executeBrowserSessionOperation(session: BrowserSession, co
     const code = command.code;
     if (!code) throw new Error('code is required for browser action=code.');
     const imageInputAvailable = options.imageInputAvailable !== false;
-    if (!imageInputAvailable && browserCodeHasImageOperation(code)) return { ok: false, actual: 'Browser images are unavailable in this mode/model. Use current DOM and locators.' };
+    if (!imageInputAvailable && (await import('./browser-code-runner.ts')).browserCodeHasImageOperation(code)) return { ok: false, actual: 'Browser images are unavailable in this mode/model. Use current DOM and locators.' };
     const result = await session.executeBrowserCode({ ...command, code, imageInputAvailable, ensureStarted: options.ensureStarted,
       attachments: options.attachments, credentials: options.credentials, runId: options.runId || 'browser',
       stepIndex: options.stepIndex || 0, abortSignal: signal });

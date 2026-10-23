@@ -3903,7 +3903,7 @@ function browserChatSafetyInstructions(mode?: BrowserChatSafetyMode) {
     return [
       'Safety mode: full.',
       '- When the user request is clear, do not ask for extra confirmation only because an operation is important.',
-      '- Still stop or ask for help when the page requires captcha/OTP/security verification, missing credentials, or information only the user can provide.',
+      '- First attempt ordinary CAPTCHA/robot/security challenges through the page UI under the browser interaction instructions. Ask for human help after those bounded attempts fail, or when credentials, OTP, QR scan, identity/device approval or essential information must come from the user.',
     ].join('\n');
   }
   return [

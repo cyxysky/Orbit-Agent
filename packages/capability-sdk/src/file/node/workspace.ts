@@ -17,22 +17,22 @@ import { createReadStream, type Dirent } from 'node:fs';
 import { copyFile, mkdir, readFile, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import sharp from 'sharp';
+
 
 import type { FileArtifactOperationResult, FileAttachmentBinding } from '../types.ts';
-import { generateFileToPaths } from './generate.ts';
+
 import { writeTextFileArtifact, type NodeFileWriteInput } from './write.ts';
 import { type NodeFileConvertInput, type NodeFileConvertExecutionOptions } from './convert.ts';
 import { type NodeFileDownloadInput, type NodeFileDownloadExecutionOptions } from './download.ts';
 
-import { inspectUnoApi, isUnoBridgeStartupError, isUnoStylePropertyInfoError, isUnoWorkerInternalError } from './office/uno.ts';
-import { validateOfficeArtifact, type OfficeElementMapEntry } from './office/validation.ts';
-import { validateOfficeRendererMatrix } from './office/render-validation.ts';
+import { inspectUnoApi, isUnoBridgeStartupError, isUnoStylePropertyInfoError, isUnoWorkerInternalError, prepareUnoRuntime } from './office/uno.ts';
+import type { validateOfficeArtifact, OfficeElementMapEntry } from './office/validation.ts';
+import type { validateOfficeRendererMatrix } from './office/render-validation.ts';
 import { analyzeOfficeProgram, diagnoseOfficeProgramRuntimeError, type OfficeProgramDiagnostic } from './office/program-analysis.ts';
 import type { OfficeDocumentDraft, OfficeDocumentKind } from '../office/types.ts';
-import { registerOfficePreview, type FilePreviewResult } from './office/preview.ts';
+import type { FilePreviewResult } from './office/preview.ts';
 import { createFileVisualIndex } from './visual-index.ts';
-import { officeGenerationRuntimeFingerprint } from './office/runtime-fingerprint.ts';
+
 import { beginOfficeValidation, currentUnoWorkerDigest, officeValidationEvidence } from './office/validation-evidence.ts';
 import { officeDesignBriefSchema, officeDesignGuidance } from '../design-guidance.ts';
 
@@ -183,6 +183,7 @@ async function sha256File(filePath: string) {
 }
 
 async function optimizeWorkspaceImage(filePath: string) {
+  const { default: sharp } = await import('sharp');
   const extension = path.extname(filePath).toLowerCase();
   if (!['.jpeg', '.jpg', '.png', '.tif', '.tiff', '.webp'].includes(extension)) return {};
   const metadata = await sharp(filePath, { failOn: 'none' }).metadata();
@@ -929,7 +930,7 @@ async function includeRendererValidation(
   validation: OfficeArtifactValidation,
   previewPath?: string,
 ): Promise<OfficeArtifactValidation> {
-  const rendererMatrix = await validateOfficeRendererMatrix({ libreOfficePdfPath: previewPath });
+  const rendererMatrix = await (await import('./office/render-validation.ts')).validateOfficeRendererMatrix({ libreOfficePdfPath: previewPath });
   const next = {
     ...validation,
     issues: [...validation.issues, ...rendererMatrix.issues],
@@ -1151,6 +1152,7 @@ async function generateValidatedDraftCandidate(input: {
   // workspace is only replaced after every validation gate succeeds.
   await input.onProgress?.({ phase: 'assets', message: '正在同步文件素材' });
   const assets = await syncDocumentAssets(input.runId, input.attachmentBindings);
+  const { officeGenerationRuntimeFingerprint } = await import('./office/runtime-fingerprint.ts');
   const assetFingerprint = documentAssetsFingerprint(assets, await officeGenerationRuntimeFingerprint(input.draft.generator), input.draft);
   const extension = path.extname(input.draft.fileName).toLowerCase();
   const cache = validationCachePaths(input.runId, input.draft, extension);
@@ -1190,7 +1192,7 @@ async function generateValidatedDraftCandidate(input: {
   await writeFile(candidateSourcePath, input.draft.program, { encoding: 'utf8', flag: 'wx' });
   let cacheCompleted = false;
   try {
-    const generated = await generateFileToPaths({
+    const generated = await (await import('./generate.ts')).generateFileToPaths({
       ...input.draft,
       programPath: candidateSourcePath,
       outputPath: cache.artifactPath,
@@ -1261,7 +1263,7 @@ async function prepareValidatedDraft(input: {
     const sourceAbsolutePath = input.draft.operation === 'modify' && input.draft.sourceDocument
       ? path.join(artifactDir(input.runId, 'document-assets'), input.draft.sourceDocument.assetName)
       : undefined;
-    let validation: ValidatedDraftCandidate['validation'] = await validateOfficeArtifact({
+    let validation: ValidatedDraftCandidate['validation'] = await (await import('./office/validation.ts')).validateOfficeArtifact({
       absolutePath: candidate.generated.outputPath,
       sourceAbsolutePath,
       elementMap: unoStrict ? elementMap : undefined,
@@ -1476,7 +1478,7 @@ async function validateDraftSourceUnit(input: {
     const assets = await syncDocumentAssets(input.runId, input.attachmentBindings);
     await input.onProgress?.({ phase: 'unit-execute', message: `正在隔离执行 ${input.sourceUnitPath}` });
     if (input.draft.validationEvidence) input.draft.validationEvidence.stage = 'execution';
-    const generated = await generateFileToPaths({
+    const generated = await (await import('./generate.ts')).generateFileToPaths({
       ...input.draft,
       programPath: sourcePath,
       outputPath,
@@ -1493,7 +1495,7 @@ async function validateDraftSourceUnit(input: {
     const sourceAbsolutePath = input.draft.operation === 'modify' && input.draft.sourceDocument
       ? path.join(artifactDir(input.runId, 'document-assets'), input.draft.sourceDocument.assetName)
       : undefined;
-    let validation: ValidatedDraftCandidate['validation'] = await validateOfficeArtifact({
+    let validation: ValidatedDraftCandidate['validation'] = await (await import('./office/validation.ts')).validateOfficeArtifact({
       absolutePath: generated.outputPath,
       sourceAbsolutePath,
       elementMap: unoStrict ? elementMap : undefined,
@@ -1711,7 +1713,7 @@ async function renderDraft(input: {
       bytes: candidate.generated.bytes,
     });
     if (candidate.generated.previewPath) {
-      await registerOfficePreview({
+      await (await import('./office/preview.ts')).registerOfficePreview({
         absolutePath: target.filePath,
         previewPath: candidate.generated.previewPath,
         extension: candidate.generated.extension,
@@ -1880,6 +1882,7 @@ async function planFileArtifactUnlocked(input: PlanArtifactInput): Promise<FileA
     // operation=modify without an Office attachment: the existing workspace,
     // source identity, and original operation remain authoritative.
     if (existing?.program || existing?.renderedFileName) {
+      if (existing.generator === 'uno') void prepareUnoRuntime(existing.documentType).catch(() => undefined);
       return {
         ok: true,
         actual: JSON.stringify({
@@ -1904,6 +1907,9 @@ async function planFileArtifactUnlocked(input: PlanArtifactInput): Promise<FileA
     const assets = await syncDocumentAssets(input.runId, input.attachmentBindings);
     const sourcePlan = await plannedSourceDocument(input, assets);
     const generator = configuredOfficeGenerator(requestedFileName, sourcePlan.operation);
+    // Planning and authoring can overlap Office/module initialization. Warmup
+    // is advisory; generation still performs its normal validation and retries.
+    if (generator === 'uno') void prepareUnoRuntime(input.documentType).catch(() => undefined);
     if (existing) {
       existing.fileName = requestedFileName;
       existing.intent = input.intent ?? existing.intent;

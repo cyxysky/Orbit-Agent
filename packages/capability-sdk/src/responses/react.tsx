@@ -1,8 +1,10 @@
 'use client';
 
-import { Component, Suspense, createElement, lazy, type ComponentType, type ReactNode } from 'react';
+import { Component, Suspense, createElement, type ComponentType, type ReactNode } from 'react';
 import { ResponseRegistry, type ResponseBlock, type ResponseDefinition } from '../index.ts';
 import { htmlResponse, markdownResponse, uiResponse } from './index.ts';
+import { DeclarativeResponseView as DataUI } from './data-ui.tsx';
+import { HTMLResponseView as HTMLUI } from './html-ui.tsx';
 
 // Static export hosts use the same safe document and declarative layout renderers.
 export { DeclarativeResponseView } from './data-ui.tsx';
@@ -53,14 +55,27 @@ export class ResponseRendererRegistry {
   get(type: string) { return this.#renderers.get(type); }
 }
 
-class ResponseErrorBoundary extends Component<{ children: ReactNode; context: ResponseRenderContext; params: unknown }, { failed: boolean }> {
+type ResponseErrorBoundaryProps = {
+  children: ReactNode;
+  context: ResponseRenderContext;
+  params: unknown;
+  renderer: ResponseRenderer;
+  fallbackText: () => string;
+};
+
+class ResponseErrorBoundary extends Component<ResponseErrorBoundaryProps, { failed: boolean }> {
   state = { failed: false };
   static getDerivedStateFromError() { return { failed: true }; }
-  componentDidUpdate(previous: Readonly<{ params: unknown }>) {
-    if (this.state.failed && previous.params !== this.props.params) this.setState({ failed: false });
+  componentDidUpdate(previous: Readonly<ResponseErrorBoundaryProps>) {
+    if (this.state.failed && (previous.params !== this.props.params || previous.renderer !== this.props.renderer)) this.setState({ failed: false });
   }
   render() {
-    return this.state.failed ? <div role="alert">{this.props.context.translate('此内容暂时无法显示。')}</div> : this.props.children;
+    if (!this.state.failed) return this.props.children;
+    return <div>
+      <div role="alert">{this.props.context.translate('此内容暂时无法显示。')}</div>
+      <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{this.props.fallbackText()}</div>
+      <button type="button" onClick={() => this.setState({ failed: false })}>{this.props.context.translate('重试')}</button>
+    </div>;
   }
 }
 
@@ -68,16 +83,24 @@ export function RegisteredResponse({ block, registry, context }: {
   block: ResponseBlock; registry: ResponseRendererRegistry; context: ResponseRenderContext;
 }) {
   const renderer = registry.get(block.type);
-  if (!renderer) return <div role="status">{context.translate('此内容的展示组件未安装。')}</div>;
-  return <ResponseErrorBoundary key={`${context.identity}:${block.type}`} context={context} params={block.params}>
+  // Keep the declared plain-text equivalent independent of rich renderers.
+  const fallbackText = () => {
+    try { return registry.definitions.get(block.type)?.toText(block.params) || ''; }
+    catch { return ''; }
+  };
+  if (!renderer) return <div>
+    <div role="status">{context.translate('此内容的展示组件未安装。')}</div>
+    <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{fallbackText()}</div>
+  </div>;
+  return <ResponseErrorBoundary key={`${context.identity}:${block.type}`} context={context} params={block.params} renderer={renderer} fallbackText={fallbackText}>
     <Suspense fallback={<div role="status">{context.translate('正在加载内容…')}</div>}>
       <renderer.component params={block.params} context={context} />
     </Suspense>
   </ResponseErrorBoundary>;
 }
 
-const DataUI = lazy(() => import('./data-ui.tsx').then(module => ({ default: module.DeclarativeResponseView })));
-const HTMLUI = lazy(() => import('./html-ui.tsx').then(module => ({ default: module.HTMLResponseView })));
+// These small core views load with the entry point, so ordinary replies do
+// not depend on a second chunk request. Optional renderers retain Suspense.
 export const coreResponseRenderers = [
   defineResponseRenderer({ definition: markdownResponse, component: ({ params, context }) => <>{context.renderMarkdown(params.text)}</> }),
   defineResponseRenderer({ definition: uiResponse, component: ({ params, context }) => <DataUI tree={params.tree} renderMarkdown={context.renderMarkdown} /> }),

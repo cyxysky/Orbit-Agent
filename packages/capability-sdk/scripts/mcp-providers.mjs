@@ -31,7 +31,20 @@ export async function createLocalProviders({ projectRoot, stateDirectory, groups
     async browser() {
       const { createBrowserMcpCapability } = await import('../dist/browser/mcp.js');
       const browser = config.tools?.browser || {};
-      return createBrowserMcpCapability({ maxSessions: browser.maxSessions, idleTimeoutMs: browser.idleTimeoutMs, sessionOptions: {
+      const { nodeArtifactRelativePath } = await import('../dist/file/node/artifacts.js');
+      return createBrowserMcpCapability({ maxSessions: browser.maxSessions, idleTimeoutMs: browser.idleTimeoutMs,
+        async resolveAttachmentArtifact(artifactId) {
+          if (path.isAbsolute(artifactId) || /^[a-z][a-z\d+.-]*:/i.test(artifactId)) {
+            throw new Error('Use a relative artifactId returned by a file/code tool, not a local path or URL.');
+          }
+          const root = await realpath(artifactsRoot);
+          const candidate = path.resolve(root, artifactId);
+          nodeArtifactRelativePath(root, candidate);
+          const filename = await realpath(candidate);
+          nodeArtifactRelativePath(root, filename);
+          if (!(await stat(filename)).isFile()) throw new Error('Upload artifact must be a file.');
+          return { name: path.basename(filename), path: filename };
+        }, sessionOptions: {
         headless: browser.headless ?? ((process.env.HEADLESS_BROWSER ?? process.env.BROWSER_HEADLESS) !== 'false'),
         isolated: browser.isolated ?? true,
         slowMoMs: browser.slowMoMs,

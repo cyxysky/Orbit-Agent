@@ -2640,6 +2640,65 @@ button.browser-chat-output-file-main {
   white-space: pre-wrap;
 }
 
+.browser-chat-confirmation-notifications {
+  position: fixed;
+  top: max(16px, env(safe-area-inset-top));
+  right: max(16px, env(safe-area-inset-right));
+  z-index: 90;
+  width: min(390px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: grid;
+  gap: 12px;
+  padding: 4px;
+  pointer-events: none;
+}
+.browser-chat-confirmation-notification,
+.browser-chat-confirmation-notification-error {
+  pointer-events: auto;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--panel);
+  color: var(--foreground);
+  box-shadow: 0 12px 36px rgba(15, 23, 42, 0.16);
+  padding: 10px;
+}
+.browser-chat-confirmation-notification-source {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 2px 2px 10px;
+  text-align: left;
+  color: var(--foreground);
+  font-size: 13px;
+}
+.browser-chat-confirmation-notification-source span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.browser-chat-confirmation-notification .browser-chat-tool-confirmation {
+  border: 0;
+  box-shadow: none;
+  padding: 4px 0 0;
+  width: 100%;
+}
+.browser-chat-confirmation-notification .browser-chat-novel-plan-review {
+  max-height: 240px;
+  overflow-y: auto;
+}
+.browser-chat-confirmation-notification-error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+.browser-chat-confirmation-notification-error span { flex: 1; }
+
 .browser-chat-tool-confirmation {
   --tool-confirmation-accent: #9a6700;
   --tool-confirmation-icon-bg: #fff7e6;

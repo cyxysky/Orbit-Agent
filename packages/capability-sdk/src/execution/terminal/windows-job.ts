@@ -1,8 +1,7 @@
 // Assign the shell to a Windows Job before it starts user code. Killing a shell
 // with taskkill /T alone races with newly spawned descendants. The kernel closes
 // this non-inherited job handle on shell exit and terminates every descendant.
-export const windowsTerminalJobSetup = `
-Add-Type -TypeDefinition @'
+export const windowsTerminalJobType = `
 using System;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
@@ -52,6 +51,11 @@ public static class OrbitTerminalJob {
     }
   }
 }
+`;
+
+export const windowsTerminalJobSetup = `
+Add-Type -TypeDefinition @'
+${windowsTerminalJobType}
 '@
 [OrbitTerminalJob]::Attach()
 `;

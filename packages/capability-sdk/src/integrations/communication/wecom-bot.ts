@@ -1,8 +1,8 @@
-import { WSClient, type BaseMessage, type WsFrame } from '@wecom/aibot-node-sdk';
+import { WSClient, type BaseMessage, type EventMessage, type TemplateCard, type WsFrame } from '@wecom/aibot-node-sdk';
 import type { CommunicationMediaFormat, CommunicationMediaOperations } from './index.ts';
 import { CommunicationDeliveryError } from './index.ts';
 
-export const WECOM_BOT_RUNTIME_REVISION = 6;
+export const WECOM_BOT_RUNTIME_REVISION = 7;
 
 export type WeComInboundAttachment = {
   type: 'image' | 'file' | 'video';
@@ -17,6 +17,7 @@ export type WeComInboundMessage = {
   target: { kind: 'user' | 'group'; id: string };
   text: string;
   media: WeComInboundAttachment[];
+  cardAction?: { taskId: string; key: string };
 };
 
 /** The leading mention addresses the bot in group callbacks; it is not Agent input. */
@@ -55,6 +56,24 @@ export function normalizeWeComInboundMessage(
   return { id: body.msgid, botId, senderId: body.from.userid, target, text, media };
 }
 
+/** Card callbacks are structured interactions, never conversational text. */
+export function normalizeWeComCardAction(
+  body: EventMessage | undefined, botId: string, rejected?: (reason: string) => void,
+): WeComInboundMessage | undefined {
+  const reject = (reason: string) => { rejected?.(reason); return undefined; };
+  if (!body?.msgid || body.aibotid !== botId || !body.from?.userid) return reject('卡片事件身份无效');
+  if (body.msgtype !== 'event' || body.event?.eventtype !== 'template_card_event') return reject('卡片事件类型无效');
+  const { task_id: taskId, event_key: key } = body.event;
+  if (typeof taskId !== 'string' || !taskId.trim() || typeof key !== 'string' || !key.trim()) return reject('卡片事件缺少任务或操作标识');
+  const chatType = body.chattype || (body.chatid ? 'group' : 'single');
+  if (!['single', 'group'].includes(chatType)) return reject('卡片事件会话类型无效');
+  const target = chatType === 'group'
+    ? { kind: 'group' as const, id: body.chatid || '' }
+    : { kind: 'user' as const, id: body.from.userid };
+  if (!target.id) return reject('卡片事件缺少会话 ID');
+  return { id: body.msgid, botId, senderId: body.from.userid, target, text: '', media: [], cardAction: { taskId, key } };
+}
+
 export function createWeComBotConnection(input: { botId: string; secret: string }) {
   const client = new WSClient({
     ...input, maxReconnectAttempts: -1,
@@ -81,15 +100,14 @@ export function createWeComBotConnection(input: { botId: string; secret: string 
     client.disconnect();
     started = false;
   });
-  client.on('message', (frame: WsFrame<BaseMessage>) => {
+  function rejectMessage(reason: string) {
+    rejected += 1;
+    lastMessageError = reason;
+    console.warn('[wecom] 接收消息未通过校验：', reason);
+  }
+  function dispatch(message: WeComInboundMessage | undefined, requestId: string) {
     received += 1;
     lastReceivedAt = new Date().toISOString();
-    const message = normalizeWeComInboundMessage(frame.body, input.botId, reason => {
-      rejected += 1;
-      lastMessageError = reason;
-      // Log validation outcomes only, never raw frames, secrets or message text.
-      console.warn('[wecom] 接收消息未通过校验：', reason);
-    });
     if (!message) return;
     if (!listeners.size) {
       lastMessageError = '消息已到达，但没有接收处理器，请保存并启用渠道。';
@@ -97,7 +115,13 @@ export function createWeComBotConnection(input: { botId: string; secret: string 
       return;
     }
     lastMessageError = '';
-    for (const listener of listeners) listener(message, frame.headers.req_id);
+    for (const listener of listeners) listener(message, requestId);
+  }
+  client.on('event.template_card_event', (frame) => {
+    dispatch(normalizeWeComCardAction(frame.body, input.botId, rejectMessage), frame.headers.req_id);
+  });
+  client.on('message', (frame: WsFrame<BaseMessage>) => {
+    dispatch(normalizeWeComInboundMessage(frame.body, input.botId, rejectMessage), frame.headers.req_id);
   });
   function connect() {
     if (closed) throw new Error('机器人连接已关闭。');
@@ -113,7 +137,8 @@ export function createWeComBotConnection(input: { botId: string; secret: string 
         client.off('authenticated', success);
         client.off('error', fail);
         signal?.removeEventListener('abort', abort);
-        failure ? reject(failure) : resolve();
+        if (failure) reject(failure);
+        else resolve();
       };
       const success = () => finish();
       const fail = () => finish(new Error(error || '机器人认证失败。'));
@@ -168,6 +193,12 @@ export function createWeComBotConnection(input: { botId: string; secret: string 
     },
     async sendText(targetId: string, content: string) {
       return send(() => client.sendMessage(targetId, { msgtype: 'markdown', markdown: { content } }));
+    },
+    async sendTemplateCard(targetId: string, card: TemplateCard) {
+      return send(() => client.sendMessage(targetId, { msgtype: 'template_card', template_card: card }));
+    },
+    async updateTemplateCard(requestId: string, card: TemplateCard, userIds?: string[]) {
+      return send(() => client.updateTemplateCard({ headers: { req_id: requestId } }, card, userIds));
     },
     async sendMedia(targetId: string, type: CommunicationMediaFormat, mediaId: string, video?: { title?: string; description?: string }) {
       return send(() => client.sendMediaMessage(targetId, type, mediaId, video));

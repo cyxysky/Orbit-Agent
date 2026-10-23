@@ -13,15 +13,21 @@ function relativeFile(value) {
   return value;
 }
 
-function decodeFile(file) {
+function filePayloadSize(file) {
   if (typeof file.base64 !== 'string' || file.base64.length > Math.ceil(MAX_FILE_BYTES / 3) * 4
     || file.base64.length % 4 !== 0
     || !/^[A-Za-z0-9+/]*={0,2}$/.test(file.base64)) {
     throw new Error('Invalid or oversized file payload (maximum 10 MB per file).');
   }
-  const bytes = Buffer.from(file.base64, 'base64');
-  if (bytes.length > MAX_FILE_BYTES) throw new Error('File exceeds 10 MB.');
-  return bytes;
+  const padding = file.base64.endsWith('==') ? 2 : file.base64.endsWith('=') ? 1 : 0;
+  const size = file.base64.length / 4 * 3 - padding;
+  if (size > MAX_FILE_BYTES) throw new Error('File exceeds 10 MB.');
+  return size;
+}
+
+function decodeFile(file) {
+  filePayloadSize(file);
+  return Buffer.from(file.base64, 'base64');
 }
 
 async function stageFiles(directory, files = []) {
@@ -80,4 +86,4 @@ async function collectFiles(directory, requested = []) {
   return files;
 }
 
-module.exports = { collectFiles, stageFiles, decodeFile, relativeFile, MAX_TOTAL_BYTES };
+module.exports = { collectFiles, stageFiles, decodeFile, filePayloadSize, relativeFile, MAX_TOTAL_BYTES };

@@ -18,7 +18,7 @@ npm install -D typescript tsx @types/node
 ```ts
 // terminal.ts — Node >=22.16, ESM TypeScript
 import { randomUUID } from 'node:crypto';
-import type { TerminalResult } from '@cjfclonedeep/capability-sdk/execution/terminal';
+import type { CompactTerminalResult } from '@cjfclonedeep/capability-sdk/execution/terminal';
 import { mountCapabilities } from '@cjfclonedeep/capability-sdk/host';
 import { createCapabilityExecutor } from '@cjfclonedeep/capability-sdk';
 import { createNodeTerminalCapability } from '@cjfclonedeep/capability-sdk/execution/terminal/node';
@@ -49,16 +49,16 @@ try {
   console.log(mounted.skillCatalog.instructions('eager'));
   const created = await call({ action: 'create', reason: 'Open a reusable terminal', name: 'Workspace' });
   if (!created.ok) throw new Error(created.error.message);
-  const terminalId = (created.data as TerminalResult).terminal!.terminalId;
+  const terminalId = (created.data as CompactTerminalResult).terminalId!;
   let result = await call({
     action: 'run', reason: 'Inspect the local working directory', terminalId,
     command: process.platform === 'win32' ? 'Get-Location' : 'pwd', yieldMs: 1000,
   });
   console.log(result);
-  while (result.ok && (result.data as TerminalResult).terminal?.status === 'running') {
+  while (result.ok && (result.data as CompactTerminalResult).status === 'running') {
     result = await call({
       action: 'wait', reason: 'Wait for command completion', terminalId,
-      cursor: (result.data as TerminalResult).cursor, yieldMs: 30000,
+      cursor: (result.data as CompactTerminalResult).cursor, yieldMs: 30000,
     });
     console.log(result);
   }
@@ -82,7 +82,7 @@ npx tsx terminal.ts
 - `interrupt`: Ctrl+C を送信し、応答しない場合は端末を終了します。
 - `resize`: cols/rows。`rename`: name。`close` は端末と子プロセスを終了して出力を保持し、`delete` は記録も削除します。
 
-すべての操作に reason が必要です。yieldMs は 0–30000 で、呼び出しの待機時間だけを制限します。running は成功ではありません。command.status=succeeded と command.exitCode=0 が成功を示します。run/wait の失敗、中断、タイムアウト時は error.details に TerminalResult が入ります。
+すべての操作に reason が必要です。yieldMs は 0–30000 で、呼び出しの待機時間だけを制限します。running は成功ではありません。status=succeeded と exitCode=0 が成功を示します。失敗、中断、タイムアウトでも出力と状態は data に入ります。
 
 ## 実行環境と寿命
 
@@ -109,7 +109,7 @@ Shell と初期ディレクトリは新規端末に適用され、管理器の�
 
 ## Agent 接続
 
-tool.input.jsonSchema をモデルの引数定義に変換し、実行前に input.parse を呼びます。共通の createCapabilityExecutor で権限と直列実行を管理し、Skill をモデルに渡してください。本人確認、操作承認、キャンセルはホストの責任です。Orbit は本地终端の設定と既存の run/write 承認処理に接続します。
+tool.input.jsonSchema をモデルの引数定義に変換し、実行前に input.parse を呼びます。共通の createCapabilityExecutor で権限と直列実行を管理し、Skill をモデルに渡してください。本人確認、操作承認、キャンセルはホストの責任です。Orbit は本地终端の設定と既存の exec/run/write 承認処理に接続します。
 
 AI SDK では Provider と設定を @cjfclonedeep/capability-sdk/ai-sdk の mountAISDKCapabilities に渡し、agentOptions を自分の Agent に渡します。すべての呼び出し終了後に解放します。コアと Node 入口は AI SDK に依存しません。
 
@@ -118,3 +118,11 @@ AI SDK では Provider と設定を @cjfclonedeep/capability-sdk/ai-sdk の moun
 ## 会話のワークスペースと端末 UI
 
 /workspaces は管理器、/http の terminalHttpResponse は操作と SSE、/client の createHttpTerminalClient はホストルートへの接続、/react の TerminalWorkspace は作成・切り替え・改名・中断・終了・削除・リアルタイム出力・端末入力を提供します。入力プロンプトは最後の出力行の直後です。画面を閉じても端末は保持されます。ホストは認証、ワークスペース認可、設定とライフサイクル連携を担当し、モデル要求ごとの dispose で共有端末を破棄しません。
+
+## 出力上限と直接実行
+
+独立したコマンドには exec を使用します。command、任意の cwd/shell を指定でき、対話用 PTY を作成する必要はありません。stdin は閉じています。対話入力や変数の保持には create/run を使用してください。実行中または未読出力がある間は terminalId を返し、終了後に出力を返し終えると記録を解放します。
+
+exec/run/read/wait の maxOutputChars は既定 8000、範囲 2–200000 の UTF-16 コード単位です。outputMode=head は cursor で順に取得し、hasMore=true なら read を続けます。endCursor は最新位置で、次ページの cursor ではありません。tail は末尾を返し、省略量を omittedChars に記録します。truncated は保持履歴の破棄だけを示します。Unicode スカラーと VT シーケンスを分割せず、保持バッファや UI の生出力を変更しません。read/wait の commandId は別コマンドへの置き換えを検出します。
+
+既定の data は状態、終了コード、commandId、shell、cwd、transport、output と継続情報です。detail=true は同じ出力上限で完全な情報を返します。成功も失敗も data の位置は同じです。解放済み exec は terminalId を返しません。Windows では両モードともユーザーコマンドの前に Job に登録し、exec はキャッシュした補助アセンブリを使います。

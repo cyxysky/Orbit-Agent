@@ -5,7 +5,7 @@ import { type CapabilityConfiguration } from '../../index.ts';
 import { createNodeFileConverter, type NodeFileConverter } from './convert.ts';
 import { createNodeFileDownloader, type NodeFileDownloader } from './download.ts';
 import { type NodeArtifactUrlResolver } from './artifacts.ts';
-import { renderFilePreview, type FilePreviewResult } from './office/preview.ts';
+import type { renderFilePreview, FilePreviewResult } from './office/preview.ts';
 
 export type NodeFileWorkspaceHost = {
   artifactsRoot: string;
@@ -30,7 +30,8 @@ export let defaultNodeFileWorkspaceHost: ResolvedNodeFileWorkspaceHost | undefin
 export function resolveNodeFileWorkspaceHost(options: NodeFileWorkspaceHost): ResolvedNodeFileWorkspaceHost {
   const artifactsRoot = path.resolve(options.artifactsRoot);
   const artifactUrl = options.artifactUrl || ((input) => pathToFileURL(input.absolutePath).href);
-  const renderPreview = options.renderPreview || renderFilePreview;
+  const renderPreview: NonNullable<NodeFileWorkspaceHost['renderPreview']> = options.renderPreview
+    || (async (input) => (await import('./office/preview.ts')).renderFilePreview(input));
   const downloader = options.downloader || createNodeFileDownloader({ artifactsRoot, artifactUrl });
   const converter = options.converter || createNodeFileConverter({
     artifactsRoot,

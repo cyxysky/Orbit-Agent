@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import path from 'node:path';
-import { readFile, realpath, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -126,11 +126,22 @@ async function main() {
 
   process.chdir(projectRoot);
   const stateDirectory = path.resolve(projectRoot, config.server?.stateDirectory || '.capability-sdk/mcp');
+  // Route geometry can be megabytes per result. Retain only file names in memory.
   const mapViews = new Map();
+  let mapViewDirectory;
+  const mapViewRoot = () => mapViewDirectory ||= mkdir(stateDirectory, { recursive: true })
+    .then(() => mkdtemp(path.join(stateDirectory, 'map-views-')));
   const providers = await createLocalProviders({ projectRoot, stateDirectory, groups, config,
-    onMapView: (record, view) => {
-      mapViews.set(record.mapId,{record,view});
-      if(mapViews.size>200)mapViews.delete(mapViews.keys().next().value);
+    onMapView: async (record, view) => {
+      const filename = path.join(await mapViewRoot(), record.mapId + '.json');
+      await writeFile(filename, JSON.stringify({ record, view }), { flag: 'wx' });
+      mapViews.set(record.mapId, filename);
+      if (mapViews.size > 200) {
+        const oldest = mapViews.keys().next().value;
+        const expired = mapViews.get(oldest);
+        mapViews.delete(oldest);
+        await rm(expired, { force: true });
+      }
     },
   });
   const { createCapabilityMcpServer } = await import('../dist/adapters/mcp/index.js');
@@ -152,7 +163,8 @@ async function main() {
     name: config.server?.name || 'capability-sdk', version, providers,
     resolveImage: createLocalImageResolver(stateDirectory),
     visualization: { ...config.server?.visualization, loadMap: async (id, record) => {
-      const data = mapViews.get(id) || (record.request?.action === 'show' ? {record,view:{center:record.request.center,zoom:record.request.zoom,markers:record.request.markers,places:[],googleMapsUrl:''}} : undefined);
+      const filename = mapViews.get(id);
+      const data = (filename ? JSON.parse(await readFile(filename, 'utf8')) : undefined) || (record.request?.action === 'show' ? {record,view:{center:record.request.center,zoom:record.request.zoom,markers:record.request.markers,places:[],googleMapsUrl:''}} : undefined);
       if(!data)return undefined;
       const { mapsUrl } = await import('../dist/maps/core.js');
       return {...data,view:{...data.view,googleMapsUrl:mapsUrl(record.request)},
@@ -180,6 +192,14 @@ async function main() {
     timeout.unref();
     try {
       await handle.close();
+      mapViews.clear();
+      if (mapViewDirectory) {
+        const directory = await mapViewDirectory;
+        if (path.dirname(directory) !== stateDirectory || !path.basename(directory).startsWith('map-views-')) {
+          throw new Error('Invalid transient map cache directory.');
+        }
+        await rm(directory, { recursive: true, force: true });
+      }
       if (groups.includes('file')) {
         const { disposeUnoRuntime } = await import('../dist/file/node/office/uno.js');
         await disposeUnoRuntime();

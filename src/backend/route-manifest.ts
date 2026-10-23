@@ -49,6 +49,7 @@ export const routes = [
   { path: '/api/browser-chat/delete', load: () => import('./routes/browser-chat/delete/route') },
   { path: '/api/browser-chat/preview-stream', load: () => import('./routes/browser-chat/preview-stream/route') },
   { path: '/api/browser-chat', load: () => import('./routes/browser-chat/route') },
+  { path: '/api/browser-chat/tool-confirmations', load: () => import('./routes/browser-chat/tool-confirmations/route') },
   { path: '/api/browser-chat/tools', load: () => import('./routes/browser-chat/tools/route') },
   { path: '/api/browser-cookies/domp', load: () => import('./routes/browser-cookies/domp/route') },
   { path: '/api/chart-assets/excalidraw/[...path]', load: () => import('./routes/chart-assets/excalidraw/[...path]/route') },

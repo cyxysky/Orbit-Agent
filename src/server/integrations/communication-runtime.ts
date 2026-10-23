@@ -3,8 +3,8 @@ import { createWeComMessageArguments } from '@cjfclonedeep/capability-sdk/integr
 import { CommunicationDeliveryError } from '@cjfclonedeep/capability-sdk/integrations/communication';
 import {
   createBrowserChatSession, deleteBrowserChatSession, getBrowserChatSession,
-  sendBrowserChatMessage, subscribeBrowserChatUIStream,
-  type BrowserChatMessage,
+  sendBrowserChatMessage, subscribeBrowserChatUIStream, resolveBrowserChatToolConfirmation,
+  type BrowserChatMessage, type BrowserChatToolConfirmation,
 } from '@/server/ai/agents/browser-chat.service';
 import { communicationArtifactReader } from '@/server/storage/artifact-access';
 import { readBrowserChatSessionSummaries } from '@/server/storage/database-record-store';
@@ -14,7 +14,7 @@ import { enabledModelProviders, modelsForProvider, modelSelectionValue, resolveR
 import { browserChatAttachmentLimit } from '@/server/ai/agents/browser-chat-attachments';
 import {
   communicationId, readCommunicationConversation, saveCommunicationConversation,
-  readCommunicationInbound,
+  readCommunicationInbound, readCommunicationConfirmationSource,
   receiveCommunicationMessage, saveCommunicationInbound, listPendingCommunicationMessages,
   readWaitingCommunicationAttachments, consumeCommunicationAttachments, cancelCommunicationAttachments,
   type CommunicationConversation, type CommunicationInbound,
@@ -64,8 +64,8 @@ function scheduleStreamTimeout(item: CommunicationInbound) {
         if (!latest || !hasUnfinishedStream(latest)) return;
         const conversation = await readCommunicationConversation(latest.conversationId);
         if (!conversation) return;
-        await sendReplyText(conversation, latest, latest.noticeSent
-          ? `对话 ${latest.sessionId || ''} 仍在等待操作确认，请在网页对话中处理。`
+        await sendReplyText(conversation, latest, latest.confirmationNotice
+          ? `对话 ${latest.sessionId || ''} 仍在等待操作确认，请使用确认卡片或 /confirm ${latest.confirmationNotice.id}、/cancel ${latest.confirmationNotice.id} 处理。`
           : '任务仍在处理中，完成后会另行发送结果，你也可以在网页对话中查看进度。');
       } finally { clearStreamTimer(item.id); }
     }).catch(() => console.error('[communication] 未能结束企微等待提示。'));
@@ -94,6 +94,24 @@ async function receive(integration: ResolvedExternalIntegration, message: WeComI
   const userId = integration.configuration.ownerUserId;
   if (!userId) return;
   const conversationId = communicationId(integration.id, message.botId, userId, message.target.kind, message.target.id);
+  if (message.cardAction) {
+    if (integration.configuration.receiveMessages !== 'true') return;
+    const conversation = await readCommunicationConversation(conversationId);
+    if (!conversation) return;
+    const { taskId, key } = message.cardAction;
+    let description: string;
+    try {
+      if (key !== 'confirm' && key !== 'cancel') throw new Error('卡片操作无效。');
+      description = await resolveCommunicationConfirmation(conversation, message.senderId, taskId, key);
+    } catch (error) { description = failureMessage(error); }
+    // Card callbacks have a five-second reply window; do not queue behind file uploads.
+    await getWeComConnection(integration).updateTemplateCard(requestId, {
+      card_type: 'text_notice', task_id: taskId,
+      main_title: { title: '操作确认结果' }, sub_title_text: description.slice(0, 112),
+      card_action: { type: 0 },
+    }, [message.senderId]).catch(() => console.warn('[communication] 卡片结果更新未确认，请在网页查看当前状态。'));
+    return;
+  }
   // Receipt acknowledgement must not wait behind attachment downloads or delivery.
   await enqueue(`receive:${conversationId}`, async () => {
     let conversation = await readCommunicationConversation(conversationId);
@@ -282,6 +300,54 @@ async function finish(conversation: CommunicationConversation, item: Communicati
   await deliver(conversation, item);
 }
 
+async function resolveCommunicationConfirmation(
+  conversation: CommunicationConversation, senderId: string, confirmationId: string, action: 'confirm' | 'cancel',
+) {
+  const source = await readCommunicationConfirmationSource(conversation.id, confirmationId);
+  if (!source?.sessionId) throw new Error('确认请求已处理或失效，请查看最新确认卡片。');
+  if (source.senderId !== senderId) throw new Error('请由发起该任务的用户处理确认。');
+  const session = await getBrowserChatSession(source.sessionId, conversation.userId);
+  if (session?.pendingToolConfirmation?.id !== confirmationId) throw new Error('确认请求已处理或失效，请查看最新确认卡片。');
+  await resolveBrowserChatToolConfirmation(source.sessionId, confirmationId, action, conversation.userId);
+  return action === 'confirm' ? '已确认执行，任务将继续。' : '已取消本次工具操作，任务将继续。';
+}
+
+async function notifyConfirmation(
+  conversation: CommunicationConversation, item: CommunicationInbound, pending: BrowserChatToolConfirmation,
+) {
+  const latest = await readCommunicationInbound(item.id);
+  if (!latest || latest.status !== 'running' || latest.confirmationNotice?.id === pending.id) return;
+  const session = latest.sessionId ? await getBrowserChatSession(latest.sessionId, conversation.userId) : undefined;
+  if (session?.pendingToolConfirmation?.id !== pending.id) return;
+  latest.confirmationNotice = { id: pending.id, status: 'sending' };
+  item.confirmationNotice = latest.confirmationNotice;
+  await saveCommunicationInbound(latest);
+  const text = [
+    '需要你的确认', pending.prompt, pending.reason && pending.reason !== pending.prompt ? pending.reason : '',
+    '对话：' + latest.sessionId,
+    '确认执行：/confirm ' + pending.id, '取消操作：/cancel ' + pending.id,
+  ].filter(Boolean).join('\n\n');
+  let delivered = false;
+  try {
+    for (const chunk of splitCommunicationText(text)) { await sendReplyText(conversation, latest, chunk); delivered = true; }
+  }
+  catch { console.warn('[communication] 确认文字提示的送达未确认，将尝试独立卡片。'); }
+  try {
+    const receiver = receiverFor(conversation);
+    if (!receiver) throw new Error('企微连接不可用');
+    await receiver.bot.sendTemplateCard(conversation.target.id, {
+      card_type: 'button_interaction', task_id: pending.id,
+      main_title: { title: '需要你的确认', desc: pending.toolName.slice(0, 30) },
+      sub_title_text: pending.prompt.slice(0, 112),
+      button_list: [{ text: '确认执行', key: 'confirm', style: 1 }, { text: '取消', key: 'cancel', style: 4 }],
+    });
+    delivered = true;
+  } catch { console.warn('[communication] 确认卡片送达未确认，可使用文字命令或网页卡片处理。'); }
+  latest.confirmationNotice.status = delivered ? 'sent' : 'unknown';
+  item.confirmationNotice = latest.confirmationNotice;
+  await saveCommunicationInbound(latest);
+}
+
 function watch(conversation: CommunicationConversation, item: CommunicationInbound) {
   if (!item.sessionId || state.watchers.has(item.id)) return;
   const watcher = { item, stop: () => {} };
@@ -290,16 +356,11 @@ function watch(conversation: CommunicationConversation, item: CommunicationInbou
     const message = update.message;
     if (['passed', 'failed', 'interrupted'].includes(message?.status || '') || (message?.status === 'blocked' && update.pendingToolConfirmation?.messageId !== message.id)) {
       void enqueue(conversation.id, () => finish(conversation, item, message!)).catch(() => {});
-    } else if (update.pendingToolConfirmation && update.pendingToolConfirmation.messageId === message?.id && !item.noticeSent) {
-      void enqueue(conversation.id, async () => {
-        const latest = await readCommunicationInbound(item.id);
-        if (!latest || latest.status !== 'running' || latest.noticeSent) return;
-        latest.noticeSent = true;
-        item.noticeSent = true;
-        await saveCommunicationInbound(latest);
-        await sendReplyText(conversation, latest,
-          `对话 ${latest.sessionId} 有操作需要确认，请在网页对话中处理，确认后会继续回复。`);
-      }).catch(() => {});
+    } else if (update.pendingToolConfirmation && update.pendingToolConfirmation.messageId === message?.id) {
+      const pending = update.pendingToolConfirmation;
+      if (item.confirmationNotice?.id !== pending.id) {
+        void enqueue(conversation.id, () => notifyConfirmation(conversation, item, pending)).catch(() => {});
+      }
     }
   });
 }
@@ -324,13 +385,15 @@ async function processReceived(conversation: CommunicationConversation, item: Co
     '/delete 删除当前对话',
     '/list [offset] [limit] 分页查看当前网页账号的对话，按创建时间从新到旧排列；offset 从 0 开始，limit 为 1～500，默认 /list 10 10。例：/list 10 5 跳过前 10 个，取后面 5 个；/list 0 10 查看第一页。',
     '/select chat_xxx 切换对话',
+    '/confirm confirm_xxx 确认对应卡片的工具操作',
+    '/cancel confirm_xxx 取消对应卡片的工具操作',
     '/model-list 查看已启用的对话模型及当前选中模型',
     '/model-switch id 复制模型列表中的 ID，切换当前通信会话后续消息使用的模型；正在执行的消息不受影响。',
   ].join('\n\n');
   const offset = args[0] === undefined ? 10 : Number(args[0]);
   const limit = args[1] === undefined ? 10 : Number(args[1]);
   const valid = ['/help', '/start', '/delete', '/model-list'].includes(command) ? args.length === 0
-    : ['/select', '/model-switch'].includes(command) ? args.length === 1
+    : ['/select', '/model-switch', '/confirm', '/cancel'].includes(command) ? args.length === 1
       : command === '/list' && args.length <= 2 && args.every(value => /^\d+$/.test(value))
         && Number.isSafeInteger(offset) && offset >= 0 && Number.isSafeInteger(limit) && limit >= 1 && limit <= 500;
   if (item.text.trimStart().startsWith('/') && !item.media?.length && !item.attachments?.length) {
@@ -365,6 +428,10 @@ async function processReceived(conversation: CommunicationConversation, item: Co
             await replyText(item, `已选中 ${selected.provider} / ${selected.model}，当前通信会话的后续消息将使用此模型。`);
           }
         }
+      } else if (command === '/confirm' || command === '/cancel') {
+        try {
+          await replyText(item, await resolveCommunicationConfirmation(conversation, item.senderId, args[0], command === '/confirm' ? 'confirm' : 'cancel'));
+        } catch (error) { await replyText(item, failureMessage(error)); }
       } else if (command === '/select') {
         const session = await getBrowserChatSession(args[0], conversation.userId);
         if (!session || session.status === 'closed') await replyText(item, '对话不存在、已关闭或不属于当前网页账号。请用 /list 查看可用 ID。');
@@ -423,7 +490,8 @@ async function processReceived(conversation: CommunicationConversation, item: Co
   item.sessionId = sessionId; item.status = 'running'; await saveCommunicationInbound(item);
   watch(conversation, item);
   try {
-    await sendBrowserChatMessage(sessionId, item.text, 'full', conversation.modelSelection?.provider, conversation.modelSelection?.model, item.id, attachments, undefined, conversation.userId);
+    const currentSession = await getBrowserChatSession(sessionId, conversation.userId);
+    await sendBrowserChatMessage(sessionId, item.text, currentSession?.safetyMode || 'full', conversation.modelSelection?.provider, conversation.modelSelection?.model, item.id, attachments, undefined, conversation.userId);
   } catch (error) {
     state.watchers.get(item.id)?.stop(); state.watchers.delete(item.id);
     if (attachments.length) {

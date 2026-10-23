@@ -218,7 +218,7 @@ export function createBrowserTools(operations: BrowserCapabilityOperations): Cap
   return Object.freeze({
     [browserCapabilityToolNames.browser]: defineCapabilityTool<BrowserToolInput, unknown>({
       name: browserCapabilityToolNames.browser,
-      description: 'Execute one bounded Playwright JavaScript cell, read scoped browser state with cursor continuation, or pause for human verification. State accepts scope/frame/selector/query; pass nextCursor as cursor to continue the same capture. The action field is authoritative and unrelated fields are discarded before validation.',
+      description: 'Execute one bounded Playwright JavaScript cell, read scoped browser state with cursor continuation, or pause for human verification. Inspect and attempt ordinary verification through the page UI first; request human help after bounded attempts fail or a step needs user-owned credentials, OTP, QR scan or device approval. State accepts scope/frame/selector/query; pass nextCursor as cursor to continue the same capture. The action field is authoritative and unrelated fields are discarded before validation.',
       input: browserToolInput,
       inputExamples: [
         { action: 'code', reason: 'Read the current page URL and title', code: 'nodeRepl.write({ url: page.url(), title: await page.title() })' },

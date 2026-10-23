@@ -414,6 +414,7 @@ export async function readBrowserChatSessionSummaries<T>(input: {
   beforeId?: string;
   beforeCreatedAt?: string;
   hasMessagesOnly?: boolean;
+  status?: string;
   limit?: number;
   offset?: number;
   userId?: string;
@@ -423,6 +424,10 @@ export async function readBrowserChatSessionSummaries<T>(input: {
   if (input.userId) {
     clauses.push('user_id = ?');
     values.push(input.userId);
+  }
+  if (input.status) {
+    clauses.push('status = ?');
+    values.push(input.status);
   }
   if (input.hasMessagesOnly) clauses.push(`EXISTS (
     SELECT 1 FROM browser_chat_message WHERE browser_chat_message.session_id = browser_chat_session.id

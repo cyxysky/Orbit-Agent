@@ -26,14 +26,15 @@ type BrowserPreviewWebSocketInfo = {
 
 type BrowserPreviewClient = {
   actionChain: Promise<void>;
+  inputActive: boolean;
+  inputQueue: Array<{ input: BrowserLiveInput; requestId?: string }>;
+  pointer?: Extract<BrowserLiveInput, { kind: 'pointer' }>;
   buffer: Buffer;
   frameBlocked: boolean;
   pendingFrame?: Buffer;
   pendingVideo: Buffer[];
   pendingVideoBytes: number;
   pendingVideoSince?: number;
-  pendingMove?: Extract<BrowserLiveInput, { kind: 'move' }>;
-  moveActive: boolean;
   sessionId: string;
   socket: Socket;
   streamKey: string;
@@ -113,11 +114,22 @@ async function removeClient(client: BrowserPreviewClient) {
   client.pendingFrame = undefined;
   client.pendingVideo = [];
   client.pendingVideoBytes = 0;
-  client.pendingMove = undefined;
+  client.inputQueue = [];
   const stream = state().streams.get(client.streamKey);
   stream?.clients.delete(client);
   client.socket.destroy();
+  await releaseClientPointer(client);
   if (stream && stream.clients.size === 0) await stopStream(stream);
+}
+
+async function releaseClientPointer(client: BrowserPreviewClient) {
+  // A down already in flight must finish before its disconnect cleanup.
+  await client.actionChain;
+  const pointer = client.pointer;
+  client.pointer = undefined;
+  if (pointer) {
+    await dispatchPreviewInput(client.sessionId, client.userId, { ...pointer, phase: 'cancel' }).catch(() => undefined);
+  }
 }
 
 function flushPendingFrame(client: BrowserPreviewClient) {
@@ -314,7 +326,7 @@ function pushVideoFrame(stream: BrowserPreviewStream, frame: BrowserScreencastFr
     try {
       encoder = new BrowserPreviewVideoEncoder({
         contentType: frame.contentType,
-        framesPerSecond: browserPreviewFramesPerSecond(process.env.BROWSER_PREVIEW_FPS),
+        framesPerSecond: browserPreviewFramesPerSecond(frame.framesPerSecond),
         height: dimensions.height,
         onError: (error) => {
           if (stream.videoEncoder === encoder) fallbackStreamToImages(stream, error);
@@ -432,7 +444,17 @@ function readLiveInput(value: unknown): BrowserLiveInput | undefined {
     return { kind: 'tab', tabId: input.tabId.trim() };
   }
   if (input.kind === 'move') {
-    return { kind: 'move', xRatio: Number(input.xRatio), yRatio: Number(input.yRatio) };
+    return { kind: 'move', xRatio: Number(input.xRatio), yRatio: Number(input.yRatio),
+      ...(typeof input.gestureId === 'string' ? { gestureId: input.gestureId.slice(0, 160) } : {}) };
+  }
+  if (input.kind === 'pointer' && (input.phase === 'down' || input.phase === 'up' || input.phase === 'cancel')
+    && typeof input.gestureId === 'string' && input.gestureId.length > 0 && input.gestureId.length <= 160) {
+    return {
+      kind: 'pointer', phase: input.phase, gestureId: input.gestureId,
+      xRatio: Number(input.xRatio), yRatio: Number(input.yRatio),
+      button: input.button === 'right' || input.button === 'middle' ? input.button : 'left',
+      clickCount: Number(input.clickCount),
+    };
   }
   if (input.kind === 'click') {
     return {
@@ -510,28 +532,6 @@ function readLiveInput(value: unknown): BrowserLiveInput | undefined {
   return undefined;
 }
 
-async function dispatchLatestMove(client: BrowserPreviewClient) {
-  if (client.moveActive) return;
-  client.moveActive = true;
-  try {
-    while (client.pendingMove && !client.socket.destroyed) {
-      const input = client.pendingMove;
-      client.pendingMove = undefined;
-      const result = await dispatchPreviewInput(client.sessionId, client.userId, input);
-      if (client.socket.destroyed || !state().clients.has(client)) return;
-      if (result?.ok === false) sendToClient(client, { type: 'inputError', error: result.actual });
-    }
-  } catch (error) {
-    sendToClient(client, {
-      type: 'inputError',
-      error: error instanceof Error ? error.message : 'Live browser input failed',
-    });
-  } finally {
-    client.moveActive = false;
-    if (client.pendingMove && !client.socket.destroyed) void dispatchLatestMove(client);
-  }
-}
-
 function handleClientMessage(client: BrowserPreviewClient, text: string) {
   let message: { event?: unknown; requestId?: unknown; type?: unknown };
   try {
@@ -546,47 +546,58 @@ function handleClientMessage(client: BrowserPreviewClient, text: string) {
     sendToClient(client, { type: 'inputError', error: 'Invalid live browser input' });
     return;
   }
-  if (input.kind === 'move') {
-    client.pendingMove = input;
-    void dispatchLatestMove(client);
-    return;
-  }
-
-  client.pendingMove = undefined;
   const requestId = typeof message.requestId === 'string' ? message.requestId : undefined;
-  client.actionChain = client.actionChain.then(async () => {
-    if (client.socket.destroyed || !state().clients.has(client)) return;
-    try {
-      const result = await dispatchPreviewInput(client.sessionId, client.userId, input);
-      if (client.socket.destroyed || !state().clients.has(client)) return;
-      if (!result || result.ok === false) {
+  const previous = client.inputQueue.at(-1);
+  // Only replace adjacent moves. Press/release and other inputs form ordering
+  // barriers, so a delayed move can never run after its release or next press.
+  if (input.kind === 'move' && previous?.input.kind === 'move' && input.gestureId === previous.input.gestureId) {
+    previous.input = input;
+    previous.requestId = requestId;
+  } else client.inputQueue.push({ input, requestId });
+  if (!client.inputActive) client.actionChain = dispatchQueuedInputs(client);
+}
+
+async function dispatchQueuedInputs(client: BrowserPreviewClient) {
+  client.inputActive = true;
+  try {
+    while (client.inputQueue.length && !client.socket.destroyed && state().clients.has(client)) {
+      const { input, requestId } = client.inputQueue.shift()!;
+      try {
+        if (input.kind === 'pointer' && input.phase === 'down') client.pointer = input;
+        const result = await dispatchPreviewInput(client.sessionId, client.userId, input);
+        if (input.kind === 'pointer' && input.phase !== 'down' && client.pointer?.gestureId === input.gestureId) client.pointer = undefined;
+        if (client.socket.destroyed || !state().clients.has(client)) return;
+        if (!result || result.ok === false) {
+          sendToClient(client, {
+            type: 'inputError',
+            requestId,
+            error: result?.actual || 'Browser session not found',
+          });
+        } else if (input.kind === 'clipboard') {
+          sendToClient(client, { type: 'clipboard', requestId, text: (result.data as { clipboardText?: string } | undefined)?.clipboardText || '' });
+        } else if (input.kind === 'tab' || input.kind === 'browserControl') {
+          const stream = state().streams.get(client.streamKey);
+          // A manual new-tab/navigation action may have started a browser after
+          // the initial subscription reported it unavailable.
+          if (stream && !stream.stop) await attachStream(stream);
+          // The active-page listener handles tab changes from every source.
+          // Restarting here too races that listener and resets the decoder twice.
+        } else if (result.liveControl || result.liveSelect) {
+          sendToClient(client, { type: 'nativeControlOpened', requestId, control: result.liveControl || result.liveSelect });
+        } else if (input.kind === 'select' || input.kind === 'controlValue' || input.kind === 'files') {
+          sendToClient(client, { type: 'nativeControlClosed', requestId });
+        }
+      } catch (error) {
         sendToClient(client, {
           type: 'inputError',
           requestId,
-          error: result?.actual || 'Browser session not found',
+          error: error instanceof Error ? error.message : 'Live browser input failed',
         });
-      } else if (input.kind === 'clipboard') {
-        sendToClient(client, { type: 'clipboard', requestId, text: (result.data as { clipboardText?: string } | undefined)?.clipboardText || '' });
-      } else if (input.kind === 'tab' || input.kind === 'browserControl') {
-        const stream = state().streams.get(client.streamKey);
-        // A manual new-tab/navigation action may have started a browser after
-        // the initial subscription reported it unavailable.
-        if (stream && !stream.stop) await attachStream(stream);
-        // The active-page listener handles tab changes from every source.
-        // Restarting here too races that listener and resets the decoder twice.
-      } else if (result.liveControl || result.liveSelect) {
-        sendToClient(client, { type: 'nativeControlOpened', requestId, control: result.liveControl || result.liveSelect });
-      } else if (input.kind === 'select' || input.kind === 'controlValue' || input.kind === 'files') {
-        sendToClient(client, { type: 'nativeControlClosed', requestId });
       }
-    } catch (error) {
-      sendToClient(client, {
-        type: 'inputError',
-        requestId,
-        error: error instanceof Error ? error.message : 'Live browser input failed',
-      });
     }
-  });
+  } finally {
+    client.inputActive = false;
+  }
 }
 
 function handleClientData(client: BrowserPreviewClient, chunk: Buffer) {
@@ -613,19 +624,25 @@ async function attachStream(stream: BrowserPreviewStream) {
       const handle = await startScreencast(sessionId, userId, {
         onActivePageChanged: () => {
           if (generation !== stream.generation || stream.clients.size === 0) return;
+          // Retire the capture before its detached CDP requests can reject.
+          const nextGeneration = ++stream.generation;
           broadcastText(stream, { type: 'activeTabChanged', sessionId });
           if (stream.reattachTimer) clearTimeout(stream.reattachTimer);
           stream.reattachTimer = setTimeout(() => {
             stream.reattachTimer = undefined;
-            if (generation === stream.generation && stream.clients.size > 0) void restartStream(stream);
+            if (nextGeneration === stream.generation && stream.clients.size > 0) void restartStream(stream);
           }, 0);
         },
-        onError: (error) => broadcastText(stream, {
-          type: 'error',
-          error: error instanceof Error ? error.message : 'Browser screencast failed',
-        }),
+        onError: (error) => {
+          if (generation !== stream.generation || stream.clients.size === 0) return;
+          broadcastText(stream, {
+            type: 'error',
+            error: error instanceof Error ? error.message : 'Browser screencast failed',
+          });
+        },
         onFrame: (frame) => { if (generation === stream.generation) handlePreviewFrame(stream, frame); },
         onNativeEvent: (event) => {
+          if (generation !== stream.generation || stream.clients.size === 0) return;
           if (event.kind === 'dialogOpened') {
             broadcastText(stream, { type: 'nativeDialogOpened', dialog: event.dialog });
           } else if (event.kind === 'dialogClosed') {
@@ -643,12 +660,12 @@ async function attachStream(stream: BrowserPreviewStream) {
         onTabsChanged: (tabs) => { if (generation === stream.generation) broadcastTabsChanged(stream, tabs); },
         video: stream.transport === 'video',
       });
-      if (!handle) {
-        broadcastText(stream, { type: 'unavailable', error: 'Browser session or its browser is not available' });
+      if (generation !== stream.generation || stream.clients.size === 0) {
+        await handle?.stop().catch(() => undefined);
         return;
       }
-      if (generation !== stream.generation || stream.clients.size === 0) {
-        await handle.stop().catch(() => undefined);
+      if (!handle) {
+        broadcastText(stream, { type: 'unavailable', error: 'Browser session or its browser is not available' });
         return;
       }
       stream.stop = async () => {
@@ -664,6 +681,7 @@ async function attachStream(stream: BrowserPreviewStream) {
       startStreamMetrics(stream, handle.metrics);
       broadcastText(stream, { type: 'ready', sessionId });
     } catch (error) {
+      if (generation !== stream.generation || stream.clients.size === 0) return;
       broadcastText(stream, {
         type: 'unavailable',
         error: error instanceof Error ? error.message : 'Failed to start browser screencast',
@@ -764,11 +782,12 @@ function createServer() {
 
     const client: BrowserPreviewClient = {
       actionChain: Promise.resolve(),
+      inputActive: false,
+      inputQueue: [],
       buffer: Buffer.alloc(0),
       frameBlocked: false,
       pendingVideo: [],
       pendingVideoBytes: 0,
-      moveActive: false,
       sessionId,
       socket: netSocket,
       streamKey: '',
@@ -814,12 +833,13 @@ function resetSession(sessionId: string, userId?: string, onReset?: () => void):
     for (const stream of streams) { state().streams.delete(stream.key); stream.clients.clear(); }
     for (const client of clients) {
       state().clients.delete(client);
-      client.pendingMove = undefined;
+      client.inputQueue = [];
       client.pendingFrame = undefined;
       client.pendingVideo = [];
       client.pendingVideoBytes = 0;
       client.socket.destroy();
     }
+    await Promise.all(clients.map((client) => releaseClientPointer(client)));
     await Promise.all(streams.map((stream) => stopStream(stream)));
     onReset?.();
   }).finally(() => {

@@ -43,6 +43,20 @@ function visit(file) {
         edits.push({ start: specifier.getStart(parsed), end: specifier.end, text: JSON.stringify(replacement) });
       } else if (name.startsWith('.') || name.startsWith('@/')) throw new Error(`Unresolved backend import: ${file} -> ${name}`);
     }
+    // Worker scripts referenced by module-relative URLs belong to the same
+    // backend graph. Copy their dependencies through the normal import walker.
+    if (ts.isNewExpression(node) && node.expression.getText(parsed) === 'URL'
+      && node.arguments?.length === 2 && ts.isStringLiteral(node.arguments[0])
+      && node.arguments[1].getText(parsed) === 'import.meta.url'
+      && node.arguments[0].text.startsWith('.')
+      && /\.[cm]?[jt]sx?$/.test(node.arguments[0].text)) {
+      const target = resolveSource(node.arguments[0].text, file);
+      if (!target) throw new Error('Unresolved backend runtime script: ' + file + ' -> ' + node.arguments[0].text);
+      visit(target);
+      let replacement = path.relative(path.dirname(outputPath(file)), outputPath(target)).split(path.sep).join('/');
+      if (!replacement.startsWith('.')) replacement = './' + replacement;
+      edits.push({ start: node.arguments[0].getStart(parsed), end: node.arguments[0].end, text: JSON.stringify(replacement) });
+    }
     ts.forEachChild(node, rewrite);
   }
   rewrite(parsed);

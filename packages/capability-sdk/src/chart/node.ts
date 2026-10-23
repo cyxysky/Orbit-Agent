@@ -2,12 +2,12 @@ import { link, mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { renderECharts } from './renderer.ts';
 import type {
   ChartArtifactStore,
 } from './index.ts';
 import { createChartCapability } from './index.ts';
 import {
-  echartsMapDefinition,
   parseChartRecord,
   normalizeChartOption,
   normalizeChartUpdate,
@@ -43,28 +43,10 @@ async function publishRecord(directory: string, filename: string, record: ChartR
 }
 
 export async function validateEChartsOption(input: ChartOptionValidationInput) {
-  const echarts = await import('echarts');
-  for (const map of input.maps || []) {
-    echarts.registerMap(
-      map.name,
-      echartsMapDefinition(map) as unknown as Parameters<typeof echarts.registerMap>[1],
-      map.specialAreas as Parameters<typeof echarts.registerMap>[2],
-    );
-  }
-  const instance = echarts.init(null, undefined, {
-    height: input.height,
-    renderer: 'svg',
-    ssr: true,
-    width: 960,
-  });
   try {
-    instance.setOption(normalizeChartOption(input.option));
-    const svg = instance.renderToSVGString();
-    if (!svg.includes('<svg')) throw new Error('ECharts produced no SVG surface.');
+    await renderECharts({ option: normalizeChartOption(input.option), maps: input.maps, height: input.height });
   } catch (error) {
-    throw new Error(`ECharts rejected option: ${error instanceof Error ? error.message : String(error)}`);
-  } finally {
-    instance.dispose();
+    throw new Error('ECharts rejected option: ' + (error instanceof Error ? error.message : String(error)));
   }
 }
 

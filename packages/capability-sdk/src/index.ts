@@ -28,6 +28,7 @@ export type CapabilityResult<TData = unknown> =
   | {
       ok: false;
       summary?: string;
+      data?: TData;
       content?: CapabilityContent[];
       error: {
         code: string;
@@ -64,6 +65,8 @@ export interface CapabilityTool<TInput = unknown, TData = unknown> {
   description: string;
   input: CapabilityInputSchema<TInput>;
   inputExamples?: readonly TInput[];
+  /** Text-only transports can request full JSON; structured hosts can avoid duplicating data. */
+  resultText?: 'full' | 'summary';
   policy?: CapabilityToolPolicy;
   execute(input: TInput, context: CapabilityExecutionContext): Promise<CapabilityResult<TData>>;
 }

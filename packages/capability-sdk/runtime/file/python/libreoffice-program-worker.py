@@ -8802,7 +8802,7 @@ def inspect_target_api(subject, query, offset, limit, complete=False):
     }
 
 
-def inspect_uno_api(soffice, profile, document_type, target, query='', offset=0, limit=120):
+def inspect_uno_api(soffice, profile, document_type, target, query='', offset=0, limit=120, existing_pipe=None):
     normalized_query = str(query or '').strip().lower()
     if target == 'facade':
         mapping_query = normalized_query == 'office.properties' or normalized_query == 'office.properties@1' or normalized_query.startswith('office.properties.')
@@ -8815,7 +8815,7 @@ def inspect_uno_api(soffice, profile, document_type, target, query='', offset=0,
             if len(parts) >= 3:
                 process = desktop = document = None
                 try:
-                    process, context, desktop = connect_office(soffice, profile)
+                    process, context, desktop = connect_office(soffice, profile, existing_pipe)
                     global OFFICE_MAPPING_CONTEXT
                     OFFICE_MAPPING_CONTEXT = context
                     OFFICE_TYPE_SCHEMAS.clear()
@@ -8838,7 +8838,7 @@ def inspect_uno_api(soffice, profile, document_type, target, query='', offset=0,
         }
     process = context = desktop = document = None
     try:
-        process, context, desktop = connect_office(soffice, profile)
+        process, context, desktop = connect_office(soffice, profile, existing_pipe)
         document = desktop.loadComponentFromURL(factory_url(document_type), '_blank', 0, (property_value('Hidden', True),))
         offset, limit = max(0, int(offset)), min(2000, max(1, int(limit)))
         response = {
@@ -9650,8 +9650,25 @@ def main():
     parser.add_argument('--profile', required=True)
     parser.add_argument('--soffice', required=True)
     parser.add_argument('--uno-pipe')
+    parser.add_argument('--warmup', action='store_true')
     args = parser.parse_args()
     soffice, profile = Path(args.soffice).resolve(), Path(args.profile).resolve()
+    if args.warmup:
+        process = desktop = document = None
+        try:
+            process, context, desktop = connect_office(soffice, profile, args.uno_pipe)
+            document = desktop.loadComponentFromURL(factory_url(args.document_type), '_blank', 0, (
+                property_value('Hidden', True), property_value('Silent', True),
+                property_value('MacroExecutionMode', uno.getConstantByName('com.sun.star.document.MacroExecMode.NEVER_EXECUTE')),
+                property_value('UpdateDocMode', uno.getConstantByName('com.sun.star.document.UpdateDocMode.NO_UPDATE')),
+            ))
+            if document is None or not document.supportsService(expected_service(args.document_type)):
+                raise RuntimeError(f'LibreOffice warmup could not load {args.document_type}')
+            print(json.dumps({'ready': True, 'documentType': args.document_type}))
+        finally:
+            close_component(document)
+            shutdown_office(process, desktop)
+        return
     if args.read_input:
         from office_content_reader import extract_document
         if not args.read_result or not args.read_selection or not args.expected_source_digest:
@@ -9684,7 +9701,7 @@ def main():
             shutdown_office(process, desktop)
         return
     if args.inspect_target:
-        print(json.dumps(inspect_uno_api(soffice, profile, args.document_type, args.inspect_target, args.api_query, args.api_offset, args.api_limit), ensure_ascii=False))
+        print(json.dumps(inspect_uno_api(soffice, profile, args.document_type, args.inspect_target, args.api_query, args.api_offset, args.api_limit, args.uno_pipe), ensure_ascii=False))
         return
     if not all((args.program, args.output, args.preview, args.assets)):
         raise ValueError('program, output, preview, and assets are required for document generation')
@@ -9700,7 +9717,7 @@ def main():
     output.parent.mkdir(parents=True, exist_ok=True)
     process = context = desktop = None
     try:
-        emit_progress('execute', '正在启动 LibreOffice')
+        emit_progress('connect', '正在连接 LibreOffice' if args.uno_pipe else '正在启动 LibreOffice')
         process, context, desktop = connect_office(soffice, profile, args.uno_pipe)
         namespace = program_namespace(program)
         job = DocumentJob(output, assets, args.document_type, context, desktop, program)

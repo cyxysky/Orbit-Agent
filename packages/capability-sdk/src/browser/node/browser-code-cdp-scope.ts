@@ -27,6 +27,7 @@ export async function createBrowserCodeCdpScope(input: {
   let client: import('ws').WebSocket | undefined;
   let closed = false;
   let watching = false;
+  let scopedBrowserContextId: string | undefined;
   let commandId = 0;
   type Payload = {
     targetId?: string;
@@ -160,6 +161,15 @@ export async function createBrowserCodeCdpScope(input: {
           send(socket, { id: message.id, error: { code: -32000, message: 'Target is outside this browserCode session.' } });
           return;
         }
+        // Playwright CDP attachments represent pre-existing incognito pages in
+        // their default context. Context-wide cookie commands otherwise target
+        // the browser's empty default cookie jar instead of the owned session.
+        // Explicitly created contexts keep their own supplied identifiers.
+        if (!message.sessionId && scopedBrowserContextId
+          && ['Storage.getCookies', 'Storage.setCookies', 'Storage.clearCookies', 'Target.createTarget'].includes(message.method || '')
+          && message.params?.browserContextId === undefined) {
+          message.params = { ...message.params, browserContextId: scopedBrowserContextId };
+        }
         if (!message.sessionId && message.method === 'Target.createTarget' && message.id !== undefined) creating.add(message.id);
         send(upstream, message);
       };
@@ -179,6 +189,12 @@ export async function createBrowserCodeCdpScope(input: {
       }),
     ]);
     if (closed) throw new Error('Scoped CDP connection closed during startup.');
+    const contextIds = new Set(await Promise.all([...allowed].map(async targetId => {
+      const info = await request('Target.getTargetInfo', { targetId });
+      return String(info.targetInfo?.browserContextId || '');
+    })));
+    if (contextIds.size !== 1) throw new Error('browserCode owned targets must share one browser context.');
+    scopedBrowserContextId = [...contextIds][0] || undefined;
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('Scoped CDP listener has no port.');
     return { endpoint: `ws://127.0.0.1:${address.port}${route}`, targetIds: () => [...allowed], updateTargets, close };

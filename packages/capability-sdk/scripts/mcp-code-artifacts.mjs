@@ -4,7 +4,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { artifactContentType } from '../dist/file/formats.js';
 import { sanitizeNodeArtifactFileName } from '../dist/file/node/artifacts.js';
-import { decodeFile, relativeFile, MAX_TOTAL_BYTES } from '../runtime/execution/files.cjs';
+import { decodeFile, filePayloadSize, relativeFile, MAX_TOTAL_BYTES } from '../runtime/execution/files.cjs';
 
 const MAX_FILES = 16;
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
@@ -44,15 +44,15 @@ export function withLocalCodeArtifacts(executor, root, runId) {
       const { files = [], ...result } = await executor.run({ ...transport, inputFiles }, context);
       if (files.length > MAX_FILES) throw new Error('Code output exceeds the file count limit.');
       let outputBytes = 0;
-      const decoded = files.map(file => {
+      for (const file of files) {
         relativeFile(file.path);
-        const bytes = decodeFile(file);
-        outputBytes += bytes.length;
+        outputBytes += filePayloadSize(file);
         if (outputBytes > MAX_TOTAL_BYTES) throw new Error('Code outputs exceed the total byte limit.');
-        return { file, bytes };
-      });
+      }
       const artifacts = [];
-      for (const { file, bytes } of decoded) {
+      // Validate the complete batch first, then hold only one decoded file at a time.
+      for (const file of files) {
+        const bytes = decodeFile(file);
         const filename = path.posix.basename(file.path).replace(/[<>:"|?*\x00-\x1f]/g, '_');
         const artifactId = `${namespace}/${randomUUID()}/${filename}`;
         const target = path.join(root, artifactId);

@@ -247,7 +247,7 @@ The following table lists literal defaults from the package settings; dynamic de
 
 | Key | Default | Apply mode |
 | --- | --- | --- |
-| `BROWSER_PREVIEW_FPS` | `20` | `runtime` |
+| `BROWSER_PREVIEW_FPS` | `30` | `runtime` |
 | `BROWSER_OUTPUT_PIXEL_RATIO` | `1.5` | `runtime` |
 | `BROWSER_SCREENCAST_FORMAT` | `jpeg` | `runtime` |
 | `BROWSER_SCREENCAST_QUALITY` | `90` | `runtime` |

@@ -18,7 +18,7 @@ npm install -D typescript tsx @types/node
 ```ts
 // terminal.ts — Node >=22.16, ESM TypeScript
 import { randomUUID } from 'node:crypto';
-import type { TerminalResult } from '@cjfclonedeep/capability-sdk/execution/terminal';
+import type { CompactTerminalResult } from '@cjfclonedeep/capability-sdk/execution/terminal';
 import { mountCapabilities } from '@cjfclonedeep/capability-sdk/host';
 import { createCapabilityExecutor } from '@cjfclonedeep/capability-sdk';
 import { createNodeTerminalCapability } from '@cjfclonedeep/capability-sdk/execution/terminal/node';
@@ -49,16 +49,16 @@ try {
   console.log(mounted.skillCatalog.instructions('eager'));
   const created = await call({ action: 'create', reason: 'Open a reusable terminal', name: 'Workspace' });
   if (!created.ok) throw new Error(created.error.message);
-  const terminalId = (created.data as TerminalResult).terminal!.terminalId;
+  const terminalId = (created.data as CompactTerminalResult).terminalId!;
   let result = await call({
     action: 'run', reason: 'Inspect the local working directory', terminalId,
     command: process.platform === 'win32' ? 'Get-Location' : 'pwd', yieldMs: 1000,
   });
   console.log(result);
-  while (result.ok && (result.data as TerminalResult).terminal?.status === 'running') {
+  while (result.ok && (result.data as CompactTerminalResult).status === 'running') {
     result = await call({
       action: 'wait', reason: 'Wait for command completion', terminalId,
-      cursor: (result.data as TerminalResult).cursor, yieldMs: 30000,
+      cursor: (result.data as CompactTerminalResult).cursor, yieldMs: 30000,
     });
     console.log(result);
   }
@@ -82,7 +82,7 @@ npx tsx terminal.ts
 - `interrupt`: Ctrl+C, with terminal termination if the foreground command remains stuck.
 - `resize`: cols/rows. `rename`: name. `close` ends the terminal and descendants but retains output; `delete` also removes the record.
 
-Every action requires reason. yieldMs is 0–30000; it bounds a call's wait, not command lifetime. A running response is not command success. Only command.status=succeeded and command.exitCode=0 establish success. Failed, interrupted or timed-out run/wait results include TerminalResult in error.details.
+Every action requires reason. yieldMs is 0–30000; it bounds a call's wait, not command lifetime. A running response is not command success. Only status=succeeded and exitCode=0 establish success. Failed, interrupted or timed-out commands preserve their output and state in data.
 
 ## Runtime behavior
 
@@ -109,7 +109,7 @@ Shell and initial directory apply when creating a terminal; manager configuratio
 
 ## Agent integration
 
-Use tool.input.jsonSchema as the model's parameters schema, parse arguments before execution, and share one createCapabilityExecutor for concurrency and permission hooks. Supply the Skill instructions to the model. The host owns operation approval, user identity and cancellation. Orbit exposes settings under Local Terminal and routes run/write through its existing approval flow.
+Use tool.input.jsonSchema as the model's parameters schema, parse arguments before execution, and share one createCapabilityExecutor for concurrency and permission hooks. Supply the Skill instructions to the model. The host owns operation approval, user identity and cancellation. Orbit exposes settings under Local Terminal and routes exec/run/write through its existing approval flow.
 
 AI SDK consumers can pass this provider and configuration to mountAISDKCapabilities from @cjfclonedeep/capability-sdk/ai-sdk, then supply its agentOptions to their own Agent. Keep the mounted runtime until all tool calls finish. The core and Node entrypoints do not import AI SDK.
 
@@ -118,3 +118,11 @@ The public exports are the provider/contract at the root, Node factories at /nod
 ## Conversation workspaces and terminal UI
 
 The /workspaces entry owns lifecycle management; /http exposes terminalHttpResponse for operations and SSE; /client provides createHttpTerminalClient for a host route; /react exports TerminalWorkspace with create, switch, rename, interrupt, close, delete, streaming output and inline terminal input. The prompt follows the last output line. Dismissing the UI retains terminals. Hosts supply identity, workspace authorization, configuration and lifecycle bindings. Per-model-request disposal must not dispose a shared workspace.
+
+## Output budgets and direct execution
+
+Use `exec` with command and optional cwd/shell for a fresh noninteractive shell without a PTY, prompt or echo. stdin is closed; use create/run for interaction or persistent variables. A running command or unread output returns terminalId; completed exec sessions are released after their output is delivered.
+
+exec/run/read/wait accept maxOutputChars (default 8000, range 2–200000 UTF-16 code units) and outputMode (head/tail). head pages forward: if hasMore=true, read using cursor and terminalId. endCursor is the latest stream position, not the next-page cursor. tail returns recent text, advances cursor to endCursor and reports skipped text as omittedChars. truncated=true means requested history was evicted. Budgets preserve Unicode scalar and VT sequence boundaries and do not change retained history or raw UI replay. read/wait can include commandId to reject a replacement command.
+
+Tool data is compact: status, exitCode, commandId, shell, cwd, transport, output and continuation fields. detail=true returns full metadata with the same output budget. Failures keep data in the same top-level location as successes. A released exec has no terminalId. stdout/stderr are merged in arrival order. On Windows both modes join a Job before user commands; exec loads a cached ownership helper so it does not compile it per command. Shell exit terminates descendants.

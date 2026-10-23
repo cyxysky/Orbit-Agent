@@ -6,7 +6,6 @@ import { Worker } from 'node:worker_threads';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CapabilityTaskQueue } from '../../index.ts';
-import { readUnoDocument } from './office/uno.ts';
 
 export type NodeFileTextExtractionObserver = {
   incrementMetric?: (name: string, labels?: Record<string, string>) => void;
@@ -75,6 +74,7 @@ function workerPath() {
 async function parse(input: FileTextExtractionInput, digest: string, signal: AbortSignal): Promise<FileTextExtractionResult> {
   signal.throwIfAborted();
   if (input.kind === 'word' || input.kind === 'presentation' || input.kind === 'spreadsheet') {
+    const { readUnoDocument } = await import('./office/uno.ts');
     const report = await readUnoDocument({
       absolutePath: input.path, extension: input.extension, sourceDigest: digest, documentType: input.kind,
       selection: { sheet: input.sheet, range: input.range, section: input.section, contentPages: input.contentPages },

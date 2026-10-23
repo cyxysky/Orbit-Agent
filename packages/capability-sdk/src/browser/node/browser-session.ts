@@ -606,6 +606,7 @@ type AiDomRuntime = {
   hasActionAttribute: (element: Element) => boolean;
   hasPointerCursor: (element: Element) => boolean;
   isContentEditableOwner: (element: Element) => boolean;
+  isDisabledElement: (element: Element) => boolean;
   labelControlFor: (element: Element) => Element | undefined;
   visibleDomHoverElements: () => Set<Element>;
   isActionable: (element: Element) => boolean;
@@ -642,6 +643,7 @@ type AiDomRuntime = {
     coveredBy?: string;
   } | undefined);
   visibleDomElement: (ref: string) => Element | undefined;
+  visibleDomSelector: (ref: string) => string | undefined;
   visibleDomText: (ref: string, options?: { maxChars?: number }) => ({ descriptor: string; text: string; textLength: number } | undefined);
   selectVisibleDomOption: (ref: string, input: { value?: string; label?: string }) => ({
     ok: boolean;
@@ -789,6 +791,16 @@ export type BrowserLiveInput =
       kind: 'move';
       xRatio: number;
       yRatio: number;
+      gestureId?: string;
+    }
+  | {
+      kind: 'pointer';
+      phase: 'down' | 'up' | 'cancel';
+      gestureId: string;
+      xRatio: number;
+      yRatio: number;
+      button?: 'left' | 'right' | 'middle';
+      clickCount?: number;
     }
   | {
       kind: 'click';
@@ -1024,6 +1036,7 @@ export type BrowserTabRestoreResult = {
 };
 
 export type BrowserScreencastFrame = {
+  framesPerSecond: number;
   /** Encoded JPEG/PNG bytes; preview transports must not base64 round-trip them. */
   data: Buffer;
   contentType: 'image/jpeg' | 'image/png';
@@ -1555,6 +1568,18 @@ export class BrowserSession {
   private livePreviewStateListeners = new Set<BrowserLivePreviewStateListener>();
   private livePreviewNativeListeners = new Set<(event: BrowserLiveNativeEvent) => void>();
   private activeScreencasts = new Set<BrowserScreencastHandle>();
+  private livePreviewPointer?: {
+    button: 'left' | 'right' | 'middle';
+    clickCount: number;
+    gestureId: string;
+    page: Page;
+    pressed: boolean;
+    startX: number;
+    startY: number;
+    moved: boolean;
+    download?: { fileName: string; url: string };
+  };
+  private livePreviewPopupWatchCounts = new WeakMap<Page, number>();
   private liveDialogOpenedWaiters = new Set<(page: Page) => void>();
   private pendingLiveDialogs = new Map<string, { descriptor: BrowserLiveDialog; dialog: Dialog; page: Page }>();
   private pendingLiveFileInputs = new Map<string, { element: ElementHandle<HTMLInputElement>; page: Page }>();
@@ -2814,6 +2839,7 @@ export class BrowserSession {
 
   private async activateSessionPage(page: Page) {
     this.ensureLivePreviewState();
+    if (this.livePreviewPointer && this.livePreviewPointer.page !== page) await this.releaseLivePreviewPointer();
     const sequence = ++this.livePreviewExplicitPageSelectionSequence;
     this.livePreviewExplicitPageSelectionAt = Date.now();
     this.page = page;
@@ -2924,7 +2950,9 @@ export class BrowserSession {
     let page: Page | undefined;
     let client: import('patchright').CDPSession | undefined;
     let fileChooserListener: ((chooser: FileChooser) => void) | undefined;
-    let pageBindingPromise: Promise<{ client: import('patchright').CDPSession; page: Page }> | undefined;
+    type CaptureBinding = { client: import('patchright').CDPSession; page: Page; generation: number };
+    let captureGeneration = 0;
+    let pageBindingPromise: Promise<CaptureBinding | undefined> | undefined;
     let captureTask: Promise<void> | undefined;
     let activeCaptures = 0;
     let captureDurationMs = 0;
@@ -2977,6 +3005,7 @@ export class BrowserSession {
     ) => {
       if (stopped || capturedPage.isClosed() || this.activePage !== capturedPage) return;
       framePump.push({
+        framesPerSecond: targetFps,
         capturedAt,
         contentType,
         data,
@@ -3000,10 +3029,11 @@ export class BrowserSession {
       // in claimPage(). Keep only a low-frequency reconciliation fallback for
       // browser/extension implementations that suppress visibility events.
       nextPageRefreshAt = currentTime + 2_000;
+      const refreshPage = this.page;
       pageRefreshPromise = this.refreshSessionGroupPages()
         .then(() => undefined)
         .catch((error) => {
-          if (!stopped) options.onError?.(error);
+          if (!stopped && this.page === refreshPage) options.onError?.(error);
         })
         .finally(() => {
           pageRefreshPromise = undefined;
@@ -3012,7 +3042,10 @@ export class BrowserSession {
     const detachCurrentPage = async () => {
       const currentClient = client;
       const currentPage = page;
+      // Invalidate pending work synchronously, before CDP rejects on detach.
+      captureGeneration += 1;
       client = undefined;
+      page = undefined;
       nativeCapture = false;
       latestNativeFrame = undefined;
       removeNativeFrameListener?.();
@@ -3022,84 +3055,102 @@ export class BrowserSession {
       if (!currentClient) return;
       await currentClient.detach().catch(() => undefined);
     };
-    const bindActivePage = async () => {
+    const bindActivePage = async (): Promise<CaptureBinding | undefined> => {
       refreshActivePageInBackground();
       const activePage = this.activePage;
-      if (page === activePage && client && !activePage.isClosed()) return { client, page: activePage };
+      if (page === activePage && client && !activePage.isClosed()) {
+        return { client, page: activePage, generation: captureGeneration };
+      }
       if (pageBindingPromise) return pageBindingPromise;
 
       pageBindingPromise = (async () => {
-        const nextActivePage = this.activePage;
-        if (page === nextActivePage && client && !nextActivePage.isClosed()) {
-          return { client, page: nextActivePage };
-        }
         await detachCurrentPage();
-        if (stopped) throw new Error('Preview capture stopped');
-        const nextClient = await nextActivePage.context().newCDPSession(nextActivePage);
-        if (stopped) {
-          await nextClient.detach().catch(() => undefined);
-          throw new Error('Preview capture stopped');
-        }
-        page = nextActivePage;
-        client = nextClient;
-        if (nativeListener) {
-          fileChooserListener = (chooser) => {
-            void this.liveFileControlForElement(nextActivePage, chooser.element() as ElementHandle<HTMLInputElement>)
-              .then((control) => {
-                if (!stopped && control) nativeListener({ control, kind: 'controlOpened' });
-              })
-              .catch((error) => {
-                if (!stopped) options.onError?.(error);
-              });
-          };
-          nextActivePage.on('filechooser', fileChooserListener);
-        }
-        const setupTimeout = setTimeout(() => {
-          if (client === nextClient) void detachCurrentPage();
-        }, 2_500);
+        if (stopped) return;
+        const nextActivePage = this.activePage;
+        const generation = captureGeneration;
+        const isCurrentAttempt = () => !stopped && generation === captureGeneration && this.page === nextActivePage;
+        let nextClient: import('patchright').CDPSession | undefined;
         try {
-          await Promise.all([
-            nextClient.send('Page.setWebLifecycleState', { state: 'active' }).catch(() => undefined),
-            nextClient.send('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => undefined),
-          ]);
-        } finally { clearTimeout(setupTimeout); }
-        if (options.video && !stopped && client === nextClient) {
-          const onNativeFrame = (event: { sessionId: number; data: string; metadata: { deviceWidth: number; deviceHeight: number } }) => {
-            // Always acknowledge, including frames from a tab being detached.
-            void nextClient.send('Page.screencastFrameAck', { sessionId: event.sessionId }).catch(() => undefined);
-            if (stopped || client !== nextClient || this.activePage !== nextActivePage) return;
-            if (latestNativeFrame && latestNativeFrame.sequence !== deliveredNativeFrame) coalescedNativeFrames += 1;
-            sourceFrames += 1;
-            latestNativeFrame = {
-              data: Buffer.from(event.data, 'base64'),
-              width: event.metadata.deviceWidth,
-              height: event.metadata.deviceHeight,
-              capturedAt: new Date().toISOString(),
-              sequence: sourceFrames,
+          nextClient = await nextActivePage.context().newCDPSession(nextActivePage);
+          if (!isCurrentAttempt()) {
+            await nextClient.detach().catch(() => undefined);
+            return;
+          }
+          const boundClient = nextClient;
+          page = nextActivePage;
+          client = boundClient;
+          if (nativeListener) {
+            fileChooserListener = (chooser) => {
+              void this.liveFileControlForElement(nextActivePage, chooser.element() as ElementHandle<HTMLInputElement>)
+                .then((control) => {
+                  if (isCurrentAttempt() && control) nativeListener({ control, kind: 'controlOpened' });
+                })
+                .catch((error) => {
+                  if (isCurrentAttempt()) options.onError?.(error);
+                });
             };
-          };
-          nextClient.on('Page.screencastFrame', onNativeFrame);
-          removeNativeFrameListener = () => nextClient.off('Page.screencastFrame', onNativeFrame);
-          const startTimeout = setTimeout(() => {
-            if (client === nextClient) void detachCurrentPage();
+            nextActivePage.on('filechooser', fileChooserListener);
+          }
+          const setupTimeout = setTimeout(() => {
+            if (client === boundClient) void detachCurrentPage();
           }, 2_500);
           try {
-            await nextClient.send('Page.startScreencast', {
-              format,
-              ...(format === 'jpeg' ? { quality } : {}),
-              maxWidth: maximumDimensions.width,
-              maxHeight: maximumDimensions.height,
-              everyNthFrame: 1,
-            });
-            nativeCapture = client === nextClient && !stopped;
-            nativeStartedAt = Date.now();
-          } catch {
-            nextClient.off('Page.screencastFrame', onNativeFrame);
-            // Screenshot capture remains available when native streaming is unsupported.
-            nativeCapture = false;
-          } finally { clearTimeout(startTimeout); }
+            await Promise.all([
+              boundClient.send('Page.setWebLifecycleState', { state: 'active' }).catch(() => undefined),
+              boundClient.send('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => undefined),
+            ]);
+          } finally { clearTimeout(setupTimeout); }
+          if (isCurrentAttempt()) {
+            const onNativeFrame = (event: { sessionId: number; data: string; metadata: { deviceWidth: number; deviceHeight: number } }) => {
+              // Always acknowledge, including frames from a detached target.
+              void boundClient.send('Page.screencastFrameAck', { sessionId: event.sessionId }).catch(() => undefined);
+              if (!isCurrentAttempt()) return;
+              if (latestNativeFrame && latestNativeFrame.sequence !== deliveredNativeFrame) coalescedNativeFrames += 1;
+              sourceFrames += 1;
+              latestNativeFrame = {
+                data: Buffer.from(event.data, 'base64'),
+                width: event.metadata.deviceWidth,
+                height: event.metadata.deviceHeight,
+                capturedAt: new Date().toISOString(),
+                sequence: sourceFrames,
+              };
+            };
+            boundClient.on('Page.screencastFrame', onNativeFrame);
+            removeNativeFrameListener = () => boundClient.off('Page.screencastFrame', onNativeFrame);
+            const startTimeout = setTimeout(() => {
+              if (client === boundClient) void detachCurrentPage();
+            }, 2_500);
+            try {
+              await boundClient.send('Page.startScreencast', {
+                format,
+                ...(format === 'jpeg' ? { quality } : {}),
+                maxWidth: maximumDimensions.width,
+                maxHeight: maximumDimensions.height,
+                everyNthFrame: 1,
+              });
+              if (isCurrentAttempt()) {
+                nativeCapture = true;
+                nativeStartedAt = Date.now();
+              }
+            } catch {
+              boundClient.off('Page.screencastFrame', onNativeFrame);
+              // Only the current target can select screenshot fallback.
+              if (isCurrentAttempt()) nativeCapture = false;
+            } finally { clearTimeout(startTimeout); }
+          }
+          if (!isCurrentAttempt()) {
+            if (client === boundClient) await detachCurrentPage();
+            else await boundClient.detach().catch(() => undefined);
+            return;
+          }
+          return { client: boundClient, page: nextActivePage, generation };
+        } catch (error) {
+          if (!isCurrentAttempt()) {
+            await nextClient?.detach().catch(() => undefined);
+            return;
+          }
+          throw error;
         }
-        return { client: nextClient, page: nextActivePage };
       })();
       try {
         return await pageBindingPromise;
@@ -3110,12 +3161,17 @@ export class BrowserSession {
     const captureFrame = async () => {
       if (stopped) return;
       const binding = await bindActivePage();
-      const isCurrentPage = () => !stopped && client === binding.client
-        && this.activePage === binding.page && !binding.page.isClosed();
+      if (!binding) return;
+      const isCurrentBinding = () => !stopped && binding.generation === captureGeneration
+        && client === binding.client && this.page === binding.page;
+      const isCurrentPage = () => isCurrentBinding() && !binding.page.isClosed();
       if (!isCurrentPage()) return;
       if (nativeCapture) {
         const latest = latestNativeFrame;
         if (latest) {
+          // Independent images need only changed pixels. Video still receives
+          // repeats to keep its fixed-rate presentation clock advancing.
+          if (!options.video && deliveredNativeFrame === latest.sequence) return;
           const scale = Math.min(1, maximumDimensions.width / latest.width, maximumDimensions.height / latest.height);
           const outputViewport = { width: Math.max(1, Math.round(latest.width * scale)), height: Math.max(1, Math.round(latest.height * scale)) };
           if (deliveredNativeFrame === latest.sequence) duplicateFrames += 1;
@@ -3132,6 +3188,7 @@ export class BrowserSession {
         removeNativeFrameListener = undefined;
         await binding.client.send('Page.stopScreencast').catch(() => undefined);
       }
+      if (!isCurrentPage()) return;
       const startedAt = performance.now();
       activeCaptures = 1;
       const captureTimeout = setTimeout(() => {
@@ -3187,6 +3244,10 @@ export class BrowserSession {
           deviceHeight: outputViewport.height,
           deviceWidth: outputViewport.width,
         });
+      } catch (error) {
+        // Cancellation belongs to the retired binding; genuine current-target
+        // errors must still reach the consumer, regardless of their message.
+        if (isCurrentBinding()) throw error;
       } finally {
         clearTimeout(captureTimeout);
         activeCaptures = 0;
@@ -3599,9 +3660,32 @@ export class BrowserSession {
     }
   }
 
+  private async releaseLivePreviewPointer(gestureId?: string) {
+    const pointer = this.livePreviewPointer;
+    if (!pointer || (gestureId !== undefined && pointer.gestureId !== gestureId)) return;
+    this.livePreviewPointer = undefined;
+    if (pointer.pressed && !pointer.page.isClosed()) {
+      await pointer.page.mouse.up({ button: pointer.button, clickCount: pointer.clickCount });
+    }
+  }
+
   async dispatchLiveInput(input: BrowserLiveInput): Promise<BrowserActionResult> {
     return this.withSessionOperation(async () => {
-
+    try {
+    if (input.kind === 'pointer' && input.phase === 'cancel') {
+      await this.releaseLivePreviewPointer(input.gestureId);
+      return { ok: true, actual: 'Live browser pointer released.' };
+    }
+    if (input.kind === 'tab' || input.kind === 'browserControl' || input.kind === 'click' || input.kind === 'drag'
+      || (input.kind === 'pointer' && input.phase === 'down')) {
+      await this.releaseLivePreviewPointer();
+    }
+    if (input.kind === 'pointer' && input.phase === 'up' && this.livePreviewPointer?.gestureId !== input.gestureId) {
+      return { ok: true, actual: 'Live browser pointer gesture already ended.' };
+    }
+    if (input.kind === 'move' && input.gestureId !== this.livePreviewPointer?.gestureId) {
+      return { ok: true, actual: 'Ignored a move outside the current pointer gesture.' };
+    }
     if (input.kind === 'tab') return this.switchLivePreviewTab(input.tabId);
     if (input.kind === 'browserControl') {
       if (input.action === 'navigate') return this.executeBrowserControl({ action: 'navigate', url: input.url });
@@ -3620,7 +3704,7 @@ export class BrowserSession {
     }
     if (input.kind === 'files') return this.applyLiveFiles(input);
     if (input.kind === 'dialog') return this.resolveLiveDialog(input);
-    const page = this.activePage;
+    const page = this.livePreviewPointer?.page || this.activePage;
     await this.ensureBrowserPageRuntime(page);
     const clampRatio = (value: number) => Math.min(1, Math.max(0, Number(value)));
     const invalidateObservation = () => {
@@ -3636,22 +3720,45 @@ export class BrowserSession {
       this.lastInteractiveCandidates = [];
     };
 
-    if (input.kind === 'move' || input.kind === 'click' || input.kind === 'drag' || input.kind === 'scroll') {
+    if (input.kind === 'move' || input.kind === 'pointer' || input.kind === 'click' || input.kind === 'drag' || input.kind === 'scroll') {
       if (!Number.isFinite(input.xRatio) || !Number.isFinite(input.yRatio)) {
+        if (input.kind === 'pointer') await this.releaseLivePreviewPointer(input.gestureId);
         return { ok: false, actual: 'Live browser input requires finite relative coordinates.' };
       }
-      const viewport = await this.getViewportMetrics();
+      const viewport = await this.getViewportMetrics(page);
       const x = Math.min(viewport.width - 1, Math.max(0, Math.round(clampRatio(input.xRatio) * viewport.width)));
       const y = Math.min(viewport.height - 1, Math.max(0, Math.round(clampRatio(input.yRatio) * viewport.height)));
       if (input.kind === 'move') {
+        const pointer = this.livePreviewPointer;
+        if (pointer && Math.hypot(x - pointer.startX, y - pointer.startY) >= 4) pointer.moved = true;
+        if (this.livePreviewPointer && !this.livePreviewPointer.pressed) {
+          return { ok: true, actual: 'Live browser pointer is handled by a native control.' };
+        }
         await page.mouse.move(x, y);
+        if (this.livePreviewPointer) invalidateObservation();
         return { ok: true, actual: `Live browser pointer moved to (${x}, ${y}).` };
       }
 
-      if (input.kind === 'click') {
+      if (input.kind === 'click' || input.kind === 'pointer') {
         const button = input.button === 'right' || input.button === 'middle' ? input.button : 'left';
         const clickCount = Math.min(2, Math.max(1, Math.floor(Number(input.clickCount) || 1)));
-        const liveControl = button === 'left' && clickCount === 1
+        const releasing = input.kind === 'pointer' && input.phase === 'up';
+        const pointer = input.kind === 'pointer'
+          ? releasing ? this.livePreviewPointer! : (this.livePreviewPointer = {
+              button, clickCount, gestureId: input.gestureId, page, pressed: false, startX: x, startY: y, moved: false,
+            })
+          : undefined;
+        if (releasing) {
+          this.livePreviewPointer = undefined;
+          if (!pointer!.pressed) {
+            if (pointer!.download && !pointer!.moved && Math.hypot(x - pointer!.startX, y - pointer!.startY) < 4) {
+              this.relayLivePreviewDownload(pointer!.download);
+            }
+            invalidateObservation();
+            return { ok: true, actual: 'Live browser pointer gesture completed.' };
+          }
+        }
+        const liveControl = !releasing && button === 'left' && clickCount === 1
           ? await this.liveNativeControlAt(page, x, y)
           : undefined;
         if (liveControl) {
@@ -3663,10 +3770,14 @@ export class BrowserSession {
             ...(liveControl.kind === 'select' ? { liveSelect: liveControl } : {}),
           };
         }
-        const downloadLink = button === 'left' && clickCount === 1
+        const downloadLink = !releasing && button === 'left' && clickCount === 1
           ? await this.liveDownloadLinkAt(page, x, y)
           : undefined;
         if (downloadLink) {
+          if (pointer) {
+            pointer.download = downloadLink;
+            return { ok: true, actual: 'Live browser download link pressed.' };
+          }
           this.relayLivePreviewDownload(downloadLink);
           invalidateObservation();
           return { ok: true, actual: `Relayed download link to the user browser: ${downloadLink.url}` };
@@ -3675,7 +3786,11 @@ export class BrowserSession {
         const popupPromise = button === 'left'
           ? page.waitForEvent('popup', { timeout: 1500 }).catch(() => undefined)
           : Promise.resolve(undefined);
-        if (button === 'left') this.livePreviewBackgroundPopupOpeners.add(page);
+        if (button === 'left') {
+          this.livePreviewPopupWatchCounts ||= new WeakMap<Page, number>();
+          this.livePreviewPopupWatchCounts.set(page, (this.livePreviewPopupWatchCounts.get(page) || 0) + 1);
+          this.livePreviewBackgroundPopupOpeners.add(page);
+        }
         const popupSelectionSequence = this.livePreviewExplicitPageSelectionSequence;
         let resolveDialogOpened: (() => void) | undefined;
         const dialogOpened = new Promise<void>((resolve) => { resolveDialogOpened = resolve; });
@@ -3683,18 +3798,6 @@ export class BrowserSession {
           if (dialogPage === page) resolveDialogOpened?.();
         };
         if (button === 'left') this.liveDialogOpenedWaiters.add(dialogWaiter);
-        const clickPromise = page.mouse.click(x, y, { button, clickCount });
-        try {
-          const outcome = button === 'left'
-            ? await Promise.race([
-                clickPromise.then(() => 'clicked' as const),
-                dialogOpened.then(() => 'dialog' as const),
-              ])
-            : await clickPromise.then(() => 'clicked' as const);
-          if (outcome === 'dialog') void clickPromise.catch(() => undefined);
-        } finally {
-          this.liveDialogOpenedWaiters.delete(dialogWaiter);
-        }
         void popupPromise.then(async (popup) => {
           if (!popup) return;
           this.livePreviewBackgroundPageUntil.set(popup, Date.now() + 2_000);
@@ -3716,10 +3819,43 @@ export class BrowserSession {
           }
           await this.refreshSessionGroupPages({ forceNativeRefresh: true });
         }).catch(() => undefined).finally(() => {
-          this.livePreviewBackgroundPopupOpeners.delete(page);
+          if (button === 'left') {
+            const remaining = Math.max(0, (this.livePreviewPopupWatchCounts.get(page) || 1) - 1);
+            this.livePreviewPopupWatchCounts.set(page, remaining);
+            if (!remaining) this.livePreviewBackgroundPopupOpeners.delete(page);
+          }
         });
+        const clickPromise = input.kind === 'click'
+          ? page.mouse.click(x, y, { button, clickCount })
+          : (async () => {
+              await page.mouse.move(x, y);
+              if (releasing) await page.mouse.up({ button: pointer!.button, clickCount: pointer!.clickCount });
+              else {
+                pointer!.pressed = true;
+                await page.mouse.down({ button, clickCount });
+              }
+            })();
+        try {
+          const outcome = button === 'left'
+            ? await Promise.race([
+                clickPromise.then(() => 'clicked' as const),
+                dialogOpened.then(() => 'dialog' as const),
+              ])
+            : await clickPromise.then(() => 'clicked' as const);
+          if (outcome === 'dialog') void clickPromise.catch(() => undefined);
+        } catch (error) {
+          if (pointer?.pressed) {
+            if (this.livePreviewPointer === pointer) this.livePreviewPointer = undefined;
+            await page.mouse.up({ button: pointer.button, clickCount: pointer.clickCount }).catch(() => undefined);
+          }
+          throw error;
+        } finally {
+          this.liveDialogOpenedWaiters.delete(dialogWaiter);
+        }
         invalidateObservation();
-        return { ok: true, actual: `Live browser clicked (${x}, ${y}).` };
+        return { ok: true, actual: input.kind === 'click'
+          ? `Live browser clicked (${x}, ${y}).`
+          : `Live browser pointer ${input.phase} at (${x}, ${y}).` };
       }
 
       if (input.kind === 'drag') {
@@ -3820,7 +3956,12 @@ export class BrowserSession {
     }
 
     return { ok: false, actual: 'Live browser input kind is unsupported.' };
-
+    } catch (error) {
+      if (input.kind === 'pointer' || (input.kind === 'move' && input.gestureId)) {
+        await this.releaseLivePreviewPointer(input.gestureId).catch(() => undefined);
+      }
+      throw error;
+    }
     });
   }
 
@@ -4148,60 +4289,183 @@ export class BrowserSession {
     return this.withSessionOperation(async (signal) => {
       const before = await this.readPageObservation().catch(() => undefined);
       const page = this.activePage;
-      // A popup already visible at the first observation may not yet belong to
-      // the active stack. Track it only when the overlay inventory is unambiguous.
       const observedOverlays = before?.surfaces.filter((surface) => surface.likelyOverlay) || [];
-      const surfaceId = before?.activeSurface?.id
-        || (observedOverlays.length === 1 ? observedOverlays[0].id : undefined);
-      const point = { x: 0, y: 0 };
+      const observedSurface = before?.activeSurface
+        || (observedOverlays.length === 1 ? observedOverlays[0] : undefined);
+      if (!before || !observedSurface) {
+        const ambiguous = observedOverlays.length > 1;
+        return {
+          ok: Boolean(before) && !ambiguous,
+          ...(!before || ambiguous ? { failureCategory: 'surface-dismissal-unconfirmed' } : {}),
+          summary: !before ? 'Surface state is unavailable; no dismissal input was sent.'
+            : ambiguous ? 'Visible overlays are ambiguous; no dismissal input was sent.'
+              : 'No active surface was observed; no dismissal input was sent.',
+          data: { method: 'none', before, after: before, closureConfirmed: false,
+            actionOutcome: 'skipped', outcome: !before ? 'observation-unavailable'
+              : ambiguous ? 'ambiguous-surface' : 'no-active-surface' },
+        };
+      }
+      const surfaceId = observedSurface.id;
+      let method: 'close-control-click' | 'corner-click' = 'corner-click';
+      let point = { x: 0, y: 0 };
+      let inputAttempted = false;
       this.stateReader?.clear();
       this.browserViewportEvidence = undefined;
-      this.latestBrowserObservation = { status: 'unavailable', error: 'A surface dismissal was attempted; earlier screenshots are stale.' };
+      this.latestBrowserObservation = { status: 'unavailable', error: 'A surface dismissal was requested; read fresh state.' };
       try {
-        await raceWithAbort(page.mouse.click(point.x, point.y), signal);
+        const frame = observedSurface.framePath ? this.frameFromPath(observedSurface.framePath) : page.mainFrame();
+        if (!frame) throw new Error('The observed surface frame is unavailable.');
+        await this.ensureBrowserPageRuntime(frame);
+        for (let ownerFrame = frame; ownerFrame.parentFrame();) {
+          const parentFrame = ownerFrame.parentFrame()!;
+          await this.ensureBrowserPageRuntime(parentFrame);
+          const owner = await ownerFrame.frameElement();
+          try {
+            const disabled = await owner.evaluate((element) => !(element instanceof Element)
+              || (window as WindowWithAiDomRuntime).__aiDomRuntime!.isDisabledElement(element));
+            if (disabled) throw new Error('The observed surface belongs to a disabled frame.');
+          } finally { await owner.dispose(); }
+          ownerFrame = parentFrame;
+        }
+        if (!observedSurface.selector) throw new Error('The observed surface has no live selector.');
+        const scope = frame.locator(observedSurface.selector);
+        if (await scope.count() !== 1) throw new Error('The observed surface selector is no longer unique.');
+        const scopeBox = await scope.evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          return { left: rect.left, right: rect.right, top: rect.top, width: rect.width, height: rect.height };
+        });
+        const handles = await scope.locator(
+          'button, [role="button"], input[type="button"], input[type="submit"], [aria-label*="close" i], [title*="close" i], '
+          + '[aria-label*="关闭"], [title*="关闭"], [class*="close" i], [class*="dismiss" i]',
+        ).filter({ visible: true }).elementHandles();
+        try {
+          const candidates: Array<{ handle: typeof handles[number]; score: number }> = [];
+          for (const handle of handles.slice(0, 128)) {
+            const score = await handle.evaluate((element, box) => {
+              if (!(element instanceof Element) || ['svg', 'use'].includes(element.localName)) return 0;
+              const names = [
+                element.getAttribute('aria-label'), element.getAttribute('title'),
+                element instanceof HTMLInputElement ? element.value : undefined, element.textContent,
+              ].map((value) => String(value || '').replace(/[\uE000-\uF8FF]/g, '').replace(/\s+/g, ' ').trim()).filter(Boolean);
+              const closeName = /^(?:关闭(?:(?:当前|此|该)?(?:对话框|弹窗|窗口|面板|菜单|提示框))?|(?:close|dismiss)(?: (?:this )?(?:dialog|modal|window|popup|popover|panel|menu|tooltip))?)$/i;
+              const cancelName = /^(?:取消|cancel)$/i;
+              const glyphName = /^[×✕✖x]$/i;
+              const close = names.some(name => closeName.test(name));
+              const cancel = names.some(name => cancelName.test(name));
+              // Conflicting visible/accessibility names are not a clear dismiss control.
+              if (names.some(name => !closeName.test(name) && !cancelName.test(name) && !glyphName.test(name))) return 0;
+              const rect = element.getBoundingClientRect();
+              const small = rect.width <= Math.min(200, box.width / 2) && rect.height <= 64;
+              const topBand = Math.min(96, box.height / 2, Math.max(64, box.height / 4));
+              const atTop = small && rect.top >= box.top - 2 && rect.top + rect.height / 2 <= box.top + topBand;
+              const atCorner = atTop && (rect.left + rect.width / 2 <= box.left + Math.min(96, box.width / 4)
+                || rect.left + rect.width / 2 >= box.right - Math.min(96, box.width / 4));
+              const closeClass = /(?:^|[-_\s])(?:close|dismiss)(?:[-_\s]|(?:icon|button|btn)$)/i.test(element.getAttribute('class') || '');
+              const closeIcon = atTop && closeClass
+                && (names.length === 0 || names.every(name => closeName.test(name) || glyphName.test(name)));
+              const explicitUiClose = names.some(name => closeName.test(name)
+                && !/^(?:关闭|close|dismiss)$/i.test(name));
+              const dialogSubmit = element instanceof HTMLButtonElement && element.type === 'submit'
+                && (element.formMethod === 'dialog' || !element.hasAttribute('formmethod') && element.form?.method === 'dialog');
+              // A footer's bare "Close" can confirm a business operation.
+              // Prefer structural close controls and do not infer that action's meaning.
+              const score = closeIcon ? 6 : close && atCorner ? 5 : cancel ? 4
+                : explicitUiClose || close && dialogSubmit ? 3 : 0;
+              const runtime = (window as WindowWithAiDomRuntime).__aiDomRuntime;
+              return score && runtime?.actionability(element, { action: 'click' }).ok ? score : 0;
+            }, scopeBox).catch(() => 0);
+            if (score) candidates.push({ handle, score });
+          }
+          candidates.sort((left, right) => right.score - left.score);
+          const selected = candidates[0] && (candidates.length === 1 || candidates[0].score > candidates[1].score)
+            ? candidates[0].handle : undefined;
+          if (selected) {
+            const actionable = await selected.evaluate((element) => {
+              if (!(element instanceof Element)) return { ok: false, reason: 'The observed close control is not a live element.' };
+              return (window as WindowWithAiDomRuntime).__aiDomRuntime!.actionability(element, { action: 'click' });
+            });
+            if (!actionable.ok) throw new Error(actionable.reason);
+            const rect = await selected.boundingBox();
+            if (!rect) throw new Error('The observed close control has no current bounding box.');
+            point = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+            method = 'close-control-click';
+            inputAttempted = true;
+            await raceWithAbort(selected.click({ timeout: 5_000 }), signal);
+          } else {
+            if (frame !== page.mainFrame()) {
+              throw new Error('No clear frame-local close control was observed; a main-page corner cannot dismiss this frame safely.');
+            }
+            const background = await page.evaluate(({ x, y }) => {
+              let hit = document.elementFromPoint(x, y);
+              for (let depth = 0; hit?.shadowRoot && depth < 32; depth += 1) {
+                const inner = hit.shadowRoot.elementFromPoint(x, y);
+                if (!inner || inner === hit) break;
+                hit = inner;
+              }
+              if (!hit) return { safe: false, reason: 'The background dismissal point is not readable.' };
+              let current: Element | null = hit;
+              for (let depth = 0; current && depth < 64; depth += 1) {
+                const role = (current.getAttribute('role') || '').toLowerCase();
+                const interactive = current.matches('button,input,select,textarea,a[href],summary,iframe,object,embed,canvas,video[controls],audio[controls]')
+                  || ['button', 'link', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'option', 'tab',
+                    'checkbox', 'radio', 'switch', 'textbox', 'combobox', 'slider', 'spinbutton', 'treeitem'].includes(role)
+                  || current instanceof HTMLElement && (current.tabIndex >= 0 || current.isContentEditable)
+                  || window.getComputedStyle(current).cursor === 'pointer';
+                if (interactive) return { safe: false, reason: 'The background dismissal point overlaps an interactive control.' };
+                const root = current.getRootNode();
+                current = current.parentElement || (root instanceof ShadowRoot ? root.host : null);
+              }
+              return { safe: true, reason: '' };
+            }, point);
+            if (!background.safe) throw new Error(background.reason);
+            inputAttempted = true;
+            await raceWithAbort(page.mouse.click(point.x, point.y), signal);
+          }
+        } finally {
+          await Promise.allSettled(handles.map((handle) => handle.dispose()));
+        }
       } catch (error) {
         const after = await this.readPageObservation().catch(() => undefined);
         return { ok: false, failureCategory: 'surface-dismissal-uncertain',
-          summary: 'The dismissal input failed or timed out; inspect current state before another action.',
-          data: { error: unknownErrorMessage(error), method: 'corner-click', before, after, point, outcome: 'unknown' } };
+          summary: 'The dismissal could not be completed; inspect current state before another action.',
+          data: { error: unknownErrorMessage(error), method, before, after, point, inputAttempted,
+            closureConfirmed: false, outcome: inputAttempted ? 'unknown' : 'not-started' } };
       }
       let after = await this.readPageObservation().catch(() => undefined);
-      if (!after) return { ok: true,
-        summary: 'The corner click was sent, but the resulting surface state could not be read.',
-        data: { method: 'corner-click', before, point, outcome: 'observation-unavailable' } };
+      if (!after) return { ok: false, failureCategory: 'surface-dismissal-unconfirmed',
+        summary: 'Dismissal input was sent, but the resulting surface state could not be read.',
+        data: { method, before, point, inputAttempted, closureConfirmed: false, outcome: 'observation-unavailable' } };
       const deadline = Date.now() + 900;
-      while (surfaceId && Date.now() < deadline && after.surfaces.some((candidate) => candidate.id === surfaceId)) {
+      while (Date.now() < deadline && after.surfaces.some((candidate) => candidate.id === surfaceId)) {
         await raceWithAbort(new Promise<void>((resolve) => setTimeout(resolve, 60)), signal);
         const refreshed = await this.readPageObservation().catch(() => undefined);
         if (!refreshed) break;
         after = refreshed;
       }
-      const closed = Boolean(surfaceId) && !after.surfaces.some((candidate) => candidate.id === surfaceId);
-      const replacementPopup = Boolean(before && after.activeSurface?.likelyOverlay
+      const closed = !after.surfaces.some((candidate) => candidate.id === surfaceId);
+      const replacementPopup = Boolean(after.activeSurface?.likelyOverlay
         && after.activeSurface.id !== surfaceId
         && !before.surfaces.some((candidate) => candidate.id === after.activeSurface?.id));
-      const navigated = Boolean(before && after.url !== before.url);
-      const lostParentSurfaceIds = (before?.surfaceStack || [])
+      const navigated = after.url !== before.url;
+      const lostParentSurfaceIds = before.surfaceStack
         .filter((candidate) => candidate.id !== surfaceId && !after.surfaces.some((next) => next.id === candidate.id))
         .map((candidate) => candidate.id);
       const verified = closed && !replacementPopup && !navigated && lostParentSurfaceIds.length === 0;
-      const unconfirmed = !surfaceId && !replacementPopup && !navigated;
       return {
-        ok: true,
+        ok: verified,
+        ...(!verified ? { failureCategory: 'surface-dismissal-unconfirmed' } : {}),
         summary: verified ? 'The observed surface closed and its parent surfaces remain open.'
-          : navigated ? 'The corner click changed the page URL; inspect before continuing.'
-            : replacementPopup ? 'Another popup is active after the corner click; inspect before continuing.'
+          : navigated ? 'Dismissal changed the page URL; inspect before continuing.'
+            : replacementPopup ? 'Another popup is active after dismissal; inspect before continuing.'
               : closed ? 'The surface closed, but a parent surface also disappeared; inspect before continuing.'
-                : unconfirmed ? `The corner click was sent. ${before ? 'No active surface was detected' : 'The initial surface state was unavailable'}, so closure is unconfirmed.`
-                  : 'The corner click completed, but the observed surface remains open.',
-        data: { method: 'corner-click', before, after, lostParentSurfaceIds, point,
+                : 'Dismissal input completed, but the observed surface remains open.',
+        data: { method, before, after, lostParentSurfaceIds, point, inputAttempted,
           closureConfirmed: verified, observedSurfaceId: surfaceId, urlChanged: navigated,
           outcome: verified ? 'verified-closed' : navigated ? 'navigation-side-effect' : replacementPopup ? 'popup-replaced'
-            : closed ? 'side-effect' : unconfirmed ? 'unconfirmed' : 'verified-open' },
+            : closed ? 'side-effect' : 'verified-open' },
       };
     }, input.abortSignal);
   }
-
 
   async readStructuredPageText() {
     return (await this.readDomObservation({ includeInteractiveCandidates: false })).structuredText;
@@ -4911,6 +5175,37 @@ export class BrowserSession {
   async executeBrowserCode(input: Parameters<BrowserSession['executeBrowserCodeCell']>[0]): Promise<BrowserActionResult> {
     return this.withSessionOperation(async (signal) => {
       this.latestBrowserObservation = { status: 'unavailable', error: 'Browser code is running; previous screenshot is no longer current.' };
+      const networkResponseStart = this.networkDiagnostics.responseSequence;
+      const networkPages = new Set<Page>();
+      if (this.page) networkPages.add(this.page);
+      const withNetworkErrors = (output: BrowserActionResult): BrowserActionResult => {
+        if (this.page) networkPages.add(this.page);
+        const failed = [...networkPages].flatMap(page => this.networkDiagnostics.records(page))
+          .filter(record => (record.responseSequence || 0) > networkResponseStart
+            && record.status !== undefined && record.status >= 500 && record.status < 600)
+          .sort((left, right) => (left.responseSequence || 0) - (right.responseSequence || 0));
+        if (!failed.length) return output;
+        const endpoint = (value: string) => {
+          try {
+            const url = new URL(value);
+            return /^https?:$/.test(url.protocol)
+              ? `${url.origin}${url.pathname}`.slice(0, 600) : url.protocol;
+          } catch { return '[unparseable URL]'; }
+        };
+        const indicators = new Map<string, { kind: string; requestId: string; method: string; url: string; status: number; resourceType: string }>();
+        for (const record of failed) {
+          const url = endpoint(record.url);
+          indicators.set(`${record.method} ${record.status} ${url}`, {
+            kind: 'http-server-error', requestId: record.id, method: record.method,
+            url, status: record.status!, resourceType: record.resourceType,
+          });
+        }
+        const data = output.data && typeof output.data === 'object' ? output.data as Record<string, unknown> : {};
+        return { ...output,
+          data: { ...data, networkErrorIndicators: [...indicators.values()].slice(-5), networkErrorCount: failed.length },
+          summary: `${output.summary || 'Browser script returned.'} Observed ${failed.length} HTTP 5xx response(s) during this call; inspect networkErrorIndicators before interpreting the page result.`,
+        };
+      };
       let result: BrowserActionResult;
       try {
         result = await this.executeBrowserCodeCell({ ...input, abortSignal: signal });
@@ -4929,7 +5224,7 @@ export class BrowserSession {
         const observation = { status: 'disabled' as const,
           disabledReason: input.imageInputAvailable === false ? 'model-image-input-unavailable' as const : 'automatic-screenshot-disabled' as const };
         this.latestBrowserObservation = observation;
-        return { ...withoutSingularImagePath, browserObservation: observation };
+        return withNetworkErrors({ ...withoutSingularImagePath, browserObservation: observation });
       }
       let observation: NonNullable<BrowserActionResult['browserObservation']>;
       const capture = new BrowserOperationDeadline(boundedPositiveIntegerEnv(
@@ -5006,7 +5301,7 @@ export class BrowserSession {
         capture.dispose();
       }
       this.latestBrowserObservation = observation;
-      return { ...withoutSingularImagePath, browserObservation: observation };
+      return withNetworkErrors({ ...withoutSingularImagePath, browserObservation: observation });
     }, input.abortSignal);
   }
 
@@ -5220,6 +5515,9 @@ export class BrowserSession {
         : `Browser script ${reportedFailure ? 'returned a failure' : execution.executionState?.status || 'failed'}; ${execution.executionState?.completedActions.length || 0} action(s) completed. Review data.error, data.diagnostics when available, and the current observation before choosing a changed recovery action.`,
       ...(emittedImagePaths.length ? { referenceImagePath: emittedImagePaths[0], referenceImagePaths: emittedImagePaths } : {}),
     };
+    if (execution.kernelReset) {
+      result.summary += ` The browserCode kernel was recycled (${execution.kernelReset.reason}); reinitialize top-level bindings and response listeners before the next code call.`;
+    }
     signal.throwIfAborted();
     return result;
 
@@ -5318,6 +5616,7 @@ export class BrowserSession {
     this.activeScreencasts.clear();
     await Promise.all(activeScreencasts.map((handle) => handle.stop().catch(() => undefined)));
     await Promise.all([this.dismissPendingLiveDialogs(), this.clearPendingLiveFileInputs()]);
+    await this.releaseLivePreviewPointer().catch(() => undefined);
     await this.downloadManager?.dispose();
     this.downloadManager = undefined;
     this.stateReader?.clear();
@@ -5473,7 +5772,8 @@ export class BrowserSession {
         text,
         valueLength: 'value' in field ? value?.length || 0 : undefined,
         contentEditable: element.isContentEditable,
-        disabled: Boolean((field as HTMLInputElement).disabled),
+        disabled: (window as WindowWithAiDomRuntime).__aiDomRuntime?.isDisabledElement(element)
+          ?? Boolean((field as HTMLInputElement).disabled),
         readOnly: Boolean((field as HTMLInputElement).readOnly),
         selectionStart: typeof selectableField.selectionStart === 'number' ? selectableField.selectionStart : undefined,
         selectionEnd: typeof selectableField.selectionEnd === 'number' ? selectableField.selectionEnd : undefined,
@@ -5524,9 +5824,9 @@ export class BrowserSession {
     return { width: viewport.width, height: viewport.height };
   }
 
-  private async getViewportMetrics(): Promise<ViewportMetrics> {
-    const fallback = this.activePage.viewportSize() || { width: 1280, height: 720 };
-    return this.activePage.evaluate(() => ({
+  private async getViewportMetrics(page = this.activePage): Promise<ViewportMetrics> {
+    const fallback = page.viewportSize() || { width: 1280, height: 720 };
+    return page.evaluate(() => ({
       width: window.innerWidth,
       height: window.innerHeight,
       devicePixelRatio: window.devicePixelRatio || 1,
@@ -6981,10 +7281,9 @@ export class BrowserSession {
     const validation = await locator.evaluate((element) => {
       const target = element as HTMLElement;
       const style = window.getComputedStyle(target);
-      const disabled = Boolean(
-        (target as HTMLButtonElement | HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement).disabled
-        || target.getAttribute('aria-disabled') === 'true',
-      );
+      const disabled = (window as WindowWithAiDomRuntime).__aiDomRuntime?.isDisabledElement(target)
+        ?? Boolean((target as HTMLButtonElement | HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement).disabled
+          || target.getAttribute('aria-disabled') === 'true');
       const rect = target.getBoundingClientRect();
       const ratios = [
         [0.5, 0.5], [0.2, 0.5], [0.8, 0.5], [0.5, 0.2], [0.5, 0.8],
@@ -7090,7 +7389,8 @@ export class BrowserSession {
           const rect = element.getBoundingClientRect();
           return {
             connected: element.isConnected,
-            disabled: Boolean(element.disabled || element.getAttribute('aria-disabled') === 'true'),
+            disabled: (window as WindowWithAiDomRuntime).__aiDomRuntime?.isDisabledElement(element)
+              ?? Boolean(element.disabled || element.getAttribute('aria-disabled') === 'true'),
             visible: rect.width > 0 && rect.height > 0
               && style.display !== 'none'
               && style.visibility !== 'hidden'

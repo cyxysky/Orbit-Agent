@@ -45,7 +45,7 @@ function normalizedTitleText(value: string) {
 
 function titleFileName(attachment: BrowserChatTitleAttachment | undefined) {
   const name = attachment?.name?.trim() || '';
-  if (!name || attachment?.kind === 'tab') return '';
+  if (!name || attachment?.kind === 'tab' || /[/\\\r\n]/.test(name)) return '';
   return fileNamePattern.test(name) ? name : '';
 }
 
@@ -60,12 +60,12 @@ function referencedFileName(content: string, attachments: BrowserChatTitleAttach
   return attachments.map(titleFileName).find(Boolean) || '';
 }
 
-function explicitTitleFile(value: string) {
+function explicitTitleFile(value: string, attachments: BrowserChatTitleAttachment[]) {
   const normalized = value.replace(/\s+/g, ' ').trim();
   const separatorIndex = normalized.search(titleSeparatorPattern);
   const leadingSegment = (separatorIndex >= 0 ? normalized.slice(0, separatorIndex) : normalized).trim();
   const fileName = unwrapTitleFileCandidate(leadingSegment);
-  if (!fileNamePattern.test(fileName)) return undefined;
+  if (!attachments.some(attachment => titleFileName(attachment) === fileName)) return undefined;
   return {
     fileName,
     text: normalizedTitleText(separatorIndex >= 0 ? normalized.slice(separatorIndex + 1) : ''),
@@ -77,7 +77,7 @@ export function browserChatSessionTitleParts(
   attachments: BrowserChatTitleAttachment[] = [],
 ): BrowserChatSessionTitleParts {
   const rawTitle = title || '';
-  const explicitFile = explicitTitleFile(rawTitle);
+  const explicitFile = explicitTitleFile(rawTitle, attachments);
   if (explicitFile) return explicitFile;
 
   const normalizedText = normalizedTitleText(rawTitle);
