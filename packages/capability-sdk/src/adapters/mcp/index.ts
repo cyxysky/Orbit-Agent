@@ -7,7 +7,7 @@ import {
   type McpHttpHandler,
 } from '@modelcontextprotocol/server';
 import { serveStdio, type StdioServerHandle } from '@modelcontextprotocol/server/stdio';
-import { createMcpVisualization, type McpVisualizationOptions } from '../../../scripts/mcp-ui.mjs';
+import { createMcpVisualization, type McpVisualizationOptions } from './visualization.ts';
 import {
   capabilitySkillReadJsonSchema,
   createCapabilityExecutor,

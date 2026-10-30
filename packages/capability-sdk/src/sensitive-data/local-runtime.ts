@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path, { dirname } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { readManagedRuntime, managedModelDirectory, runtimeDirectory } from '../runtime.ts';
+import { readManagedSensitiveDataRuntime, managedModelDirectory, runtimeDirectory } from '../runtime.ts';
 import {
   defaultLiquidPiiModel,
   normalizedGlinerModelName,
@@ -71,7 +71,7 @@ export function localGlinerPythonCandidates(projectRoot = process.cwd(), configu
   const executable = process.platform === 'win32' ? 'python.exe' : 'python';
   return [...new Set([
     configuredPath ? path.resolve(configuredPath) : '',
-    readManagedRuntime()?.python || '',
+    readManagedSensitiveDataRuntime()?.python || '',
     ...bundledGlinerRuntimeDirectories(projectRoot).map((runtimeRoot) => path.join(runtimeRoot, 'python', executable)),
     path.resolve(projectRoot, '.venv-gliner', process.platform === 'win32' ? 'Scripts' : 'bin', executable),
     path.resolve(projectRoot, '..', '.venv-gliner', process.platform === 'win32' ? 'Scripts' : 'bin', executable),
@@ -168,12 +168,12 @@ async function waitForService(endpoint: string, child: ChildProcess, expectedRev
   const deadline = Date.now() + startupTimeoutMs();
   while (Date.now() < deadline) {
     if (child.exitCode !== null || child.killed) {
-      throw new Error('Local GLiNER process exited before becoming ready. Run "npm run sensitive-data:install" and check the startup output.');
+      throw new Error('Local GLiNER process exited before becoming ready. Download the local components from Settings and check the startup output.');
     }
     if (await serviceHealthy(endpoint, 1_000, expectedRevision)) return endpoint;
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  throw new Error('Local GLiNER startup timed out. The first model download can take several minutes; check network access and the GLiNER startup output.');
+  throw new Error('Local GLiNER startup timed out. Loading local models can take several minutes; check the GLiNER startup output.');
 }
 
 async function startManagedSidecar(
@@ -207,6 +207,9 @@ async function startManagedSidecar(
     manifestKey: 'piiModelName',
     relativePath: ['models', 'liquid-pii'],
   });
+  if (!modelBundleDirectory || !chineseNerModelBundleDirectory || !piiModelBundleDirectory) {
+    throw new Error('Local sensitive-data models are not installed. Open Settings → Security & privacy → Local sensitive-data runtime and click Download.');
+  }
   const modelCacheDirectory = String(process.env.GLINER_MODEL_CACHE_DIR || '').trim()
     || path.join(runtimeDirectory(), 'huggingface');
   console.log(`[gliner-local] Starting ${pythonCommand} on ${url.hostname}:${port}.`);
@@ -230,10 +233,8 @@ async function startManagedSidecar(
       GLINER_PII_MODEL: piiModelBundleDirectory
         || String(process.env.GLINER_PII_MODEL || '').trim()
         || defaultLiquidPiiModel,
-      ...(modelBundleDirectory && chineseNerModelBundleDirectory && piiModelBundleDirectory ? {
-        HF_HUB_OFFLINE: '1',
-        TRANSFORMERS_OFFLINE: '1',
-      } : {}),
+      HF_HUB_OFFLINE: '1',
+      TRANSFORMERS_OFFLINE: '1',
       HF_HOME: process.env.HF_HOME || modelCacheDirectory,
       HF_HUB_CACHE: process.env.HF_HUB_CACHE || path.join(modelCacheDirectory, 'hub'),
       HF_MODULES_CACHE: process.env.HF_MODULES_CACHE || path.join(modelCacheDirectory, 'modules'),

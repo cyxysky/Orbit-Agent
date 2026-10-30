@@ -825,8 +825,15 @@ input[type="checkbox"]:not([data-slot], [data-slot] *):focus-visible {
 .spin {
   animation: ui-icon-loading-spin 1s linear infinite;
   stroke-width: 1.75;
-  transform-origin: center;
+  transform-origin: 50% 50%;
   will-change: transform;
+}
+
+/* SVG arc bounds are asymmetric: rotate around the full icon viewport. */
+svg:is(.spin, .animate-spin, .editor-spin) {
+  transform-box: view-box;
+  transform-origin: 50% 50%;
+  flex-shrink: 0;
 }
 
 @keyframes ui-icon-loading-spin {

@@ -25,7 +25,8 @@ export default function nextConfig(phase: string): NextConfig {
   return {
     basePath,
     typescript: {
-      tsconfigPath: capabilitySource === 'npm' ? 'tsconfig.npm.json' : 'tsconfig.json',
+      tsconfigPath: capabilitySource === 'npm' ? 'tsconfig.npm.json'
+        : phase === PHASE_DEVELOPMENT_SERVER ? 'tsconfig.json' : 'tsconfig.production.json',
     },
     transpilePackages: ['@cjfclonedeep/capability-sdk'],
     // A running development server must never write into the production build

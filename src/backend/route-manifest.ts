@@ -1,6 +1,6 @@
 // Explicit lazy imports keep Node route loading independent of Next.
 export const routes = [
-  { path: '/api/novels/workspace', load: () => import('./routes/novels/workspace/route') },
+  { path: '/api/settings/knowledge', load: () => import('./routes/settings/knowledge/route') },
   { path: '/api/media/video-projects', load: () => import('./routes/media/video-projects/route') },
   { path: '/embed/orbit.js', load: () => import('./routes/embed-scripts/orbit.js/route') },
   { path: '/embed/webpilot.js', load: () => import('./routes/embed-scripts/webpilot.js/route') },
@@ -80,6 +80,7 @@ export const routes = [
   { path: '/api/settings/model-selection', load: () => import('./routes/settings/model-selection/route') },
   { path: '/api/settings/sensitive-data-evaluation', load: () => import('./routes/settings/sensitive-data-evaluation/route') },
   { path: '/api/settings/sensitive-data-test', load: () => import('./routes/settings/sensitive-data-test/route') },
+  { path: '/api/settings/sensitive-data-runtime', load: () => import('./routes/settings/sensitive-data-runtime/route') },
   { path: '/api/skills/[skillId]', load: () => import('./routes/skills/[skillId]/route') },
   { path: '/api/skills', load: () => import('./routes/skills/route') },
   { path: '/api/system/shutdown', load: () => import('./routes/system/shutdown/route') },

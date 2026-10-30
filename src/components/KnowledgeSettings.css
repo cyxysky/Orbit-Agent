@@ -1,0 +1,29 @@
+.knowledge-settings { display: grid; align-content: start; grid-auto-rows: max-content; gap: 20px; min-width: 0; }
+.knowledge-settings-header, .knowledge-package-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; }
+.knowledge-settings-header { flex-wrap: wrap; }
+.knowledge-settings-header > div:first-child, .knowledge-package-heading > div:first-child { min-width: 0; flex: 1 1 360px; }
+.knowledge-package-heading { flex-wrap: wrap; }
+.knowledge-settings-actions { flex: 0 0 auto; }
+.knowledge-settings-header h2 { display: flex; align-items: center; gap: 9px; font-size: 20px; margin: 0 0 8px; }
+.knowledge-settings p { margin: 0; line-height: 1.65; }
+.settings-workspace .knowledge-settings :is(h2, h3, p, dd) { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
+.knowledge-settings-header p, .knowledge-settings-help, .knowledge-package-card p, .knowledge-package-card dt { opacity: .75; }
+.knowledge-settings-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.knowledge-settings-help { display: grid; gap: 8px; font-size: 13px; padding: 16px; border-radius: 12px; background: color-mix(in srgb, currentColor 4%, transparent); }
+.knowledge-settings-notice { color: var(--success, #26834a); }
+.knowledge-settings-error { color: var(--danger, #cb4254); overflow-wrap: anywhere; }
+.knowledge-settings-empty { display: grid; justify-items: center; gap: 12px; padding: 50px 20px; text-align: center; }
+.knowledge-settings-empty span { opacity: .7; }
+.knowledge-package-list { display: grid; gap: 14px; }
+.knowledge-package-card { border: 1px solid color-mix(in srgb, currentColor 15%, transparent); border-radius: 12px; padding: 20px; min-width: 0; overflow-wrap: anywhere; }
+.knowledge-package-card h3 { font-size: 16px; margin: 0 0 6px; }
+.knowledge-package-card p { font-size: 13px; }
+.knowledge-package-card dl { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin: 18px 0 0; font-size: 13px; }
+.knowledge-package-card dd { margin: 5px 0 0; }
+.knowledge-package-domains { margin-top: 14px !important; }
+@media (max-width: 760px) {
+  .knowledge-settings-header, .knowledge-package-heading { flex-direction: column; }
+  .knowledge-settings-header > div:first-child, .knowledge-package-heading > div:first-child { flex: 0 1 auto; width: 100%; }
+  .knowledge-settings-actions { max-width: 100%; }
+  .knowledge-package-card dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

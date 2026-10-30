@@ -551,6 +551,7 @@
     "lucide-react": "^0.511.0",
     "mammoth": "^1.12.0",
     "node-pty": "^1.1.0",
+    "node-unrar-js": "^2.0.2",
     "patchright": "1.63.0",
     "pdf-parse": "^2.4.5",
     "postcss": "8.5.23",

@@ -22,7 +22,7 @@ import { normalizeBoundedNumberSetting, type CapabilitySettingDefinition } from 
 
 export { defaultGlinerOpenLabelModel, defaultLiquidPiiModel };
 
-export type SettingsTab = 'general' | 'model' | 'runtime' | 'browser' | 'capabilities' | 'sensitive-data' | 'skills' | 'memory' | 'accounts';
+export type SettingsTab = 'general' | 'model' | 'runtime' | 'browser' | 'capabilities' | 'sensitive-data' | 'skills' | 'memory' | 'accounts' | 'knowledge';
 
 export type ModelProviderDefinition = {
   value: ModelProvider;
@@ -45,7 +45,7 @@ export type RuntimeEnvDefinition = {
   key: string;
   label: string;
   description: string;
-  tab: Exclude<SettingsTab, 'general' | 'model' | 'skills' | 'memory' | 'accounts'>;
+  tab: Exclude<SettingsTab, 'general' | 'model' | 'skills' | 'memory' | 'accounts' | 'knowledge'>;
   defaultValue: string;
   control: 'boolean' | 'number' | 'select' | 'text' | 'secret' | 'textarea';
   min?: number;

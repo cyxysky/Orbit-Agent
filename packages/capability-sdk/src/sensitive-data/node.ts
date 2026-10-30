@@ -5,6 +5,7 @@ import { prepareGlinerService } from './local-runtime.ts';
 export * from './client.ts';
 export * from './config.ts';
 export * from './local-runtime.ts';
+export * from './runtime-installer.ts';
 
 let lastFailOpenWarningAt = 0;
 

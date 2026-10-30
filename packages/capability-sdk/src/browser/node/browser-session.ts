@@ -1,5 +1,5 @@
 import sharp from 'sharp';
-import { readManagedRuntime } from '../../runtime.ts';
+import { managedChromiumOptions } from '../../runtime.ts';
 import { acquireSharedBrowser, connectOrLaunchPersistentBrowserOverCdp, launchPersistentContextWithBrowserCodeConnection, connectExistingBrowserOverCdp, launchBrowserServerWithConnection, sleep, closeConnectedBrowserProcess, type BrowserOwnership } from './browser-shared-runtime.ts';
 import { BrowserDownloadManager, type BrowserDownloadReceiver, type BrowserDownloadResult } from './browser-downloads.ts';
 import { BrowserStateReader, type BrowserStateReadOptions } from './browser-state-reader.ts';
@@ -1877,7 +1877,7 @@ export class BrowserSession {
     const useElectronEmbeddedBrowser = this.browserSurface === 'electron-embedded';
     const forceBundledBrowser = isolated || (environment.AI_WEB_TEST_FORCE_PLAYWRIGHT_BROWSER === 'true' && !useElectronEmbeddedBrowser);
     const channel = forceBundledBrowser ? undefined : environment.BROWSER_CHANNEL?.trim() || undefined;
-    const executablePath = environment.AI_WEB_TEST_CHROMIUM_EXECUTABLE_PATH?.trim() || readManagedRuntime(environment)?.chromium || undefined;
+    const executablePath = managedChromiumOptions(environment).executablePath;
     const browserProfileKey = this.options.browserProfileKey ? normalizePageGroupId(this.options.browserProfileKey) : '';
     const sharedBrowserRuntimeKey = this.options.sharedBrowserRuntimeKey?.trim() || '';
     const rawCdpEndpoint = forceBundledBrowser

@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { chromium } from 'patchright';
+import { managedChromiumOptions } from '@cjfclonedeep/capability-sdk/runtime';
 import {
   WEBPILOT_ONBOARDING_VERSION,
   isWebPilotOnboardingStep,
@@ -163,7 +164,7 @@ export async function readOnboardingReadiness(): Promise<WebPilotOnboardingReadi
   const libreOfficeReady = Boolean(libreOfficeExecutable && libreOfficePython && libreOfficeWorker);
   let browserReady = false;
   try {
-    browserReady = existsSync(chromium.executablePath());
+    browserReady = existsSync(managedChromiumOptions().executablePath || chromium.executablePath());
   } catch {
     browserReady = false;
   }

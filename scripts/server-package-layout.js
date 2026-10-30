@@ -36,6 +36,8 @@ function productionPackagePaths(projectRoot) {
   for (const [relativePath, metadata] of Object.entries(lock.packages)) {
     if (!relativePath.startsWith('node_modules/') || !metadata || typeof metadata !== 'object' || metadata.dev === true) continue;
     const packagePath = packagePathFromLockEntry(relativePath);
+    const supported = (values, current) => !Array.isArray(values) || (!values.includes('!' + current) && (!values.some(value => !value.startsWith('!')) || values.includes(current)));
+    if (!supported(metadata.os, process.platform) || !supported(metadata.cpu, process.arch)) continue;
     if (fs.existsSync(path.join(projectRoot, packagePath))) {
       packagePaths.push(packagePath);
     } else if (metadata.optional !== true) {
@@ -64,7 +66,8 @@ function copyBuildOutput(projectRoot, target) {
       return relativePath !== 'cache'
         && !relativePath.startsWith(`cache${path.sep}`)
         && relativePath !== 'standalone'
-        && !relativePath.startsWith(`standalone${path.sep}`);
+        && !relativePath.startsWith(`standalone${path.sep}`)
+        && runtimeFileFilter(entry);
     },
   });
 }
@@ -112,22 +115,45 @@ function copyServerRuntime(projectRoot, target) {
   return runtimeFiles;
 }
 
+function runtimeFileFilter(entry) {
+  const parts = entry.split(/[\\/]/);
+  return !parts.some(part => ['.cache', '__pycache__', '.git'].includes(part))
+    && !/\.(?:map|pyc|pyo)$/.test(entry);
+}
+
 function copyProductionRuntime(projectRoot, target) {
   const packagePaths = productionPackagePaths(projectRoot);
-  fs.rmSync(target, { recursive: true, force: true });
+  const resolvedTarget = path.resolve(target);
+  if (!resolvedTarget.startsWith(path.resolve(projectRoot) + path.sep)) throw new Error('Package target must be inside project output.');
+  fs.rmSync(resolvedTarget, { recursive: true, force: true });
   fs.mkdirSync(target, { recursive: true });
 
   copyBuildOutput(projectRoot, target);
   fs.cpSync(path.join(projectRoot, 'dist-backend'), path.join(target, 'dist-backend'), { recursive: true });
   fs.cpSync(path.join(projectRoot, 'package.json'), path.join(target, 'package.json'));
-  const envSource = path.join(projectRoot, '.env');
-  if (fs.existsSync(envSource)) fs.cpSync(envSource, path.join(target, '.env'));
+  const envSource = path.join(projectRoot, '.env.example');
+  if (fs.existsSync(envSource)) fs.cpSync(envSource, path.join(target, '.env.example'));
 
   for (const packagePath of packagePaths) {
     const source = path.join(projectRoot, packagePath);
     const destination = path.join(target, packagePath);
     fs.mkdirSync(path.dirname(destination), { recursive: true });
-    fs.cpSync(source, destination, { recursive: true });
+    const workspace = fs.lstatSync(source).isSymbolicLink();
+    if (workspace) {
+      // npm's publish file list avoids copying workspace source and private data.
+      const { execFileSync } = require('node:child_process');
+      const npmCli = process.env.npm_execpath;
+      if (!npmCli) throw new Error('Package through npm so its publish file list is available.');
+      const pack = JSON.parse(execFileSync(process.execPath, [npmCli, 'pack', '--dry-run', '--json', '--ignore-scripts'], { cwd: fs.realpathSync(source), encoding: 'utf8' }))[0];
+      for (const { path: file } of pack.files) {
+        if (!runtimeFileFilter(file)) continue;
+        const output = path.join(destination, file);
+        fs.mkdirSync(path.dirname(output), { recursive: true });
+        fs.copyFileSync(path.join(source, file), output);
+      }
+    } else {
+      fs.cpSync(source, destination, { recursive: true, dereference: true, filter: runtimeFileFilter });
+    }
   }
   return packagePaths;
 }

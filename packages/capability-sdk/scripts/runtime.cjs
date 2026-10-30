@@ -8,11 +8,23 @@ const { spawn } = require('node:child_process');
 const { createHash } = require('node:crypto');
 const { Readable } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
-const { runtimeDirectory, readManagedRuntime } = require('../runtime/managed/layout.cjs');
+const { runtimeDirectory, readManagedRuntime, readManagedSensitiveDataRuntime } = require('../runtime/managed/layout.cjs');
 const spec = require('../runtime/managed/spec.json');
 const packageRoot = path.resolve(__dirname, '..');
 const requirements = path.join(packageRoot, 'runtime', 'sensitive-data', 'python', 'requirements.txt');
-const log = message => process.stderr.write(`[capability-sdk] ${message}\n`);
+let installationStatus;
+function writeInstallStatus(patch) {
+  installationStatus = { ...installationStatus, ...patch, pid: process.pid, updatedAt: new Date().toISOString() };
+  const directory = runtimeDirectory();
+  fs.mkdirSync(directory, { recursive: true });
+  const temporary = path.join(directory, `sensitive-data-status-${process.pid}.tmp`);
+  fs.writeFileSync(temporary, JSON.stringify(installationStatus));
+  fs.renameSync(temporary, path.join(directory, 'sensitive-data-status.json'));
+}
+const log = message => {
+  process.stderr.write(`[capability-sdk] ${message}\n`);
+  if (installationStatus?.state === 'installing') writeInstallStatus({ message });
+};
 
 function platformPlan(platform = process.platform, arch = process.arch, osRelease) {
   const uv = spec.uv[`${platform}-${arch}`];
@@ -259,14 +271,14 @@ function fingerprint() {
   return createHash('sha256').update(JSON.stringify(spec)).update(fs.readFileSync(requirements)).update(require('patchright/package.json').version).update(require('ffmpeg-static/package.json').version).digest('hex');
 }
 
-async function verify(runtime, { loadModels = false } = {}) {
+async function verify(runtime, { loadModels = false, sensitiveOnly = false } = {}) {
   const failures = [];
   for (const [name, executable, args, options] of [
     ['Python dependencies', runtime?.python, ['-c', 'import torch, gliner2, transformers, uvicorn, fastapi; from huggingface_hub import snapshot_download'], { timeout: 120000 }],
     ['LibreOffice', runtime?.libreoffice, ['--headless', '--version']],
     ['PyUNO', runtime?.unoPython, ['-c', 'import uno'], runtime?.libreoffice ? { env: unoEnvironment(runtime.libreoffice, runtime.unoPython), cwd: path.dirname(runtime.libreoffice) } : {}],
     ['FFmpeg', runtime?.ffmpeg, ['-version']],
-  ]) if (!await works(executable, args, options)) failures.push(name);
+  ]) if ((!sensitiveOnly || name === 'Python dependencies') && !await works(executable, args, options)) failures.push(name);
   for (const key of Object.keys(spec.models)) {
     const directory = runtime?.models?.[key];
     if (!directory || !fs.existsSync(path.join(directory, 'config.json')) || !fs.readdirSync(directory).some(name => /\.(safetensors|bin)$/.test(name))) failures.push(`model ${key}`);
@@ -280,6 +292,7 @@ async function verify(runtime, { loadModels = false } = {}) {
       });
     } catch (error) { failures.push(`Sensitive-data model loading: ${error.message.slice(-3000)}`); }
   }
+  if (sensitiveOnly) return failures;
   try {
     if (!runtime?.chromium || !fs.existsSync(runtime.chromium)) throw new Error('Chromium is missing');
     const browser = await require('patchright').chromium.launch({ executablePath: runtime.chromium, headless: true, timeout: 30000 });
@@ -348,6 +361,43 @@ async function install() {
   } finally { await fsp.unlink(path.join(lock, 'owner.json')); await fsp.rmdir(lock); }
 }
 
+function sensitiveDataFingerprint() {
+  const hash = createHash('sha256').update(JSON.stringify({ python: spec.pythonVersion, uv: spec.uvVersion, models: spec.models })).update(fs.readFileSync(requirements));
+  for (const filename of ['app.py', 'candidate_resolution.py', 'entity_boundaries.py', 'deterministic_spans.py']) hash.update(fs.readFileSync(path.join(packageRoot, 'runtime', 'sensitive-data', 'python', filename)));
+  return hash.digest('hex');
+}
+
+async function installSensitiveData() {
+  const cache = runtimeDirectory(), lock = path.join(cache, '.install-lock');
+  await fsp.mkdir(cache, { recursive: true });
+  writeInstallStatus({ state: 'installing', step: 0, totalSteps: 4, phase: 'waiting', message: 'Waiting for runtime installation lock', startedAt: new Date().toISOString(), error: undefined });
+  await acquireLock(lock);
+  try {
+    const existing = readManagedSensitiveDataRuntime();
+    if (existing?.fingerprint === sensitiveDataFingerprint() && !(await verify(existing, { sensitiveOnly: true })).length) {
+      writeInstallStatus({ state: 'ready', step: 4, phase: 'ready', message: 'Sensitive-data runtime is ready' });
+      return existing;
+    }
+    writeInstallStatus({ phase: 'python', step: 1, message: 'Downloading Python and CPU inference dependencies' });
+    const python = existing?.python && !(await verify(existing, { sensitiveOnly: true })).length
+      ? existing.python : await installPython(cache, platformPlan());
+    writeInstallStatus({ phase: 'models', step: 2, message: 'Downloading the three sensitive-data models' });
+    const models = existing?.models || await installModels(cache, python);
+    writeInstallStatus({ phase: 'verify', step: 3, message: 'Loading all models offline to verify readiness' });
+    const runtime = { format: 1, status: 'ready', platform: process.platform, arch: process.arch, fingerprint: sensitiveDataFingerprint(), python, models };
+    const failures = await verify(runtime, { sensitiveOnly: true, loadModels: true });
+    if (failures.length) throw new Error(failures.join('; '));
+    const temporary = path.join(cache, `sensitive-data-${process.pid}.tmp`);
+    await fsp.writeFile(temporary, JSON.stringify(runtime, null, 2));
+    await fsp.rename(temporary, path.join(cache, 'sensitive-data.json'));
+    writeInstallStatus({ state: 'ready', step: 4, phase: 'ready', message: 'Sensitive-data runtime is ready' });
+    return runtime;
+  } catch (error) {
+    writeInstallStatus({ state: 'failed', phase: 'failed', message: 'Installation failed; retry to resume cached downloads', error: String(error.message || error).slice(-3000) });
+    throw error;
+  } finally { await fsp.unlink(path.join(lock, 'owner.json')); await fsp.rmdir(lock); }
+}
+
 async function main(args = process.argv.slice(2)) {
   if (process.env.npm_lifecycle_event === 'postinstall') {
     const project = process.env.npm_config_local_prefix || process.env.INIT_CWD;
@@ -355,6 +405,15 @@ async function main(args = process.argv.slice(2)) {
     process.chdir(project);
   }
   const command = args[0] || 'install';
+  if (args[1] === 'sensitive-data') {
+    if (command === 'install') { await installSensitiveData(); return; }
+    if (command === 'doctor') {
+      const runtime = readManagedSensitiveDataRuntime();
+      const failures = await verify(runtime, { sensitiveOnly: true, loadModels: true });
+      process.stdout.write(JSON.stringify({ ready: !!runtime && !failures.length, failures, directory: runtimeDirectory() }) + '\n');
+      process.exitCode = runtime && !failures.length ? 0 : 1; return;
+    }
+  }
   if (command === 'plan') { process.stdout.write(JSON.stringify({ ...platformPlan(), directory: runtimeDirectory() }, null, 2) + '\n'); return; }
   if (command === 'doctor') {
     const runtime = readManagedRuntime();
@@ -370,5 +429,5 @@ async function main(args = process.argv.slice(2)) {
   await install();
 }
 
-module.exports = { platformPlan, verify, install, main };
+module.exports = { platformPlan, verify, install, installSensitiveData, sensitiveDataFingerprint, main };
 if (require.main === module) main().catch(error => { log(error.message); process.exitCode = 1; });

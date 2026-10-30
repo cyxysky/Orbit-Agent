@@ -1,11 +1,11 @@
 import path from 'node:path';
-import { readManagedRuntime, runtimeDirectory, managedModelDirectory } from '../runtime/managed/layout.cjs';
-export { readManagedRuntime, runtimeDirectory, managedModelDirectory };
+import { readManagedRuntime, readManagedSensitiveDataRuntime, runtimeDirectory, managedModelDirectory } from '../runtime/managed/layout.cjs';
+export { readManagedRuntime, readManagedSensitiveDataRuntime, runtimeDirectory, managedModelDirectory };
 export type { ManagedRuntime } from '../runtime/managed/layout.cjs';
 
 /** Explicit host settings take precedence over installed runtime defaults. */
-export function managedChromiumOptions() {
-  const executablePath = readManagedRuntime()?.chromium;
+export function managedChromiumOptions(environment: Readonly<Record<string, string | undefined>> = process.env) {
+  const executablePath = environment.AI_WEB_TEST_CHROMIUM_EXECUTABLE_PATH?.trim() || readManagedRuntime(environment)?.chromium;
   return executablePath ? { executablePath } : {};
 }
 

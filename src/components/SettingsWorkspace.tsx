@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useState, type FormEvent } from 'react';
 import {
   Bot,
+  BookOpen,
   Brain,
   Braces,
   Gauge,
@@ -40,6 +41,7 @@ function SettingsTabIcon({ tab }: { tab: SettingsTab }) {
   if (tab === 'browser') return <PanelLeft size={15} />;
   if (tab === 'sensitive-data') return <ShieldCheck size={15} />;
   if (tab === 'runtime') return <Gauge size={15} />;
+  if (tab === 'knowledge') return <BookOpen size={15} />;
   if (tab === 'capabilities') return <Wrench size={15} />;
   if (tab === 'skills') return <Braces size={15} />;
   if (tab === 'memory') return <Brain size={15} />;

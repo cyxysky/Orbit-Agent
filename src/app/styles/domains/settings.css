@@ -614,6 +614,16 @@
   overflow: hidden;
 }
 
+/* Content pages size their rows by content and scroll within the workspace. */
+.settings-workspace-route .browser-chat-settings-pane .settings-content > section.settings-scroll-page {
+  align-content: start;
+  grid-template-rows: none;
+  grid-auto-rows: max-content;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 24px;
+}
+
 .settings-workspace .settings-content {
   color: var(--settings-text);
   min-width: 0;

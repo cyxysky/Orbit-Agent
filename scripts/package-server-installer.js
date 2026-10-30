@@ -41,19 +41,16 @@ function assertSupportedNodeVersion(version = process.versions.node) {
 }
 
 function createServiceXml() {
+  const runtimePaths = JSON.parse(fs.readFileSync(path.join(distributionRoot, 'runtime-paths.json'), 'utf8'));
   const environment = {
     APP_DATA_DIR: '%ProgramData%\\WebPilot\\runtime',
-    AI_SENSITIVE_DATA_FILTER_ENABLED: 'true',
+    AI_WEB_TEST_CHROMIUM_EXECUTABLE_PATH: `%BASE%\\${runtimePaths.chromium}`,
+    AI_SENSITIVE_DATA_FILTER_ENABLED: 'false',
     AI_SENSITIVE_DATA_FILTER_FAILURE_MODE: 'closed',
     ARTIFACTS_DIR: '%ProgramData%\\WebPilot\\runtime\\artifacts',
     GLINER_BATCH_SIZE: '8',
     GLINER_DEVICE: 'cpu',
-    GLINER_MODEL_BUNDLE_DIR: '%BASE%\\server\\sensitive-data-runtime\\models\\gliner2',
-    GLINER_CHINESE_NER_MODEL_BUNDLE_DIR: '%BASE%\\server\\sensitive-data-runtime\\models\\chinese-roberta',
-    GLINER_PII_MODEL_BUNDLE_DIR: '%BASE%\\server\\sensitive-data-runtime\\models\\liquid-pii',
-    GLINER_PYTHON_PATH: '%BASE%\\server\\sensitive-data-runtime\\python\\python.exe',
     GLINER_RUNTIME_MODE: 'local',
-    GLINER_SERVICE_DIR: '%BASE%\\server\\sensitive-data-runtime\\service',
     GLINER_SERVICE_URL: 'http://127.0.0.1:18001',
     HEADLESS_BROWSER: 'true',
     HOSTNAME: '0.0.0.0',
@@ -91,13 +88,20 @@ function createServiceXml() {
   ].join('\r\n');
 }
 
-function createNsisScript({ iconPath, licensePath, nodePath, outputPath, packageRoot, serviceConfigPath, version, winSwPath }) {
+function createNsisScript({ iconPath, licensePath, nodePath, outputPath, packageRoot, payloadPath, payloadUnpackedSize, sevenZipPath, sevenZipLicensePath, sevenZipCopyingPath, serviceConfigPath, version, winSwPath }) {
+  const basePath = JSON.parse(fs.readFileSync(path.join(packageRoot, 'server', '.next', 'required-server-files.json'), 'utf8')).config.basePath || '';
+  const launchUrl = nsisEscape(`http://127.0.0.1:3000${basePath}`);
   const escaped = Object.fromEntries(Object.entries({
     iconPath,
     licensePath,
     nodePath,
     outputPath,
     packageRoot,
+    payloadPath,
+    payloadUnpackedSize,
+    sevenZipPath,
+    sevenZipLicensePath,
+    sevenZipCopyingPath,
     serviceConfigPath,
     winSwPath,
   }).map(([key, value]) => [key, nsisEscape(value)]));
@@ -105,7 +109,8 @@ function createNsisScript({ iconPath, licensePath, nodePath, outputPath, package
   return [
     'Unicode true',
     'RequestExecutionLevel admin',
-    'SetCompressor /SOLID lzma',
+    'SetCompressor lzma',
+    'SetCompressorDictSize 32',
     `Name "Orbit Server ${nsisEscape(version)}"`,
     'BrandingText "Orbit Server"',
     `OutFile "${escaped.outputPath}"`,
@@ -130,7 +135,7 @@ function createNsisScript({ iconPath, licensePath, nodePath, outputPath, package
     '!insertmacro MUI_PAGE_DIRECTORY',
     '!insertmacro MUI_PAGE_INSTFILES',
     '!define MUI_FINISHPAGE_RUN "$WINDIR\\explorer.exe"',
-    '!define MUI_FINISHPAGE_RUN_PARAMETERS "http://127.0.0.1:3000"',
+    `!define MUI_FINISHPAGE_RUN_PARAMETERS "${launchUrl}"`,
     '!define MUI_FINISHPAGE_RUN_TEXT "Open Orbit Server"',
     '!insertmacro MUI_PAGE_FINISH',
     '!insertmacro MUI_UNPAGE_CONFIRM',
@@ -157,11 +162,29 @@ function createNsisScript({ iconPath, licensePath, nodePath, outputPath, package
     '  CreateDirectory "$APPDATA\\WebPilot\\runtime\\artifacts"',
     '  CreateDirectory "$APPDATA\\WebPilot\\logs"',
     '  SetOutPath "$INSTDIR"',
-    `  File /r "${escaped.packageRoot}\\*.*"`,
+    `  AddSize ${Math.max(0, Math.ceil((payloadUnpackedSize - fs.statSync(payloadPath).size) / 1024))}`,
+    '  InitPluginsDir',
+    '  SetOutPath "$PLUGINSDIR"',
+    '  SetCompress off',
+    `  File /oname=Orbit-Server.7z "${escaped.payloadPath}"`,
+    '  SetCompress auto',
+    `  File /oname=7za.exe "${escaped.sevenZipPath}"`,
+    '  DetailPrint "Extracting Orbit Server files..."',
+    '  nsExec::ExecToLog \'"$PLUGINSDIR\\7za.exe" x "$PLUGINSDIR\\Orbit-Server.7z" "-o$INSTDIR" -y -aoa -bd\'',
+    '  Pop $0',
+    '  StrCmp $0 "0" payload_extracted',
+    '    MessageBox MB_ICONSTOP "Unable to extract Orbit Server files. Installation stopped."',
+    '    Abort',
+    '  payload_extracted:',
+    '  Delete "$PLUGINSDIR\\Orbit-Server.7z"',
+    '  Delete "$PLUGINSDIR\\7za.exe"',
+    '  SetOutPath "$INSTDIR"',
     `  File /oname=node.exe "${escaped.nodePath}"`,
     `  File /oname=WebPilotService.exe "${escaped.winSwPath}"`,
     `  File /oname=WebPilotService.xml "${escaped.serviceConfigPath}"`,
     `  File /oname=WinSW-LICENSE.txt "${escaped.licensePath}"`,
+    `  File /oname=7zip-LICENSE.txt "${escaped.sevenZipLicensePath}"`,
+    `  File /oname=7zip-COPYING.txt "${escaped.sevenZipCopyingPath}"`,
     '  WriteUninstaller "$INSTDIR\\Uninstall.exe"',
     '  WriteRegStr HKLM "Software\\WebPilot\\Server" "InstallLocation" "$INSTDIR"',
     '  WriteRegStr HKLM "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\WebPilotServer" "DisplayName" "Orbit Server"',
@@ -176,7 +199,7 @@ function createNsisScript({ iconPath, licensePath, nodePath, outputPath, package
     '  Delete "$SMPROGRAMS\\WebPilot Server\\Uninstall.lnk"',
     '  RMDir "$SMPROGRAMS\\WebPilot Server"',
     '  CreateDirectory "$SMPROGRAMS\\Orbit Server"',
-    '  CreateShortCut "$SMPROGRAMS\\Orbit Server\\Open Orbit Server.lnk" "$WINDIR\\explorer.exe" "http://127.0.0.1:3000"',
+    `  CreateShortCut "$SMPROGRAMS\\Orbit Server\\Open Orbit Server.lnk" "$WINDIR\\explorer.exe" "${launchUrl}"`,
     '  CreateShortCut "$SMPROGRAMS\\Orbit Server\\Windows Services.lnk" "$SYSDIR\\mmc.exe" "services.msc"',
     '  CreateShortCut "$SMPROGRAMS\\Orbit Server\\Uninstall.lnk" "$INSTDIR\\Uninstall.exe"',
     '  ExecWait \'"$SYSDIR\\netsh.exe" advfirewall firewall delete rule name="Orbit Server (TCP 3000)"\' $0',
@@ -219,16 +242,8 @@ function requiredServerPackageEntries(packageRoot = distributionRoot) {
     path.join(packageRoot, 'server', 'node_modules', 'next', 'package.json'),
     path.join(packageRoot, 'server', 'webpilot-server.js'),
     path.join(packageRoot, 'ms-playwright'),
+    path.join(packageRoot, 'runtime-paths.json'),
     path.join(packageRoot, 'libreoffice', 'program', 'soffice.exe'),
-    path.join(packageRoot, 'server', 'sensitive-data-runtime', 'python', 'python.exe'),
-    path.join(packageRoot, 'server', 'sensitive-data-runtime', 'service', 'app.py'),
-    path.join(packageRoot, 'server', 'sensitive-data-runtime', 'service', 'candidate_resolution.py'),
-    path.join(packageRoot, 'server', 'sensitive-data-runtime', 'service', 'entity_boundaries.py'),
-    path.join(packageRoot, 'server', 'sensitive-data-runtime', 'service', 'deterministic_spans.py'),
-    path.join(packageRoot, 'server', 'sensitive-data-runtime', 'models', 'gliner2', 'config.json'),
-    path.join(packageRoot, 'server', 'sensitive-data-runtime', 'models', 'chinese-roberta', 'config.json'),
-    path.join(packageRoot, 'server', 'sensitive-data-runtime', 'models', 'liquid-pii', 'config.json'),
-    path.join(packageRoot, 'server', 'sensitive-data-runtime', 'models', 'liquid-pii', 'pii_hybrid_decode.py'),
   ];
 }
 
@@ -255,7 +270,8 @@ async function resolveWinSwExecutable() {
   fs.mkdirSync(cacheRoot, { recursive: true });
   const temporaryPath = `${executablePath}.download`;
   console.log(`Downloading WinSW ${winSwVersion} from ${winSwUrl}`);
-  const response = await fetch(winSwUrl, { redirect: 'follow' });
+  const { EnvHttpProxyAgent } = require('undici');
+  const response = await fetch(winSwUrl, { redirect: 'follow', dispatcher: new EnvHttpProxyAgent(), signal: AbortSignal.timeout(120_000) });
   if (!response.ok) throw new Error(`Unable to download WinSW: HTTP ${response.status}`);
   fs.writeFileSync(temporaryPath, Buffer.from(await response.arrayBuffer()));
   if (sha256(temporaryPath) !== winSwSha256) {
@@ -275,6 +291,13 @@ function run(command, args, options = {}) {
       else reject(new Error(`${command} exited with ${code ?? `signal ${signal}`}.`));
     });
   });
+}
+
+function directorySize(directory) {
+  return fs.readdirSync(directory, { withFileTypes: true }).reduce((total, entry) => {
+    const file = path.join(directory, entry.name);
+    return total + (entry.isDirectory() ? directorySize(file) : fs.statSync(file).size);
+  }, 0);
 }
 
 async function main() {
@@ -299,13 +322,31 @@ async function main() {
   const serviceConfigPath = path.join(installerWorkRoot, 'WebPilotService.xml');
   const scriptPath = path.join(installerWorkRoot, 'Orbit-Server.nsi');
   const outputPath = path.join(installerOutputRoot, `Orbit-Server-Setup-${version}-x64.exe`);
+  const payloadUnpackedSize = directorySize(distributionRoot);
+  const payloadPath = path.join(installerOutputRoot, `Orbit-Server-${version}-x64.7z`);
+  const { getPath7za } = require('app-builder-lib/out/toolsets/7zip');
+  const sevenZipPath = await getPath7za();
+  const sevenZipRoot = path.resolve(path.dirname(sevenZipPath), '..');
+  const sevenZipLicensePath = path.join(sevenZipRoot, 'LICENSE.txt');
+  const sevenZipCopyingPath = path.join(sevenZipRoot, 'COPYING');
   fs.writeFileSync(serviceConfigPath, createServiceXml(), 'utf8');
+  if (!process.argv.includes('--reuse-payload')) {
+    fs.rmSync(payloadPath, { force: true });
+    console.log('Compressing server payload with 7-Zip LZMA2...');
+    await run(sevenZipPath, ['a', '-t7z', '-mx=5', '-m0=LZMA2', '-md=16m', '-mmt=4', '-ms=128m', '-y', '-bd', payloadPath, '.\\*'], { cwd: distributionRoot });
+  }
+  await run(sevenZipPath, ['t', '-bd', payloadPath], { cwd: root });
   fs.writeFileSync(scriptPath, createNsisScript({
     iconPath,
     licensePath,
     nodePath: process.execPath,
     outputPath,
     packageRoot: distributionRoot,
+    payloadPath,
+    payloadUnpackedSize,
+    sevenZipPath,
+    sevenZipLicensePath,
+    sevenZipCopyingPath,
     serviceConfigPath,
     version,
     winSwPath,
@@ -315,7 +356,7 @@ async function main() {
   const makeNsis = await getMakeNsisPath(null);
   await run(makeNsis.path, ['/V2', scriptPath], {
     cwd: root,
-    env: { ...process.env, ...(makeNsis.env || {}) },
+    env: { ...process.env, ...(makeNsis.env || {}), TEMP: installerWorkRoot, TMP: installerWorkRoot },
   });
   if (!fs.existsSync(outputPath)) throw new Error(`NSIS did not create the expected installer: ${outputPath}`);
   console.log(`Orbit Server installer created:\n  ${outputPath}`);

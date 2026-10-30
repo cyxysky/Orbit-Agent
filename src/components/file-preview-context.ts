@@ -23,8 +23,7 @@ export type FilePreviewRequest = {
   fileName: string;
   mimeType?: string;
   source: PreviewSource | (() => Promise<PreviewSource>);
-  mode?: 'preview' | 'editVideo' | 'editNovel';
-  novelProjectId?: string;
+  mode?: 'preview' | 'editVideo';
 };
 
 export type FilePreviewContextValue = {

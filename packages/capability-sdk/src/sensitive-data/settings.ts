@@ -11,7 +11,7 @@ const booleanOptions = [
 
 export const sensitiveDataCapabilitySettings = [
   { key: 'AI_SENSITIVE_DATA_FILTER_ENABLED', label: 'AI 敏感数据过滤', description: '在模型请求发出前过滤系统、消息与工具文本中的敏感数据。', section: 'sensitive-data', group: '脱敏策略', defaultValue: 'false', control: 'boolean', applyMode: 'runtime', options: booleanOptions },
-  { key: 'GLINER_RUNTIME_MODE', label: 'GLiNER 运行模式', description: 'auto 使用包内托管运行时；external 连接主应用指定的可信服务。', section: 'sensitive-data', group: '推理服务', defaultValue: 'auto', control: 'select', applyMode: 'startup', options: [{ label: '包内托管', value: 'auto' }, { label: '外部服务', value: 'external' }] },
+  { key: 'GLINER_RUNTIME_MODE', label: 'GLiNER 运行模式', description: 'auto 使用设置页下载的本地运行时；external 连接主应用指定的可信服务。', section: 'sensitive-data', group: '推理服务', defaultValue: 'auto', control: 'select', applyMode: 'startup', options: [{ label: '本地托管', value: 'auto' }, { label: '外部服务', value: 'external' }] },
   { key: 'GLINER_SERVICE_URL', label: 'GLiNER 服务地址', description: '内置或可信内网敏感实体识别服务地址。', section: 'sensitive-data', group: '推理服务', defaultValue: 'http://127.0.0.1:18001', control: 'text', applyMode: 'startup' },
   { key: 'GLINER_SERVICE_API_KEY', label: 'GLiNER 服务密钥', description: '连接外部敏感实体识别服务时使用的访问密钥。', section: 'sensitive-data', group: '推理服务', defaultValue: '', control: 'secret', applyMode: 'runtime', secret: true },
   { key: 'AI_SENSITIVE_DATA_FILTER_FAILURE_MODE', label: '敏感数据过滤故障策略', description: 'closed 会阻止未完成脱敏的模型请求；open 会继续发送原文。', section: 'sensitive-data', group: '脱敏策略', defaultValue: 'closed', control: 'select', applyMode: 'runtime', options: [{ label: '关闭模式（阻止请求）', value: 'closed' }, { label: '开放模式（继续请求）', value: 'open' }] },

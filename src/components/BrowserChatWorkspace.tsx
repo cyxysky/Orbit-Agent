@@ -2859,10 +2859,6 @@ function BrowserChatToolScreenshotButton({ tool }: { tool: BrowserChatToolCall }
   );
 }
 
-function BrowserChatNovelLibraryButton() {
-  const { openFilePreview } = useFilePreview();
-  return <button className="browser-chat-conversation-direct-action" type="button" aria-label="小说书架：阅读与编辑" onClick={() => openFilePreview({ fileName: '小说书架', source: '', mode: 'editNovel' })}><BookOpen size={17} /><ExpandableActionLabel>阅读与编辑</ExpandableActionLabel></button>;
-}
 
 function BrowserChatToolContextTokenInfo({ tool }: { tool: BrowserChatToolCall }) {
   const recovery = (tool.input && typeof tool.input === 'object' && 'recoveryReview' in tool.input && typeof tool.input.recoveryReview === 'string' ? tool.input.recoveryReview : '');
@@ -10944,7 +10940,6 @@ export function BrowserChatWorkspace({
       <div className="browser-chat-conversation-header-actions">
         <div className="browser-chat-conversation-tools" role="group" aria-label={t('对话工具')}>
           <BrowserChatRecoveryPanel key={`recovery-${session.id}`} sessionId={session.id} busy={currentBusy} />
-          <BrowserChatNovelLibraryButton />
           <BrowserChatFilesPanel key={`files-${session.id}`} sessionId={session.id} busy={currentBusy} />
           <BrowserChatTerminalPanel key={`terminals-${session.id}`} sessionId={session.id} closed={session.status === 'closed'} />
           <BrowserChatExportButton key={`export-${session.id}`} sessionId={session.id} onError={setError} />
@@ -11080,7 +11075,7 @@ export function BrowserChatWorkspace({
           sessionAwaitingHuman={session?.turnState === 'awaiting_human'}
           sessionId={session?.id}
           sessionBusy={selectedSessionRunning}
-          submittedClientMessageId={submittedMessage?.sessionId === session?.id ? submittedMessage.clientMessageId : undefined}
+          submittedClientMessageId={submittedMessage && submittedMessage.sessionId === session?.id ? submittedMessage.clientMessageId : undefined}
           stoppingSubagentIds={stoppingSubagentIds}
           subagents={subagents}
           stepsByIndex={stepsByIndex}

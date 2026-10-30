@@ -5,11 +5,11 @@ import { FloatingLayer, type FloatingLayerAlign, type FloatingLayerPlacement } f
 
 type HoverCardTriggerProps = {
   'aria-describedby'?: string;
-  onBlur: FocusEventHandler<HTMLElement>;
-  onFocus: FocusEventHandler<HTMLElement>;
-  onPointerDown: PointerEventHandler<HTMLElement>;
-  onPointerEnter: PointerEventHandler<HTMLElement>;
-  onPointerLeave: PointerEventHandler<HTMLElement>;
+  onBlur: FocusEventHandler<Element>;
+  onFocus: FocusEventHandler<Element>;
+  onPointerDown: PointerEventHandler<Element>;
+  onPointerEnter: PointerEventHandler<Element>;
+  onPointerLeave: PointerEventHandler<Element>;
   ref: (node: HTMLElement | null) => void;
 };
 

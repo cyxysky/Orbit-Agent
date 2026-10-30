@@ -9,6 +9,8 @@ import { AlertCircle, ArrowLeft, BookOpen, Bot, Brain, Bug, ChartNoAxesCombined,
 import { CustomSelect } from '@/components/CustomSelect';
 import { ConfirmDeleteModal } from '@/components/ConfirmDeleteModal';
 import { SkillsManager } from '@/components/SkillsManager';
+import { KnowledgeSettings } from '@/components/KnowledgeSettings';
+import { SensitiveDataRuntimeSettings } from '@/components/SensitiveDataRuntimeSettings';
 import {
   defaultModelForProvider,
   isOpenAICompatibleProvider,
@@ -812,7 +814,7 @@ export function EnvironmentSettings({
   userId?: string;
 } = {}) {
   const shouldLoadEnvironmentConfig = !controlledActiveTab
-    || !['skills', 'memory', 'accounts'].includes(controlledActiveTab);
+    || !['skills', 'memory', 'accounts', 'knowledge'].includes(controlledActiveTab);
   const { language, setLanguage, t } = useI18n();
   const { brandPrefix, brandText, setBrandPrefix, setBrandText } = useWorkspaceBrand();
   const [internalActiveTab, setInternalActiveTab] = useState<SettingsTab>('general');
@@ -888,7 +890,7 @@ export function EnvironmentSettings({
   const normalizedUserId = userId?.trim() || normalizedDefaultUserId;
   const visibleSettingsTabs = environmentSettingsTabsForUser(normalizedUserId, normalizedDefaultUserId);
   const requestedActiveTab = controlledActiveTab || internalActiveTab;
-  const standaloneManagementTab = !showTabs && ['skills', 'memory', 'accounts'].includes(requestedActiveTab);
+  const standaloneManagementTab = !showTabs && ['skills', 'memory', 'accounts', 'knowledge'].includes(requestedActiveTab);
   const activeTab = standaloneManagementTab || visibleSettingsTabs.some((tab) => tab.id === requestedActiveTab) ? requestedActiveTab : 'general';
   const adminSettingsAuthorizationHeaders: Record<string, string> = adminSettingsAccessToken
     ? { Authorization: `Bearer ${adminSettingsAccessToken}` }
@@ -2633,6 +2635,7 @@ export function EnvironmentSettings({
   ));
   const visibleEnvGroups = groupVisibleEnvSettings(activeTab, visibleEnvItems);
   const settingsSecondaryItems: SettingsSecondaryNavItem[] = [
+    ...(activeTab === 'sensitive-data' ? [{ id: 'sensitive:runtime', label: t('本地组件下载') }] : []),
     ...(activeTab === 'capabilities' ? [
       { id: 'integration:connector', label: t('连接器') },
       { id: 'integration:communication', label: t('通信') },
@@ -3097,6 +3100,8 @@ export function EnvironmentSettings({
 
           {activeTab === 'skills' ? <SkillsManager onChanged={onSkillsChanged} showTitle={showSectionTitles} userId={normalizedUserId} /> : null}
 
+          {activeTab === 'knowledge' ? <KnowledgeSettings /> : null}
+
           {activeTab === 'memory' ? (
             <div className="settings-memory-page">
               {renderPersonalMemoryPanel()}
@@ -3139,7 +3144,7 @@ export function EnvironmentSettings({
 
           {activeTab === 'accounts' ? renderLoginAccountsPanel() : null}
 
-          {activeTab !== 'general' && activeTab !== 'model' && activeTab !== 'skills' && activeTab !== 'memory' && activeTab !== 'accounts' ? (
+          {activeTab !== 'general' && activeTab !== 'model' && activeTab !== 'skills' && activeTab !== 'memory' && activeTab !== 'accounts' && activeTab !== 'knowledge' ? (
             <section>
               <div className="settings-detail-workspace">
                 <SettingsSecondaryNav
@@ -3150,6 +3155,7 @@ export function EnvironmentSettings({
                 />
                 <div className="settings-detail-content">
                   {activeSettingsSection === 'sensitive:test' ? renderSensitiveDataToolPanel('test') : null}
+                  {activeSettingsSection === 'sensitive:runtime' ? <SensitiveDataRuntimeSettings accessToken={adminSettingsAccessToken} /> : null}
                   {activeSettingsSection === 'sensitive:evaluation' ? renderSensitiveDataToolPanel('evaluation') : null}
 
                   {activeSettingsSection === 'integration:connector' ? (

@@ -13,4 +13,6 @@ export type ManagedRuntime = {
 };
 export function runtimeDirectory(environment?: Readonly<Record<string, string | undefined>>): string;
 export function readManagedRuntime(environment?: Readonly<Record<string, string | undefined>>): ManagedRuntime | undefined;
+export type ManagedSensitiveDataRuntime = Pick<ManagedRuntime, 'platform' | 'arch' | 'status' | 'fingerprint' | 'python' | 'models'> & { format: 1 | 2 };
+export function readManagedSensitiveDataRuntime(environment?: Readonly<Record<string, string | undefined>>): ManagedSensitiveDataRuntime | undefined;
 export function managedModelDirectory(key: 'gliner' | 'chinese' | 'pii', requested?: string, environment?: Readonly<Record<string, string | undefined>>): string;

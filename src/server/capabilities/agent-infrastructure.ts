@@ -11,6 +11,7 @@ import { createHttpCodeSandboxExecutor } from '@cjfclonedeep/capability-sdk/exec
 import { createNodeConnectorsCapability } from '@cjfclonedeep/capability-sdk/integrations/connectors/node';
 import type { AgentConnector } from '@cjfclonedeep/capability-sdk/integrations/connectors';
 import { createNodeKnowledgeCapability } from '@cjfclonedeep/capability-sdk/knowledge/node';
+import { userKnowledgeDirectory } from './knowledge-storage';
 import { createNovelCapability, type NovelConfirmationRequest } from '@cjfclonedeep/capability-sdk/novel';
 import { createFileNovelOperations } from '@cjfclonedeep/capability-sdk/novel/node';
 import { novelUserDirectory } from './novel-storage';
@@ -178,7 +179,7 @@ export function createAgentInfrastructureProviders(input: {
   return [
     createAgentCodeSandboxCapability(),
     createNodeConnectorsCapability({ connectors: configuredConnectors }),
-    createNodeKnowledgeCapability({ directory: (context) => artifactPath('agent-infrastructure', 'knowledge', safeSegment(context.userId, 'shared')) }),
+    createNodeKnowledgeCapability({ directory: (context) => userKnowledgeDirectory(context.userId) }),
     createNovelCapability({ createOperations(context) {
       return createFileNovelOperations({
         directory: novelUserDirectory(context.userId),

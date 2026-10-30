@@ -17,7 +17,7 @@
     "sensitive-data:start": "npm run start-runtime --workspace @cjfclonedeep/capability-sdk",
     "sensitive-data:bundle": "npm run bundle-runtime --workspace @cjfclonedeep/capability-sdk",
     "build": "npm run backend:build && next build",
-    "server:package": "npm run build && npm run sensitive-data:bundle && node scripts/package-server.js",
+    "server:package": "npm run capabilities:build && npm run build && node scripts/package-server.js",
     "server:installer": "npm run server:package && node scripts/package-server-installer.js",
     "desktop:prepare": "npm run build && npm run sensitive-data:bundle && node scripts/prepare-electron-server.js",
     "desktop:pack": "npm run desktop:installer",

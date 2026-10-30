@@ -382,7 +382,7 @@ async function* dashboardRows<T>(sql: string, parameters: unknown[], keys: strin
       [...parameters, ...(cursor || [])],
     );
     if (!rows.length) return;
-    for (const row of rows) yield row;
+    for (const row of rows) yield (await row) as Awaited<T>;
     const last = rows[rows.length - 1];
     cursor = keys.map(key => last[key.split('.').at(-1)!]);
     if (rows.length < 8) return;
