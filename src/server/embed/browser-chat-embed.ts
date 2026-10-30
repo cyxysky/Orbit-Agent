@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { NextRequest, NextResponse } from 'next/server';
+import { joinWebPilotUrl, WEBPILOT_BASE_PATH } from '@/lib/webpilot-base-path';
 
 type EmbedTokenClaims = {
   version: 1;
@@ -49,7 +49,7 @@ function withEmbedHeaders(headers: Headers, cacheable = false) {
 
 export function embedJson<T>(body: T, init: ResponseInit = {}) {
   const headers = withEmbedHeaders(new Headers(init.headers));
-  return NextResponse.json(body, { ...init, headers });
+  return Response.json(body, { ...init, headers });
 }
 
 export function embedOptionsResponse() {
@@ -150,7 +150,7 @@ export function verifyEmbedToken(token: string, expectedSessionId?: string): Emb
   return claims;
 }
 
-export function readEmbedAuth(request: NextRequest | Request, expectedSessionId?: string): EmbedAuthContext {
+export function readEmbedAuth(request: Request | Request, expectedSessionId?: string): EmbedAuthContext {
   const authorization = request.headers.get('authorization') || '';
   const bearer = authorization.match(/^Bearer\s+(.+)$/i)?.[1];
   const url = new URL(request.url);
@@ -176,30 +176,31 @@ export function normalizeString(value: unknown) {
   return typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
 }
 
-export function normalizeMode(value: unknown) {
-  void value;
-  return 'dom';
-}
-
 export function normalizeSafetyMode(value: unknown) {
   return value === 'full' ? 'full' : 'strict';
 }
 
-export function publicBaseUrl(request: NextRequest | Request) {
-  return (
-    normalizeString(process.env.WEBPILOT_PUBLIC_BASE_URL)
-    || normalizeString(process.env.NEXT_PUBLIC_WEBPILOT_BASE_URL)
-    || new URL(request.url).origin
-  ).replace(/\/+$/g, '');
+export function publicBaseUrl(request: Request | Request) {
+  const requestUrl = new URL(request.url);
+  const browserOrigin = normalizeString(request.headers.get('origin'));
+  if (browserOrigin) {
+    try {
+      const originUrl = new URL(browserOrigin);
+      if (originUrl.protocol === 'http:' || originUrl.protocol === 'https:') {
+        return joinWebPilotUrl(originUrl.origin, WEBPILOT_BASE_PATH).replace(/\/+$/g, '');
+      }
+    } catch {
+      // Fall through to proxy/request URL inference.
+    }
+  }
+  const forwardedHost = normalizeString(request.headers.get('x-forwarded-host')).split(',')[0];
+  const forwardedProto = normalizeString(request.headers.get('x-forwarded-proto')).split(',')[0];
+  const publicOrigin = forwardedHost
+    ? `${forwardedProto || requestUrl.protocol.replace(/:$/, '')}://${forwardedHost}`
+    : requestUrl.origin;
+  return joinWebPilotUrl(publicOrigin, WEBPILOT_BASE_PATH).replace(/\/+$/g, '');
 }
 
-export function requestUserId(request: NextRequest, body?: { userId?: unknown; qzUserId?: unknown }) {
-  return normalizeString(body?.userId)
-    || normalizeString(body?.qzUserId)
-    || normalizeString(request.nextUrl.searchParams.get('userId'))
-    || normalizeString(request.nextUrl.searchParams.get('qzUserId'));
-}
-
-export function requestOrigin(request: NextRequest | Request) {
+export function requestOrigin(request: Request | Request) {
   return normalizeString(request.headers.get('origin'));
 }

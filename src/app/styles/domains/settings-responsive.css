@@ -1,0 +1,141 @@
+/* Settings loads independently of the conversation stylesheet. */
+@media (max-width: 1024px) {
+  .settings-workspace-route.browser-chat-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    height: 100dvh;
+    min-height: 100dvh;
+    overflow: hidden;
+  }
+
+  .settings-workspace-route > .browser-chat-sidebar {
+    align-items: center;
+    display: grid;
+    grid-template-areas: "brand navigation theme";
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 8px;
+    height: auto;
+    min-height: 0;
+    padding: max(8px, env(safe-area-inset-top)) 12px 8px;
+  }
+
+  .settings-workspace-route .browser-chat-brand {
+    grid-area: brand;
+    min-height: 38px;
+    padding: 0;
+  }
+
+  .settings-workspace-route .browser-chat-brand .ui-icon-button,
+  .settings-workspace-route .browser-chat-settings-section {
+    display: none;
+  }
+
+  .settings-workspace-route.sidebar-collapsed .browser-chat-brand strong {
+    display: inline-flex;
+  }
+
+  .settings-workspace-route .browser-chat-sidebar-footer {
+    grid-area: theme;
+    flex-direction: row !important;
+    gap: 4px;
+    border: 0;
+    margin: 0;
+    padding: 0;
+  }
+
+  .settings-workspace-route .browser-chat-theme-toggle {
+    width: 36px;
+    min-width: 36px;
+    height: 38px;
+    min-height: 38px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .settings-workspace-route .browser-chat-settings-pane .settings-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 0;
+    align-items: stretch;
+  }
+
+  .settings-workspace-route .browser-chat-settings-pane .settings-tabs {
+    display: flex;
+    min-width: 0;
+    gap: 4px;
+    margin: 0;
+    padding: 10px 0;
+    position: static;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: thin;
+  }
+
+  .settings-workspace-route .settings-tabs button {
+    flex: 0 0 auto;
+    min-height: 38px;
+    white-space: nowrap;
+  }
+
+  .settings-workspace-route .settings-command-bar {
+    gap: 8px;
+    margin-bottom: 16px;
+    min-height: 0;
+    padding-block: 8px;
+  }
+
+  .settings-workspace-route .settings-row > .settings-control {
+    justify-self: stretch;
+    min-width: 0;
+    width: 100%;
+    max-width: none;
+  }
+}
+
+@media (max-width: 680px) {
+  .settings-workspace-route > .browser-chat-sidebar {
+    padding-inline: 9px;
+  }
+
+  .settings-workspace-route .browser-chat-brand-title > span {
+    display: none;
+  }
+
+  .settings-workspace-route .workspace-help-button {
+    justify-content: center;
+    width: 36px;
+    min-width: 36px;
+    padding: 0;
+  }
+
+  .settings-workspace-route .workspace-help-button > span {
+    display: none;
+  }
+
+  .settings-workspace-route .browser-chat-settings-pane {
+    --settings-page-inline-padding: 12px;
+  }
+}
+
+@container settings-pane (max-width: 760px) {
+  .settings-workspace-route .browser-chat-settings-pane .settings-row {
+    --settings-control-width: 100%;
+    gap: 12px;
+  }
+
+  .settings-workspace-route .settings-row > .settings-control {
+    justify-self: stretch;
+    min-width: 0;
+    width: 100%;
+    max-width: none;
+  }
+
+  .settings-workspace-route .settings-row > div:first-child {
+    min-width: 0;
+  }
+
+  .settings-workspace-route .theme-palette-control {
+    flex-wrap: wrap;
+  }
+}

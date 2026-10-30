@@ -1,0 +1,116 @@
+@import "../shared-base.css";
+@import "./settings-base.css";
+@import "../workspace-shared.css";
+@import "./settings.css";
+@import "./onboarding.css";
+@import "./settings-responsive.css";
+
+@media (min-width: 1025px) {
+  .settings-workspace-route:not(.sidebar-collapsed) .browser-chat-settings-section {
+    align-content: start;
+    flex: 1 1 auto;
+    gap: 4px;
+    margin-top: 0;
+    min-height: 0;
+    padding: 0 var(--nav-group-inset);
+  }
+
+  .settings-workspace-route:not(.sidebar-collapsed) .browser-chat-subnav {
+    align-content: start;
+    display: grid;
+    gap: 14px;
+    min-width: 0;
+  }
+
+  .settings-workspace-route:not(.sidebar-collapsed) .browser-chat-settings-nav-group {
+    display: grid;
+    gap: 3px;
+    min-width: 0;
+  }
+
+  .settings-workspace-route:not(.sidebar-collapsed) .browser-chat-settings-nav-label {
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    line-height: 20px;
+    padding: 0 10px;
+    text-transform: uppercase;
+  }
+
+  .settings-workspace-route:not(.sidebar-collapsed) .browser-chat-subnav button {
+    align-items: center;
+    appearance: none;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--nav-item-radius);
+    box-shadow: none;
+    color: var(--muted);
+    cursor: pointer;
+    display: flex;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    gap: 8px;
+    height: var(--nav-item-height);
+    justify-content: flex-start;
+    min-height: var(--nav-item-height);
+    min-width: 0;
+    padding: 0 var(--nav-item-padding-inline);
+    position: relative;
+    text-align: left;
+    transition: background-color var(--motion-fast) ease, color var(--motion-fast) ease;
+    width: 100%;
+  }
+
+  .settings-workspace-route:not(.sidebar-collapsed) .browser-chat-subnav button:hover {
+    background: var(--menu-hover-bg);
+    color: var(--menu-hover-foreground);
+  }
+
+  .settings-workspace-route:not(.sidebar-collapsed) .browser-chat-subnav button.active,
+  .settings-workspace-route:not(.sidebar-collapsed) .browser-chat-subnav button.active:hover {
+    background: var(--menu-selected-bg);
+    border-color: transparent;
+    box-shadow: none !important;
+    color: var(--menu-selected-foreground);
+    font-weight: 600;
+  }
+
+  .settings-workspace-route:not(.sidebar-collapsed) .browser-chat-subnav button > svg:not(.browser-chat-settings-tab-lock) {
+    animation: none;
+    color: var(--muted);
+    flex: 0 0 16px;
+    height: 16px;
+    stroke-width: 1.9;
+    transform: none;
+    width: 16px;
+  }
+
+  .settings-workspace-route:not(.sidebar-collapsed) .browser-chat-subnav button.active > svg:not(.browser-chat-settings-tab-lock) {
+    color: var(--menu-selected-foreground);
+  }
+
+  .settings-workspace-route:not(.sidebar-collapsed) .browser-chat-subnav button > span {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .settings-workspace-route:not(.sidebar-collapsed) .browser-chat-settings-tab-lock {
+    animation: none;
+    color: var(--muted);
+    margin-left: 4px;
+    transform: none;
+  }
+}
+
+.settings-workspace-route.sidebar-collapsed .browser-chat-settings-nav-label {
+  display: none;
+}
+
+.settings-workspace-route.sidebar-collapsed .browser-chat-settings-nav-group {
+  display: contents;
+}

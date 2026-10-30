@@ -1,31 +1,23 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { createAlibaba } from '@ai-sdk/alibaba';
-import { createAmazonBedrock } from '@ai-sdk/amazon-bedrock';
-import { createAnthropic } from '@ai-sdk/anthropic';
-import { createAzure } from '@ai-sdk/azure';
-import { createCerebras } from '@ai-sdk/cerebras';
-import { createCohere } from '@ai-sdk/cohere';
-import { createDeepInfra } from '@ai-sdk/deepinfra';
-import { createDeepSeek } from '@ai-sdk/deepseek';
-import { createFireworks } from '@ai-sdk/fireworks';
-import { createGateway } from '@ai-sdk/gateway';
-import { createGoogleGenerativeAI } from '@ai-sdk/google';
-import { createVertex } from '@ai-sdk/google-vertex';
-import { createGroq } from '@ai-sdk/groq';
-import { createHuggingFace } from '@ai-sdk/huggingface';
-import { createMistral } from '@ai-sdk/mistral';
-import { createOpenAI } from '@ai-sdk/openai';
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { createPerplexity } from '@ai-sdk/perplexity';
-import { createTogetherAI } from '@ai-sdk/togetherai';
-import { createVercel } from '@ai-sdk/vercel';
-import { createXai } from '@ai-sdk/xai';
-import { createOpenRouter } from '@openrouter/ai-sdk-provider';
+import { randomUUID } from 'node:crypto';
+import { aiFetch } from './ai-fetch';
+import { withAiReasoningSettings } from './ai-sdk-runtime';
+import { currentReasoningEffort, withReasoningEffort } from './reasoning-scope';
+import type { ReasoningEffortSetting } from '@/lib/reasoning-effort';
+import { resolveCodexCliPath } from './codex-cli';
+import type { LanguageModelV4 } from '@ai-sdk/provider';
 import type { generateText } from 'ai';
-import { createCodexAppServer, createCodexCli, type ReasoningEffort } from 'ai-sdk-provider-codex-cli';
+import { isOpenAICompatibleProvider, normalizeMiniMaxOpenAIBaseURL, openAICompatibleProviderIndex } from '@/config/settings';
+import { ensureAiSdkTelemetryRegistered } from '@/server/ai/ai-sdk-telemetry';
+import { filterSensitiveData } from '@/server/capabilities/sensitive-data';
+import { normalizeToolInputSchemas } from '@/server/ai/tool-input-schema';
+import { normalizeRuntimeCacheUsage } from '@/server/ai/agents/runtime-prompt-cache';
 
+ensureAiSdkTelemetryRegistered();
 
 type GenerateTextModel = Parameters<typeof generateText>[0]['model'];
+type LoadedLanguageModel = LanguageModelV4;
+type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 type AiProvider =
   | 'ai-gateway'
   | 'alibaba'
@@ -39,137 +31,315 @@ type AiProvider =
   | 'deepseek'
   | 'fireworks'
   | 'google'
-  | 'google-vertex'
   | 'groq'
   | 'huggingface'
   | 'llama-cpp'
   | 'lmstudio'
+  | 'minimax'
   | 'mistral'
   | 'ollama'
   | 'openai'
+  | 'openai-compatible'
+  | 'openai-compatible-2'
+  | 'openai-compatible-3'
+  | `openai-compatible-${number}`
   | 'openrouter'
   | 'perplexity'
   | 'togetherai'
   | 'vercel'
   | 'xai';
-type ApprovalMode = 'never' | 'on-failure' | 'on-request' | 'untrusted';
+type ApprovalMode = 'never' | 'on-request' | 'untrusted';
 type SandboxMode = 'danger-full-access' | 'read-only' | 'workspace-write';
 export type ModelSettingsOverride = {
+  sessionId?: string;
   provider?: string;
   model?: string;
+  supportsImageInput?: boolean;
+  maxContextTokens?: number;
+  reasoningEffort?: ReasoningEffortSetting;
 };
 
-const modelSettingsStorage = new AsyncLocalStorage<ModelSettingsOverride>();
+const modelSettingsStorage = ((globalThis as typeof globalThis & {
+  __webPilotModelSettingsStorage?: AsyncLocalStorage<ModelSettingsOverride>;
+}).__webPilotModelSettingsStorage ??= new AsyncLocalStorage<ModelSettingsOverride>());
+
+
+function optionalEnvironmentValue(name: string) {
+  const value = String(process.env[name] || '').trim();
+  if (value) return value;
+  // AI SDK 7 provider entrypoints validate their own base URL environment
+  // variable while the package is imported. An empty persisted setting means
+  // "use the provider default", so it must be absent rather than an empty
+  // string before the lazy import runs.
+  delete process.env[name];
+  return undefined;
+}
+
+function miniMaxOpenAIBaseURL() {
+  return normalizeMiniMaxOpenAIBaseURL(
+    optionalEnvironmentValue('MINIMAX_BASE_URL'),
+  );
+}
+
+const protectedOpenAICompatibleRequestFields = new Set([
+  'model',
+  'messages',
+  'stream',
+  'tools',
+  'tool_choice',
+]);
+
+function extraOpenAICompatibleRequestParameters(environmentName: string) {
+  const raw = String(process.env[environmentName] || '').trim();
+  if (!raw) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return Object.fromEntries(Object.entries(parsed).filter(([key]) => !protectedOpenAICompatibleRequestFields.has(key)));
+  } catch {
+    return {};
+  }
+}
+
+function mergeExtraOpenAICompatibleRequestParameters(
+  body: Record<string, unknown>,
+  parameters: Record<string, unknown>,
+) {
+  return { ...body, ...parameters };
+}
+
+function lazyLanguageModel(
+  provider: string,
+  modelId: string,
+  loader: (sessionId: string) => Promise<LoadedLanguageModel>,
+): GenerateTextModel {
+  // Capture before lazy loading, which may run outside the settings scope.
+  const sessionId = modelSettingsStorage.getStore()?.sessionId || randomUUID();
+  const reasoningEffort = currentReasoningEffort();
+  let resolvedModel: Promise<LoadedLanguageModel> | undefined;
+  const loadModel = () => (resolvedModel ??= loader(sessionId));
+  return {
+    specificationVersion: 'v4',
+    provider,
+    modelId,
+    supportedUrls: {},
+    doGenerate: async (options) => {
+      const model = await loadModel();
+      const prepared = normalizeToolInputSchemas(await filterSensitiveData(withAiReasoningSettings(options, model.provider, reasoningEffort)));
+      const result = await model.doGenerate(prepared);
+      return { ...result, usage: normalizeRuntimeCacheUsage(result.usage) };
+    },
+    doStream: async (options) => {
+      const model = await loadModel();
+      const prepared = normalizeToolInputSchemas(await filterSensitiveData(withAiReasoningSettings(options, model.provider, reasoningEffort)));
+      const result = await model.doStream(prepared);
+      return { ...result, stream: result.stream.pipeThrough(new TransformStream({
+        transform(part, controller) {
+          controller.enqueue(part.type === 'finish'
+            ? { ...part, usage: normalizeRuntimeCacheUsage(part.usage) } : part);
+        },
+      })) };
+    },
+  } satisfies GenerateTextModel;
+}
+
+function openCodeHeaders(baseURL: string | undefined, sessionId: string) {
+  if (!baseURL) return undefined;
+  try {
+    const { hostname } = new URL(baseURL);
+    if (hostname !== 'opencode.ai' && !hostname.endsWith('.opencode.ai')) return undefined;
+  } catch {
+    return undefined;
+  }
+  return { 'x-opencode-session': sessionId, 'User-Agent': 'webpilot/1.0' };
+}
+
+function openAiCompatibleModel(
+  provider: 'llama-cpp' | 'lmstudio' | 'ollama' | 'openai-compatible' | `openai-compatible-${number}`,
+  modelId: string,
+  baseUrlEnvironmentName: string,
+  defaultBaseURL: string,
+  apiKeyEnvironmentName: string,
+  extraRequestParametersEnvironmentName: string,
+) {
+  return lazyLanguageModel(provider, modelId, async (sessionId) => {
+    const baseURL = optionalEnvironmentValue(baseUrlEnvironmentName) || defaultBaseURL;
+    if (!baseURL) {
+      throw new Error(`${provider} has no Base URL. Configure the complete OpenAI-compatible /v1 endpoint in model settings.`);
+    }
+    const extraRequestParameters = extraOpenAICompatibleRequestParameters(extraRequestParametersEnvironmentName);
+    if (/minimax/i.test(`${modelId} ${baseURL}`)) {
+      const { createMiniMaxOpenAIV4 } = await import('@/server/ai/providers/minimax-openai-v4-provider');
+      return createMiniMaxOpenAIV4({
+        fetch: aiFetch,
+        apiKey: optionalEnvironmentValue(apiKeyEnvironmentName) || '',
+        baseURL,
+        headers: openCodeHeaders(baseURL, sessionId),
+        extraRequestParameters,
+      })(modelId);
+    }
+    const { createOpenAICompatible } = await import('@ai-sdk/openai-compatible');
+    return createOpenAICompatible({
+      fetch: aiFetch,
+      name: provider,
+      baseURL,
+      headers: openCodeHeaders(baseURL, sessionId),
+      apiKey: optionalEnvironmentValue(apiKeyEnvironmentName),
+      transformRequestBody: (body) => mergeExtraOpenAICompatibleRequestParameters(body, extraRequestParameters),
+    })(modelId) as unknown as LoadedLanguageModel;
+  });
+}
 
 export function withModelSettings<T>(settings: ModelSettingsOverride, callback: () => T): T {
-  return modelSettingsStorage.run(settings, callback);
+  const sessionId = settings.sessionId?.trim() || modelSettingsStorage.getStore()?.sessionId || randomUUID();
+  return modelSettingsStorage.run({ ...settings, sessionId }, () => withReasoningEffort(settings.reasoningEffort, callback));
 }
 
 export function getModel(): GenerateTextModel {
   const { provider, model } = getModelSettings();
-  if (provider === 'ai-gateway') return createGateway({
-    apiKey: process.env.AI_GATEWAY_API_KEY || process.env.VERCEL_AI_GATEWAY_API_KEY || '',
-    baseURL: process.env.AI_GATEWAY_BASE_URL || undefined,
-  })(model) as unknown as GenerateTextModel;
-  if (provider === 'alibaba') return createAlibaba({
-    apiKey: process.env.ALIBABA_API_KEY || '',
-    baseURL: process.env.ALIBABA_BASE_URL || undefined,
-  })(model) as unknown as GenerateTextModel;
-  if (provider === 'anthropic') return createAnthropic({
-    apiKey: process.env.ANTHROPIC_API_KEY || '',
-    baseURL: process.env.ANTHROPIC_BASE_URL || undefined,
-  })(model) as unknown as GenerateTextModel;
-  if (provider === 'bedrock') return createAmazonBedrock({
-    apiKey: process.env.AWS_BEARER_TOKEN_BEDROCK || undefined,
-    region: process.env.AWS_REGION || 'us-east-1',
-  })(model) as unknown as GenerateTextModel;
-  if (provider === 'cerebras') return createCerebras({
-    apiKey: process.env.CEREBRAS_API_KEY || '',
-    baseURL: process.env.CEREBRAS_BASE_URL || undefined,
-  })(model) as unknown as GenerateTextModel;
-  if (provider === 'cohere') return createCohere({
-    apiKey: process.env.COHERE_API_KEY || '',
-    baseURL: process.env.COHERE_BASE_URL || undefined,
-  })(model) as unknown as GenerateTextModel;
+  if (provider === 'ai-gateway') return lazyLanguageModel(provider, model, async () => {
+    const baseURL = optionalEnvironmentValue('AI_GATEWAY_BASE_URL');
+    const { createGateway } = await import('@ai-sdk/gateway');
+    return createGateway({
+      fetch: aiFetch,
+      apiKey: process.env.AI_GATEWAY_API_KEY || process.env.VERCEL_AI_GATEWAY_API_KEY || '',
+      baseURL,
+    })(model) as unknown as LoadedLanguageModel;
+  });
+  if (provider === 'alibaba') return lazyLanguageModel(provider, model, async () => {
+    const baseURL = optionalEnvironmentValue('ALIBABA_BASE_URL');
+    const { createAlibaba } = await import('@ai-sdk/alibaba');
+    return createAlibaba({ fetch: aiFetch, apiKey: process.env.ALIBABA_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
+  });
+  if (provider === 'anthropic') return lazyLanguageModel(provider, model, async (sessionId) => {
+    const baseURL = optionalEnvironmentValue('ANTHROPIC_BASE_URL');
+    const { createAnthropic } = await import('@ai-sdk/anthropic');
+    return createAnthropic({ fetch: aiFetch, apiKey: process.env.ANTHROPIC_API_KEY || '', baseURL, headers: openCodeHeaders(baseURL, sessionId) })(model) as unknown as LoadedLanguageModel;
+  });
+  if (provider === 'bedrock') return lazyLanguageModel(provider, model, async () => {
+    const { createAmazonBedrock } = await import('@ai-sdk/amazon-bedrock');
+    return createAmazonBedrock({
+      fetch: aiFetch,
+      apiKey: process.env.AWS_BEARER_TOKEN_BEDROCK || undefined,
+      region: process.env.AWS_REGION || 'us-east-1',
+    })(model) as unknown as LoadedLanguageModel;
+  });
+  if (provider === 'cerebras') return lazyLanguageModel(provider, model, async () => {
+    const baseURL = optionalEnvironmentValue('CEREBRAS_BASE_URL');
+    const { createCerebras } = await import('@ai-sdk/cerebras');
+    return createCerebras({ fetch: aiFetch, apiKey: process.env.CEREBRAS_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
+  });
+  if (provider === 'cohere') return lazyLanguageModel(provider, model, async () => {
+    const baseURL = optionalEnvironmentValue('COHERE_BASE_URL');
+    const { createCohere } = await import('@ai-sdk/cohere');
+    return createCohere({ fetch: aiFetch, apiKey: process.env.COHERE_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
+  });
   if (provider === 'codex') return getCodexModel(model);
-  if (provider === 'deepseek') return createDeepSeek({
-    apiKey: process.env.DEEPSEEK_API_KEY || '',
-  })(model) as unknown as GenerateTextModel;
-  if (provider === 'deepinfra') return createDeepInfra({
-    apiKey: process.env.DEEPINFRA_API_KEY || '',
-    baseURL: process.env.DEEPINFRA_BASE_URL || undefined,
-  })(model) as unknown as GenerateTextModel;
-  if (provider === 'fireworks') return createFireworks({
-    apiKey: process.env.FIREWORKS_API_KEY || '',
-    baseURL: process.env.FIREWORKS_BASE_URL || undefined,
-  })(model) as unknown as GenerateTextModel;
-  if (provider === 'google') return createGoogleGenerativeAI({
-    apiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.GOOGLE_API_KEY || '',
-  })(model) as unknown as GenerateTextModel;
-  if (provider === 'google-vertex') return createVertex({
-    apiKey: process.env.GOOGLE_VERTEX_API_KEY || undefined,
-    baseURL: process.env.GOOGLE_VERTEX_BASE_URL || undefined,
-  })(model) as unknown as GenerateTextModel;
-  if (provider === 'groq') return createGroq({
-    apiKey: process.env.GROQ_API_KEY || '',
-    baseURL: process.env.GROQ_BASE_URL || undefined,
-  })(model) as unknown as GenerateTextModel;
-  if (provider === 'huggingface') return createHuggingFace({
-    apiKey: process.env.HUGGINGFACE_API_KEY || '',
-    baseURL: process.env.HUGGINGFACE_BASE_URL || undefined,
-  })(model) as unknown as GenerateTextModel;
-  if (provider === 'lmstudio') return createOpenAICompatible({
-    name: 'lmstudio',
-    baseURL: process.env.LMSTUDIO_BASE_URL || 'http://localhost:1234/v1',
-    apiKey: process.env.LMSTUDIO_API_KEY || undefined,
-  })(model) as unknown as GenerateTextModel;
-  if (provider === 'llama-cpp') return createOpenAICompatible({
-    name: 'llama-cpp',
-    baseURL: process.env.LLAMA_CPP_BASE_URL || 'http://localhost:8080/v1',
-    apiKey: process.env.LLAMA_CPP_API_KEY || undefined,
-  })(model) as unknown as GenerateTextModel;
-  if (provider === 'ollama') return createOpenAICompatible({
-    name: 'ollama',
-    baseURL: process.env.OLLAMA_BASE_URL || 'http://localhost:11434/v1',
-    apiKey: process.env.OLLAMA_API_KEY || undefined,
-  })(model) as unknown as GenerateTextModel;
-  if (provider === 'openai') return createOpenAI({
-    apiKey: process.env.OPENAI_API_KEY || '',
-    baseURL: process.env.OPENAI_BASE_URL || undefined,
-  })(model) as unknown as GenerateTextModel;
-  if (provider === 'azure-openai') return createAzure({
-    baseURL: process.env.AZURE_OPENAI_BASE_URL || 'http://mirrors.shterm.com:4000',
-    apiKey: process.env.AZURE_OPENAI_API_KEY || '-',
-  }).chat(model) as unknown as GenerateTextModel;
-  if (provider === 'mistral') return createMistral({
-    apiKey: process.env.MISTRAL_API_KEY || '',
-    baseURL: process.env.MISTRAL_BASE_URL || undefined,
-  })(model) as unknown as GenerateTextModel;
-  if (provider === 'perplexity') return createPerplexity({
-    apiKey: process.env.PERPLEXITY_API_KEY || '',
-    baseURL: process.env.PERPLEXITY_BASE_URL || undefined,
-  })(model) as unknown as GenerateTextModel;
-  if (provider === 'togetherai') return createTogetherAI({
-    apiKey: process.env.TOGETHERAI_API_KEY || '',
-    baseURL: process.env.TOGETHERAI_BASE_URL || undefined,
-  })(model) as unknown as GenerateTextModel;
-  if (provider === 'vercel') return createVercel({
-    apiKey: process.env.VERCEL_API_KEY || '',
-    baseURL: process.env.VERCEL_BASE_URL || undefined,
-  })(model) as unknown as GenerateTextModel;
-  if (provider === 'xai') return createXai({
-    apiKey: process.env.XAI_API_KEY || '',
-    baseURL: process.env.XAI_BASE_URL || undefined,
-  })(model) as unknown as GenerateTextModel;
-  return createOpenRouter({
-    apiKey: process.env.OPENROUTER_API_KEY || '',
-  }).chat(model) as unknown as GenerateTextModel;
+  if (provider === 'deepseek') return lazyLanguageModel(provider, model, async (sessionId) => {
+    const baseURL = optionalEnvironmentValue('DEEPSEEK_BASE_URL');
+    const { createDeepSeek } = await import('@ai-sdk/deepseek');
+    return createDeepSeek({ fetch: aiFetch, apiKey: process.env.DEEPSEEK_API_KEY || '', baseURL, headers: openCodeHeaders(baseURL, sessionId) })(model) as unknown as LoadedLanguageModel;
+  });
+  if (provider === 'deepinfra') return lazyLanguageModel(provider, model, async () => {
+    const baseURL = optionalEnvironmentValue('DEEPINFRA_BASE_URL');
+    const { createDeepInfra } = await import('@ai-sdk/deepinfra');
+    return createDeepInfra({ fetch: aiFetch, apiKey: process.env.DEEPINFRA_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
+  });
+  if (provider === 'fireworks') return lazyLanguageModel(provider, model, async () => {
+    const baseURL = optionalEnvironmentValue('FIREWORKS_BASE_URL');
+    const { createFireworks } = await import('@ai-sdk/fireworks');
+    return createFireworks({ fetch: aiFetch, apiKey: process.env.FIREWORKS_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
+  });
+  if (provider === 'google') return lazyLanguageModel(provider, model, async () => {
+    const { createGoogleGenerativeAI } = await import('@ai-sdk/google');
+    return createGoogleGenerativeAI({
+      fetch: aiFetch,
+      apiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.GOOGLE_API_KEY || '',
+    })(model) as unknown as LoadedLanguageModel;
+  });
+  if (provider === 'groq') return lazyLanguageModel(provider, model, async () => {
+    const baseURL = optionalEnvironmentValue('GROQ_BASE_URL');
+    const { createGroq } = await import('@ai-sdk/groq');
+    return createGroq({ fetch: aiFetch, apiKey: process.env.GROQ_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
+  });
+  if (provider === 'huggingface') return lazyLanguageModel(provider, model, async () => {
+    const baseURL = optionalEnvironmentValue('HUGGINGFACE_BASE_URL');
+    const { createHuggingFace } = await import('@ai-sdk/huggingface');
+    return createHuggingFace({ fetch: aiFetch, apiKey: process.env.HUGGINGFACE_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
+  });
+  if (provider === 'lmstudio') return openAiCompatibleModel(provider, model, 'LMSTUDIO_BASE_URL', 'http://localhost:1234/v1', 'LMSTUDIO_API_KEY', 'LMSTUDIO_EXTRA_REQUEST_PARAMETERS');
+  if (provider === 'llama-cpp') return openAiCompatibleModel(provider, model, 'LLAMA_CPP_BASE_URL', 'http://localhost:8080/v1', 'LLAMA_CPP_API_KEY', 'LLAMA_CPP_EXTRA_REQUEST_PARAMETERS');
+  if (provider === 'ollama') return openAiCompatibleModel(provider, model, 'OLLAMA_BASE_URL', 'http://localhost:11434/v1', 'OLLAMA_API_KEY', 'OLLAMA_EXTRA_REQUEST_PARAMETERS');
+  if (isOpenAICompatibleProvider(provider)) {
+    const openAICompatibleIndex = openAICompatibleProviderIndex(provider) || 1;
+    const environmentPrefix = openAICompatibleIndex === 1
+      ? 'OPENAI_COMPATIBLE'
+      : `OPENAI_COMPATIBLE_${openAICompatibleIndex}`;
+    return openAiCompatibleModel(
+      provider,
+      model,
+      `${environmentPrefix}_BASE_URL`,
+      '',
+      `${environmentPrefix}_API_KEY`,
+      `${environmentPrefix}_EXTRA_REQUEST_PARAMETERS`,
+    );
+  }
+  if (provider === 'minimax') return lazyLanguageModel(provider, model, async (sessionId) => {
+    const baseURL = miniMaxOpenAIBaseURL();
+    const { createMiniMaxOpenAIV4 } = await import('@/server/ai/providers/minimax-openai-v4-provider');
+    return createMiniMaxOpenAIV4({
+      fetch: aiFetch,
+      apiKey: process.env.MINIMAX_API_KEY || '',
+      baseURL: baseURL || 'https://api.minimax.io/v1',
+      headers: openCodeHeaders(baseURL, sessionId),
+      extraRequestParameters: extraOpenAICompatibleRequestParameters('MINIMAX_EXTRA_REQUEST_PARAMETERS'),
+    })(model);
+  });
+  if (provider === 'openai') return lazyLanguageModel(provider, model, async (sessionId) => {
+    const baseURL = optionalEnvironmentValue('OPENAI_BASE_URL');
+    const { createOpenAI } = await import('@ai-sdk/openai');
+    return createOpenAI({ fetch: aiFetch, apiKey: process.env.OPENAI_API_KEY || '', baseURL, headers: openCodeHeaders(baseURL, sessionId) })(model) as unknown as LoadedLanguageModel;
+  });
+  if (provider === 'azure-openai') return lazyLanguageModel(provider, model, async () => {
+    const baseURL = optionalEnvironmentValue('AZURE_OPENAI_BASE_URL') || 'http://mirrors.shterm.com:4000';
+    const { createAzure } = await import('@ai-sdk/azure');
+    return createAzure({ fetch: aiFetch, baseURL, apiKey: process.env.AZURE_OPENAI_API_KEY || '-' }).chat(model) as unknown as LoadedLanguageModel;
+  });
+  if (provider === 'mistral') return lazyLanguageModel(provider, model, async () => {
+    const baseURL = optionalEnvironmentValue('MISTRAL_BASE_URL');
+    const { createMistral } = await import('@ai-sdk/mistral');
+    return createMistral({ fetch: aiFetch, apiKey: process.env.MISTRAL_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
+  });
+  if (provider === 'perplexity') return lazyLanguageModel(provider, model, async () => {
+    const baseURL = optionalEnvironmentValue('PERPLEXITY_BASE_URL');
+    const { createPerplexity } = await import('@ai-sdk/perplexity');
+    return createPerplexity({ fetch: aiFetch, apiKey: process.env.PERPLEXITY_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
+  });
+  if (provider === 'togetherai') return lazyLanguageModel(provider, model, async () => {
+    const baseURL = optionalEnvironmentValue('TOGETHERAI_BASE_URL');
+    const { createTogetherAI } = await import('@ai-sdk/togetherai');
+    return createTogetherAI({ fetch: aiFetch, apiKey: process.env.TOGETHERAI_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
+  });
+  if (provider === 'vercel') return lazyLanguageModel(provider, model, async () => {
+    const baseURL = optionalEnvironmentValue('VERCEL_BASE_URL');
+    const { createVercel } = await import('@ai-sdk/vercel');
+    return createVercel({ fetch: aiFetch, apiKey: process.env.VERCEL_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
+  });
+  if (provider === 'xai') return lazyLanguageModel(provider, model, async () => {
+    const baseURL = optionalEnvironmentValue('XAI_BASE_URL');
+    const { createXai } = await import('@ai-sdk/xai');
+    return createXai({ fetch: aiFetch, apiKey: process.env.XAI_API_KEY || '', baseURL })(model) as unknown as LoadedLanguageModel;
+  });
+  return lazyLanguageModel('openrouter', model, async () => {
+    const { createOpenRouter } = await import('@openrouter/ai-sdk-provider');
+    return createOpenRouter({ fetch: aiFetch, apiKey: process.env.OPENROUTER_API_KEY || '' }).chat(model) as unknown as LoadedLanguageModel;
+  });
 }
 
 export function getModelSettings() {
   const override = modelSettingsStorage.getStore();
   const provider = normalizeProvider(override?.provider || process.env.AI_PROVIDER);
-  const defaults: Record<AiProvider, string> = {
+  const defaults: Partial<Record<AiProvider, string>> = {
     'ai-gateway': 'openai/gpt-5.5',
     alibaba: 'qwen-plus',
     anthropic: 'claude-sonnet-4-5',
@@ -182,14 +352,17 @@ export function getModelSettings() {
     deepseek: 'deepseek-v4-flash',
     fireworks: 'accounts/fireworks/models/llama-v3p1-70b-instruct',
     google: 'gemini-3-flash-preview',
-    'google-vertex': 'gemini-2.5-flash',
     groq: 'llama-3.3-70b-versatile',
     huggingface: 'meta-llama/Llama-3.1-8B-Instruct',
     'llama-cpp': 'local-model',
     lmstudio: 'qwen3-vl-2b-instruct',
+    minimax: 'minimax-m3',
     mistral: 'mistral-large-latest',
     ollama: 'llama3.1',
     openai: 'gpt-5.5',
+    'openai-compatible': 'custom-model',
+    'openai-compatible-2': 'custom-model',
+    'openai-compatible-3': 'custom-model',
     openrouter: 'qwen/qwen3.6-27b',
     perplexity: 'sonar',
     togetherai: 'meta-llama/Llama-3.3-70B-Instruct-Turbo',
@@ -198,45 +371,48 @@ export function getModelSettings() {
   };
   return {
     provider,
-    model: override?.model || process.env.AI_MODEL || defaults[provider],
+    model: override?.model || process.env.AI_MODEL || defaults[provider] || 'custom-model',
+    supportsImageInput: override?.supportsImageInput === true,
+    maxContextTokens: override?.maxContextTokens,
   };
 }
 
 function getCodexModel(model: string): GenerateTextModel {
-  const codexPath = process.env.CODEX_PATH || undefined;
-  const cwd = process.env.CODEX_CWD || process.cwd();
-  const approvalMode = parseApprovalMode(process.env.CODEX_APPROVAL_MODE) || 'on-failure';
+  const projectRoot = process.cwd();
+  const codexPath = resolveCodexCliPath(process.env.CODEX_PATH, projectRoot);
+  const cwd = process.env.CODEX_CWD || projectRoot;
+  const approvalMode = parseApprovalMode(process.env.CODEX_APPROVAL_MODE) || 'on-request';
   const sandboxMode = parseSandboxMode(process.env.CODEX_SANDBOX_MODE) || 'workspace-write';
-  const effort = parseReasoningEffort(process.env.CODEX_REASONING_EFFORT) || 'medium';
+  const effort = parseReasoningEffort(currentReasoningEffort()) || 'medium';
   const verbose = process.env.CODEX_VERBOSE === 'true';
 
-  if (process.env.CODEX_TRANSPORT === 'exec' || process.env.CODEX_PROVIDER_MODE === 'exec') {
-    return createCodexCli({
-      defaultSettings: {
-        codexPath,
-        cwd,
-        approvalMode,
-        sandboxMode,
-        reasoningEffort: effort,
-        verbose,
-        skipGitRepoCheck: process.env.CODEX_SKIP_GIT_REPO_CHECK !== 'false',
-        allowNpx: process.env.CODEX_ALLOW_NPX === 'true',
-      },
-    })(model) as unknown as GenerateTextModel;
-  }
-
-  return createCodexAppServer({
-    defaultSettings: {
-      codexPath,
-      cwd,
-      approvalPolicy: approvalMode,
-      sandboxPolicy: sandboxMode,
-      effort,
-      verbose,
-      minCodexVersion: '0.130.0',
-      threadMode: 'stateless',
-    },
-  })(model) as unknown as GenerateTextModel;
+  return lazyLanguageModel('codex', model, () => import('ai-sdk-provider-codex-cli').then((provider) => (
+    process.env.CODEX_TRANSPORT === 'exec' || process.env.CODEX_PROVIDER_MODE === 'exec'
+      ? provider.createCodexCli({
+          defaultSettings: {
+            codexPath,
+            cwd,
+            approvalMode,
+            sandboxMode,
+            reasoningEffort: effort,
+            verbose,
+            skipGitRepoCheck: process.env.CODEX_SKIP_GIT_REPO_CHECK !== 'false',
+            allowNpx: process.env.CODEX_ALLOW_NPX === 'true',
+          },
+        })(model) as unknown as LoadedLanguageModel
+      : provider.createCodexAppServer({
+          defaultSettings: {
+            codexPath,
+            cwd,
+            approvalPolicy: approvalMode,
+            sandboxPolicy: sandboxMode,
+            effort,
+            verbose,
+            minCodexVersion: '0.144.0',
+            threadMode: 'stateless',
+          },
+        })(model) as unknown as LoadedLanguageModel
+  )));
 }
 
 function normalizeProvider(value: string | undefined): AiProvider {
@@ -253,14 +429,20 @@ function normalizeProvider(value: string | undefined): AiProvider {
   if (provider === 'deepseek') return 'deepseek';
   if (provider === 'fireworks' || provider === 'fireworks-ai') return 'fireworks';
   if (provider === 'gemini' || provider === 'gemini-cli' || provider === 'google') return 'google';
-  if (provider === 'google-vertex' || provider === 'vertex' || provider === 'vertex-ai') return 'google-vertex';
   if (provider === 'groq') return 'groq';
   if (provider === 'huggingface' || provider === 'hugging-face') return 'huggingface';
   if (provider === 'llama-cpp' || provider === 'llamacpp' || provider === 'llama.cpp') return 'llama-cpp';
   if (provider === 'lmstudio' || provider === 'lm-studio' || provider === 'local') return 'lmstudio';
+  if (provider === 'minimax') return 'minimax';
   if (provider === 'mistral' || provider === 'mistral-ai') return 'mistral';
   if (provider === 'ollama') return 'ollama';
   if (provider === 'openai') return 'openai';
+  if (provider === 'openai-compatible' || provider === 'openai-compatible-1' || provider === 'openai-compatible-api' || provider === 'custom-openai' || provider === 'custom-openai-1') return 'openai-compatible';
+  const compatibleMatch = provider.match(/^(?:openai-compatible|custom-openai)-(\d+)$/);
+  if (compatibleMatch) {
+    const index = Number.parseInt(compatibleMatch[1], 10);
+    if (Number.isSafeInteger(index) && index >= 2) return `openai-compatible-${index}`;
+  }
   if (provider === 'perplexity') return 'perplexity';
   if (provider === 'together' || provider === 'togetherai' || provider === 'together-ai') return 'togetherai';
   if (provider === 'vercel' || provider === 'v0') return 'vercel';
@@ -269,7 +451,7 @@ function normalizeProvider(value: string | undefined): AiProvider {
 }
 
 function parseApprovalMode(value: string | undefined): ApprovalMode | undefined {
-  if (value === 'never' || value === 'on-request' || value === 'on-failure' || value === 'untrusted') return value;
+  if (value === 'never' || value === 'on-request' || value === 'untrusted') return value;
   return undefined;
 }
 
@@ -279,6 +461,7 @@ function parseSandboxMode(value: string | undefined): SandboxMode | undefined {
 }
 
 function parseReasoningEffort(value: string | undefined): ReasoningEffort | undefined {
+  if (value === 'max') return 'xhigh';
   if (value === 'none' || value === 'minimal' || value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh') return value;
   return undefined;
 }

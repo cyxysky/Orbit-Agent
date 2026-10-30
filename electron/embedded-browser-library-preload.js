@@ -1,4 +1,5 @@
 const { contextBridge, ipcRenderer } = require('electron');
+const { subscribeIpc } = require('./ipc-subscription');
 
 contextBridge.exposeInMainWorld('webPilotEmbeddedBrowserLibrary', {
   clearHistory() {
@@ -13,14 +14,8 @@ contextBridge.exposeInMainWorld('webPilotEmbeddedBrowserLibrary', {
   navigate(input) {
     return ipcRenderer.invoke('webpilot:embedded-browser:navigate', input);
   },
-  panelReady(input) {
-    return ipcRenderer.invoke('webpilot:embedded-browser:library-panel-ready', input);
-  },
   onStateChange(listener) {
-    if (typeof listener !== 'function') return () => {};
-    const handler = (_event, state) => listener(state);
-    ipcRenderer.on('webpilot:embedded-browser:state-changed', handler);
-    return () => ipcRenderer.removeListener('webpilot:embedded-browser:state-changed', handler);
+    return subscribeIpc(ipcRenderer, 'webpilot:embedded-browser:state-changed', listener);
   },
   removeBookmark(input) {
     return ipcRenderer.invoke('webpilot:embedded-browser:remove-bookmark', input);

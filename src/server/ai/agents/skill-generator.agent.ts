@@ -1,20 +1,29 @@
-import { generateObject } from 'ai';
+import { generateText, Output } from 'ai';
 import { z } from 'zod';
+import { aiReasoningEffort, aiRequestTimeoutMs, aiTelemetry } from '@/server/ai/ai-sdk-runtime';
 import { getModel } from '@/server/ai/model';
-import { skillContentSchema, type SkillRecord, type StepExecutionResult, type TestCaseRecord, type TestRunRecord } from '@/server/ai/schemas/test-case.schema';
-import { richTextToPlainText } from '@/lib/rich-text';
+import { skillContentSchema, type SkillRecord, type StepExecutionResult } from '@/server/ai/schemas/runtime.schema';
 
 const generatedSkillSchema = z.object({
   title: z.string().min(2).max(80),
   description: z.string().min(8).max(240),
-  tags: z.array(z.string().min(1).max(32)).min(1).max(6),
   triggerPhrases: z.array(z.string().min(2).max(80)).min(2).max(8),
   content: skillContentSchema.extend({
-    workflow: z.array(z.string().min(4).max(260)).min(2).max(8),
-    recovery: z.array(z.string().min(4).max(220)).max(3),
-    verification: z.array(z.string().min(4).max(220)).min(1).max(4),
+    details: z.string().min(20).max(8_000),
   }),
 });
+
+export function parseGeneratedSkillOutput(value: unknown) {
+  const parsed = generatedSkillSchema.safeParse(value);
+  if (!parsed.success) {
+    const detail = parsed.error.issues
+      .slice(0, 4)
+      .map((issue) => `${issue.path.join('.') || 'root'}: ${issue.message}`)
+      .join('; ');
+    throw new Error(`Skill model response is invalid: ${detail}`);
+  }
+  return parsed.data;
+}
 
 function compactText(value: unknown, max = 800) {
   const text = String(value || '').replace(/\s+/g, ' ').trim();
@@ -83,36 +92,38 @@ function compactStep(step: StepExecutionResult) {
     goal: action,
     expected: expected && normalizedText(expected) !== normalizedText(action) ? expected : undefined,
     outcome: actual && normalizedText(actual) !== normalizedText(expected) ? actual : undefined,
-    findings: distinctText([step.note, ...(step.findings || [])], 4),
+    findings: distinctText([step.note], 4),
     tools: (step.tools || []).map((tool) => compactTool(tool, action)).slice(0, 6),
   };
 }
 
-export async function generateSkillFromRun(input: {
-  run: TestRunRecord;
-  testCase: TestCaseRecord;
-}): Promise<Omit<SkillRecord, 'id' | 'createdAt' | 'updatedAt' | 'version' | 'status'>> {
-  const { run, testCase } = input;
-  const steps = run.result?.steps || [];
+export async function generateSkillFromBrowserHistory(input: {
+  consoleErrors?: string[];
+  constraints?: string;
+  goal: string;
+  networkErrors?: string[];
+  sourceId: string;
+  status: 'passed' | 'failed' | 'blocked';
+  steps: StepExecutionResult[];
+  targetUrl: string;
+  title: string;
+}): Promise<Omit<SkillRecord, 'id' | 'userId' | 'shared' | 'createdAt' | 'updatedAt' | 'version' | 'status'>> {
+  const { steps } = input;
   if (!steps.length) throw new Error('Run has no executable steps to convert into a skill.');
-  const sourceGoal = richTextToPlainText(
-    testCase.content.userRequirement
-    || testCase.description
-    || testCase.title,
-  );
-  const rawConstraints = richTextToPlainText(testCase.content.systemPrompt || '');
-  const stableConstraints = rawConstraints.includes('该上下文由浏览器对话生成') ? '' : rawConstraints;
-  const diagnostics = run.status === 'passed'
+  const diagnostics = input.status === 'passed'
     ? []
     : distinctText([
-      ...(run.result?.consoleErrors || []).slice(-6),
-      ...(run.result?.networkErrors || []).slice(-6),
+      ...(input.consoleErrors || []).slice(-6),
+      ...(input.networkErrors || []).slice(-6),
     ], 6);
 
-  const result = await generateObject({
+  const result = await generateText({
     model: getModel(),
-    schema: generatedSkillSchema,
     temperature: 0.2,
+    reasoning: aiReasoningEffort(),
+    timeout: aiRequestTimeoutMs(),
+    telemetry: aiTelemetry('browser-skill-generator'),
+    output: Output.object({ schema: generatedSkillSchema }),
     prompt: [
       'You are converting a completed browser test execution record into a reusable application Skill.',
       'The Skill will be injected into future browser prompts. Minimize tokens and preserve only durable operating knowledge.',
@@ -120,44 +131,36 @@ export async function generateSkillFromRun(input: {
       'Rules:',
       '- Write the skill in Chinese if the source requirement is Chinese; otherwise use the source language.',
       '- Description: one sentence that combines capability and precise usage scope. Do not repeat it elsewhere.',
+      '- Treat the supplied constraints as the user requested summarization direction. Use them to decide which workflow, decisions, and reusable details are central.',
       '- Trigger phrases: specific user intents that should activate this Skill. Avoid broad phrases such as "open website" or "search".',
-      '- Workflow: 2-8 semantic action steps. Put a page-recognition or locator hint directly in its relevant step instead of creating a separate pattern section.',
-      '- Recovery: only alternative actions for likely failures. Do not restate normal workflow steps or generic warnings.',
-      '- Verification: only final observable success signals. Do not duplicate them as workflow steps.',
+      '- Details: write the complete reusable operating guidance as one structured Markdown block. Include page recognition, stable locator hints, ordered actions, useful branches, and observable success conditions where they matter.',
       '- Keep every fact in exactly one output field. Remove paraphrases and near-duplicates across fields.',
       '- Do NOT preserve volatile details: candidate ids, DOM node ids, coordinates, screenshot paths, run ids, temporary file names, timestamps, or raw tool JSON.',
       '- Do NOT include passwords, cookies, tokens, one-time codes, personal accounts, or secrets. Replace them with generic placeholders.',
       '- Avoid describing this as a report. It is a reusable operating skill for later AI browser runs.',
-      '- Keep workflow steps actionable but semantic: describe what to find/click/check, not old ids or exact pixels.',
+      '- Keep the details actionable but semantic: describe what to find/click/check, not old ids or exact pixels.',
+      '- Return exactly one object matching the configured output schema.',
       '',
       `Reusable source JSON:\n${safeJson({
-        title: testCase.title,
-        targetUrl: testCase.targetUrl,
-        goal: sourceGoal,
-        constraints: stableConstraints || undefined,
-        browserMode: testCase.content.browserMode,
-        status: run.status,
+        title: input.title,
+        targetUrl: input.targetUrl,
+        goal: input.goal,
+        constraints: input.constraints || undefined,
+        status: input.status,
         diagnostics: diagnostics.length ? diagnostics : undefined,
         steps: steps.map(compactStep),
       }, 10000)}`,
     ].join('\n'),
   });
-  const workflow = distinctText(result.object.content.workflow, 8);
-  const workflowKeys = new Set(workflow.map(normalizedText));
-  const recovery = distinctText(result.object.content.recovery, 3)
-    .filter((item) => !workflowKeys.has(normalizedText(item)));
-
+  const generated = parseGeneratedSkillOutput(result.output);
   return {
-    title: result.object.title,
-    description: result.object.description,
-    tags: distinctText(result.object.tags, 6),
-    triggerPhrases: distinctText(result.object.triggerPhrases, 8),
+    title: generated.title,
+    description: generated.description,
+    triggerPhrases: distinctText(generated.triggerPhrases, 8),
     content: {
-      workflow,
-      recovery,
-      verification: distinctText(result.object.content.verification, 4),
+      details: generated.content.details.trim(),
+      ...(generated.content.resources ? { resources: generated.content.resources } : {}),
     },
-    sourceRunId: run.id,
-    sourceTestCaseId: testCase.id,
+    sourceSessionId: input.sourceId,
   };
 }

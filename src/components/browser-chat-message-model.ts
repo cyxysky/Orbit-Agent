@@ -4,23 +4,57 @@ export type BrowserChatLogRecordLike = {
 };
 
 export type BrowserChatMessageLike = {
+  activity?: { phase?: string };
   content?: string;
+  createdAt?: string;
   id: string;
   role: 'user' | 'assistant';
+  status?: string;
   stepIndexes?: number[];
+  updatedAt?: string;
 };
 
 export type BrowserChatLogIndex<TLog extends BrowserChatLogRecordLike> = {
   byMessageId: Map<string, TLog[]>;
-  byStepIndex: Map<number, TLog[]>;
 };
+
+const emptyBrowserChatLogs: never[] = [];
 
 export type BrowserChatAiOutputCycleLike = {
   id: string;
   output: {
+    reasoning?: string[];
     texts: string[];
+    tools?: unknown[];
   };
 };
+
+export function browserChatMessageIsTextStreaming(message: BrowserChatMessageLike) {
+  return message.role === 'assistant'
+    && message.status === 'running'
+    && message.activity?.phase === 'ai:text:streaming';
+}
+
+export function normalizeBrowserChatMessageRunStates<TMessage extends BrowserChatMessageLike>(
+  messages: TMessage[],
+  input: { currentAssistantMessageId?: string; sessionBusy: boolean },
+) {
+  let changed = false;
+  const normalized = messages.map((message) => {
+    if (
+      message.role !== 'assistant'
+      || message.status !== 'running'
+      || (input.sessionBusy && message.id === input.currentAssistantMessageId)
+    ) return message;
+    changed = true;
+    return {
+      ...message,
+      activity: undefined,
+      status: 'interrupted',
+    } as TMessage;
+  });
+  return changed ? normalized : messages;
+}
 
 export type BrowserChatAiCycleRenderEntry<TCycle extends BrowserChatAiOutputCycleLike> =
   | { cycle: TCycle; kind: 'cycle' }
@@ -34,52 +68,84 @@ function hasVisibleText(value: unknown) {
   return typeof value === 'string' && Boolean(value.trim());
 }
 
-export function assignBrowserChatStepIndexesToLatestMessage<TMessage extends BrowserChatMessageLike>(messages: TMessage[]) {
-  const claimedStepIndexes = new Set<number>();
-  const normalized = [...messages];
-  for (let index = normalized.length - 1; index >= 0; index -= 1) {
-    const message = normalized[index];
-    if (message.role !== 'assistant' || !message.stepIndexes?.length) continue;
-    const stepIndexes = message.stepIndexes.filter((stepIndex) => {
-      if (claimedStepIndexes.has(stepIndex)) return false;
-      claimedStepIndexes.add(stepIndex);
-      return true;
-    });
-    if (stepIndexes.length !== message.stepIndexes.length) {
-      normalized[index] = { ...message, stepIndexes };
-    }
+function normalizedVisibleText(value: unknown) {
+  return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
+}
+
+export function isBrowserChatManualVerificationStatusText(text: string) {
+  const normalized = normalizedVisibleText(text);
+  return /^AI requested a manual verification pause\. Ask the user to inspect the browser and continue after completing any required verification\.$/i.test(normalized)
+    || /^Manual verification is visible \(.+\)\. The run UI should pause and wait for the user to complete it\.$/i.test(normalized)
+    || /^已暂停自动操作(?:[：:,，；;]|\s)/.test(normalized)
+    || /^已暂停(?:自动操作)?[，,]?\s*等待您检查浏览器/.test(normalized);
+}
+
+export function browserChatAiCycleAnchorsText(
+  cycle: BrowserChatAiOutputCycleLike,
+  text: string,
+) {
+  const normalizedText = normalizedVisibleText(text);
+  if (!normalizedText || !cycle.output.tools?.length) return false;
+  return cycle.output.texts.some((candidate) => normalizedVisibleText(candidate) === normalizedText);
+}
+
+export function browserChatTerminalAnswerCycleIndex(cycles: BrowserChatAiOutputCycleLike[]) {
+  for (let index = cycles.length - 1; index >= 0; index -= 1) {
+    const cycle = cycles[index];
+    if (cycle.output.tools?.length) continue;
+    if (cycle.output.texts.some(hasVisibleText)) return index;
   }
-  return normalized;
+  return -1;
+}
+
+export function browserChatAssistantMessageHasExecutionMetadata(message: BrowserChatMessageLike) {
+  return message.role === 'assistant' && Boolean(message.stepIndexes?.length);
+}
+
+export function browserChatMessageElapsedMs(
+  message: Pick<BrowserChatMessageLike, 'createdAt' | 'updatedAt'>,
+  liveNowMs?: number,
+) {
+  const startedAt = Date.parse(message.createdAt || '');
+  const completedAt = Number.isFinite(liveNowMs)
+    ? Number(liveNowMs)
+    : Date.parse(message.updatedAt || message.createdAt || '');
+  if (!Number.isFinite(startedAt) || !Number.isFinite(completedAt)) return undefined;
+  return Math.max(0, completedAt - startedAt);
+}
+
+export function formatBrowserChatElapsedTime(value: number | undefined) {
+  if (!Number.isFinite(value)) return '';
+  const totalSeconds = Math.max(0, Math.round(Number(value) / 1_000));
+  const hours = Math.floor(totalSeconds / 3_600);
+  const minutes = Math.floor((totalSeconds % 3_600) / 60);
+  const seconds = totalSeconds % 60;
+  return [
+    hours ? `${hours}h` : '',
+    minutes ? `${minutes}m` : '',
+    `${seconds}s`,
+  ].filter(Boolean).join(' ');
 }
 
 export function buildBrowserChatLogIndex<TLog extends BrowserChatLogRecordLike>(logs: TLog[]): BrowserChatLogIndex<TLog> {
   const byMessageId = new Map<string, TLog[]>();
-  const byStepIndex = new Map<number, TLog[]>();
 
   for (const log of logs) {
     if (log.messageId) {
       const entries = byMessageId.get(log.messageId) || [];
       entries.push(log);
       byMessageId.set(log.messageId, entries);
-      continue;
-    }
-    if (typeof log.stepIndex === 'number') {
-      const entries = byStepIndex.get(log.stepIndex) || [];
-      entries.push(log);
-      byStepIndex.set(log.stepIndex, entries);
     }
   }
 
-  return { byMessageId, byStepIndex };
+  return { byMessageId };
 }
 
 export function browserChatLogsForMessage<TMessage extends BrowserChatMessageLike, TLog extends BrowserChatLogRecordLike>(
   message: TMessage,
   logIndex: BrowserChatLogIndex<TLog>,
 ) {
-  const directLogs = logIndex.byMessageId.get(message.id) || [];
-  const stepLogs = (message.stepIndexes || []).flatMap((stepIndex) => logIndex.byStepIndex.get(stepIndex) || []);
-  return directLogs.length || stepLogs.length ? [...directLogs, ...stepLogs] : [];
+  return logIndex.byMessageId.get(message.id) || (emptyBrowserChatLogs as TLog[]);
 }
 
 export function browserChatAssistantMessageHasVisibleText<TMessage extends BrowserChatMessageLike, TLog extends BrowserChatLogRecordLike>(
@@ -93,6 +159,7 @@ export function browserChatAssistantMessageHasVisibleText<TMessage extends Brows
 
 export function buildBrowserChatAiCycleRenderEntries<TCycle extends BrowserChatAiOutputCycleLike>(
   cycles: TCycle[],
+  hasExecutedTool: (cycle: TCycle) => boolean = () => true,
 ): BrowserChatAiCycleRenderEntry<TCycle>[] {
   const entries: BrowserChatAiCycleRenderEntry<TCycle>[] = [];
   let pendingExecuted: TCycle[] = [];
@@ -100,20 +167,22 @@ export function buildBrowserChatAiCycleRenderEntries<TCycle extends BrowserChatA
   const flushExecuted = () => {
     if (!pendingExecuted.length) return;
     const first = pendingExecuted[0];
-    const last = pendingExecuted[pendingExecuted.length - 1];
     entries.push({
       cycles: pendingExecuted,
-      id: `executed-cycles-${first.id}-${last.id}-${pendingExecuted.length}`,
+      id: `executed-cycles-${first.id}`,
       kind: 'executed',
     });
     pendingExecuted = [];
   };
 
   for (const cycle of cycles) {
-    if (!cycle.output.texts.some(hasVisibleText)) {
+    const hasVisibleOutput = cycle.output.texts.some(hasVisibleText)
+      || (cycle.output.reasoning || []).some(hasVisibleText);
+    if (!hasVisibleOutput && hasExecutedTool(cycle)) {
       pendingExecuted.push(cycle);
       continue;
     }
+    if (!hasVisibleOutput) continue;
     flushExecuted();
     entries.push({ cycle, kind: 'cycle' });
   }
@@ -125,6 +194,7 @@ export function buildBrowserChatMessageRenderEntries<TMessage extends BrowserCha
   messages: TMessage[],
   logIndex: BrowserChatLogIndex<TLog>,
   assistantMessageHasVisibleText: (message: TMessage, logs: TLog[]) => boolean,
+  assistantMessageHasExecutedTool: (message: TMessage) => boolean,
 ): BrowserChatMessageRenderEntry<TMessage>[] {
   const entries: BrowserChatMessageRenderEntry<TMessage>[] = [];
   let pendingExecutedGroup: TMessage[] = [];
@@ -133,9 +203,8 @@ export function buildBrowserChatMessageRenderEntries<TMessage extends BrowserCha
     if (!pendingExecutedGroup.length) return;
     if (pendingExecutedGroup.length > 1) {
       const first = pendingExecutedGroup[0];
-      const last = pendingExecutedGroup[pendingExecutedGroup.length - 1];
       entries.push({
-        id: `executed-${first.id}-${last.id}-${pendingExecutedGroup.length}`,
+        id: `executed-${first.id}`,
         items: pendingExecutedGroup,
         kind: 'executed-group',
       });
@@ -145,11 +214,16 @@ export function buildBrowserChatMessageRenderEntries<TMessage extends BrowserCha
     pendingExecutedGroup = [];
   };
 
-  for (const item of assignBrowserChatStepIndexesToLatestMessage(messages)) {
+  for (const item of messages) {
     const itemLogs = item.role === 'assistant' ? browserChatLogsForMessage(item, logIndex) : [];
     const emptyAssistantMessage = item.role === 'assistant' && !assistantMessageHasVisibleText(item, itemLogs);
     if (emptyAssistantMessage) {
-      pendingExecutedGroup.push(item);
+      if (item.status === 'running') {
+        flushExecutedGroup();
+        entries.push({ item, kind: 'message' });
+        continue;
+      }
+      if (assistantMessageHasExecutedTool(item)) pendingExecutedGroup.push(item);
       continue;
     }
     flushExecutedGroup();

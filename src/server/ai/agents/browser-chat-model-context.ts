@@ -1,0 +1,189 @@
+import { createHash } from 'node:crypto';
+import { modelMessageSchema, type ModelMessage } from 'ai';
+import type { RuntimeContextManifest } from './runtime-context-assembler';
+import type { RuntimeKnowledgeState } from './runtime-knowledge-context';
+import { stripBrowserChatContextMarkers } from '../../../lib/browser-chat-visible-text';
+import { withoutRuntimePromptCacheMetadata, isRuntimePromptCacheMetadataMessage } from './runtime-prompt-cache';
+import { parseContextSummary } from './runtime-semantic-summary';
+import { completeRuntimeModelToolChain } from './runtime-context-compression';
+import type { SubagentResultInbox } from './browser-chat-subagent-delivery';
+
+export type BrowserChatModelContextCompression = {
+  compressedAt: string;
+  continuationSummary: string;
+  estimatedTokensAfter: number;
+  estimatedTokensBefore: number;
+  retainedMessageCount: number;
+  summarizedMessageCount: number;
+  targetTokens: number;
+  thresholdTokens: number;
+  windowTokens: number;
+};
+
+export type BrowserChatModelContext = {
+  version: 2;
+  /** Immutable content-addressed records. Storage moves these out of the session header. */
+  records: Record<string, ModelMessage>;
+  history: string[];
+  active: string[];
+  lastRequest?: RuntimeContextManifest;
+  backgroundRef?: string;
+  knowledge?: RuntimeKnowledgeState;
+  branches?: Record<string, {
+    recordIds: string[];
+    active: string[];
+    history: string[];
+    lastRequest?: RuntimeContextManifest;
+    backgroundRef?: string;
+    continuationSummary?: string;
+    knowledge?: RuntimeKnowledgeState;
+  }>;
+  lastCompression?: Omit<BrowserChatModelContextCompression, 'continuationSummary'>;
+  continuationSummary?: string;
+  /** Result events are independent of replaceable/compacted active messages. */
+  subagentInbox?: SubagentResultInbox;
+};
+
+const persistentBinaryOmissionText = '[Binary visual input omitted from persistent model context; use the conversation file registry to read it again.]';
+
+function withoutPersistentBinaryParts(message: ModelMessage): ModelMessage {
+  if (!Array.isArray(message.content)) return message;
+  const content = message.content.filter((part) => (
+    !part || typeof part !== 'object' || !('type' in part) || (part.type !== 'file' && part.type !== 'image')
+  ));
+  if (content.length) return { ...message, content } as ModelMessage;
+  return { ...message, content: persistentBinaryOmissionText } as ModelMessage;
+}
+
+export function serializableBrowserChatModelMessages(messages: ModelMessage[]) {
+  return normalizeBrowserChatModelMessages(messages.map(withoutPersistentBinaryParts));
+}
+
+export function compactBrowserChatModelTranscript(messages: ModelMessage[]) {
+  // An interrupted/pending exchange is evidence too. Repair only the request view.
+  return serializableBrowserChatModelMessages(messages);
+}
+
+export function browserChatContextRecordId(message: ModelMessage) {
+  return `ctx_${createHash('sha256').update(JSON.stringify(message)).digest('hex')}`;
+}
+
+export function browserChatTranscript(context: BrowserChatModelContext) {
+  return contextMessages(context.records, context.history);
+}
+
+export function browserChatActiveMessages(context: BrowserChatModelContext) {
+  return completeRuntimeModelToolChain(contextMessages(context.records, context.active));
+}
+
+function contextMessages(records: Record<string, ModelMessage>, refs: string[]) {
+  return refs.map(ref => {
+    if (!Object.hasOwn(records, ref)) throw new Error(`Missing browser-chat context record: ${ref}`);
+    return records[ref];
+  });
+}
+
+function modelMessageText(message: ModelMessage) {
+  if (typeof message.content === 'string') return message.content.trim();
+  if (!Array.isArray(message.content)) return '';
+  return message.content.flatMap((part) => {
+    if (!part || typeof part !== 'object') return [];
+    const text = 'text' in part && typeof part.text === 'string' ? part.text.trim() : '';
+    return text ? [text] : [];
+  }).join('\n').trim();
+}
+
+export function isOriginalBrowserChatUserMessage(message: ModelMessage) {
+  return message.role === 'user' && !isRuntimePromptCacheMetadataMessage(message)
+    && !/^\[(?:Approved historical memory|Historical handoff|Historical context segment|Document visual QA|Attachment visual content|Explicit visual evidence|(?:Current |Historical )?browser observation|Browser observation|Source file context|Execution progress|Runtime response protocol)/.test(modelMessageText(message))
+    // Older checkpoints stored this host reminder without a bracketed marker.
+    && !/^Runtime response protocol:/.test(modelMessageText(message));
+}
+
+export function latestBrowserChatUserMessageIndex(messages: ModelMessage[]) {
+  return messages.findLastIndex(isOriginalBrowserChatUserMessage);
+}
+
+/** Old private reasoning is neither a user instruction nor execution evidence.
+ * Keep the active turn's reasoning intact for provider tool-continuation
+ * protocols. This projection never rewrites the archived messages. */
+export function projectCompletedTurnReasoning(messages: ModelMessage[]) {
+  const currentTurn = latestBrowserChatUserMessageIndex(messages);
+  let omittedParts = 0;
+  const projected = messages.flatMap((message, index) => {
+    if (index >= currentTurn || message.role !== 'assistant' || !Array.isArray(message.content)) return [message];
+    const content = message.content.filter(part => part.type !== 'reasoning');
+    omittedParts += message.content.length - content.length;
+    return content.length ? [{ ...message, content }] : [];
+  });
+  return { messages: projected, omittedParts };
+}
+
+function currentTurnContains(messages: ModelMessage[], role: 'user' | 'assistant', text: string) {
+  const start = latestBrowserChatUserMessageIndex(messages);
+  return messages.slice(Math.max(0, start)).some((message) => message.role === role && modelMessageText(message) === text.trim());
+}
+export function appendInterruptedBrowserChatTurn(messages: ModelMessage[], userContent: string, assistantContent: string, inputAlreadyStored = true) {
+  const next = [...messages];
+  if (!inputAlreadyStored) next.push({ role: 'user', content: userContent });
+  const partial = stripBrowserChatContextMarkers(assistantContent).trim();
+  if (partial && !currentTurnContains(next, 'assistant', partial)) next.push({ role: 'assistant', content: partial });
+  // Interruption is session status, not model-authored text or a command to resume.
+  return serializableBrowserChatModelMessages(next);
+}
+export function appendTerminalBrowserChatTurn(messages: ModelMessage[], userContent: string, assistantContent: string) {
+  const next = [...messages];
+  if (!currentTurnContains(next, 'user', userContent)) next.push({ role: 'user', content: userContent });
+  if (assistantContent.trim() && !currentTurnContains(next, 'assistant', assistantContent)) next.push({ role: 'assistant', content: assistantContent });
+  return serializableBrowserChatModelMessages(next);
+}
+
+export function normalizeBrowserChatModelMessages(value: unknown): ModelMessage[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((message, index) => {
+    const parsed = modelMessageSchema.safeParse(message);
+    if (!parsed.success) throw new Error(`Invalid model context message at index ${index}: ${parsed.error.issues[0]?.message || 'invalid protocol'}`);
+    const normalized = withoutPersistentBinaryParts(parsed.data);
+    if (normalized.role === 'assistant' && typeof normalized.content === 'string') {
+      const content = stripBrowserChatContextMarkers(normalized.content).trim();
+      return content ? [{ ...normalized, content }] : [];
+    }
+    return [normalized];
+  });
+}
+
+export function normalizeBrowserChatModelContext(value: unknown): BrowserChatModelContext {
+  const record = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Partial<BrowserChatModelContext> & { transcript?: unknown; activeMessages?: unknown }
+    : {};
+  const records: Record<string, ModelMessage> = { ...record.records };
+  const register = (messages: ModelMessage[]) => messages.map((message) => {
+    const id = browserChatContextRecordId(message);
+    records[id] = message;
+    return id;
+  });
+  if (record.transcript === undefined) contextMessages(records, record.history || []);
+  const history = record.transcript !== undefined
+    ? register(withoutRuntimePromptCacheMetadata(normalizeBrowserChatModelMessages(record.transcript)))
+    : record.history || [];
+  const active = record.activeMessages !== undefined
+    ? register(withoutRuntimePromptCacheMetadata(normalizeBrowserChatModelMessages(record.activeMessages)))
+    // Older snapshots may contain only the transcript/history. Missing active
+    // state must fall back to that history; an explicitly empty window stays empty.
+    : register(withoutRuntimePromptCacheMetadata(normalizeBrowserChatModelMessages(contextMessages(records, record.active ?? history))));
+  const compression = record.lastCompression;
+  const continuationSummary = parseContextSummary(record.continuationSummary) ? record.continuationSummary! : '';
+  return {
+    version: 2,
+    records,
+    history,
+    active,
+    ...(record.backgroundRef ? { backgroundRef: record.backgroundRef } : {}),
+    ...(record.lastRequest ? { lastRequest: record.lastRequest } : {}),
+    ...(record.knowledge ? { knowledge: record.knowledge } : {}),
+    ...(record.branches ? { branches: record.branches } : {}),
+    ...(record.subagentInbox ? { subagentInbox: record.subagentInbox } : {}),
+    ...(compression && typeof compression === 'object' ? { lastCompression: { compressedAt: compression.compressedAt, estimatedTokensBefore: compression.estimatedTokensBefore, estimatedTokensAfter: compression.estimatedTokensAfter, retainedMessageCount: compression.retainedMessageCount, summarizedMessageCount: compression.summarizedMessageCount, targetTokens: compression.targetTokens, thresholdTokens: compression.thresholdTokens, windowTokens: compression.windowTokens } } : {}),
+    ...(continuationSummary ? { continuationSummary } : {}),
+  };
+}

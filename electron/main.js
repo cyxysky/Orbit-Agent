@@ -1,21 +1,58 @@
-const { app, BrowserWindow, Menu, WebContentsView, dialog, ipcMain, nativeTheme, shell } = require('electron');
+/* eslint-disable @typescript-eslint/no-require-imports */
+const { app, BrowserWindow, Menu, WebContentsView, dialog, ipcMain, nativeTheme, session: electronSession, shell } = require('electron');
 const { spawn } = require('node:child_process');
-const { once } = require('node:events');
+const { createHash, randomUUID } = require('node:crypto');
 const fs = require('node:fs');
 const http = require('node:http');
 const net = require('node:net');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
+const { translateDesktopText } = require('./translations');
+const { product } = require('./product-brand');
+const {
+  compiledServerBasePath,
+  loadDevelopmentEnvironment,
+  serverRouteUrl,
+  withServerBasePath,
+} = require('./server-url');
 
-const APP_NAME = 'WebPilot';
+if (!app.isPackaged) {
+  // The spawned Next development server loads .env files automatically. Load
+  // them in Electron as well before deriving ports and public route URLs so
+  // both processes use the same WEBPILOT_BASE_PATH and runtime settings.
+  loadDevelopmentEnvironment(process.cwd());
+}
+const { applyOrbitEnvironment } = require(app.isPackaged
+  ? path.join(process.resourcesPath, 'server', 'orbit-environment.js')
+  : '../server/orbit-environment');
+applyOrbitEnvironment();
+const { stopProcessTree } = require(app.isPackaged
+  ? path.join(process.resourcesPath, 'server', 'process-tree.cjs')
+  : '../server/process-tree.cjs');
+
+const APP_NAME = product.name;
 const APP_TITLE = APP_NAME;
+let desktopLanguage = 'zh';
+const desktopText = (text, params) => translateDesktopText(desktopLanguage, text, params);
 const DEFAULT_PORT = 17890;
 const EMBEDDED_BROWSER_CDP_PORT = Number(process.env.WEBPILOT_ELECTRON_CDP_PORT || process.env.ELECTRON_EMBEDDED_BROWSER_CDP_PORT || 19333);
 
 app.setName(APP_NAME);
+// Keep existing desktop data and Chromium sessions when upgrading the product name.
+const legacyUserData = path.join(app.getPath('appData'), 'WebPilot');
+const orbitUserData = path.join(app.getPath('appData'), APP_NAME);
+const desktopUserData = fs.existsSync(legacyUserData) && !fs.existsSync(orbitUserData) ? legacyUserData : orbitUserData;
+fs.mkdirSync(desktopUserData, { recursive: true });
+app.setPath('userData', desktopUserData);
+app.setPath('sessionData', desktopUserData);
 app.commandLine.appendSwitch('remote-debugging-port', String(EMBEDDED_BROWSER_CDP_PORT));
 
 let serverProcess;
+let localServerUrl = '';
+const serverShutdownToken = randomUUID();
+let applicationShutdownStarted = false;
+let applicationShutdownReady = false;
+let electronResourcesDestroyed = false;
 let mainWindow;
 let embeddedBrowserView;
 let embeddedBrowserAttached = false;
@@ -24,8 +61,6 @@ let embeddedBrowserLibraryView;
 let embeddedBrowserLibraryPanel = '';
 let embeddedBrowserLibraryAttached = false;
 let embeddedBrowserLibraryVisible = false;
-let embeddedBrowserLibraryOpenSequence = 0;
-let embeddedBrowserLibraryPendingSequence = 0;
 let embeddedBrowserActiveGroupId = '';
 let embeddedBrowserActiveTabId = '';
 let embeddedBrowserNextTabId = 1;
@@ -37,17 +72,18 @@ let embeddedBrowserNextBookmarkId = 1;
 let embeddedBrowserNextHistoryId = 1;
 const embeddedBrowserRecentlyClosedTabs = [];
 let embeddedBrowserBounds = { x: 0, y: 0, width: 0, height: 0 };
-let embeddedBrowserFitTimer;
-let embeddedBrowserFitAllowZoomIn = false;
 let runtimeDatabasePath = '';
 let electronStateDatabase;
 let embeddedBrowserPersistenceTimer;
 let embeddedBrowserPersistenceStopped = false;
 let embeddedBrowserPersistenceRestoring = false;
 let embeddedBrowserStateChangeTimer;
+const htmlFullscreenWebContentsIds = new Set();
+let htmlFullscreenWindowState;
 const EMBEDDED_BROWSER_ROUTE_LOADING_MS = 1200;
 const EMBEDDED_BROWSER_PERSISTENCE_VERSION = 2;
 const EMBEDDED_BROWSER_STATE_KEY = 'embedded-browser';
+const DOWNLOAD_SETTINGS_STATE_KEY = 'download-settings';
 const RUNTIME_DATABASE_FILE = 'webpilot.db';
 const EMBEDDED_BROWSER_HISTORY_LIMIT = 300;
 let startupLogPath;
@@ -56,6 +92,8 @@ let recentServerOutput = [];
 let lastDownloadDirectory = '';
 let nextDownloadId = 1;
 const systemDownloads = new Map();
+const nativeDownloadItems = new Map();
+const nativeDownloadSessions = new WeakSet();
 
 function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
@@ -158,11 +196,6 @@ function serverDirectory() {
   return process.cwd();
 }
 
-function tinymceRoot() {
-  if (app.isPackaged) return path.join(process.resourcesPath, 'tinymce');
-  return path.join(process.cwd(), 'node_modules', 'tinymce');
-}
-
 function appIconPath() {
   const fileName = process.platform === 'win32' ? 'app-icon.ico' : 'app-icon.png';
   if (app.isPackaged) return path.join(process.resourcesPath, fileName);
@@ -218,13 +251,53 @@ function packagedChromiumExecutable() {
   }
 }
 
+function packagedLibreOfficeExecutable() {
+  if (!app.isPackaged) return String(process.env.LIBREOFFICE_PATH || '').trim();
+  const executablePath = path.join(process.resourcesPath, 'libreoffice', 'program', 'soffice.exe');
+  return fs.existsSync(executablePath) ? executablePath : '';
+}
+
+function packagedGlinerEnvironment(serverDir) {
+  if (!app.isPackaged) return {};
+  const runtimeRoot = path.join(serverDir, 'sensitive-data-runtime');
+  const pythonPath = path.join(runtimeRoot, 'python', 'python.exe');
+  const serviceDir = path.join(runtimeRoot, 'service');
+  const modelDir = path.join(runtimeRoot, 'models', 'gliner2');
+  const chineseNerModelDir = path.join(runtimeRoot, 'models', 'chinese-roberta');
+  const piiModelDir = path.join(runtimeRoot, 'models', 'liquid-pii');
+  for (const requiredPath of [
+    pythonPath,
+    path.join(serviceDir, 'app.py'),
+    path.join(serviceDir, 'candidate_resolution.py'),
+    path.join(serviceDir, 'entity_boundaries.py'),
+    path.join(modelDir, 'config.json'),
+    path.join(chineseNerModelDir, 'config.json'),
+    path.join(piiModelDir, 'config.json'),
+  ]) {
+    if (!fs.existsSync(requiredPath)) throw new Error(`Packaged GLiNER runtime is missing: ${requiredPath}`);
+  }
+  return {
+    AI_SENSITIVE_DATA_FILTER_ENABLED: 'true',
+    AI_SENSITIVE_DATA_FILTER_FAILURE_MODE: 'closed',
+    GLINER_BATCH_SIZE: '8',
+    GLINER_CHINESE_NER_MODEL_BUNDLE_DIR: chineseNerModelDir,
+    GLINER_DEVICE: 'cpu',
+    GLINER_MODEL_BUNDLE_DIR: modelDir,
+    GLINER_PII_MODEL_BUNDLE_DIR: piiModelDir,
+    GLINER_PYTHON_PATH: pythonPath,
+    GLINER_RUNTIME_MODE: 'local',
+    GLINER_SERVICE_DIR: serviceDir,
+    GLINER_SERVICE_URL: 'http://127.0.0.1:18001',
+  };
+}
+
 function embeddedBrowserPlaceholderUrl() {
   const html = [
     '<!doctype html>',
     '<html data-webpilot-embedded-browser="true">',
-    '<head><meta charset="utf-8"><title>新建标签页</title></head>',
+    `<head><meta charset="utf-8"><title>${desktopText('新建标签页')}</title></head>`,
     '<body style="margin:0;font:14px system-ui;background:#f8fafc;color:#334155;display:grid;place-items:center;height:100vh">',
-    '<div>新建标签页</div>',
+    `<div>${desktopText('新建标签页')}</div>`,
     '</body>',
     '</html>',
   ].join('');
@@ -236,7 +309,11 @@ function embeddedBrowserLibraryRouteUrl() {
   try {
     const current = new URL(mainWindow.webContents.getURL());
     if (!['http:', 'https:'].includes(current.protocol)) return '';
-    return new URL('/embedded-browser-library', current.origin).toString();
+    return serverRouteUrl(
+      current.origin,
+      compiledServerBasePath(serverDirectory(), process.env.WEBPILOT_BASE_PATH),
+      '/embedded-browser-library',
+    );
   } catch {
     return '';
   }
@@ -264,6 +341,7 @@ function ensureEmbeddedBrowserLibraryView() {
     },
   });
   view.setBackgroundColor('#00000000');
+  installHtmlFullscreenRecovery(view.webContents);
   view.setBorderRadius(0);
   view.setVisible(false);
   view.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -294,7 +372,6 @@ function ensureEmbeddedBrowserLibraryView() {
     if (embeddedBrowserLibraryView === view) {
       embeddedBrowserLibraryPanel = '';
       embeddedBrowserLibraryVisible = false;
-      embeddedBrowserLibraryPendingSequence = 0;
       view.setVisible(false);
       notifyEmbeddedBrowserStateChange();
     }
@@ -305,7 +382,6 @@ function ensureEmbeddedBrowserLibraryView() {
       embeddedBrowserLibraryPanel = '';
       embeddedBrowserLibraryAttached = false;
       embeddedBrowserLibraryVisible = false;
-      embeddedBrowserLibraryPendingSequence = 0;
       notifyEmbeddedBrowserStateChange();
     }
   });
@@ -317,7 +393,6 @@ function ensureEmbeddedBrowserLibraryView() {
     if (embeddedBrowserLibraryView === view) {
       embeddedBrowserLibraryPanel = '';
       embeddedBrowserLibraryVisible = false;
-      embeddedBrowserLibraryPendingSequence = 0;
       view.setVisible(false);
       notifyEmbeddedBrowserStateChange();
     }
@@ -332,13 +407,12 @@ function attachEmbeddedBrowserLibraryView() {
     return;
   }
   const view = ensureEmbeddedBrowserLibraryView();
-  if (!embeddedBrowserLibraryAttached) {
-    mainWindow.contentView.addChildView(view);
-    embeddedBrowserLibraryAttached = true;
-  }
+  // Re-adding an existing child moves it to the top of the native View stack.
+  // Active browser tabs are also WebContentsViews and may otherwise cover this panel.
+  mainWindow.contentView.addChildView(view);
+  embeddedBrowserLibraryAttached = true;
   view.setBounds(embeddedBrowserLibraryViewBounds());
-  const canShow = embeddedBrowserLibraryPendingSequence === 0;
-  if (canShow && !embeddedBrowserLibraryVisible) {
+  if (!embeddedBrowserLibraryVisible) {
     view.setVisible(true);
     embeddedBrowserLibraryVisible = true;
     view.webContents.focus();
@@ -346,23 +420,19 @@ function attachEmbeddedBrowserLibraryView() {
 }
 
 function setEmbeddedBrowserLibraryPanel(value) {
-  const nextPanel = value === 'bookmarks' || value === 'history' ? value : '';
-  embeddedBrowserLibraryPanel = nextPanel;
-  if (nextPanel) {
-    embeddedBrowserLibraryOpenSequence += 1;
-    embeddedBrowserLibraryPendingSequence = embeddedBrowserLibraryOpenSequence;
-    if (embeddedBrowserLibraryVisible) {
-      embeddedBrowserLibraryView?.setVisible(false);
-      embeddedBrowserLibraryVisible = false;
-    }
-    attachEmbeddedBrowserLibraryView();
-    notifyEmbeddedBrowserLibraryStateChange();
-  }
-  else {
-    embeddedBrowserLibraryPendingSequence = 0;
+  const nextPanel = value === 'library' ? value : '';
+  if (!nextPanel) {
+    embeddedBrowserLibraryPanel = '';
     if (embeddedBrowserLibraryVisible) embeddedBrowserLibraryView?.setVisible(false);
     embeddedBrowserLibraryVisible = false;
+    notifyEmbeddedBrowserStateChange();
+    return embeddedBrowserState();
   }
+
+  // Reuse the preloaded combined view so opening is immediate.
+  embeddedBrowserLibraryPanel = nextPanel;
+  attachEmbeddedBrowserLibraryView();
+  notifyEmbeddedBrowserLibraryStateChange();
   notifyEmbeddedBrowserStateChange();
   return embeddedBrowserState();
 }
@@ -370,7 +440,6 @@ function setEmbeddedBrowserLibraryPanel(value) {
 function destroyEmbeddedBrowserLibraryView() {
   const view = embeddedBrowserLibraryView;
   embeddedBrowserLibraryPanel = '';
-  embeddedBrowserLibraryPendingSequence = 0;
   embeddedBrowserLibraryView = undefined;
   embeddedBrowserLibraryVisible = false;
   const wasAttached = embeddedBrowserLibraryAttached;
@@ -525,21 +594,6 @@ function uniqueDownloadPath(directory, fileName) {
   return candidate;
 }
 
-function parseDownloadFileNameFromContentDisposition(value) {
-  const header = String(value || '');
-  const encoded = header.match(/filename\*\s*=\s*(?:UTF-8''|)([^;]+)/i)?.[1];
-  if (encoded) {
-    try {
-      return decodeURIComponent(encoded.trim().replace(/^"|"$/g, ''));
-    } catch {
-      return encoded.trim().replace(/^"|"$/g, '');
-    }
-  }
-  return header.match(/filename\s*=\s*"([^"]+)"/i)?.[1]
-    || header.match(/filename\s*=\s*([^;]+)/i)?.[1]?.trim()
-    || '';
-}
-
 function downloadProgressPayload(download) {
   const totalBytes = Number(download.totalBytes || 0);
   const receivedBytes = Number(download.receivedBytes || 0);
@@ -561,10 +615,16 @@ function downloadProgressPayload(download) {
 
 function emitDownloadProgress(download) {
   const payload = downloadProgressPayload(download);
-  if (mainWindow && !mainWindow.isDestroyed()) {
+  if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
     mainWindow.webContents.send('webpilot:system:download-progress', payload);
   }
   return payload;
+}
+
+function emitDownloadRemoved(id) {
+  if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
+    mainWindow.webContents.send('webpilot:system:download-removed', { id });
+  }
 }
 
 function updateSystemDownload(download, patch = {}) {
@@ -575,6 +635,7 @@ function updateSystemDownload(download, patch = {}) {
 
 function systemDownloadState() {
   return {
+    directory: downloadDirectory(),
     downloads: Array.from(systemDownloads.values())
       .sort((left, right) => Number(right.startedAt || 0) - Number(left.startedAt || 0))
       .map(downloadProgressPayload),
@@ -582,141 +643,135 @@ function systemDownloadState() {
   };
 }
 
+function downloadDirectory() {
+  return lastDownloadDirectory || app.getPath('downloads');
+}
+
+function writeDownloadSettings() {
+  if (!runtimeDatabasePath || !lastDownloadDirectory) return;
+  try {
+    getElectronStateDatabase().prepare(`
+      INSERT INTO electron_state (key, value_json, updated_at) VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
+    `).run(
+      DOWNLOAD_SETTINGS_STATE_KEY,
+      JSON.stringify({ directory: lastDownloadDirectory }),
+      new Date().toISOString(),
+    );
+  } catch (error) {
+    appendLog(`Download settings save failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function restoreDownloadSettings() {
+  if (!runtimeDatabasePath) return false;
+  try {
+    const row = getElectronStateDatabase().prepare(`
+      SELECT value_json FROM electron_state WHERE key = ?
+    `).get(DOWNLOAD_SETTINGS_STATE_KEY);
+    if (!row?.value_json) return false;
+    const saved = JSON.parse(row.value_json);
+    const directory = typeof saved?.directory === 'string' ? saved.directory.trim() : '';
+    if (!directory || !path.isAbsolute(directory)) return false;
+    lastDownloadDirectory = directory;
+    return true;
+  } catch (error) {
+    appendLog(`Download settings restore failed: ${error instanceof Error ? error.message : String(error)}`);
+    return false;
+  }
+}
+
 async function chooseDownloadDirectory(input = {}) {
   const defaultPath = typeof input.defaultPath === 'string' && input.defaultPath.trim()
     ? input.defaultPath.trim()
-    : (lastDownloadDirectory || undefined);
+    : downloadDirectory();
   const result = await dialog.showOpenDialog(mainWindow, {
     defaultPath,
     properties: ['openDirectory', 'createDirectory'],
-    title: 'Select download directory',
+    title: desktopText('选择下载位置'),
   });
   if (result.canceled || !result.filePaths?.[0]) return { ok: true, canceled: true };
   lastDownloadDirectory = result.filePaths[0];
+  writeDownloadSettings();
   return { ok: true, path: result.filePaths[0] };
 }
 
-async function downloadCookieHeader(webContents, url) {
-  try {
-    const cookies = await webContents?.session?.cookies?.get?.({ url });
-    if (!Array.isArray(cookies) || !cookies.length) return '';
-    return cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join('; ');
-  } catch {
-    return '';
-  }
+function installNativeDownloadHandler(electronSession) {
+  if (!electronSession || nativeDownloadSessions.has(electronSession)) return;
+  nativeDownloadSessions.add(electronSession);
+  electronSession.on('will-download', (event, item) => {
+    const startedAt = Date.now();
+    const url = item.getURL() || '';
+    const fileName = sanitizeDownloadFileName(item.getFilename() || downloadFileNameFromUrl(url));
+    const download = {
+      error: '',
+      fileName,
+      id: `download:${startedAt}:${nextDownloadId++}`,
+      path: '',
+      receivedBytes: Number(item.getReceivedBytes() || 0),
+      startedAt,
+      status: 'pending',
+      totalBytes: Number(item.getTotalBytes() || 0),
+      updatedAt: startedAt,
+      url,
+    };
+    systemDownloads.set(download.id, download);
+    emitDownloadProgress(download);
+
+    try {
+      const directory = ensureDir(downloadDirectory());
+      const savePath = uniqueDownloadPath(directory, fileName);
+      item.setSavePath(savePath);
+      nativeDownloadItems.set(download.id, item);
+      updateSystemDownload(download, { path: savePath, status: 'downloading' });
+    } catch (error) {
+      event.preventDefault();
+      const message = error instanceof Error ? error.message : String(error);
+      updateSystemDownload(download, { completedAt: Date.now(), error: message, status: 'failed' });
+      appendLog(`Native download setup failed: ${message}`);
+      return;
+    }
+
+    let lastProgressAt = 0;
+    item.on('updated', (_updatedEvent, state) => {
+      const now = Date.now();
+      const receivedBytes = Number(item.getReceivedBytes() || 0);
+      const totalBytes = Number(item.getTotalBytes() || 0);
+      if (state === 'progressing' && now - lastProgressAt < 160 && receivedBytes !== totalBytes) return;
+      lastProgressAt = now;
+      updateSystemDownload(download, {
+        error: state === 'interrupted' ? '下载已中断，正在等待恢复' : '',
+        receivedBytes,
+        status: state === 'interrupted' ? 'interrupted' : item.isPaused() ? 'paused' : 'downloading',
+        totalBytes,
+      });
+    });
+
+    item.once('done', (_doneEvent, state) => {
+      nativeDownloadItems.delete(download.id);
+      const completed = state === 'completed';
+      updateSystemDownload(download, {
+        completedAt: Date.now(),
+        error: completed || state === 'cancelled' ? '' : '下载已中断',
+        receivedBytes: Number(item.getReceivedBytes() || 0),
+        status: completed ? 'completed' : state === 'cancelled' ? 'cancelled' : 'failed',
+        totalBytes: Number(item.getTotalBytes() || 0),
+      });
+    });
+  });
 }
 
-async function startElectronDownload(webContents, url, context, options = {}) {
+function startNativeDownload(webContents, url) {
   const normalizedUrl = normalizeEmbeddedBrowserOpenUrl(url, mainWindow?.webContents?.getURL?.() || '');
   if (!normalizedUrl) return { ok: false, error: 'Download URL is invalid.' };
-  const download = {
-    error: '',
-    fileName: sanitizeDownloadFileName(options.fileName || downloadFileNameFromUrl(normalizedUrl)),
-    id: `download:${Date.now()}:${nextDownloadId++}`,
-    path: '',
-    receivedBytes: 0,
-    startedAt: Date.now(),
-    status: 'selecting',
-    totalBytes: 0,
-    updatedAt: Date.now(),
-    url: normalizedUrl,
-  };
-  systemDownloads.set(download.id, download);
-  emitDownloadProgress(download);
-  let directory = String(options.directory || '').trim();
-  if (options.promptForDirectory || !directory) {
-    const selected = await chooseDownloadDirectory({ defaultPath: options.defaultPath });
-    if (!selected.ok || selected.canceled) {
-      updateSystemDownload(download, { completedAt: Date.now(), status: selected.canceled ? 'cancelled' : 'failed', error: selected.error || '' });
-      return selected;
-    }
-    directory = selected.path;
-  }
-  await fs.promises.mkdir(directory, { recursive: true });
-  updateSystemDownload(download, { status: 'pending' });
-  let savePath = '';
-  let fileStream;
   try {
-    const headers = {};
-    const cookieHeader = await downloadCookieHeader(webContents, normalizedUrl);
-    if (cookieHeader) headers.Cookie = cookieHeader;
-    const userAgent = typeof webContents?.getUserAgent === 'function' ? webContents.getUserAgent() : '';
-    if (userAgent) headers['User-Agent'] = userAgent;
-    headers.Accept = '*/*';
-    const response = await fetch(normalizedUrl, {
-      headers,
-      redirect: 'follow',
-    });
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status} ${response.statusText}`);
-    }
-    const responseUrl = response.url || normalizedUrl;
-    const fileName = sanitizeDownloadFileName(
-      options.fileName
-      || parseDownloadFileNameFromContentDisposition(response.headers.get('content-disposition'))
-      || downloadFileNameFromUrl(responseUrl)
-      || download.fileName,
-    );
-    const totalBytes = Number(response.headers.get('content-length') || 0);
-    savePath = uniqueDownloadPath(directory, fileName);
-    fileStream = fs.createWriteStream(savePath);
-    const fileStreamError = new Promise((_, reject) => {
-      fileStream.once('error', reject);
-    });
-    updateSystemDownload(download, {
-      fileName,
-      path: savePath,
-      status: 'downloading',
-      totalBytes: Number.isFinite(totalBytes) && totalBytes > 0 ? totalBytes : 0,
-    });
-
-    let receivedBytes = 0;
-    let lastEmitAt = 0;
-    const emitChunkProgress = () => {
-      const now = Date.now();
-      if (now - lastEmitAt < 160 && receivedBytes !== totalBytes) return;
-      lastEmitAt = now;
-      updateSystemDownload(download, { receivedBytes });
-    };
-
-    if (response.body?.getReader) {
-      const reader = response.body.getReader();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const buffer = Buffer.from(value);
-        receivedBytes += buffer.byteLength;
-        if (!fileStream.write(buffer)) await Promise.race([once(fileStream, 'drain'), fileStreamError]);
-        emitChunkProgress();
-      }
-    } else {
-      const buffer = Buffer.from(await response.arrayBuffer());
-      receivedBytes = buffer.byteLength;
-      if (!fileStream.write(buffer)) await Promise.race([once(fileStream, 'drain'), fileStreamError]);
-      emitChunkProgress();
-    }
-
-    await Promise.race([
-      new Promise((resolve) => fileStream.end(resolve)),
-      fileStreamError,
-    ]);
-    updateSystemDownload(download, {
-      completedAt: Date.now(),
-      receivedBytes,
-      status: 'completed',
-      totalBytes: download.totalBytes || receivedBytes,
-    });
-    return { ok: true, path: savePath };
+    if (!webContents || webContents.isDestroyed()) throw new Error('Download page is not available.');
+    installNativeDownloadHandler(webContents.session);
+    webContents.downloadURL(normalizedUrl);
+    return { ok: true };
   } catch (error) {
-    try {
-      if (fileStream) fileStream.destroy();
-      if (savePath && fs.existsSync(savePath)) fs.unlinkSync(savePath);
-    } catch {
-      // Best-effort cleanup of incomplete downloads.
-    }
-    appendLog(`${context} failed: ${error instanceof Error ? error.message : String(error)}`);
     const message = error instanceof Error ? error.message : String(error);
-    updateSystemDownload(download, { completedAt: Date.now(), error: message, status: 'failed' });
+    appendLog(`Native download start failed: ${message}`);
     return { ok: false, error: message };
   }
 }
@@ -743,8 +798,8 @@ async function openAppShellUrlInEmbeddedBrowser(url) {
 function embeddedBrowserTabTitle(webContents) {
   const url = webContents.getURL() || '';
   const title = webContents.getTitle() || '';
-  if (!url || /^data:text\/html/i.test(url) || /^WebPilot Embedded Browser$/i.test(title)) return '新建标签页';
-  return title || url || '新建标签页';
+  if (!url || /^data:text\/html/i.test(url) || /^(?:Orbit|WebPilot) Embedded Browser$/i.test(title)) return desktopText('新建标签页');
+  return title || url || desktopText('新建标签页');
 }
 
 function sanitizeEmbeddedBounds(bounds) {
@@ -760,6 +815,32 @@ function sanitizeEmbeddedBounds(bounds) {
 
 function normalizeEmbeddedBrowserSessionId(value) {
   return String(value || '').trim();
+}
+
+function normalizeEmbeddedBrowserUserId(value) {
+  return String(value ?? '').trim();
+}
+
+function embeddedBrowserPartition(sessionId) {
+  const sessionKey = normalizeEmbeddedBrowserSessionId(sessionId) || 'default';
+  const normalized = sessionKey
+    .replace(/[^a-zA-Z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
+  const digest = createHash('sha256').update(sessionKey, 'utf8').digest('hex').slice(0, 24);
+  return `persist:webpilot-${normalized || 'session'}-${digest}`;
+}
+
+async function clearEmbeddedBrowserPartition(sessionId, userId) {
+  const normalized = normalizeEmbeddedBrowserSessionId(sessionId);
+  const normalizedUserId = normalizeEmbeddedBrowserUserId(userId);
+  if (!normalized && !normalizedUserId) return;
+  const partitionSession = electronSession.fromPartition(embeddedBrowserPartition(
+    normalizedUserId ? `user:${normalizedUserId}` : `session:${normalized}`,
+  ));
+  await partitionSession.clearStorageData();
+  await partitionSession.clearCache();
+  if (typeof partitionSession.clearAuthCache === 'function') await partitionSession.clearAuthCache();
 }
 
 function embeddedBrowserGroupIdForSession(sessionId) {
@@ -937,6 +1018,7 @@ function embeddedBrowserPersistenceSnapshot() {
       id: tab.id,
       pinned: Boolean(tab.pinned),
       sessionId: tab.sessionId || undefined,
+      userId: tab.userId || undefined,
       title: embeddedBrowserRecordTitle(tab.lastKnownTitle),
       url,
     });
@@ -950,6 +1032,7 @@ function embeddedBrowserPersistenceSnapshot() {
       id: group.id,
       label: embeddedBrowserRecordTitle(group.label),
       sessionId: embeddedBrowserSessionIdFromGroupId(group.id) || group.sessionId || undefined,
+      userId: group.userId || undefined,
     }));
 
   return {
@@ -1069,6 +1152,7 @@ function restoreEmbeddedBrowserPersistence() {
         id,
         label: embeddedBrowserRecordTitle(item?.label),
         sessionId,
+        userId: normalizeEmbeddedBrowserUserId(item?.userId),
       });
       savedGroupActiveTabIds.set(id, persistedEmbeddedBrowserId(item?.activeTabId));
     }
@@ -1086,6 +1170,7 @@ function restoreEmbeddedBrowserPersistence() {
           createdAt: Date.now(),
           id: groupId,
           sessionId: embeddedBrowserSessionIdFromGroupId(groupId) || normalizeEmbeddedBrowserSessionId(item?.sessionId),
+          userId: normalizeEmbeddedBrowserUserId(item?.userId),
         });
       }
       try {
@@ -1096,6 +1181,7 @@ function restoreEmbeddedBrowserPersistence() {
           id,
           pinned: Boolean(item?.pinned),
           sessionId: embeddedBrowserSessionIdFromGroupId(groupId) || normalizeEmbeddedBrowserSessionId(item?.sessionId),
+          userId: normalizeEmbeddedBrowserUserId(item?.userId),
           restore: true,
           title: embeddedBrowserRecordTitle(item?.title),
           url: embeddedBrowserPersistableUrl(item?.url),
@@ -1267,6 +1353,7 @@ function embeddedBrowserTabsForGroup(groupId) {
 function ensureEmbeddedBrowserGroup(input = {}) {
   const groupId = embeddedBrowserGroupId(input);
   const sessionId = embeddedBrowserSessionIdForGroup(input, groupId);
+  const userId = normalizeEmbeddedBrowserUserId(input.userId);
   let group = embeddedBrowserGroups.get(groupId);
   if (!group) {
     group = {
@@ -1276,12 +1363,17 @@ function ensureEmbeddedBrowserGroup(input = {}) {
       id: groupId,
       label: embeddedBrowserRecordTitle(input.label),
       sessionId,
+      userId,
     };
     embeddedBrowserGroups.set(group.id, group);
     scheduleEmbeddedBrowserPersistence();
     notifyEmbeddedBrowserStateChange();
-  } else if (sessionId && group.id.startsWith('session:') && group.sessionId !== sessionId) {
-    group.sessionId = sessionId;
+  } else if (
+    (sessionId && group.id.startsWith('session:') && group.sessionId !== sessionId)
+    || (userId && group.userId !== userId)
+  ) {
+    if (sessionId) group.sessionId = sessionId;
+    if (userId) group.userId = userId;
     scheduleEmbeddedBrowserPersistence();
     notifyEmbeddedBrowserStateChange();
   }
@@ -1289,7 +1381,7 @@ function ensureEmbeddedBrowserGroup(input = {}) {
 }
 
 function createManualEmbeddedBrowserGroup(input = {}) {
-  const label = embeddedBrowserRecordTitle(input.label) || '新建标签组';
+  const label = embeddedBrowserRecordTitle(input.label) || desktopText('新建标签组');
   const id = `group:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
   ensureEmbeddedBrowserGroup({ groupId: id, label });
   setActiveEmbeddedBrowserGroup(id);
@@ -1344,13 +1436,9 @@ function handleEmbeddedBrowserShortcut(event, input, sourceTab) {
   return true;
 }
 
-function scheduleEmbeddedBrowserFitForTab(tab, delayMs = 180, options = {}) {
-  if (activeEmbeddedBrowserTab()?.id !== tab?.id) return;
-  scheduleEmbeddedBrowserFitToWidth(delayMs, options);
-}
-
 function installEmbeddedBrowserTabHandlers(tab) {
   const { view } = tab;
+  installHtmlFullscreenRecovery(view.webContents);
   view.webContents.on('before-input-event', (event, input) => {
     handleEmbeddedBrowserShortcut(event, input, tab);
   });
@@ -1359,16 +1447,13 @@ function installEmbeddedBrowserTabHandlers(tab) {
     const normalizedUrl = normalizeEmbeddedBrowserOpenUrl(url, view.webContents.getURL() || '');
     if (!normalizedUrl || isBlankPageUrl(normalizedUrl)) return { action: 'deny' };
     if (isDownloadLikeUrl(normalizedUrl, details)) {
-      startElectronDownload(view.webContents, normalizedUrl, 'Embedded browser popup download', { promptForDirectory: true })
-        .then((result) => {
-          if (result?.ok === false) appendLog(`Embedded browser popup download failed: ${result.error || 'unknown error'}`);
-        })
-        .catch((error) => appendLog(`Embedded browser popup download failed: ${error instanceof Error ? error.message : String(error)}`));
+      const result = startNativeDownload(view.webContents, normalizedUrl);
+      if (result.ok === false) appendLog(`Embedded browser popup download failed: ${result.error || 'unknown error'}`);
       return { action: 'deny' };
     }
     let popupTab;
     try {
-      popupTab = createEmbeddedBrowserTab({ groupId: tab.groupId, sessionId: tab.sessionId, url: normalizedUrl });
+      popupTab = createEmbeddedBrowserTab({ groupId: tab.groupId, sessionId: tab.sessionId, userId: tab.userId, url: normalizedUrl });
     } catch (error) {
       appendLog(`Embedded browser popup tab create failed: ${error instanceof Error ? error.message : String(error)}`);
       return { action: 'deny' };
@@ -1379,15 +1464,11 @@ function installEmbeddedBrowserTabHandlers(tab) {
       setActiveEmbeddedBrowserTab(popupTab);
     }
     ensureEmbeddedBrowserTabReady(popupTab)
-      .then(() => {
-        scheduleEmbeddedBrowserFitForTab(popupTab, 180, { allowZoomIn: true });
-      })
       .catch((error) => appendLog(`Embedded browser popup navigation failed: ${error.message}`));
     return { action: 'deny' };
   });
   view.webContents.on('dom-ready', () => {
     void markEmbeddedBrowserSession(tab);
-    scheduleEmbeddedBrowserFitForTab(tab, 140, { allowZoomIn: true });
   });
   view.webContents.on('did-start-navigation', (_event, url, isInPlace, isMainFrame) => {
     if (!isMainFrame || isInPlace) return;
@@ -1407,7 +1488,6 @@ function installEmbeddedBrowserTabHandlers(tab) {
     tab.lastKnownUrl = view.webContents.getURL() || tab.lastKnownUrl || '';
     tab.lastKnownTitle = embeddedBrowserRecordTitle(embeddedBrowserTabTitle(view.webContents), tab.lastKnownTitle);
     void markEmbeddedBrowserSession(tab);
-    scheduleEmbeddedBrowserFitForTab(tab, 180, { allowZoomIn: true });
     scheduleEmbeddedBrowserPersistence();
     notifyEmbeddedBrowserStateChange();
     recordEmbeddedBrowserHistory(tab);
@@ -1418,14 +1498,12 @@ function installEmbeddedBrowserTabHandlers(tab) {
     tab.lastKnownUrl = view.webContents.getURL() || tab.lastKnownUrl || '';
     tab.lastKnownTitle = embeddedBrowserRecordTitle(embeddedBrowserTabTitle(view.webContents), tab.lastKnownTitle);
     void markEmbeddedBrowserSession(tab);
-    scheduleEmbeddedBrowserFitForTab(tab, 240, { allowZoomIn: true });
     scheduleEmbeddedBrowserPersistence();
     notifyEmbeddedBrowserStateChange();
   });
   view.webContents.on('did-navigate', () => {
     tab.lastKnownUrl = view.webContents.getURL() || tab.lastKnownUrl || '';
     void markEmbeddedBrowserSession(tab);
-    scheduleEmbeddedBrowserFitForTab(tab, 180, { allowZoomIn: true });
     scheduleEmbeddedBrowserPersistence();
     notifyEmbeddedBrowserStateChange();
     recordEmbeddedBrowserHistory(tab);
@@ -1439,7 +1517,6 @@ function installEmbeddedBrowserTabHandlers(tab) {
     tab.lastKnownUrl = view.webContents.getURL() || tab.lastKnownUrl || '';
     tab.routeLoadingUntil = Date.now() + EMBEDDED_BROWSER_ROUTE_LOADING_MS;
     void markEmbeddedBrowserSession(tab);
-    scheduleEmbeddedBrowserFitForTab(tab, 220, { allowZoomIn: true });
     scheduleEmbeddedBrowserPersistence();
     notifyEmbeddedBrowserStateChange();
     recordEmbeddedBrowserHistory(tab);
@@ -1477,6 +1554,14 @@ function installEmbeddedBrowserTabHandlers(tab) {
     embeddedBrowserTabs.delete(tab.id);
     const group = embeddedBrowserGroups.get(tab.groupId);
     if (group?.activeTabId === tab.id) group.activeTabId = embeddedBrowserTabsForGroup(tab.groupId)[0]?.id || '';
+    if (group && String(group.sessionId || '').startsWith('actor_') && !embeddedBrowserTabsForGroup(tab.groupId).length) {
+      const actorSessionId = group.sessionId;
+      closeEmbeddedBrowserGroup(tab.groupId, { rememberClosed: false });
+      void clearEmbeddedBrowserPartition(actorSessionId).catch((error) => {
+        appendLog(`Actor browser partition cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
+      });
+      return;
+    }
     if (embeddedBrowserActiveTabId === tab.id) {
       embeddedBrowserActiveTabId = '';
       embeddedBrowserView = undefined;
@@ -1487,11 +1572,46 @@ function installEmbeddedBrowserTabHandlers(tab) {
   });
 }
 
+function installHtmlFullscreenRecovery(webContents) {
+  if (!webContents || webContents.__webPilotHtmlFullscreenRecoveryInstalled) return;
+  webContents.__webPilotHtmlFullscreenRecoveryInstalled = true;
+  webContents.on('enter-html-full-screen', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    htmlFullscreenWebContentsIds.add(webContents.id);
+    htmlFullscreenWindowState ??= { maximized: mainWindow.isMaximized() };
+  });
+  webContents.on('leave-html-full-screen', () => {
+    htmlFullscreenWebContentsIds.delete(webContents.id);
+    if (htmlFullscreenWebContentsIds.size || !mainWindow || mainWindow.isDestroyed()) return;
+    const windowState = htmlFullscreenWindowState;
+    htmlFullscreenWindowState = undefined;
+    // Chromium occasionally leaves a Windows BrowserWindow in native fullscreen
+    // after an HTML5 video has already exited. Explicitly restoring the native
+    // window brings both the application chrome and the Windows taskbar back.
+    if (mainWindow.isFullScreen()) mainWindow.setFullScreen(false);
+    if (windowState?.maximized && !mainWindow.isMaximized()) mainWindow.maximize();
+    mainWindow.setMenuBarVisibility(false);
+    mainWindow.show();
+    mainWindow.focus();
+    const tab = activeEmbeddedBrowserTab();
+    if (embeddedBrowserVisible && tab && ensureEmbeddedBrowserTabAttached(tab)) {
+      tab.view.setBounds(embeddedBrowserBounds);
+    }
+    if (embeddedBrowserLibraryPanel) attachEmbeddedBrowserLibraryView();
+    notifyEmbeddedBrowserStateChange();
+  });
+  webContents.once('destroyed', () => {
+    htmlFullscreenWebContentsIds.delete(webContents.id);
+    if (!htmlFullscreenWebContentsIds.size) htmlFullscreenWindowState = undefined;
+  });
+}
+
 function createEmbeddedBrowserTab(input = {}) {
   if (!mainWindow || mainWindow.isDestroyed()) throw new Error('Main window is not ready.');
   if (!WebContentsView) throw new Error('Electron WebContentsView is not available.');
   const group = ensureEmbeddedBrowserGroup(input);
   const sessionId = normalizeEmbeddedBrowserSessionId(input.sessionId) || embeddedBrowserSessionIdFromGroupId(group.id) || group.sessionId;
+  const userId = normalizeEmbeddedBrowserUserId(input.userId) || normalizeEmbeddedBrowserUserId(group.userId);
   const tabId = input.id || `tab:${embeddedBrowserNextTabId++}`;
   const rawInitialUrl = String(input.url || '').trim();
   const initialUrl = rawInitialUrl
@@ -1502,10 +1622,12 @@ function createEmbeddedBrowserTab(input = {}) {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      partition: embeddedBrowserPartition(userId ? `user:${userId}` : `session:${sessionId}`),
       preload: embeddedBrowserPreloadPath(),
       sandbox: false,
     },
   });
+  installNativeDownloadHandler(view.webContents.session);
   const tab = {
     audioMuted: Boolean(input.audioMuted),
     attached: false,
@@ -1519,9 +1641,9 @@ function createEmbeddedBrowserTab(input = {}) {
     readyPromise: undefined,
     restorePending: Boolean(input.restore),
     sessionId,
+    userId,
     view,
   };
-  view.webContents.setZoomFactor(1);
   applyEmbeddedBrowserTabAudioPolicy(tab);
   view.webContents.setUserAgent(embeddedBrowserUserAgent());
   embeddedBrowserTabs.set(tab.id, tab);
@@ -1556,7 +1678,7 @@ function ensureEmbeddedBrowserTab(input = {}) {
 
   if (!tab && input.createIfMissing !== false) {
     const sessionId = normalizeEmbeddedBrowserSessionId(input.sessionId) || embeddedBrowserSessionIdFromGroupId(group.id) || group.sessionId;
-    tab = createEmbeddedBrowserTab({ groupId: group.id, sessionId });
+    tab = createEmbeddedBrowserTab({ groupId: group.id, sessionId, userId: input.userId || group.userId });
   }
   return tab;
 }
@@ -1593,6 +1715,24 @@ function destroyEmbeddedBrowserTab(tab) {
   notifyEmbeddedBrowserStateChange();
 }
 
+// A renderer reload can leave a WebContentsView marked as attached even though
+// Electron has removed it from the window's content view. Re-adding it is
+// idempotent and moves the native view back to the front when needed.
+function ensureEmbeddedBrowserTabAttached(tab) {
+  if (!mainWindow || mainWindow.isDestroyed() || !tab || tab.view.webContents.isDestroyed()) return false;
+  try {
+    mainWindow.contentView.addChildView(tab.view);
+    tab.attached = true;
+    embeddedBrowserAttached = true;
+    tab.view.setVisible(true);
+    return true;
+  } catch (error) {
+    tab.attached = false;
+    appendLog(`Embedded browser attach failed: ${error instanceof Error ? error.message : String(error)}`);
+    return false;
+  }
+}
+
 function attachEmbeddedBrowserView(input = {}) {
   const restoredTab = embeddedBrowserVisible ? undefined : activeEmbeddedBrowserTab();
   embeddedBrowserVisible = true;
@@ -1604,10 +1744,12 @@ function attachEmbeddedBrowserView(input = {}) {
   if (shouldCreateTab || existingGroup) {
     tab = ensureEmbeddedBrowserTab({ ...input, createIfMissing: shouldCreateTab });
   }
-  if (!tab && !shouldCreateTab && restoredTab && !restoredTab.view.webContents.isDestroyed()) {
+  if (!tab && !shouldCreateTab && restoredTab?.groupId === groupId && !restoredTab.view.webContents.isDestroyed()) {
     tab = restoredTab;
   }
   if (!tab) {
+    embeddedBrowserVisible = false;
+    applyEmbeddedBrowserAudioPolicy();
     setActiveEmbeddedBrowserGroup(groupId);
     for (const item of embeddedBrowserTabs.values()) detachEmbeddedBrowserTab(item);
     return undefined;
@@ -1615,15 +1757,16 @@ function attachEmbeddedBrowserView(input = {}) {
   for (const item of embeddedBrowserTabs.values()) {
     if (item.id !== tab.id) detachEmbeddedBrowserTab(item);
   }
-  if (!tab.attached) {
-    mainWindow.contentView.addChildView(tab.view);
-    tab.attached = true;
-  }
+  ensureEmbeddedBrowserTabAttached(tab);
   setActiveEmbeddedBrowserTab(tab);
   tab.view.setBounds(embeddedBrowserBounds);
+  try {
+    ensureEmbeddedBrowserLibraryView();
+  } catch (error) {
+    appendLog(`Embedded browser library preload failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
   attachEmbeddedBrowserLibraryView();
   void markEmbeddedBrowserSession(tab);
-  scheduleEmbeddedBrowserFitForTab(tab, 180, { allowZoomIn: true });
   return tab.view;
 }
 
@@ -1632,109 +1775,18 @@ function detachEmbeddedBrowserView() {
   applyEmbeddedBrowserAudioPolicy();
   for (const tab of embeddedBrowserTabs.values()) detachEmbeddedBrowserTab(tab);
   embeddedBrowserAttached = false;
-  embeddedBrowserLibraryPanel = '';
-  embeddedBrowserLibraryPendingSequence = 0;
-  if (embeddedBrowserLibraryVisible) embeddedBrowserLibraryView?.setVisible(false);
-  embeddedBrowserLibraryVisible = false;
+  destroyEmbeddedBrowserLibraryView();
   notifyEmbeddedBrowserStateChange();
 }
 
 function setEmbeddedBrowserBounds(bounds) {
-  const previousBounds = embeddedBrowserBounds;
   embeddedBrowserBounds = sanitizeEmbeddedBounds(bounds);
-  const boundsChanged = previousBounds.x !== embeddedBrowserBounds.x
-    || previousBounds.y !== embeddedBrowserBounds.y
-    || previousBounds.width !== embeddedBrowserBounds.width
-    || previousBounds.height !== embeddedBrowserBounds.height;
   const tab = activeEmbeddedBrowserTab();
-  if (tab?.attached) {
+  if (embeddedBrowserVisible && tab && ensureEmbeddedBrowserTabAttached(tab)) {
     tab.view.setBounds(embeddedBrowserBounds);
-    if (boundsChanged) scheduleEmbeddedBrowserFitForTab(tab, 180, { allowZoomIn: true });
   }
   if (embeddedBrowserLibraryPanel) attachEmbeddedBrowserLibraryView();
   return embeddedBrowserBounds;
-}
-
-function embeddedBrowserMinZoomFactor() {
-  const configured = Number(process.env.ELECTRON_EMBEDDED_BROWSER_MIN_ZOOM || '');
-  return Number.isFinite(configured) && configured > 0 && configured <= 1 ? configured : 0.2;
-}
-
-function embeddedBrowserAutoZoomEnabled() {
-  return process.env.ELECTRON_EMBEDDED_BROWSER_AUTO_ZOOM === 'true';
-}
-
-function clearEmbeddedBrowserFitTimer() {
-  if (!embeddedBrowserFitTimer) return;
-  clearTimeout(embeddedBrowserFitTimer);
-  embeddedBrowserFitTimer = undefined;
-}
-
-function scheduleEmbeddedBrowserFitToWidth(delayMs = 180, options = {}) {
-  if (!embeddedBrowserAutoZoomEnabled()) return;
-  embeddedBrowserFitAllowZoomIn = embeddedBrowserFitAllowZoomIn || Boolean(options.allowZoomIn);
-  clearEmbeddedBrowserFitTimer();
-  embeddedBrowserFitTimer = setTimeout(() => {
-    embeddedBrowserFitTimer = undefined;
-    const allowZoomIn = embeddedBrowserFitAllowZoomIn;
-    embeddedBrowserFitAllowZoomIn = false;
-    void fitEmbeddedBrowserToWidth(allowZoomIn);
-  }, delayMs);
-}
-
-function clampEmbeddedBrowserZoom(value) {
-  const minZoom = embeddedBrowserMinZoomFactor();
-  return Math.max(minZoom, Math.min(1, Number(value) || 1));
-}
-
-async function fitEmbeddedBrowserToWidth(allowZoomIn = false) {
-  const tab = activeEmbeddedBrowserTab();
-  if (!tab || tab.view.webContents.isDestroyed()) return;
-  const webContents = tab.view.webContents;
-  const width = Math.max(1, Number(embeddedBrowserBounds.width) || 1);
-  if (width < 80 || webContents.isLoading()) return;
-
-  try {
-    const metrics = await webContents.executeJavaScript(`
-      (() => {
-        const doc = document.documentElement;
-        const body = document.body;
-        const scrollWidth = Math.max(
-          doc ? doc.scrollWidth : 0,
-          body ? body.scrollWidth : 0,
-          window.innerWidth || 0
-        );
-        const clientWidth = Math.max(
-          doc ? doc.clientWidth : 0,
-          body ? body.clientWidth : 0,
-          window.innerWidth || 0,
-          1
-        );
-        return { clientWidth, scrollWidth };
-      })()
-    `, true);
-    const scrollWidth = Math.max(1, Number(metrics?.scrollWidth) || width);
-    const clientWidth = Math.max(1, Number(metrics?.clientWidth) || width);
-    const currentZoom = webContents.getZoomFactor();
-    const overflowRatio = scrollWidth / clientWidth;
-    let targetZoom = currentZoom;
-
-    if (overflowRatio > 1.012) {
-      targetZoom = currentZoom / overflowRatio;
-    } else if (allowZoomIn && currentZoom < 0.995) {
-      const spareRatio = clientWidth / Math.max(1, scrollWidth);
-      if (spareRatio > 1.08) {
-        targetZoom = currentZoom * Math.min(spareRatio, 1.35);
-      }
-    }
-
-    targetZoom = Math.round(clampEmbeddedBrowserZoom(targetZoom) * 1000) / 1000;
-    if (Math.abs(currentZoom - targetZoom) > 0.025) {
-      webContents.setZoomFactor(targetZoom);
-    }
-  } catch (error) {
-    appendLog(`Embedded browser width fit failed: ${error instanceof Error ? error.message : String(error)}`);
-  }
 }
 
 function embeddedBrowserNavigationState(tab) {
@@ -1785,7 +1837,6 @@ async function navigateEmbeddedBrowserHistory(direction) {
     }
   }
   tab.routeLoadingUntil = Date.now() + EMBEDDED_BROWSER_ROUTE_LOADING_MS;
-  scheduleEmbeddedBrowserFitForTab(tab, 180, { allowZoomIn: true });
   return embeddedBrowserState();
 }
 
@@ -1794,7 +1845,6 @@ function reloadEmbeddedBrowserTab() {
   if (!tab || tab.view.webContents.isDestroyed()) return embeddedBrowserState();
   tab.routeLoadingUntil = Date.now() + EMBEDDED_BROWSER_ROUTE_LOADING_MS;
   tab.view.webContents.reload();
-  scheduleEmbeddedBrowserFitForTab(tab, 180, { allowZoomIn: true });
   notifyEmbeddedBrowserStateChange();
   return embeddedBrowserState();
 }
@@ -1823,6 +1873,7 @@ function embeddedBrowserState() {
       createdAt: tab.createdAt || Date.now(),
       id: tab.groupId,
       sessionId: tab.sessionId || '',
+      userId: tab.userId || '',
     });
   }
 
@@ -1852,6 +1903,7 @@ function embeddedBrowserState() {
         loading: webContents.isLoading(),
         pinned: Boolean(tab.pinned),
         sessionId: tab.sessionId || undefined,
+        userId: tab.userId || undefined,
         title,
         url,
       };
@@ -1867,6 +1919,7 @@ function embeddedBrowserState() {
       id: group.id,
       label: group.label || undefined,
       sessionId: group.sessionId || undefined,
+      userId: group.userId || undefined,
       tabs: groupTabs,
     });
   }
@@ -1881,8 +1934,6 @@ function embeddedBrowserState() {
     groups,
     history: embeddedBrowserHistory,
     libraryPanel: embeddedBrowserLibraryPanel || undefined,
-    libraryPanelSequence: embeddedBrowserLibraryPanel ? embeddedBrowserLibraryOpenSequence : undefined,
-    zoomFactor: active?.view.webContents.isDestroyed() ? undefined : active?.view.webContents.getZoomFactor(),
     tabs,
   };
 }
@@ -1895,6 +1946,7 @@ function rememberClosedEmbeddedBrowserTab(tab) {
     groupId: tab.groupId,
     pinned: Boolean(tab.pinned),
     sessionId: tab.sessionId || undefined,
+    userId: tab.userId || undefined,
     title: embeddedBrowserRecordTitle(tab.lastKnownTitle),
     url: embeddedBrowserPersistableUrl(tab.lastKnownUrl || tab.view.webContents.getURL() || ''),
   });
@@ -1905,6 +1957,7 @@ function openEmbeddedBrowserTabFromRecord(record = {}, options = {}) {
   const group = ensureEmbeddedBrowserGroup({
     groupId: record.groupId || embeddedBrowserActiveGroupId || 'default',
     sessionId: record.sessionId,
+    userId: record.userId,
   });
   const tab = createEmbeddedBrowserTab({
     audioMuted: Boolean(record.audioMuted),
@@ -1912,6 +1965,7 @@ function openEmbeddedBrowserTabFromRecord(record = {}, options = {}) {
     groupId: group.id,
     pinned: Boolean(options.pinned ?? record.pinned),
     sessionId: embeddedBrowserSessionIdFromGroupId(group.id) || group.sessionId || normalizeEmbeddedBrowserSessionId(record.sessionId),
+    userId: normalizeEmbeddedBrowserUserId(record.userId) || group.userId,
     title: embeddedBrowserRecordTitle(record.title),
     url: embeddedBrowserPersistableUrl(record.url),
   });
@@ -2133,13 +2187,11 @@ async function createManualEmbeddedBrowserTab(input = {}) {
   const rawUrl = String(input.url || '').trim();
   const url = rawUrl ? normalizeEmbeddedBrowserOpenUrl(rawUrl, mainWindow?.webContents?.getURL?.() || '') : '';
   if (rawUrl && !url) throw new Error(`Invalid embedded browser URL: ${rawUrl}`);
-  const tab = createEmbeddedBrowserTab({ groupId: group.id, sessionId, url });
+  const tab = createEmbeddedBrowserTab({ groupId: group.id, sessionId, userId: input.userId || group.userId, url });
   if (embeddedBrowserVisible) attachEmbeddedBrowserView({ id: tab.id });
   else setActiveEmbeddedBrowserTab(tab);
   ensureEmbeddedBrowserTabReady(tab)
-    .then(() => scheduleEmbeddedBrowserFitForTab(tab, 180, { allowZoomIn: true }))
     .catch((error) => appendLog(`Embedded browser tab ready failed: ${error instanceof Error ? error.message : String(error)}`));
-  scheduleEmbeddedBrowserFitForTab(tab, 180, { allowZoomIn: true });
   return embeddedBrowserState();
 }
 
@@ -2157,24 +2209,24 @@ function showEmbeddedBrowserTabContextMenu(input = {}) {
     .filter((item) => item.id !== tab.id && !item.pinned);
   const menu = Menu.buildFromTemplate([
     {
-      label: '复制标签页',
+      label: desktopText('复制标签页'),
       click: () => duplicateEmbeddedBrowserTab(tab.id),
     },
     {
-      label: tab.pinned ? '取消固定标签页' : '固定标签页',
+      label: desktopText(tab.pinned ? '取消固定标签页' : '固定标签页'),
       click: () => setEmbeddedBrowserTabPinned({ id: tab.id, pinned: !tab.pinned }),
     },
     {
       enabled: closeableOtherTabs.length > 0,
-      label: '关闭其他标签页',
+      label: desktopText('关闭其他标签页'),
       click: () => closeOtherEmbeddedBrowserTabs(tab.id),
     },
     { type: 'separator' },
     {
       enabled: moveTargets.length > 0,
-      label: '移动到分组',
+      label: desktopText('移动到分组'),
       submenu: moveTargets.map((group) => ({
-        label: labels.get(group.id) || `标签组 ${String(group.sessionId || group.id).slice(-6)}`,
+        label: labels.get(group.id) || desktopText('标签组 {id}', { id: String(group.sessionId || group.id).slice(-6) }),
         click: () => moveEmbeddedBrowserTab({
           id: tab.id,
           position: 'end',
@@ -2188,13 +2240,32 @@ function showEmbeddedBrowserTabContextMenu(input = {}) {
   return { ok: true };
 }
 
-function registerEmbeddedBrowserIpc() {
-  ipcMain.on('webpilot:embedded-browser:content-resized', (event) => {
-    const tab = activeEmbeddedBrowserTab();
-    if (!tab || event.sender !== tab.view.webContents) return;
-    scheduleEmbeddedBrowserFitForTab(tab, 420);
+function registerIpcHandler(channel, handler, onError) {
+  ipcMain.handle(channel, async (event, input = {}) => {
+    try {
+      return await handler(event, input);
+    } catch (error) {
+      onError?.(error);
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
   });
+}
 
+function registerEmbeddedBrowserIpc() {
+  ipcMain.on('webpilot:system:language', (event, language) => {
+    if (!mainWindow || event.sender !== mainWindow.webContents || !['zh', 'en'].includes(language)) return;
+    if (desktopLanguage === language) return;
+    desktopLanguage = language;
+    try {
+      getElectronStateDatabase().prepare(`
+        INSERT INTO electron_state (key, value_json, updated_at) VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
+      `).run('interface-language', JSON.stringify(language), new Date().toISOString());
+    } catch (error) {
+      appendLog(`Language preference save failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    notifyEmbeddedBrowserStateChange();
+  });
   ipcMain.on('webpilot:embedded-browser:client-navigation', (event, payload = {}) => {
     const tab = embeddedBrowserTabForWebContents(event.sender);
     if (!tab) return;
@@ -2208,298 +2279,214 @@ function registerEmbeddedBrowserIpc() {
     if (tab.clientNavigation.url) tab.lastKnownUrl = tab.clientNavigation.url;
     tab.restorePending = false;
     tab.routeLoadingUntil = Date.now() + EMBEDDED_BROWSER_ROUTE_LOADING_MS;
-    scheduleEmbeddedBrowserFitForTab(tab, 180, { allowZoomIn: true });
     recordEmbeddedBrowserHistory(tab);
     notifyEmbeddedBrowserStateChange();
   });
 
-  ipcMain.handle('webpilot:embedded-browser:get-state', async () => {
-    try {
-      return embeddedBrowserState();
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
-    }
+  registerIpcHandler('webpilot:embedded-browser:get-state', () => embeddedBrowserState());
+  registerIpcHandler('webpilot:embedded-browser:create-tab', (_event, input) => createManualEmbeddedBrowserTab(input));
+  registerIpcHandler('webpilot:embedded-browser:create-group', (_event, input) => createManualEmbeddedBrowserGroup(input));
+  registerIpcHandler('webpilot:embedded-browser:set-library-panel', (_event, input) => {
+    const requestedPanel = input.panel === 'library' ? input.panel : '';
+    const nextPanel = input.toggle && embeddedBrowserLibraryPanel === requestedPanel ? '' : requestedPanel;
+    return setEmbeddedBrowserLibraryPanel(nextPanel);
   });
+  registerIpcHandler('webpilot:embedded-browser:clear-history', () => clearEmbeddedBrowserHistory());
+  registerIpcHandler('webpilot:embedded-browser:remove-bookmark', (_event, input) => (
+    removeEmbeddedBrowserBookmark(typeof input.url === 'string' ? input.url : '')
+  ));
+  registerIpcHandler('webpilot:embedded-browser:set-tab-muted', (_event, input) => (
+    setEmbeddedBrowserTabMuted({ id: input.id, muted: input.muted })
+  ));
+  registerIpcHandler('webpilot:embedded-browser:go-back', () => navigateEmbeddedBrowserHistory('back'));
+  registerIpcHandler('webpilot:embedded-browser:go-forward', () => navigateEmbeddedBrowserHistory('forward'));
+  registerIpcHandler('webpilot:embedded-browser:reload', () => reloadEmbeddedBrowserTab());
+  registerIpcHandler('webpilot:embedded-browser:stop', () => stopEmbeddedBrowserTabLoading());
+  registerIpcHandler('webpilot:embedded-browser:toggle-bookmark', () => toggleEmbeddedBrowserBookmark());
 
-  ipcMain.handle('webpilot:embedded-browser:create-tab', async (_event, input = {}) => {
-    try {
-      return await createManualEmbeddedBrowserTab(input);
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
-    }
-  });
-
-  ipcMain.handle('webpilot:embedded-browser:create-group', async (_event, input = {}) => {
-    try {
-      return createManualEmbeddedBrowserGroup(input);
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
-    }
-  });
-
-  ipcMain.handle('webpilot:embedded-browser:set-library-panel', async (_event, input = {}) => {
-    try {
-      return setEmbeddedBrowserLibraryPanel(input.panel);
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
-    }
-  });
-
-  ipcMain.handle('webpilot:embedded-browser:library-panel-ready', async (_event, input = {}) => {
-    const panel = input.panel === 'bookmarks' || input.panel === 'history' ? input.panel : '';
-    const sequence = Number(input.sequence);
-    if (panel && panel === embeddedBrowserLibraryPanel && sequence === embeddedBrowserLibraryOpenSequence) {
-      embeddedBrowserLibraryPendingSequence = 0;
-      attachEmbeddedBrowserLibraryView();
+  registerIpcHandler('webpilot:embedded-browser:set-visible', async (_event, input) => {
+    if (input.bounds) setEmbeddedBrowserBounds(input.bounds);
+    if (input.visible) {
+      const hasRequestedBrowserTarget = Boolean(
+        String(input.groupId || '').trim()
+        || String(input.id || '').trim()
+        || normalizeEmbeddedBrowserSessionId(input.sessionId)
+      );
+      if (!hasRequestedBrowserTarget) {
+        detachEmbeddedBrowserView();
+        return embeddedBrowserState();
+      }
+      attachEmbeddedBrowserView({
+        createIfMissing: input.createIfMissing === true,
+        groupId: input.groupId,
+        id: input.id,
+        sessionId: input.sessionId,
+        userId: input.userId,
+      });
+      const tab = activeEmbeddedBrowserTab();
+      if (typeof input.url === 'string' && input.url.trim()) {
+        if (!tab) throw new Error('Embedded browser tab is not ready.');
+        await loadEmbeddedBrowserTabUrl(tab, input.url.trim());
+      } else if (tab) {
+        void ensureEmbeddedBrowserTabReady(tab);
+      }
+    } else {
+      detachEmbeddedBrowserView();
     }
     return embeddedBrowserState();
   });
 
-  ipcMain.handle('webpilot:embedded-browser:clear-history', async () => {
-    try {
-      return clearEmbeddedBrowserHistory();
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
-    }
+  registerIpcHandler('webpilot:embedded-browser:set-bounds', (_event, bounds) => (
+    { ok: true, bounds: setEmbeddedBrowserBounds(bounds) }
+  ));
+
+  registerIpcHandler('webpilot:embedded-browser:navigate', async (_event, input) => {
+    const url = typeof input.url === 'string' ? input.url.trim() : '';
+    if (!url) throw new Error('URL is empty.');
+    attachEmbeddedBrowserView({
+      createIfMissing: true,
+      groupId: input.groupId,
+      id: input.id,
+      sessionId: input.sessionId,
+    });
+    const tab = activeEmbeddedBrowserTab();
+    if (!tab) throw new Error('Embedded browser tab is not ready.');
+    await loadEmbeddedBrowserTabUrl(tab, url);
+    return { ok: true };
   });
 
-  ipcMain.handle('webpilot:embedded-browser:remove-bookmark', async (_event, input = {}) => {
-    try {
-      return removeEmbeddedBrowserBookmark(typeof input.url === 'string' ? input.url : '');
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  registerIpcHandler('webpilot:embedded-browser:move-tab', (_event, input) => moveEmbeddedBrowserTab(input));
+  registerIpcHandler('webpilot:embedded-browser:show-tab-context-menu', (_event, input) => showEmbeddedBrowserTabContextMenu(input));
+  registerIpcHandler('webpilot:embedded-browser:set-group-collapsed', (_event, input) => setEmbeddedBrowserGroupCollapsed(input));
+  registerIpcHandler('webpilot:embedded-browser:close-active-tab', () => closeEmbeddedBrowserTab(embeddedBrowserActiveTabId));
+  registerIpcHandler('webpilot:embedded-browser:close-tab', (_event, input) => (
+    closeEmbeddedBrowserTab(typeof input.id === 'string' ? input.id : embeddedBrowserActiveTabId)
+  ));
+  registerIpcHandler('webpilot:embedded-browser:close-group', (_event, input) => (
+    closeEmbeddedBrowserGroup(typeof input.id === 'string' ? input.id : embeddedBrowserActiveGroupId)
+  ));
+
+  registerIpcHandler('webpilot:embedded-browser:discard-group', async (_event, input) => {
+    const groupId = typeof input.id === 'string' ? input.id : '';
+    const sessionId = embeddedBrowserSessionIdFromGroupId(groupId)
+      || normalizeEmbeddedBrowserSessionId(embeddedBrowserGroups.get(groupId)?.sessionId);
+    const userId = normalizeEmbeddedBrowserUserId(embeddedBrowserGroups.get(groupId)?.userId);
+    const state = closeEmbeddedBrowserGroup(groupId, { rememberClosed: false });
+    const userPartitionStillInUse = Boolean(userId) && Array.from(embeddedBrowserGroups.values())
+      .some((group) => normalizeEmbeddedBrowserUserId(group.userId) === userId);
+    if (input.clearStorage === true && (sessionId || userId) && !userPartitionStillInUse) {
+      await clearEmbeddedBrowserPartition(sessionId, userId);
     }
+    return state;
   });
 
-  ipcMain.handle('webpilot:embedded-browser:set-tab-muted', async (_event, input = {}) => {
-    try {
-      return setEmbeddedBrowserTabMuted({ id: input.id, muted: input.muted });
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
-    }
+  registerIpcHandler('webpilot:embedded-browser:activate-tab', (_event, input) => {
+    const id = typeof input.id === 'string' ? input.id : '';
+    const tab = id ? embeddedBrowserTabs.get(id) : undefined;
+    if (!tab || tab.view.webContents.isDestroyed()) throw new Error('Embedded browser tab not found.');
+    if (embeddedBrowserVisible) attachEmbeddedBrowserView({ id });
+    else setActiveEmbeddedBrowserTab(tab);
+    return embeddedBrowserState();
   });
 
-  ipcMain.handle('webpilot:embedded-browser:go-back', async () => {
-    try {
-      return await navigateEmbeddedBrowserHistory('back');
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
-    }
-  });
-
-  ipcMain.handle('webpilot:embedded-browser:go-forward', async () => {
-    try {
-      return await navigateEmbeddedBrowserHistory('forward');
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
-    }
-  });
-
-  ipcMain.handle('webpilot:embedded-browser:reload', async () => {
-    try {
-      return reloadEmbeddedBrowserTab();
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
-    }
-  });
-
-  ipcMain.handle('webpilot:embedded-browser:stop', async () => {
-    try {
-      return stopEmbeddedBrowserTabLoading();
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
-    }
-  });
-
-  ipcMain.handle('webpilot:embedded-browser:toggle-bookmark', async () => {
-    try {
-      return toggleEmbeddedBrowserBookmark();
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
-    }
-  });
-
-  ipcMain.handle('webpilot:embedded-browser:set-visible', async (_event, input = {}) => {
-    try {
-      if (input.bounds) setEmbeddedBrowserBounds(input.bounds);
-      if (input.visible) {
-        attachEmbeddedBrowserView({
-          createIfMissing: input.createIfMissing === true,
-          groupId: input.groupId,
-          id: input.id,
-          sessionId: input.sessionId,
-        });
-        const tab = activeEmbeddedBrowserTab();
-        if (typeof input.url === 'string' && input.url.trim()) {
-          if (!tab) throw new Error('Embedded browser tab is not ready.');
-          await loadEmbeddedBrowserTabUrl(tab, input.url.trim());
-          scheduleEmbeddedBrowserFitToWidth(180, { allowZoomIn: true });
-        } else if (tab) {
-          void ensureEmbeddedBrowserTabReady(tab);
-        }
-      } else {
-        detachEmbeddedBrowserView();
-      }
-      return embeddedBrowserState();
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
-    }
-  });
-
-  ipcMain.handle('webpilot:embedded-browser:set-bounds', async (_event, bounds = {}) => {
-    try {
-      return { ok: true, bounds: setEmbeddedBrowserBounds(bounds) };
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
-    }
-  });
-
-  ipcMain.handle('webpilot:embedded-browser:navigate', async (_event, input = {}) => {
-    try {
-      const url = typeof input.url === 'string' ? input.url.trim() : '';
-      if (!url) throw new Error('URL is empty.');
-      attachEmbeddedBrowserView({
-        createIfMissing: true,
-        groupId: input.groupId,
-        id: input.id,
-        sessionId: input.sessionId,
-      });
-      const tab = activeEmbeddedBrowserTab();
-      if (!tab) throw new Error('Embedded browser tab is not ready.');
-      await loadEmbeddedBrowserTabUrl(tab, url);
-      scheduleEmbeddedBrowserFitToWidth(180, { allowZoomIn: true });
-      return { ok: true };
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
-    }
-  });
-
-  ipcMain.handle('webpilot:embedded-browser:move-tab', async (_event, input = {}) => {
-    try {
-      return moveEmbeddedBrowserTab(input);
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
-    }
-  });
-
-  ipcMain.handle('webpilot:embedded-browser:show-tab-context-menu', async (_event, input = {}) => {
-    try {
-      return showEmbeddedBrowserTabContextMenu(input);
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
-    }
-  });
-
-  ipcMain.handle('webpilot:embedded-browser:set-group-collapsed', async (_event, input = {}) => {
-    try {
-      return setEmbeddedBrowserGroupCollapsed(input);
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
-    }
-  });
-
-  ipcMain.handle('webpilot:embedded-browser:close-active-tab', async () => {
-    try {
-      return closeEmbeddedBrowserTab(embeddedBrowserActiveTabId);
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
-    }
-  });
-
-  ipcMain.handle('webpilot:embedded-browser:close-tab', async (_event, input = {}) => {
-    try {
-      return closeEmbeddedBrowserTab(typeof input.id === 'string' ? input.id : embeddedBrowserActiveTabId);
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
-    }
-  });
-
-  ipcMain.handle('webpilot:embedded-browser:close-group', async (_event, input = {}) => {
-    try {
-      return closeEmbeddedBrowserGroup(typeof input.id === 'string' ? input.id : embeddedBrowserActiveGroupId);
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
-    }
-  });
-
-  ipcMain.handle('webpilot:embedded-browser:discard-group', async (_event, input = {}) => {
-    try {
-      return closeEmbeddedBrowserGroup(typeof input.id === 'string' ? input.id : '', { rememberClosed: false });
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
-    }
-  });
-
-  ipcMain.handle('webpilot:embedded-browser:activate-tab', async (_event, input = {}) => {
-    try {
-      const id = typeof input.id === 'string' ? input.id : '';
-      const tab = id ? embeddedBrowserTabs.get(id) : undefined;
-      if (!tab || tab.view.webContents.isDestroyed()) throw new Error('Embedded browser tab not found.');
-      if (embeddedBrowserVisible) attachEmbeddedBrowserView({ id });
-      else setActiveEmbeddedBrowserTab(tab);
-      return embeddedBrowserState();
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
-    }
-  });
-
-  ipcMain.handle('webpilot:embedded-browser:reset', async () => {
-    try {
-      attachEmbeddedBrowserView({
-        createIfMissing: true,
-        groupId: embeddedBrowserActiveGroupId || undefined,
-        id: embeddedBrowserActiveTabId || undefined,
-      });
-      const tab = activeEmbeddedBrowserTab();
-      if (!tab) throw new Error('Embedded browser tab is not ready.');
-      await loadEmbeddedBrowserTabUrl(tab, embeddedBrowserPlaceholderUrl());
-      scheduleEmbeddedBrowserFitToWidth(180, { allowZoomIn: true });
-      return { ok: true };
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
-    }
+  registerIpcHandler('webpilot:embedded-browser:reset', async () => {
+    attachEmbeddedBrowserView({
+      createIfMissing: true,
+      groupId: embeddedBrowserActiveGroupId || undefined,
+      id: embeddedBrowserActiveTabId || undefined,
+    });
+    const tab = activeEmbeddedBrowserTab();
+    if (!tab) throw new Error('Embedded browser tab is not ready.');
+    await loadEmbeddedBrowserTabUrl(tab, embeddedBrowserPlaceholderUrl());
+    return { ok: true };
   });
 }
 
 function registerSystemIpc() {
-  ipcMain.handle('webpilot:system:select-directory', async (_event, input = {}) => {
-    try {
-      const defaultPath = typeof input.defaultPath === 'string' && input.defaultPath.trim()
-        ? input.defaultPath.trim()
-        : undefined;
-      const result = await dialog.showOpenDialog(mainWindow, {
-        defaultPath,
-        properties: ['openDirectory', 'createDirectory'],
-        title: 'Select file output directory',
-      });
-      if (result.canceled || !result.filePaths?.[0]) return { ok: true, canceled: true };
-      return { ok: true, path: result.filePaths[0] };
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
-    }
+  registerIpcHandler('webpilot:system:select-file', async (_event, input) => {
+    const defaultPath = typeof input.defaultPath === 'string' && input.defaultPath.trim()
+      ? input.defaultPath.trim()
+      : undefined;
+    const result = await dialog.showOpenDialog(mainWindow, {
+      defaultPath,
+      properties: ['openFile'],
+      title: 'Select file',
+    });
+    if (result.canceled || !result.filePaths?.[0]) return { ok: true, canceled: true };
+    return { ok: true, path: result.filePaths[0] };
   });
 
-  ipcMain.handle('webpilot:system:download-url', async (_event, input = {}) => {
-    try {
-      const url = String(input.url || '').trim();
-      if (!url) throw new Error('Download URL is required.');
-      const webContents = preferredDownloadWebContents();
-      return await startElectronDownload(webContents, url, 'Selected directory download', {
-        defaultPath: typeof input.defaultPath === 'string' ? input.defaultPath : undefined,
-        fileName: typeof input.fileName === 'string' ? input.fileName : undefined,
-        promptForDirectory: true,
-      });
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
-    }
+  registerIpcHandler('webpilot:system:select-directory', async (_event, input) => {
+    const defaultPath = typeof input.defaultPath === 'string' && input.defaultPath.trim()
+      ? input.defaultPath.trim()
+      : undefined;
+    const result = await dialog.showOpenDialog(mainWindow, {
+      defaultPath,
+      properties: ['openDirectory', 'createDirectory'],
+      title: 'Select file output directory',
+    });
+    if (result.canceled || !result.filePaths?.[0]) return { ok: true, canceled: true };
+    return { ok: true, path: result.filePaths[0] };
   });
 
-  ipcMain.handle('webpilot:system:get-downloads', async () => {
-    try {
-      return systemDownloadState();
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  registerIpcHandler('webpilot:system:download-url', (_event, input) => {
+    const url = String(input.url || '').trim();
+    if (!url) throw new Error('Download URL is required.');
+    const webContents = preferredDownloadWebContents();
+    return startNativeDownload(webContents, url);
+  });
+
+  registerIpcHandler('webpilot:system:get-downloads', () => systemDownloadState());
+
+  registerIpcHandler('webpilot:system:read-download', async (_event, input) => {
+    const download = systemDownloads.get(String(input.id || ''));
+    if (!download?.path || !fs.existsSync(download.path)) throw new Error('下载文件不存在或已被移动。');
+    const filePath = path.resolve(download.path);
+    const fileStat = await fs.promises.stat(filePath);
+    if (!fileStat.isFile()) throw new Error('下载路径不是文件。');
+    const buffer = await fs.promises.readFile(filePath);
+    const data = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+    return { ok: true, data, fileName: download.fileName || path.basename(filePath) };
+  });
+
+  registerIpcHandler('webpilot:system:remove-download', async (_event, input) => {
+    const id = String(input.id || '');
+    const download = systemDownloads.get(id);
+    if (!id || !download) throw new Error('下载记录不存在。');
+    if (nativeDownloadItems.has(id)) throw new Error('下载进行中，暂时不能删除记录。');
+    if (download.path && fs.existsSync(download.path)) {
+      const filePath = path.resolve(download.path);
+      if (!fs.statSync(filePath).isFile()) throw new Error('下载路径不是文件，无法删除。');
+      await shell.trashItem(filePath);
+      if (fs.existsSync(filePath)) throw new Error('文件未能移入回收站。');
     }
+    systemDownloads.delete(id);
+    emitDownloadRemoved(id);
+    return { ok: true };
+  }, (error) => appendLog(`Download remove failed: ${error instanceof Error ? error.message : String(error)}`));
+
+  registerIpcHandler('webpilot:system:choose-download-directory', (_event, input) => chooseDownloadDirectory(input));
+
+  registerIpcHandler('webpilot:system:open-download', async (_event, input) => {
+    const download = systemDownloads.get(String(input.id || ''));
+    if (!download?.path || !fs.existsSync(download.path)) throw new Error('下载文件不存在或已被移动。');
+    const error = await shell.openPath(download.path);
+    return error ? { ok: false, error } : { ok: true };
+  });
+
+  registerIpcHandler('webpilot:system:show-download-in-folder', (_event, input) => {
+    const download = systemDownloads.get(String(input.id || ''));
+    if (!download?.path || !fs.existsSync(download.path)) throw new Error('下载文件不存在或已被移动。');
+    shell.showItemInFolder(download.path);
+    return { ok: true };
+  });
+
+  registerIpcHandler('webpilot:system:cancel-download', (_event, input) => {
+    const id = String(input.id || '');
+    const item = nativeDownloadItems.get(id);
+    if (!item) throw new Error('该下载已结束。');
+    item.cancel();
+    return { ok: true };
   });
 }
 
@@ -2507,11 +2494,12 @@ async function startServer(appDataDir) {
   const port = await findAvailablePort(Number(process.env.AI_WEB_TEST_PORT || DEFAULT_PORT));
   const serverDir = serverDirectory();
   const serverScript = app.isPackaged
-    ? path.join(serverDir, 'server.js')
-    : path.join(process.cwd(), 'node_modules', 'next', 'dist', 'bin', 'next');
+    ? path.join(serverDir, 'webpilot-server.js')
+    : path.join(process.cwd(), 'server', 'webpilot-server.js');
   const browserProfileDir = ensureDir(path.join(appDataDir, 'browser-profile'));
   const env = {
     ...process.env,
+    ...packagedGlinerEnvironment(serverDir),
     AI_WEB_TEST_BROWSER_PROFILE_DIR: process.env.AI_WEB_TEST_BROWSER_PROFILE_DIR || browserProfileDir,
     AI_WEB_TEST_FORCE_PLAYWRIGHT_BROWSER: app.isPackaged ? 'true' : process.env.AI_WEB_TEST_FORCE_PLAYWRIGHT_BROWSER,
     AI_WEB_TEST_CHROMIUM_EXECUTABLE_PATH: packagedChromiumExecutable(),
@@ -2521,14 +2509,27 @@ async function startServer(appDataDir) {
     BROWSER_USER_DATA_DIR: process.env.BROWSER_USER_DATA_DIR || browserProfileDir,
     ELECTRON_EMBEDDED_BROWSER_CDP_PORT: String(EMBEDDED_BROWSER_CDP_PORT),
     HOSTNAME: '127.0.0.1',
+    LIBREOFFICE_PATH: packagedLibreOfficeExecutable(),
+    CAPABILITY_FILE_RUNTIME_DIR: app.isPackaged
+      ? path.join(serverDir, 'capability-runtime', 'file')
+      : process.env.CAPABILITY_FILE_RUNTIME_DIR,
+    CAPABILITY_BROWSER_RUNTIME_DIR: app.isPackaged
+      ? path.join(serverDir, 'capability-runtime', 'browser')
+      : process.env.CAPABILITY_BROWSER_RUNTIME_DIR,
+    CAPABILITY_COMPUTER_RUNTIME_DIR: app.isPackaged
+      ? path.join(serverDir, 'capability-runtime', 'computer')
+      : process.env.CAPABILITY_COMPUTER_RUNTIME_DIR,
     NODE_PATH: app.isPackaged ? path.join(serverDir, 'node_modules') : process.env.NODE_PATH,
     NODE_ENV: 'production',
     PORT: String(port),
-    TINYMCE_ROOT: tinymceRoot(),
     WEBPILOT_ELECTRON_CDP_PORT: String(EMBEDDED_BROWSER_CDP_PORT),
+    WEBPILOT_INTERNAL_SHUTDOWN_TOKEN: serverShutdownToken,
+    WEBPILOT_DEFAULT_USER_ID: process.env.WEBPILOT_DEFAULT_USER_ID || '1',
+    WEBPILOT_REQUIRE_MOUNT_USER_ID: 'false',
+    ORBIT_REQUIRE_MOUNT_USER_ID: 'false',
   };
 
-  const args = app.isPackaged ? [serverScript] : [serverScript, 'start', '-p', String(port), '-H', '127.0.0.1'];
+  const args = [serverScript];
   if (app.isPackaged) {
     env.ELECTRON_RUN_AS_NODE = '1';
     env.PLAYWRIGHT_BROWSERS_PATH = path.join(process.resourcesPath, 'ms-playwright');
@@ -2541,13 +2542,16 @@ async function startServer(appDataDir) {
   appendLog(`AI_WEB_TEST_BROWSER_PROFILE_DIR=${env.AI_WEB_TEST_BROWSER_PROFILE_DIR}`);
   appendLog(`PLAYWRIGHT_BROWSERS_PATH=${env.PLAYWRIGHT_BROWSERS_PATH || ''}`);
   appendLog(`AI_WEB_TEST_CHROMIUM_EXECUTABLE_PATH=${env.AI_WEB_TEST_CHROMIUM_EXECUTABLE_PATH || ''}`);
+  appendLog(`LIBREOFFICE_PATH=${env.LIBREOFFICE_PATH || ''}`);
+  appendLog(`GLINER_RUNTIME_MODE=${env.GLINER_RUNTIME_MODE || ''}`);
+  appendLog(`GLINER_PYTHON_PATH=${env.GLINER_PYTHON_PATH || ''}`);
   appendLog(`WEBPILOT_ELECTRON_CDP_PORT=${env.WEBPILOT_ELECTRON_CDP_PORT || ''}`);
   appendLog(`NODE_PATH=${env.NODE_PATH || ''}`);
 
   serverProcess = spawn(process.execPath, args, {
     cwd: serverDir,
     env,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     windowsHide: true,
   });
   serverProcess.stdout?.on('data', (chunk) => rememberServerOutput('server stdout', chunk));
@@ -2558,9 +2562,13 @@ async function startServer(appDataDir) {
     serverProcess = undefined;
   });
 
-  const url = `http://127.0.0.1:${port}`;
-  await waitForHttp(`${url}/dashboard`, 60_000, 3);
-  await waitForHttp(`${url}/api/test-cases`, 30_000, 2);
+  const basePath = compiledServerBasePath(serverDir, env.WEBPILOT_BASE_PATH);
+  const url = withServerBasePath(
+    `http://127.0.0.1:${port}`,
+    basePath,
+  );
+  localServerUrl = url;
+  await waitForHttp(serverRouteUrl(url, basePath, '/browser-chat'), 60_000, 3);
   return url;
 }
 
@@ -2580,6 +2588,8 @@ function createWindow() {
       preload: preloadPath(),
     },
   });
+  installNativeDownloadHandler(mainWindow.webContents.session);
+  installHtmlFullscreenRecovery(mainWindow.webContents);
   mainWindow.setMenuBarVisibility(false);
   mainWindow.webContents.on('before-input-event', (event, input) => {
     handleEmbeddedBrowserShortcut(event, input);
@@ -2609,11 +2619,8 @@ function createWindow() {
     const normalizedUrl = normalizeEmbeddedBrowserOpenUrl(url, mainWindow.webContents.getURL() || '');
     if (!normalizedUrl || isBlankPageUrl(normalizedUrl)) return { action: 'deny' };
     if (isDownloadLikeUrl(normalizedUrl, details)) {
-      startElectronDownload(preferredDownloadWebContents(), normalizedUrl, 'App shell download', { promptForDirectory: true })
-        .then((result) => {
-          if (result?.ok === false) appendLog(`App shell download failed: ${result.error || 'unknown error'}`);
-        })
-        .catch((error) => appendLog(`App shell download failed: ${error instanceof Error ? error.message : String(error)}`));
+      const result = startNativeDownload(preferredDownloadWebContents(), normalizedUrl);
+      if (result.ok === false) appendLog(`App shell download failed: ${result.error || 'unknown error'}`);
       return { action: 'deny' };
     }
     openAppShellUrlInEmbeddedBrowser(normalizedUrl)
@@ -2628,7 +2635,7 @@ function createWindow() {
   }
   const loadingMark = loadingIconDataUrl
     ? `<img src="${loadingIconDataUrl}" alt="" />`
-    : '<span>W</span>';
+    : '<span>O</span>';
   const loadingHtml = `
     <style>
       * { box-sizing: border-box; }
@@ -2772,16 +2779,16 @@ function createWindow() {
         </div>
         <div>
           <div class="eyebrow">${APP_NAME}</div>
-          <h2>智能浏览器测试工作区</h2>
-          <p><span class="status-dot"></span><span id="startup-status">正在初始化工作区…</span></p>
+          <h2>${desktopText("智能浏览器测试工作区")}</h2>
+          <p><span class="status-dot"></span><span id="startup-status">${desktopText("正在初始化工作区…")}</span></p>
         </div>
-        <div class="slow-note" id="startup-slow">首次启动可能需要更长时间，请稍候。</div>
+        <div class="slow-note" id="startup-slow">${desktopText("首次启动可能需要更长时间，请稍候。")}</div>
         <div class="startup-error" id="startup-error">
-          <strong id="startup-error-message">启动失败</strong>
+          <strong id="startup-error-message">${desktopText("启动失败")}</strong>
           <div class="startup-actions">
-            <button onclick="location.href='webpilot-startup://retry'">重新启动</button>
-            <button onclick="location.href='webpilot-startup://logs'">查看日志</button>
-            <button onclick="location.href='webpilot-startup://quit'">退出</button>
+            <button onclick="location.href='webpilot-startup://retry'">${desktopText("重新启动")}</button>
+            <button onclick="location.href='webpilot-startup://logs'">${desktopText("查看日志")}</button>
+            <button onclick="location.href='webpilot-startup://quit'">${desktopText("退出")}</button>
           </div>
         </div>
       </main>
@@ -2797,8 +2804,8 @@ function createWindow() {
           },
           fail(message) {
             document.querySelector('.status-dot').style.background = '#d65c5c';
-            document.getElementById('startup-status').textContent = '未能完成启动';
-            document.getElementById('startup-error-message').textContent = message || '启动失败，请重试或查看日志。';
+            document.getElementById('startup-status').textContent = ${JSON.stringify(desktopText('未能完成启动'))};
+            document.getElementById('startup-error-message').textContent = message || ${JSON.stringify(desktopText('启动失败，请重试或查看日志。'))};
             document.getElementById('startup-error').classList.add('visible');
             document.getElementById('startup-slow').classList.remove('visible');
           },
@@ -2814,7 +2821,7 @@ async function updateStartupScreen(input) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   try {
     await startupScreenReady;
-    await mainWindow.webContents.executeJavaScript(`window.__webPilotStartup?.update(${JSON.stringify(input)})`);
+    await mainWindow.webContents.executeJavaScript(`window.__webPilotStartup?.update(${JSON.stringify({ ...input, message: desktopText(input.message || '') })})`);
   } catch {
     // Startup progress is cosmetic and must never prevent the app from opening.
   }
@@ -2830,34 +2837,60 @@ async function failStartupScreen(message) {
   }
 }
 
+function runtimeAppDataDirectory() {
+  const configured = String(process.env.APP_DATA_DIR || '').trim();
+  if (configured) return path.resolve(configured);
+  if (!app.isPackaged) return process.cwd();
+  return path.join(app.getPath('userData'), 'runtime');
+}
+
 async function boot() {
-  const appDataDir = ensureDir(path.join(app.getPath('userData'), 'runtime'));
+  const appDataDir = ensureDir(runtimeAppDataDirectory());
   runtimeDatabasePath = path.join(appDataDir, '.data', RUNTIME_DATABASE_FILE);
   startupLogPath = path.join(appDataDir, 'startup.log');
   fs.writeFileSync(startupLogPath, '');
   appendLog(`App starting. packaged=${app.isPackaged}`);
+  appendLog(`APP_DATA_DIR=${appDataDir}`);
   appendLog(`resourcesPath=${process.resourcesPath}`);
   appendLog(`WEBPILOT_ELECTRON_CDP_PORT=${EMBEDDED_BROWSER_CDP_PORT}`);
+  if (restoreDownloadSettings()) appendLog(`Download directory restored: ${lastDownloadDirectory}`);
+  try {
+    const saved = getElectronStateDatabase().prepare('SELECT value_json FROM electron_state WHERE key = ?').get('interface-language');
+    desktopLanguage = saved && JSON.parse(saved.value_json) === 'en' ? 'en' : 'zh';
+  } catch (error) {
+    appendLog(`Language preference restore failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
   createWindow();
   await updateStartupScreen({ message: '正在恢复浏览器工作区…', progress: 18 });
-  if (restoreEmbeddedBrowserPersistence()) appendLog('Embedded browser tabs restored from local cache.');
   const slowStartupTimer = setTimeout(() => {
     void updateStartupScreen({ message: '服务仍在启动，请稍候…', progress: 58, slow: true });
   }, 8_000);
 
   try {
     const externalServerUrl = String(process.env.WEBPILOT_ELECTRON_SERVER_URL || '').trim().replace(/\/+$/, '');
+    const basePath = compiledServerBasePath(serverDirectory(), process.env.WEBPILOT_BASE_PATH);
     await updateStartupScreen({ message: externalServerUrl ? '正在连接本地服务…' : '正在启动本地服务…', progress: 36 });
-    const url = externalServerUrl || await startServer(appDataDir);
+    const url = externalServerUrl
+      ? withServerBasePath(externalServerUrl, basePath)
+      : await startServer(appDataDir);
+    const applicationUrl = serverRouteUrl(
+      url,
+      basePath,
+      '/browser-chat',
+    );
     await updateStartupScreen({ message: '服务已就绪，正在加载界面…', progress: 82 });
     if (externalServerUrl) {
-      await waitForHttp(`${url}/dashboard`, 60_000, 2);
+      await waitForHttp(applicationUrl, 60_000, 2);
     }
     clearTimeout(slowStartupTimer);
     await updateStartupScreen({ message: '工作区已准备完成', progress: 100 });
     await mainWindow.webContents.executeJavaScript('window.__webPilotStartup?.complete()').catch(() => undefined);
     await new Promise((resolve) => setTimeout(resolve, 180));
-    await mainWindow.loadURL(url);
+    appendLog(`Loading application: ${applicationUrl}`);
+    await mainWindow.loadURL(applicationUrl);
+    // Restoring WebContentsViews before this navigation makes Electron destroy
+    // them when the startup document is replaced by the application shell.
+    if (restoreEmbeddedBrowserPersistence()) appendLog('Embedded browser tabs restored from local cache.');
   } catch (error) {
     clearTimeout(slowStartupTimer);
     const output = recentServerOutput.length
@@ -2879,7 +2912,34 @@ app.on('window-all-closed', () => {
   app.quit();
 });
 
-app.on('before-quit', () => {
+function requestLocalServerShutdown() {
+  if (!localServerUrl || !serverProcess || serverProcess.killed) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const shutdownUrl = new URL(`${localServerUrl}/api/system/shutdown`);
+    const request = http.request({
+      hostname: shutdownUrl.hostname,
+      port: shutdownUrl.port,
+      path: shutdownUrl.pathname,
+      method: 'POST',
+      headers: {
+        'x-webpilot-shutdown-token': serverShutdownToken,
+      },
+    }, (response) => {
+      response.resume();
+      response.once('end', () => {
+        if ((response.statusCode || 500) < 400) resolve();
+        else reject(new Error(`Server shutdown returned HTTP ${response.statusCode || 500}.`));
+      });
+    });
+    request.setTimeout(8_000, () => request.destroy(new Error('Server shutdown timed out.')));
+    request.once('error', reject);
+    request.end();
+  });
+}
+
+function destroyElectronResources() {
+  if (electronResourcesDestroyed) return;
+  electronResourcesDestroyed = true;
   clearEmbeddedBrowserFitTimer();
   clearEmbeddedBrowserStateChangeTimer();
   clearEmbeddedBrowserPersistenceTimer();
@@ -2890,7 +2950,26 @@ app.on('before-quit', () => {
   destroyEmbeddedBrowserLibraryView();
   detachEmbeddedBrowserView();
   for (const tab of Array.from(embeddedBrowserTabs.values())) destroyEmbeddedBrowserTab(tab);
-  if (serverProcess && !serverProcess.killed) serverProcess.kill();
+  if (serverProcess) void stopProcessTree(serverProcess, { force: true });
   electronStateDatabase?.close();
   electronStateDatabase = undefined;
+}
+
+app.on('before-quit', (event) => {
+  if (applicationShutdownReady) {
+    destroyElectronResources();
+    return;
+  }
+  event.preventDefault();
+  if (applicationShutdownStarted) return;
+  applicationShutdownStarted = true;
+  void requestLocalServerShutdown()
+    .catch((error) => appendLog(`Server browser cleanup failed before quit: ${error instanceof Error ? error.message : String(error)}`))
+    .then(() => stopProcessTree(serverProcess))
+    .catch((error) => appendLog(`Server process cleanup failed: ${error.message}`))
+    .finally(() => {
+      destroyElectronResources();
+      applicationShutdownReady = true;
+      app.quit();
+    });
 });

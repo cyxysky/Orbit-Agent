@@ -1,42 +1,38 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { runtimeAllowedToolTypes } from './runtime-tool-selection';
+import {
+  runtimeAllowedToolTypes,
+  runtimeToolRequiresBrowserSession,
+  runtimeToolLoopStopToolNames,
+} from './runtime-tool-selection';
 
-const nativeToolNames = ['takeSnapshot', 'mouse', 'keyboard', 'selectOption', 'reportState'];
-const observationToolNames = new Set(['takeSnapshot']);
+const nativeToolNames = ['browser', 'file'];
+const observationToolNames = new Set<string>();
 
 test('runtimeAllowedToolTypes keeps native tools outside Codex mode', () => {
-  assert.deepEqual(
-    runtimeAllowedToolTypes({
-      browserChatMode: false,
-      codexMode: false,
-      nativeToolNames,
-      observationToolNames,
-    }),
+  assert.deepEqual(runtimeAllowedToolTypes({
+    browserChatMode: false,
+    codexMode: false,
     nativeToolNames,
-  );
+    observationToolNames,
+  }), nativeToolNames);
 });
 
-test('runtimeAllowedToolTypes keeps snapshot and unified input tools in Codex object mode', () => {
-  assert.deepEqual(
-    runtimeAllowedToolTypes({
-      browserChatMode: false,
-      codexMode: true,
-      nativeToolNames,
-      observationToolNames,
-    }),
+test('runtimeAllowedToolTypes adds answer in Codex browser chat', () => {
+  assert.deepEqual(runtimeAllowedToolTypes({
+    browserChatMode: true,
+    codexMode: true,
     nativeToolNames,
-  );
+    observationToolNames,
+  }), ['browser', 'file', 'answer']);
 });
 
-test('runtimeAllowedToolTypes swaps reportState for answer in Codex browser chat', () => {
-  assert.deepEqual(
-    runtimeAllowedToolTypes({
-      browserChatMode: true,
-      codexMode: true,
-      nativeToolNames,
-      observationToolNames,
-    }),
-    ['takeSnapshot', 'mouse', 'keyboard', 'selectOption', 'answer'],
-  );
+test('the unified browser tool uses the generic session-start hook', () => {
+  assert.equal(runtimeToolRequiresBrowserSession('browser'), true);
+  assert.equal(runtimeToolRequiresBrowserSession('subagent'), false);
+  assert.equal(runtimeToolRequiresBrowserSession('file'), false);
+});
+
+test('subagent calls end the current runtime tool loop', () => {
+  assert.deepEqual(runtimeToolLoopStopToolNames, ['finalResponse', 'subagent']);
 });

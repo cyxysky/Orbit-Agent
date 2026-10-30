@@ -1,72 +1,84 @@
 import {
   defaultModelForProvider,
+  defaultModelProviderSettings,
   modelListForProvider,
-  modelProviderDefinition,
-  modelProviderDefinitions,
+  modelProviderDefinitionsForConfig,
+  migrateRuntimeEnvValue,
   runtimeEnvDefinitions,
 } from '@/config/settings';
-import type { ModelProvider, ModelProviderSettings } from '@/server/ai/schemas/test-case.schema';
+import type { ModelProvider, ModelProviderSettings } from '@/server/ai/schemas/runtime.schema';
+import { normalizedModelCapabilities } from '@/lib/model-capabilities';
 import { store } from '@/server/db/store';
-
-function defaultProviderSettings(provider: ModelProvider): ModelProviderSettings {
-  const definition = modelProviderDefinition(provider);
-  const models = modelListForProvider(definition);
-  const model = defaultModelForProvider(definition);
-  return {
-    defaultModel: model,
-    model,
-    models,
-    apiKey: '',
-    baseURL: definition.defaultBaseURL || '',
-  };
-}
+import { maskSecret } from '@/lib/secret-input';
 
 function completeProviders(input?: Partial<Record<ModelProvider, ModelProviderSettings>>) {
   const result: Partial<Record<ModelProvider, ModelProviderSettings>> = {};
-  for (const definition of modelProviderDefinitions) {
+  for (const definition of modelProviderDefinitionsForConfig(input)) {
     const current = input?.[definition.value];
     const models = modelListForProvider(definition, current);
     const model = defaultModelForProvider(definition, current);
     result[definition.value] = {
-      ...defaultProviderSettings(definition.value),
+      ...defaultModelProviderSettings(definition.value),
       ...current,
+      enabled: current?.enabled === true,
       defaultModel: model,
       model,
       models,
+      modelCapabilities: normalizedModelCapabilities(definition.value, models, current?.modelCapabilities),
     };
   }
   return result;
 }
 
-export function readRuntimeSettingsItems() {
-  const savedByKey = new Map(store.listRuntimeEnv().map((item) => [item.key, item]));
+export async function readRuntimeSettingsItems() {
+  const savedByKey = new Map((await store.listRuntimeEnv()).map((item) => [item.key, item]));
   return runtimeEnvDefinitions.map((definition) => {
     const saved = savedByKey.get(definition.key);
+    const secret = saved?.secret ?? Boolean(definition.secret);
+    const value = migrateRuntimeEnvValue(
+      definition.key,
+      saved?.value ?? process.env[definition.key] ?? definition.defaultValue,
+    );
     return {
       key: definition.key,
-      value: saved?.value ?? definition.defaultValue,
+      value: secret ? '' : value,
+      hasValue: secret ? Boolean(value) : undefined,
+      secretPreview: secret ? maskSecret(value) : undefined,
       enabled: true,
-      secret: saved?.secret ?? Boolean(definition.secret),
+      secret,
       updatedAt: saved?.updatedAt,
     };
   });
 }
 
-export function readModelSettingsState() {
-  const saved = store.getModelConfig();
+export async function readModelSettingsState() {
+  const saved = await store.getModelConfig();
+  const providers = completeProviders(saved?.providers);
+  for (const provider of Object.keys(providers) as ModelProvider[]) {
+    const current = providers[provider];
+    if (!current) continue;
+    providers[provider] = {
+      ...current,
+      apiKey: '',
+      hasApiKey: Boolean(current.apiKey),
+      apiKeyPreview: maskSecret(current.apiKey || ''),
+    };
+  }
   return {
     saved: Boolean(saved),
     config: {
       provider: saved?.provider || 'openrouter',
-      providers: completeProviders(saved?.providers),
+      providers,
+      providerOrder: saved?.providerOrder,
+      mediaSelections: saved?.mediaSelections,
       updatedAt: saved?.updatedAt || '',
     },
   };
 }
 
-export function readEnvironmentSettingsSnapshot() {
+export async function readEnvironmentSettingsSnapshot() {
   return {
-    envItems: readRuntimeSettingsItems(),
-    modelConfig: readModelSettingsState().config,
+    envItems: await readRuntimeSettingsItems(),
+    modelConfig: (await readModelSettingsState()).config,
   };
 }

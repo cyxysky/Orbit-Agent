@@ -1,0 +1,219 @@
+import { jsonRecordFromUnknown, jsonValueFromString } from '@cjfclonedeep/capability-sdk';
+import { artifactApiUrl } from './artifacts';
+import type { StepExecutionResult, StepToolCall } from '@/server/ai/schemas/runtime.schema';
+
+export type BrowserChatArtifactSummary = {
+  bytes?: number;
+  documentId?: string;
+  downloadUrl?: string;
+  fileName: string;
+  id: string;
+  kind: 'file' | 'image' | 'screenshot';
+  pageCount?: number;
+  path?: string;
+  title?: string;
+  url?: string;
+};
+
+export type BrowserChatMessageFileGroup = {
+  messageId: string;
+  title: string;
+  createdAt: string;
+  files: BrowserChatArtifactSummary[];
+};
+
+export function browserChatArtifactOpenUrl(artifact: BrowserChatArtifactSummary) {
+  return artifact.url || artifactApiUrl(artifact.path) || artifact.downloadUrl;
+}
+
+export function browserChatArtifactIdFromUrl(value: string) {
+  try {
+    const url = new URL(value, 'http://artifact.invalid');
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return undefined;
+    const marker = '/api/artifacts/';
+    const start = url.pathname.indexOf(marker);
+    if (start < 0) return undefined;
+    return url.pathname.slice(start + marker.length).split('/').map(decodeURIComponent).join('/');
+  } catch {
+    return undefined;
+  }
+}
+
+/** A document can produce multiple physical files and revisions. */
+export function browserChatArtifactKey(artifact: BrowserChatArtifactSummary) {
+  const url = browserChatArtifactOpenUrl(artifact);
+  const identity = (url && browserChatArtifactIdFromUrl(url))
+    || artifact.path?.replace(/\\/g, '/') || url;
+  return identity ? `${artifact.kind === 'screenshot' ? 'screenshot' : 'file'}:${identity}` : artifact.id;
+}
+
+/** Resolve references only against artifacts delivered with this message. */
+export function resolveBrowserChatArtifactReference(
+  value: string,
+  artifacts: readonly BrowserChatArtifactSummary[],
+  image = false,
+) {
+  const alias = /^attachment:\/\//i.test(value);
+  // Browser tools historically returned screenshot file names. A name is not a
+  // page-relative URL: resolve it only when the message identifies one artifact.
+  const localImageReference = image && !alias && !/^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(value);
+  let reference: string;
+  try {
+    reference = alias ? decodeURIComponent(value.slice('attachment://'.length))
+      : browserChatArtifactIdFromUrl(value) || (localImageReference ? decodeURIComponent(value).replace(/^\.\//, '') : '');
+  } catch { return ''; }
+  if (!reference) return value;
+  const matches = artifacts.filter((artifact) => (
+    ((alias || localImageReference) && artifact.fileName === reference) || artifact.id === reference
+    || artifact.id === `file:${reference}` || artifact.path === reference
+    || browserChatArtifactIdFromUrl(artifact.url || '') === reference
+    || browserChatArtifactIdFromUrl(artifact.downloadUrl || '') === reference
+  ));
+  if (matches.length !== 1) return alias || (localImageReference && matches.length > 1) ? '' : value;
+  const artifact = matches[0];
+  const url = image ? artifact.url || artifactApiUrl(artifact.path) || artifact.downloadUrl
+    : artifact.downloadUrl || artifact.url || artifactApiUrl(artifact.path);
+  // Validation/review results may identify an artifact without supplying its
+  // delivery URL. They must not erase a URL already present in the message.
+  if (!url) return alias ? '' : value;
+  return image ? (url || '').replace(/([?&])download=1(&|$)/, '$1').replace(/[?&]$/, '') : url || '';
+}
+
+/** Consume the shared artifact contract regardless of which tool produced it. */
+export function browserChatArtifactPayloads(value: unknown): Record<string, unknown>[] {
+  const payload = jsonRecordFromUnknown(value) || jsonRecordFromUnknown(jsonValueFromString(value));
+  if (!payload) return [];
+  const candidates = [payload, ...(Array.isArray(payload.data) ? payload.data : []),
+    ...(Array.isArray(payload.artifacts) ? payload.artifacts : []),
+    ...(Array.isArray(payload.content) ? payload.content.filter((item) => jsonRecordFromUnknown(item)?.type === 'artifact') : [])];
+  const seen = new Set<string>();
+  return candidates.flatMap((value) => {
+    const item = jsonRecordFromUnknown(value);
+    if (!item) return [];
+    if (!item.artifactId && !item.downloadUrl && !(item.fileName && (item.path || item.url))) return [];
+    const id = String(item.artifactId || item.path || item.url || item.downloadUrl || '');
+    if (!id || seen.has(id)) return [];
+    seen.add(id);
+    return [item];
+  });
+}
+
+/** Browser tool previews contain only images emitted by that invocation. */
+export function browserChatToolScreenshots(tool: Pick<StepToolCall, 'name' | 'screenshots' | 'rawResult'>) {
+  const result = jsonRecordFromUnknown(tool.rawResult);
+  const observationPath = jsonRecordFromUnknown(result?.browserObservation)?.path;
+  return (tool.screenshots || []).filter((image) => (
+    image.source !== 'automatic' && image.path !== observationPath
+    && (tool.name !== 'browser' || image.kind === 'current' || image.kind === 'history')
+  ));
+}
+
+export function browserChatScreenshotIsInternalDocumentPreview(
+  screenshot: { path?: string; title?: string },
+) {
+  const path = String(screenshot.path || '').replace(/\\/g, '/');
+  return /(?:^|\/)attachment-previews(?:\/|$)/i.test(path);
+}
+
+export function browserChatArtifactFileName(value: unknown) {
+  if (typeof value !== 'string') return '';
+  const normalized = value.trim().replace(/\\/g, '/');
+  if (!normalized) return '';
+  const fileName = normalized.split('/').pop() || '';
+  try {
+    return decodeURIComponent(fileName);
+  } catch {
+    return fileName;
+  }
+}
+
+export function browserChatArtifactExtension(fileName: string) {
+  return fileName.match(/\.([a-z0-9]{1,10})$/i)?.[1]?.toUpperCase();
+}
+
+export function browserChatArtifactIsImage(fileName: string) {
+  return /\.(?:avif|gif|jpe?g|png|svg|webp)$/i.test(fileName);
+}
+
+function browserChatFileArtifacts(tool: StepToolCall): BrowserChatArtifactSummary[] {
+  const rawResult = jsonRecordFromUnknown(tool.rawResult);
+  if (rawResult?.ok !== true) return [];
+  return browserChatArtifactPayloads(rawResult.actual ?? rawResult).flatMap((payload): BrowserChatArtifactSummary[] => {
+
+    const artifactId = typeof payload.artifactId === 'string' ? payload.artifactId.trim() : '';
+    const path = typeof payload.path === 'string' ? payload.path.trim() : '';
+    const url = typeof payload.url === 'string' ? payload.url.trim() : '';
+    const downloadUrl = typeof payload.downloadUrl === 'string' ? payload.downloadUrl.trim() : '';
+    const documentId = typeof payload.documentId === 'string' ? payload.documentId.trim() : '';
+    if (!artifactId && !path && !url && !downloadUrl) return [];
+
+    const visualVerification = jsonRecordFromUnknown(payload.visualVerification);
+    const payloadBytes = payload.bytes ?? payload.size;
+    const bytes = typeof payloadBytes === 'number' && Number.isFinite(payloadBytes) && payloadBytes >= 0
+      ? payloadBytes
+      : undefined;
+    const pageCount = typeof visualVerification?.pageCount === 'number'
+      && Number.isFinite(visualVerification.pageCount)
+      && visualVerification.pageCount > 0
+      ? Math.floor(visualVerification.pageCount)
+      : undefined;
+    const fileName = browserChatArtifactFileName(payload.fileName)
+      || browserChatArtifactFileName(path)
+      || browserChatArtifactFileName(artifactId)
+      || 'artifact';
+    return [{
+      bytes,
+      documentId: documentId || undefined,
+      downloadUrl: downloadUrl || undefined,
+      fileName,
+      id: `file:${artifactId || path || url || downloadUrl}`,
+      kind: browserChatArtifactIsImage(fileName) ? 'image' : 'file',
+      pageCount,
+      path: path || undefined,
+      url: url || (downloadUrl ? downloadUrl.replace(/([?&])download=1(&|$)/, '$1').replace(/[?&]$/, '') : undefined),
+    }];
+  });
+}
+
+export function browserChatArtifactsFromTool(tool: StepToolCall) {
+  const artifacts: BrowserChatArtifactSummary[] = [];
+  artifacts.push(...browserChatFileArtifacts(tool));
+  for (const screenshot of browserChatToolScreenshots(tool)) {
+    if (browserChatScreenshotIsInternalDocumentPreview(screenshot)) continue;
+    const path = screenshot.path?.trim();
+    if (!path) continue;
+    artifacts.push({
+      fileName: browserChatArtifactFileName(path) || 'screenshot.png',
+      id: `screenshot:${path}`,
+      kind: 'screenshot',
+      path,
+      url: artifactApiUrl(path),
+      title: screenshot.title?.trim() || '截图',
+    });
+  }
+  return artifacts;
+}
+
+export function mergeBrowserChatArtifactSummaries(
+  ...groups: ReadonlyArray<readonly BrowserChatArtifactSummary[] | undefined>
+) {
+  const byId = new Map<string, BrowserChatArtifactSummary>();
+  for (const artifact of groups.flatMap((group) => group || [])) {
+    if (
+      artifact.kind === 'screenshot'
+      && browserChatScreenshotIsInternalDocumentPreview(artifact)
+    ) continue;
+    const key = browserChatArtifactKey(artifact);
+    const previous = byId.get(key);
+    // Metadata-only observations must not erase an already delivered URL.
+    const defined = Object.fromEntries(Object.entries(artifact).filter(([, value]) => value !== undefined));
+    byId.set(key, previous ? { ...previous, ...defined } : artifact);
+  }
+  return [...byId.values()];
+}
+
+export function browserChatArtifactsFromSteps(steps: readonly StepExecutionResult[]) {
+  return mergeBrowserChatArtifactSummaries(
+    steps.flatMap((step) => (step.tools || []).flatMap(browserChatArtifactsFromTool)),
+  );
+}

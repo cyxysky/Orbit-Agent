@@ -1,3 +1,18 @@
+import { browserCapabilityToolNames } from '@cjfclonedeep/capability-sdk/browser';
+
+export const runtimeToolLoopStopToolNames = [
+  'finalResponse',
+  'subagent',
+] as const;
+
+export const runtimeBrowserSessionToolNames: ReadonlySet<string> = new Set([
+  browserCapabilityToolNames.browser,
+]);
+
+export function runtimeToolRequiresBrowserSession(toolName: string) {
+  return runtimeBrowserSessionToolNames.has(toolName);
+}
+
 export function runtimeAllowedToolTypes({
   browserChatMode,
   codexMode,
@@ -9,10 +24,18 @@ export function runtimeAllowedToolTypes({
   nativeToolNames: string[];
   observationToolNames: ReadonlySet<string>;
 }) {
-  const nativeAllowedToolTypes = nativeToolNames.filter((name) => !(browserChatMode && name === 'reportState'));
-  void codexMode;
+  const nativeAllowedToolTypes = nativeToolNames;
   void observationToolNames;
-  const baseAllowedToolTypes = nativeAllowedToolTypes;
+  return browserChatMode && codexMode ? [...nativeAllowedToolTypes, 'answer'] : nativeAllowedToolTypes;
+}
 
-  return browserChatMode && codexMode ? [...baseAllowedToolTypes, 'answer'] : baseAllowedToolTypes;
+function actionFromInput(input: unknown) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
+  const action = (input as Record<string, unknown>).action;
+  return typeof action === 'string' ? action : undefined;
+}
+
+export function isBrowserHumanPauseCall(toolName: string, toolInput: unknown) {
+  return toolName === browserCapabilityToolNames.browser
+    && ['waitForHumanVerification', 'requestUserInput'].includes(actionFromInput(toolInput) || '');
 }

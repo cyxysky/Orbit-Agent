@@ -1,8 +1,18 @@
 import { randomUUID } from 'node:crypto';
-import { generateText } from 'ai';
-import { getModel, getModelSettings } from '@/server/ai/model';
-import type { StepExecutionResult } from '@/server/ai/schemas/test-case.schema';
-import { readPersonalMemoryRecords, replacePersonalMemoryRecords } from '@/server/storage/sqlite-record-store';
+import { fuzzyRetrievalScore, normalizeRetrievalText } from '@/lib/fuzzy-retrieval';
+import { normalizeApplicationUserId } from '@/server/auth/user-context';
+import { getModelSettings } from '@/server/ai/model';
+import { memoryApplicabilitySchema, memoryVerificationSchema, memoryExtractionSchema, parseMemoryJson } from './personal-memory-policy';
+import type { z } from 'zod';
+import {
+  deletePersonalMemoryRecord,
+  markPersonalMemoryRecordsUsed,
+  readPersonalMemoryRecordByIdentity,
+  readPersonalMemoryRecords,
+  writePersonalMemoryRecord,
+  writePersonalMemoryRecords,
+  writePersonalMemoryRecordsQueued,
+} from '@/server/storage/database-record-store';
 
 export type PersonalMemoryScope = 'global' | 'domain';
 export type PersonalMemoryType = 'alias' | 'preference' | 'workflow' | 'domain_fact';
@@ -11,6 +21,7 @@ export type PersonalMemoryStatus = 'active' | 'disabled';
 export type PersonalMemoryItem = {
   id: string;
   userId: string;
+  shared: boolean;
   scope: PersonalMemoryScope;
   domain: string;
   type: PersonalMemoryType;
@@ -27,9 +38,22 @@ export type PersonalMemoryItem = {
   lastUsedAt?: string;
   useCount: number;
   status: PersonalMemoryStatus;
+  recall?: 'always' | 'relevant';
+  evidence?: string[];
+  durability?: string;
+  applicability?: z.infer<typeof memoryApplicabilitySchema>;
+  utility?: string;
+  verification?: z.infer<typeof memoryVerificationSchema>[];
+  verifiedAt?: string;
+  expiresAt?: string;
+  reviewReason?: string;
+  supersededBy?: string;
+  history?: Array<{ value: string; applicability?: PersonalMemoryItem['applicability']; evidence?: string[];
+    sourceSessionId?: string; sourceMessageIds?: string[]; replacedAt: string }>;
 };
 
 export type PersonalMemoryDraft = {
+  shared?: unknown;
   scope?: unknown;
   domain?: unknown;
   type?: unknown;
@@ -39,6 +63,17 @@ export type PersonalMemoryDraft = {
   confidence?: unknown;
   sourceUrl?: unknown;
   status?: unknown;
+  recall?: unknown;
+  evidence?: unknown;
+  durability?: unknown;
+  applicability?: unknown;
+  utility?: unknown;
+  verification?: unknown;
+  verifiedAt?: unknown;
+  expiresAt?: unknown;
+  reviewReason?: unknown;
+  supersededBy?: unknown;
+  history?: PersonalMemoryItem['history'];
 };
 
 type PersonalMemoryStoreFile = {
@@ -53,13 +88,40 @@ export type PersonalMemorySearchResult = {
 };
 
 export type PersonalMemoryExtractionResult = {
+  pendingCandidateId?: string;
   items: PersonalMemoryItem[];
   rawText: string;
   skipped: boolean;
   reason?: string;
+  diagnostics: PersonalMemoryExtractionDiagnostics;
 };
 
-type PersonalMemoryConversationMessage = {
+export type PersonalMemoryFilterRejectionReason =
+  | 'invalid_candidate' | 'missing_new_evidence' | 'unverified_procedure' | 'invalid_scope'
+  | 'expired_candidate' | 'review_rejected' | 'invalid_review';
+
+export type PersonalMemoryFilterRejection = {
+  index: number;
+  key: string;
+  type: string;
+  durability: string;
+  reason: PersonalMemoryFilterRejectionReason;
+  reasonDescription: string;
+};
+
+export type PersonalMemoryExtractionDiagnostics = {
+  candidateCount: number;
+  acceptedCount: number;
+  rejectedCount: number;
+  savedCount: number;
+  normalizationRejectedCount: number;
+  rejectionReasons: Partial<Record<PersonalMemoryFilterRejectionReason, number>>;
+  rejectedCandidates: PersonalMemoryFilterRejection[];
+  decisions?: Array<{ index: number; action: string; reason: string; targetIds: string[] }>;
+};
+
+export type PersonalMemoryConversationMessage = {
+  id?: string;
   role: 'user' | 'assistant';
   content: string;
 };
@@ -67,6 +129,9 @@ type PersonalMemoryConversationMessage = {
 const memoryTypes: PersonalMemoryType[] = ['alias', 'preference', 'workflow', 'domain_fact'];
 const memoryScopes: PersonalMemoryScope[] = ['global', 'domain'];
 const memoryStatuses: PersonalMemoryStatus[] = ['active', 'disabled'];
+export function parsePersonalMemoryExtractionOutput(value: unknown) {
+  return memoryExtractionSchema.parse(parseMemoryJson(textFromUnknown(value)));
+}
 
 function now() {
   return new Date().toISOString();
@@ -83,16 +148,19 @@ function compactText(value: unknown, max = 180) {
   return text.length > max ? `${text.slice(0, max)}...` : text;
 }
 
+export function normalizePersonalMemoryValue(value: unknown) {
+  return textFromUnknown(value).replace(/\r\n?/g, '\n').trim();
+}
+
 export function normalizePersonalMemoryUserId(value: unknown) {
-  const userId = textFromUnknown(value).trim();
-  return userId || 'default';
+  return normalizeApplicationUserId(value);
 }
 
 export function personalMemoryEnabled() {
   return process.env.AI_PERSONAL_MEMORY_ENABLED !== 'false';
 }
 
-function personalMemoryExtractionEnabled() {
+export function personalMemoryExtractionEnabled() {
   return personalMemoryEnabled() && process.env.AI_PERSONAL_MEMORY_EXTRACT_ENABLED !== 'false';
 }
 
@@ -101,14 +169,14 @@ function personalMemoryPromptLimit() {
   return Number.isFinite(raw) ? Math.min(Math.max(Math.floor(raw), 0), 20) : 6;
 }
 
-function personalMemoryExtractionInputLimit() {
-  const raw = Number(process.env.AI_PERSONAL_MEMORY_EXTRACTION_INPUT_MAX_CHARS || 18000);
-  return Number.isFinite(raw) ? Math.min(Math.max(Math.floor(raw), 3000), 60000) : 18000;
+function personalMemoryPromptMaxChars() {
+  const raw = Number(process.env.AI_PERSONAL_MEMORY_PROMPT_MAX_CHARS || 12000);
+  return Number.isFinite(raw) ? Math.min(Math.max(Math.floor(raw), 1000), 120000) : 12000;
 }
 
-function personalMemoryExtractionTimeoutMs() {
-  const raw = Number(process.env.AI_PERSONAL_MEMORY_EXTRACTION_TIMEOUT_MS || process.env.AI_TEST_REQUEST_TIMEOUT_MS || 30000);
-  return Number.isFinite(raw) ? Math.min(Math.max(Math.floor(raw), 1000), 120000) : 30000;
+export function personalMemoryExtractionInputLimit() {
+  const raw = Number(process.env.AI_PERSONAL_MEMORY_EXTRACTION_INPUT_MAX_CHARS || 18000);
+  return Number.isFinite(raw) ? Math.min(Math.max(Math.floor(raw), 3000), 60000) : 18000;
 }
 
 export function normalizePersonalMemoryDomain(value: unknown) {
@@ -181,7 +249,7 @@ function itemText(input: Pick<PersonalMemoryItem, 'key' | 'value' | 'aliases' | 
   return compactText(`${input.type} ${input.key}: ${input.value}${aliases}${domain}`, 360);
 }
 
-function normalizeMemoryDraft(input: PersonalMemoryDraft, defaults: {
+export function normalizeMemoryDraft(input: PersonalMemoryDraft, defaults: {
   userId: string;
   domain?: string;
   sourceSessionId?: string;
@@ -192,12 +260,13 @@ function normalizeMemoryDraft(input: PersonalMemoryDraft, defaults: {
   const scope = normalizeScope(input.scope, rawDomain);
   const domain = scope === 'domain' ? rawDomain : '';
   const key = normalizeKey(input.key);
-  const value = compactText(input.value, 260);
+  const value = normalizePersonalMemoryValue(input.value);
   if (!key || !value) return undefined;
   const type = normalizeType(input.type);
   const aliases = normalizeAliases(input.aliases, key);
   return {
     userId: defaults.userId,
+    shared: input.shared === true,
     scope,
     domain,
     type,
@@ -210,10 +279,21 @@ function normalizeMemoryDraft(input: PersonalMemoryDraft, defaults: {
     sourceMessageIds: defaults.sourceMessageIds,
     sourceUrl: compactText(input.sourceUrl || defaults.sourceUrl || '', 2000) || undefined,
     status: normalizeStatus(input.status),
+    ...(input.recall === 'always' || input.recall === 'relevant' ? { recall: input.recall } : {}),
+    ...(Array.isArray(input.evidence) ? { evidence: input.evidence.filter((quote): quote is string => typeof quote === 'string').slice(0, 8).map((quote) => quote.slice(0, 500)) } : {}),
+    ...(typeof input.durability === 'string' ? { durability: input.durability } : {}),
+    ...(input.applicability ? { applicability: memoryApplicabilitySchema.parse(input.applicability) } : {}),
+    ...(typeof input.utility === 'string' ? { utility: compactText(input.utility, 300) } : {}),
+    ...(Array.isArray(input.verification) ? { verification: input.verification.map((entry) => memoryVerificationSchema.parse(entry)).slice(0, 4) } : {}),
+    ...(typeof input.verifiedAt === 'string' ? { verifiedAt: input.verifiedAt } : {}),
+    ...(typeof input.expiresAt === 'string' ? { expiresAt: input.expiresAt } : {}),
+    ...(typeof input.reviewReason === 'string' ? { reviewReason: compactText(input.reviewReason, 400) } : {}),
+    ...(typeof input.supersededBy === 'string' ? { supersededBy: input.supersededBy } : {}),
+    ...(input.history ? { history: input.history.slice(-5) } : {}),
   };
 }
 
-function normalizeStoreItem(value: unknown): PersonalMemoryItem | undefined {
+export function normalizeStoreItem(value: unknown): PersonalMemoryItem | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const record = value as Partial<PersonalMemoryItem>;
   const userId = normalizePersonalMemoryUserId(record.userId);
@@ -237,15 +317,17 @@ function normalizeStoreItem(value: unknown): PersonalMemoryItem | undefined {
   };
 }
 
-function readStore(): PersonalMemoryStoreFile {
-  const items = readPersonalMemoryRecords<PersonalMemoryItem>()
+async function readStore(input: {
+  domain?: string;
+  includeDisabled?: boolean;
+  includeShared?: boolean;
+  limit?: number;
+  userId?: string;
+} = {}): Promise<PersonalMemoryStoreFile> {
+  const items = (await readPersonalMemoryRecords<PersonalMemoryItem>(input))
     .map(normalizeStoreItem)
     .filter((item): item is PersonalMemoryItem => Boolean(item));
   return { version: 1, items };
-}
-
-function writeStore(store: PersonalMemoryStoreFile) {
-  replacePersonalMemoryRecords(store.items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
 }
 
 function memoryIdentity(item: Pick<PersonalMemoryItem, 'userId' | 'scope' | 'domain' | 'type' | 'key'>) {
@@ -258,22 +340,40 @@ function memoryIdentity(item: Pick<PersonalMemoryItem, 'userId' | 'scope' | 'dom
   ].join('\u0001');
 }
 
-export function listPersonalMemoryItems(input: {
+export async function listPersonalMemoryItems(input: {
   userId?: unknown;
   domain?: unknown;
   includeDisabled?: boolean;
+  limit?: number;
 } = {}) {
   const userId = normalizePersonalMemoryUserId(input.userId);
   const domain = normalizePersonalMemoryDomain(input.domain);
-  return readStore().items.filter((item) => {
-    if (item.userId !== userId) return false;
+  const limit = Number.isFinite(input.limit) ? Math.max(1, Math.min(500, Math.floor(Number(input.limit)))) : undefined;
+  const items = (await readStore({
+    domain,
+    userId,
+    includeShared: true,
+    includeDisabled: input.includeDisabled === true,
+    limit,
+  })).items.filter((item) => {
+    if (item.userId !== userId && !item.shared) return false;
     if (!input.includeDisabled && item.status !== 'active') return false;
     if (!domain) return true;
     return item.scope === 'global' || domainMatches(item.domain, domain);
   });
+  return limit ? items.slice(0, limit) : items;
 }
 
-export function savePersonalMemoryItem(input: PersonalMemoryDraft & {
+export async function getPersonalMemoryItem(id: string, userId?: unknown) {
+  const normalizedUserId = normalizePersonalMemoryUserId(userId);
+  return (await readPersonalMemoryRecords<PersonalMemoryItem>({
+    ids: [id],
+    userId: normalizedUserId,
+    includeShared: true,
+  })).map(normalizeStoreItem).find((item): item is PersonalMemoryItem => Boolean(item));
+}
+
+export async function savePersonalMemoryItem(input: PersonalMemoryDraft & {
   id?: unknown;
   userId?: unknown;
   sourceSessionId?: string;
@@ -288,17 +388,27 @@ export function savePersonalMemoryItem(input: PersonalMemoryDraft & {
     sourceUrl: textFromUnknown(input.sourceUrl),
   });
   if (!draft) throw new Error('Personal memory item requires key and value.');
-  const store = readStore();
   const timestamp = now();
   const requestedId = compactText(input.id, 120);
-  const identity = memoryIdentity(draft);
-  const existingIndex = store.items.findIndex((item) => (
-    (requestedId && item.id === requestedId && item.userId === userId)
-    || memoryIdentity(item) === identity
-  ));
-  const previous = existingIndex >= 0 ? store.items[existingIndex] : undefined;
+  const requestedItem = requestedId
+    ? (await readPersonalMemoryRecords<PersonalMemoryItem>({ ids: [requestedId] }))
+      .map(normalizeStoreItem)
+      .find((item): item is PersonalMemoryItem => Boolean(item))
+    : undefined;
+  if (requestedItem && requestedItem.userId !== userId) {
+    throw new Error('Only the memory creator can edit this shared memory.');
+  }
+  const identityItem = await readPersonalMemoryRecordByIdentity<PersonalMemoryItem>({
+    userId,
+    scope: draft.scope,
+    domain: draft.domain,
+    type: draft.type,
+    key: draft.key,
+  });
+  const previous = requestedItem || (identityItem ? normalizeStoreItem(identityItem) : undefined);
   const item: PersonalMemoryItem = {
     ...draft,
+    shared: input.shared === undefined ? previous?.shared ?? false : draft.shared,
     id: previous?.id || requestedId || `mem_${randomUUID()}`,
     createdAt: previous?.createdAt || timestamp,
     updatedAt: timestamp,
@@ -306,18 +416,62 @@ export function savePersonalMemoryItem(input: PersonalMemoryDraft & {
     useCount: previous?.useCount || 0,
     status: draft.status,
   };
-  if (existingIndex >= 0) store.items[existingIndex] = item;
-  else store.items.push(item);
-  writeStore(store);
+  await writePersonalMemoryRecord(item);
   return item;
 }
 
-export function updatePersonalMemoryItem(id: string, patch: PersonalMemoryDraft, userId?: unknown) {
+export async function savePersonalMemoryItems(
+  inputs: Array<PersonalMemoryDraft & { id?: unknown }>,
+  userIdValue?: unknown,
+  options: { queued?: boolean } = {},
+) {
+  const userId = normalizePersonalMemoryUserId(userIdValue);
+  const store = await readStore({ userId, includeShared: true });
+  const byIdentity = new Map(store.items.map((item) => [memoryIdentity(item), item]));
+  const timestamp = now();
+  const saved: PersonalMemoryItem[] = [];
+  let created = 0;
+  let updated = 0;
+  for (const input of inputs) {
+    const draft = normalizeMemoryDraft(input, {
+      userId,
+      domain: textFromUnknown(input.domain),
+      sourceUrl: textFromUnknown(input.sourceUrl),
+    });
+    if (!draft) continue;
+    const previous = byIdentity.get(memoryIdentity(draft));
+    if (previous && previous.userId !== userId) continue;
+    const item: PersonalMemoryItem = {
+      ...draft,
+      shared: input.shared === undefined ? previous?.shared ?? false : draft.shared,
+      id: previous?.id || compactText(input.id, 120) || `mem_${randomUUID()}`,
+      createdAt: previous?.createdAt || timestamp,
+      updatedAt: timestamp,
+      lastUsedAt: previous?.lastUsedAt,
+      useCount: previous?.useCount || 0,
+      status: draft.status,
+    };
+    if (previous) updated += 1;
+    else created += 1;
+    byIdentity.set(memoryIdentity(item), item);
+    saved.push(item);
+  }
+  const result = { created, items: saved, updated };
+  if (saved.length && options.queued) return writePersonalMemoryRecordsQueued(saved).then(() => result);
+  if (saved.length) await writePersonalMemoryRecords(saved);
+  return result;
+}
+
+export async function updatePersonalMemoryItem(id: string, patch: PersonalMemoryDraft, userId?: unknown, source?: {
+  sourceSessionId?: string; sourceMessageIds?: string[]; sourceUrl?: string;
+}) {
   const normalizedUserId = normalizePersonalMemoryUserId(userId);
-  const store = readStore();
-  const index = store.items.findIndex((item) => item.id === id && item.userId === normalizedUserId);
-  if (index < 0) return undefined;
-  const previous = store.items[index];
+  const previous = (await readPersonalMemoryRecords<PersonalMemoryItem>({
+    ids: [id],
+    userId: normalizedUserId,
+    includeShared: false,
+  })).map(normalizeStoreItem).find((item): item is PersonalMemoryItem => Boolean(item));
+  if (!previous) return undefined;
   const draft = normalizeMemoryDraft({
     ...previous,
     ...patch,
@@ -328,9 +482,9 @@ export function updatePersonalMemoryItem(id: string, patch: PersonalMemoryDraft,
   }, {
     userId: previous.userId,
     domain: previous.domain,
-    sourceSessionId: previous.sourceSessionId,
-    sourceMessageIds: previous.sourceMessageIds,
-    sourceUrl: previous.sourceUrl,
+    sourceSessionId: source?.sourceSessionId || previous.sourceSessionId,
+    sourceMessageIds: source?.sourceMessageIds || previous.sourceMessageIds,
+    sourceUrl: source?.sourceUrl || previous.sourceUrl,
   });
   if (!draft) throw new Error('Personal memory item requires key and value.');
   const item: PersonalMemoryItem = {
@@ -342,342 +496,166 @@ export function updatePersonalMemoryItem(id: string, patch: PersonalMemoryDraft,
     lastUsedAt: previous.lastUsedAt,
     useCount: previous.useCount,
     status: normalizeStatus(patch.status ?? previous.status),
+    expiresAt: patch.expiresAt === null ? undefined : draft.expiresAt,
+    applicability: patch.applicability === null ? undefined : draft.applicability,
   };
-  store.items[index] = item;
-  writeStore(store);
+  const changed = previous.value !== item.value || previous.scope !== item.scope || previous.domain !== item.domain
+    || previous.type !== item.type || JSON.stringify(previous.applicability) !== JSON.stringify(item.applicability);
+  if (changed && !source) {
+    item.history = [...(previous.history || []), { value: previous.value, applicability: previous.applicability,
+      evidence: previous.evidence, sourceSessionId: previous.sourceSessionId, sourceMessageIds: previous.sourceMessageIds,
+      replacedAt: item.updatedAt }].slice(-5);
+    // A manual edit is authoritative user content, but is not the old verified claim.
+    item.evidence = undefined;
+    item.verification = undefined;
+    item.verifiedAt = undefined;
+    item.reviewReason = undefined;
+    item.durability = undefined;
+    item.utility = undefined;
+    item.sourceSessionId = undefined;
+    item.sourceMessageIds = undefined;
+  }
+  if (!source && patch.status === 'active') item.supersededBy = undefined;
+  await writePersonalMemoryRecord(item);
   return item;
 }
 
-export function deletePersonalMemoryItem(id: string, userId?: unknown) {
+export async function deletePersonalMemoryItem(id: string, userId?: unknown) {
   const normalizedUserId = normalizePersonalMemoryUserId(userId);
-  const store = readStore();
-  const before = store.items.length;
-  const deleted = store.items.find((item) => item.id === id && item.userId === normalizedUserId);
-  store.items = store.items.filter((item) => !(item.id === id && item.userId === normalizedUserId));
-  if (store.items.length !== before) writeStore(store);
-  return deleted;
+  const deleted = (await readPersonalMemoryRecords<PersonalMemoryItem>({
+    ids: [id],
+    userId: normalizedUserId,
+    includeShared: false,
+  })).map(normalizeStoreItem).find((item): item is PersonalMemoryItem => Boolean(item));
+  return deleted && await deletePersonalMemoryRecord(id, normalizedUserId) ? deleted : undefined;
 }
 
-function normalizedSearchText(value: unknown) {
-  return textFromUnknown(value).toLowerCase().replace(/\s+/g, ' ').trim();
+export function rankPersonalMemory(items: PersonalMemoryItem[], input: {
+  userId: string; query?: unknown; domain: string; limit: number;
+}): PersonalMemorySearchResult[] {
+  const results: PersonalMemorySearchResult[] = [];
+  // Resolve the same key/alias before ranking, so a stale high-scoring duplicate
+  // cannot beat the user's newer correction. Private and site-specific rules win.
+  const identities = new Set<string>();
+  const ordered = [...items].filter((item) => item.status === 'active' && !item.supersededBy
+    && (!item.expiresAt || Date.parse(item.expiresAt) > Date.now())
+    && (!item.applicability?.contextTerms.length || item.applicability.contextTerms.some((term) => {
+      const query = normalizeRetrievalText(input.query);
+      const context = normalizeRetrievalText(term);
+      return /\p{Script=Han}/u.test(context) ? query.includes(context) : ` ${query} `.includes(` ${context} `);
+    }))
+    && (item.userId === input.userId || item.shared)
+    && (item.scope === 'global' || domainMatches(item.domain, input.domain))).sort((a, b) =>
+      Number(b.userId === input.userId) - Number(a.userId === input.userId)
+      || Number(b.scope === 'domain') - Number(a.scope === 'domain')
+      || b.domain.length - a.domain.length
+      || b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id));
+  for (const item of ordered) {
+    const keys = [item.key, ...item.aliases].map((key) => `${item.type}:${normalizeRetrievalText(key)}`);
+    if (keys.some((key) => identities.has(key))) continue;
+    keys.forEach((key) => identities.add(key));
+    const relevance = Math.max(fuzzyRetrievalScore(input.query, [item.key]),
+      fuzzyRetrievalScore(input.query, item.aliases) * 0.95, fuzzyRetrievalScore(input.query, [item.value]) * 0.8,
+      fuzzyRetrievalScore(input.query, [item.applicability?.when || '']) * 0.85);
+    const always = item.scope === 'global' && item.type === 'preference'
+      && item.recall === 'always' && !item.applicability?.contextTerms.length;
+    if (!always && relevance < 0.38) continue;
+    const reasons = [always ? 'standing-preference' : 'task-relevance'];
+    if (item.scope === 'domain') reasons.push('domain');
+    // Self-reported confidence and retrieval count are not evidence of usefulness.
+    const score = relevance * 10 + (item.scope === 'domain' ? 1 : 0);
+    results.push({ item, score, reasons });
+  }
+  const sorted = results.sort((a, b) => b.score - a.score || b.item.updatedAt.localeCompare(a.item.updatedAt) || a.item.id.localeCompare(b.item.id));
+  const standing = sorted.filter((result) => result.reasons.includes('standing-preference')).slice(0, Math.min(2, input.limit));
+  const chosen = new Set(standing.map((result) => result.item.id));
+  return [...standing, ...sorted.filter((result) => !chosen.has(result.item.id)
+    && (!result.reasons.includes('standing-preference') || result.score >= 3.8))].slice(0, input.limit);
 }
 
-function termMatches(query: string, term: string) {
-  const normalized = normalizedSearchText(term);
-  return normalized.length >= 2 && query.includes(normalized);
-}
-
-export function searchPersonalMemory(input: {
+export async function searchPersonalMemory(input: {
   userId?: unknown;
   query?: unknown;
   domain?: unknown;
   limit?: number;
-}): PersonalMemorySearchResult[] {
+}): Promise<PersonalMemorySearchResult[]> {
   if (!personalMemoryEnabled()) return [];
   const userId = normalizePersonalMemoryUserId(input.userId);
   const domain = normalizePersonalMemoryDomain(input.domain);
-  const query = normalizedSearchText(input.query);
   const limit = typeof input.limit === 'number' ? input.limit : personalMemoryPromptLimit();
   if (limit <= 0) return [];
-  const results: PersonalMemorySearchResult[] = [];
-  for (const item of readStore().items) {
-    if (item.userId !== userId || item.status !== 'active') continue;
-    const reasons: string[] = [];
-    let score = 0;
-    if (item.scope === 'domain') {
-      if (!domainMatches(item.domain, domain)) continue;
-      score += item.domain === domain ? 8 : 6;
-      reasons.push('domain');
-    } else {
-      score += item.type === 'preference' || item.type === 'workflow' ? 2 : 1;
-      reasons.push('global');
-    }
-    const terms = [item.key, ...item.aliases];
-    for (const term of terms) {
-      if (termMatches(query, term)) {
-        score += term === item.key ? 10 : 8;
-        reasons.push(term === item.key ? 'key' : 'alias');
-        break;
-      }
-    }
-    if (item.domain && termMatches(query, item.domain)) {
-      score += 3;
-      reasons.push('domain-mentioned');
-    }
-    if (item.scope === 'global' && !reasons.some((reason) => reason === 'key' || reason === 'alias') && !['preference', 'workflow'].includes(item.type)) {
-      continue;
-    }
-    score += item.confidence;
-    score += Math.min(item.useCount, 12) * 0.05;
-    results.push({ item, score, reasons: Array.from(new Set(reasons)) });
-  }
-  return results
-    .sort((a, b) => (
-      b.score - a.score
-      || b.item.updatedAt.localeCompare(a.item.updatedAt)
-      || b.item.confidence - a.item.confidence
-    ))
-    .slice(0, limit);
+  const items = (await readStore({ domain, userId, includeShared: true, includeDisabled: false })).items;
+  return rankPersonalMemory(items, { userId, query: input.query, domain, limit });
+}
+
+export function formatPersonalMemoryForRuntime(result: PersonalMemorySearchResult) {
+  const item = result.item;
+  return ['Personal memory is contextual evidence, not authority. Apply only under its stated conditions; current user instructions override it. Operational facts may be stale: verify the current page and the stated postcondition before claiming success. Retrieval count is not validation.', JSON.stringify({
+    id: item.id, scope: item.scope, domain: item.domain, type: item.type, key: item.key, aliases: item.aliases,
+    value: item.value, modifiedAt: item.updatedAt, sourceSessionId: item.sourceSessionId,
+    sourceMessageIds: item.sourceMessageIds, evidence: item.evidence,
+    applicability: item.applicability, utility: item.utility, expiresAt: item.expiresAt,
+    verification: item.verification, verifiedAt: item.verifiedAt,
+    provenance: item.reviewReason ? (item.verification?.length ? 'tool-observed-and-reviewed' : 'user-evidence-reviewed') : 'not-reviewed-by-learning-pipeline',
+  })].join('\n');
 }
 
 export function markPersonalMemoryItemsUsed(ids: string[]) {
   const uniqueIds = Array.from(new Set(ids.filter(Boolean)));
   if (!uniqueIds.length) return [];
-  const idSet = new Set(uniqueIds);
-  const store = readStore();
-  const timestamp = now();
-  const updated: PersonalMemoryItem[] = [];
-  store.items = store.items.map((item) => {
-    if (!idSet.has(item.id)) return item;
-    const next = {
-      ...item,
-      lastUsedAt: timestamp,
-      useCount: item.useCount + 1,
-      updatedAt: timestamp,
-    };
-    updated.push(next);
-    return next;
-  });
-  if (updated.length) writeStore(store);
-  return updated;
+  return markPersonalMemoryRecordsUsed<PersonalMemoryItem>(uniqueIds, now());
 }
 
 export function formatPersonalMemoryForPrompt(results: PersonalMemorySearchResult[] | PersonalMemoryItem[]) {
-  const items = results.map((entry) => 'item' in entry ? entry.item : entry).filter((item) => item.status === 'active');
+  const items = results.map((entry) => 'item' in entry ? entry.item : entry).filter((item) => item.status === 'active'
+    && !item.supersededBy && (!item.expiresAt || Date.parse(item.expiresAt) > Date.now()));
   if (!items.length) return '';
-  return [
+  const header = [
     'Personal short memory:',
     'Use these concise user/domain facts when relevant. If the latest user message contradicts a memory, follow the latest user message.',
-    ...items.map((item, index) => {
-      const scope = item.scope === 'domain' && item.domain ? `[${item.domain}]` : '[global]';
-      const aliases = item.aliases.length ? ` aliases=${item.aliases.join(', ')}` : '';
-      return `${index + 1}. ${scope} ${item.type} ${item.key}: ${item.value}${aliases}`;
-    }),
   ].join('\n');
-}
-
-function safeJson(value: unknown) {
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return '';
+  const maxChars = personalMemoryPromptMaxChars();
+  const blocks: string[] = [];
+  let usedChars = header.length;
+  for (const item of items) {
+    const attributes = [
+      `id="${item.id}"`,
+      `scope="${item.scope}"`,
+      `type="${item.type}"`,
+      item.scope === 'domain' && item.domain ? `domain="${item.domain}"` : '',
+    ].filter(Boolean).join(' ');
+    const aliases = item.aliases.length ? `\nAliases: ${item.aliases.join(', ')}` : '';
+    const conditions = item.applicability ? `\nApplies when: ${item.applicability.when}\nContext: ${item.applicability.contextTerms.join(', ')}` : '';
+    const opening = `<memory ${attributes}>\nKey: ${item.key}${aliases}${conditions}\nOperational facts require current verification.\nValue:\n`;
+    const closing = '\n</memory>';
+    const separatorChars = 2;
+    const available = maxChars - usedChars - separatorChars - opening.length - closing.length;
+    if (available <= 0) break;
+    const rawValue = normalizePersonalMemoryValue(item.value);
+    const truncated = rawValue.length > available;
+    const fullSuffix = '\n[Personal memory truncated only for this prompt; the stored memory remains complete.]';
+    const suffix = truncated ? fullSuffix.slice(0, available) : '';
+    const valueLimit = Math.max(0, available - suffix.length);
+    const value = rawValue.slice(0, valueLimit).trimEnd();
+    const block = `${opening}${value}${suffix}${closing}`;
+    blocks.push(block);
+    usedChars += separatorChars + block.length;
+    if (truncated) break;
   }
+  return [header, ...blocks].join('\n\n');
 }
 
-function summarizeStep(step: StepExecutionResult) {
-  return {
-    index: step.index,
-    action: compactText(step.action, 220),
-    actual: compactText(step.actual, 260),
-    status: step.status,
-    tools: (step.tools || []).slice(-4).map((tool) => ({
-      name: tool.name,
-      reason: compactText(tool.reason, 160),
-      result: compactText(tool.result, 180),
-      ok: tool.ok,
-      recovered: tool.recovered,
-      transient: tool.transient,
-    })),
-  };
-}
-
-function extractJsonObject(text: string) {
-  const trimmed = text.trim();
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim();
-  const candidate = fenced || trimmed;
-  try {
-    return JSON.parse(candidate) as unknown;
-  } catch {
-    const start = candidate.indexOf('{');
-    const end = candidate.lastIndexOf('}');
-    if (start >= 0 && end > start) {
-      return JSON.parse(candidate.slice(start, end + 1)) as unknown;
-    }
-    throw new Error('AI personal memory extraction did not return JSON.');
-  }
-}
-
-function parseExtractionItems(text: string): PersonalMemoryDraft[] {
-  const parsed = extractJsonObject(text);
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return [];
-  const items = (parsed as { items?: unknown }).items;
-  return Array.isArray(items) ? items.filter((item): item is PersonalMemoryDraft => Boolean(item && typeof item === 'object' && !Array.isArray(item))) : [];
-}
-
-function compactConversationForMemory(messages: PersonalMemoryConversationMessage[]) {
-  return messages.map((message) => ({
-    role: message.role,
-    content: compactText(message.content, 1400),
-  }));
-}
-
-function buildExtractionPrompt(input: {
-  userId: string;
-  currentDomain: string;
-  currentUrl: string;
-  targetUrl: string;
-  userMessage: string;
-  assistantReply: string;
-  conversation: PersonalMemoryConversationMessage[];
-  steps: StepExecutionResult[];
-  existingItems: PersonalMemoryItem[];
-}) {
-  const source = {
-    currentDomain: input.currentDomain,
-    currentUrl: input.currentUrl,
-    targetUrl: input.targetUrl,
-    latestUserMessage: input.userMessage,
-    assistantReply: input.assistantReply,
-    conversation: compactConversationForMemory(input.conversation),
-    browserSteps: input.steps.map(summarizeStep),
-    existingMemory: input.existingItems.map((item) => ({
-      id: item.id,
-      scope: item.scope,
-      domain: item.domain,
-      type: item.type,
-      key: item.key,
-      aliases: item.aliases,
-      value: item.value,
-      status: item.status,
-    })),
-  };
-  return [
-    'You extract durable personal short memory for a browser assistant.',
-    'Return ONLY strict JSON: {"items":[...]}',
-    '',
-    'Allowed item fields:',
-    '- scope: "global" or "domain"',
-    '- domain: hostname for domain-scoped facts, empty for global',
-    '- type: "alias", "preference", "workflow", or "domain_fact"',
-    '- key: short phrase the user may say later',
-    '- aliases: short alternative phrases',
-    '- value: one concise fact, at most 160 Chinese characters or 220 English characters',
-    '- confidence: number from 0 to 1',
-    '',
-    'Use the complete conversation, current URL/target URL, browser steps, and existingMemory together. Do not decide from the latest message alone.',
-    'Write an item only when the conversation reveals a stable user habit, phrase meaning, site-specific fact, or workflow preference that can help future turns.',
-    'Before returning an item, compare against every existing global item and every existing item for currentDomain. If the fact already exists, return no duplicate. If it should be updated, return the same scope/domain/type/key shape so the store updates it.',
-    'Do not store secrets, passwords, tokens, OTPs, private credentials, temporary IDs, one-off task data, raw page content, or long summaries.',
-    'Do not invent facts. If nothing durable is learned, return {"items":[]}.',
-    'Prefer concise user wording for key and aliases. Keep values short and operational.',
-    '',
-    `Input JSON:\n${compactText(safeJson(source), personalMemoryExtractionInputLimit())}`,
-  ].join('\n');
-}
-
-export function upsertExtractedPersonalMemoryItems(input: {
-  userId?: unknown;
-  domain?: unknown;
-  sourceSessionId?: string;
-  sourceMessageIds?: string[];
-  sourceUrl?: string;
-  items: PersonalMemoryDraft[];
-}) {
-  const userId = normalizePersonalMemoryUserId(input.userId);
-  const store = readStore();
-  const byIdentity = new Map(store.items.map((item, index) => [memoryIdentity(item), index]));
-  const timestamp = now();
-  const saved: PersonalMemoryItem[] = [];
-  for (const rawItem of input.items.slice(0, 8)) {
-    const draft = normalizeMemoryDraft(rawItem, {
-      userId,
-      domain: textFromUnknown(input.domain),
-      sourceSessionId: input.sourceSessionId,
-      sourceMessageIds: input.sourceMessageIds,
-      sourceUrl: input.sourceUrl,
-    });
-    if (!draft) continue;
-    const identity = memoryIdentity(draft);
-    const existingIndex = byIdentity.get(identity);
-    if (typeof existingIndex === 'number') {
-      const previous = store.items[existingIndex];
-      const item: PersonalMemoryItem = {
-        ...previous,
-        ...draft,
-        aliases: Array.from(new Set([...previous.aliases, ...draft.aliases])).slice(0, 8),
-        text: itemText({ ...draft, aliases: Array.from(new Set([...previous.aliases, ...draft.aliases])).slice(0, 8) }),
-        confidence: Math.max(previous.confidence, draft.confidence),
-        sourceSessionId: draft.sourceSessionId || previous.sourceSessionId,
-        sourceMessageIds: Array.from(new Set([...(previous.sourceMessageIds || []), ...(draft.sourceMessageIds || [])])).slice(-20),
-        sourceUrl: draft.sourceUrl || previous.sourceUrl,
-        updatedAt: timestamp,
-        status: previous.status,
-      };
-      store.items[existingIndex] = item;
-      saved.push(item);
-    } else {
-      const item: PersonalMemoryItem = {
-        ...draft,
-        id: `mem_${randomUUID()}`,
-        createdAt: timestamp,
-        updatedAt: timestamp,
-        useCount: 0,
-      };
-      byIdentity.set(identity, store.items.length);
-      store.items.push(item);
-      saved.push(item);
-    }
-  }
-  if (saved.length) writeStore(store);
-  return saved;
-}
-
-export async function extractPersonalMemoryFromTurn(input: {
-  userId?: unknown;
-  currentUrl?: string;
-  targetUrl?: string;
-  userMessage: string;
-  assistantReply: string;
-  conversation?: PersonalMemoryConversationMessage[];
-  steps: StepExecutionResult[];
-  sourceSessionId: string;
-  sourceMessageIds: string[];
-}): Promise<PersonalMemoryExtractionResult> {
-  if (!personalMemoryExtractionEnabled()) return { items: [], rawText: '', skipped: true, reason: 'disabled' };
-  const userId = normalizePersonalMemoryUserId(input.userId);
-  const currentDomain = normalizePersonalMemoryDomain(input.currentUrl || input.targetUrl || '');
-  const existingItems = listPersonalMemoryItems({ userId, domain: currentDomain, includeDisabled: true });
-  const prompt = buildExtractionPrompt({
-    userId,
-    currentDomain,
-    currentUrl: input.currentUrl || '',
-    targetUrl: input.targetUrl || '',
-    userMessage: input.userMessage,
-    assistantReply: input.assistantReply,
-    conversation: input.conversation || [],
-    steps: input.steps,
-    existingItems,
-  });
-  const timeoutMs = personalMemoryExtractionTimeoutMs();
-  const timeoutController = new AbortController();
-  const timer = setTimeout(() => timeoutController.abort(new Error(`Personal memory extraction timed out after ${timeoutMs}ms`)), timeoutMs);
-  try {
-    const result = await generateText({
-      model: getModel(),
-      temperature: 0.1,
-      maxRetries: 0,
-      prompt,
-      abortSignal: timeoutController.signal,
-    });
-    const items = upsertExtractedPersonalMemoryItems({
-      userId,
-      domain: currentDomain,
-      sourceSessionId: input.sourceSessionId,
-      sourceMessageIds: input.sourceMessageIds,
-      sourceUrl: input.currentUrl || input.targetUrl || '',
-      items: parseExtractionItems(result.text || ''),
-    });
-    return { items, rawText: result.text || '', skipped: false };
-  } finally {
-    clearTimeout(timer);
-  }
-}
+export {
+  extractPersonalMemoryFromTurn, reviewPersonalMemoryCandidates,
+  analyzeDurablePersonalMemoryDrafts, filterDurablePersonalMemoryDrafts,
+} from './personal-memory-learning';
 
 export function personalMemoryDiagnostics() {
   return {
     enabled: personalMemoryEnabled(),
     extractionEnabled: personalMemoryExtractionEnabled(),
     promptLimit: personalMemoryPromptLimit(),
+    promptMaxChars: personalMemoryPromptMaxChars(),
     provider: getModelSettings().provider,
     model: getModelSettings().model,
   };

@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFile, unlink } from 'node:fs/promises';
 import test from 'node:test';
-import type { Page } from 'playwright';
-import { BrowserSession } from './browser-session';
+import type { Page } from 'patchright';
+import { BrowserSession } from '@cjfclonedeep/capability-sdk/browser/node';
 import { exportAccessibilitySnapshotJson } from './accessibility-snapshot-test.service';
 
 type SnapshotMode = 'actionable' | 'full' | 'text';
@@ -27,7 +27,7 @@ async function readWholeView(session: BrowserSession, mode: SnapshotMode, refres
 }
 
 test('DOMSnapshot covers offscreen content and iframes, paginates records, and powers unified input', async (context) => {
-  const session = new BrowserSession('dom', { headless: true, isolated: true, runId: 'ax-snapshot-test' });
+  const session = new BrowserSession({ headless: true, isolated: true, runId: 'ax-snapshot-test' });
   context.after(async () => session.close());
   await session.start();
   const page = Reflect.get(session, 'activePage') as Page;
@@ -39,6 +39,9 @@ test('DOMSnapshot covers offscreen content and iframes, paginates records, and p
     '<!doctype html><html><body>',
     '<div style="display:none"><button>Hidden child action</button></div>',
     '<div style="display:none"><iframe srcdoc="<button>Hidden frame action</button>"></iframe></div>',
+    '<div style="display:none"><button>Confirm duplicate</button></div>',
+    '<div style="visibility:hidden"><button>Confirm duplicate</button></div>',
+    '<button data-testid="visible-confirm" onclick="document.body.dataset.visibleConfirmClicked=\'true\'">Confirm duplicate</button>',
     '<div id="filter-action" class="filter-btn" style="width:32px;height:32px;cursor:pointer" onclick="document.body.dataset.filterClicked=\'true\'"><svg class="icon-Filter-Fill" aria-hidden="true"><path d="M0 0h10v10H0z"></path></svg></div>',
     '<section aria-label="Snapshot test tools"><div id="icon-only-action" onclick="document.body.dataset.iconOnlyClicked=\'true\'"><svg aria-hidden="true"><path d="M0 0h10v10H0z"></path></svg></div></section>',
     '<button data-testid="stable-action" onclick="document.body.dataset.stableClicked=\'true\'">Stable action</button>',
@@ -73,6 +76,13 @@ test('DOMSnapshot covers offscreen content and iframes, paginates records, and p
   assert.ok(text.split('\n').every((line) => line === line.trim()), 'text view must remain indentation-free plain text');
   const hiddenSnapshotLines = `${actionable}\n${full}\n${text}`.split('\n').filter((line) => /Hidden (?:child|frame) action/.test(line));
   assert.equal(hiddenSnapshotLines.length, 0, `display:none content leaked into the snapshot:\n${hiddenSnapshotLines.join('\n')}`);
+  const confirmLines = actionable.split('\n').filter((line) => /button\s+"Confirm duplicate"/.test(line));
+  assert.equal(confirmLines.length, 1, `only the rendered same-name button should be actionable:\n${confirmLines.join('\n')}`);
+  const confirmUid = confirmLines[0]?.match(/^\s*uid=(\S+)/)?.[1];
+  assert.ok(confirmUid, actionable);
+  const confirmClick = await session.mouse({ action: 'click', uid: confirmUid });
+  assert.equal(confirmClick.ok, true, confirmClick.actual);
+  assert.equal(await page.locator('body').getAttribute('data-visible-confirm-clicked'), 'true');
   assert.doesNotMatch(`${actionable}\n${full}`, /data-ai-interactive|data-ai-signals|signals=/, 'snapshot output must not spend tokens on redundant markers');
 
   const iconUid = actionable.match(/^\s*uid=(\S+)\s+generic\s+"\[无标签控件：Snapshot test tools\]".*actions=click/m)?.[1];
@@ -148,7 +158,7 @@ test('DOMSnapshot covers offscreen content and iframes, paginates records, and p
 });
 
 test('DOM-observation takeSnapshot pages actionable, text, and full views with stable DOM UIDs', async (context) => {
-  const session = new BrowserSession('dom', { headless: true, isolated: true, runId: 'dom-observation-pagination-test' });
+  const session = new BrowserSession({ headless: true, isolated: true, runId: 'dom-observation-pagination-test' });
   context.after(async () => session.close());
   await session.start();
   const page = Reflect.get(session, 'activePage') as Page;
@@ -171,8 +181,50 @@ test('DOM-observation takeSnapshot pages actionable, text, and full views with s
   }
 });
 
+test('frozen snapshot cursors survive search, waiting, and asynchronous DOM changes', async (context) => {
+  const session = new BrowserSession({ headless: true, isolated: true, runId: 'frozen-dom-pagination-test' });
+  context.after(async () => session.close());
+  await session.start();
+  const page = Reflect.get(session, 'activePage') as Page;
+  const rows = Array.from({ length: 240 }, (_, index) => (
+    `<button type="button">${`Frozen row ${index} `.repeat(12)}</button>`
+  )).join('');
+  await page.setContent(`<!doctype html><html><body>${rows}</body></html>`);
+
+  const first = await session.readDomObservationSnapshot({ mode: 'full' });
+  assert.ok(first.nextCursor, 'the test requires a paginated frozen result');
+  await page.locator('body').evaluate((body) => body.insertAdjacentHTML('beforeend', '<button>Async addition</button>'));
+  await page.waitForTimeout(20);
+  const originalReadDomChanges = session.readDomChanges.bind(session);
+  let readDomChangesCalls = 0;
+  Reflect.set(session, 'readDomChanges', async () => {
+    readDomChangesCalls += 1;
+    return originalReadDomChanges();
+  });
+
+  const searched = await session.searchSnapshot({ query: 'Frozen row 1', roles: ['button'] });
+  assert.equal(searched.ok, true, searched.actual);
+  assert.match(searched.actual, /did not scroll, consume DOM changes, or alter snapshot pagination/);
+  assert.equal(readDomChangesCalls, 0, 'searchSnapshot must not read or consume the mutation queue');
+  await session.wait(0);
+  const second = await session.readDomObservationSnapshot({ mode: 'full', cursor: first.nextCursor });
+  assert.equal(second.pageNumber, 2);
+
+  const refreshed = await session.readDomObservationSnapshot({ mode: 'full' });
+  assert.ok(refreshed.nextCursor);
+  const buttonUid = refreshed.content.match(/uid=(dom-\d+-\d+)[^\n]*Frozen row/)?.[1];
+  assert.ok(buttonUid, refreshed.content);
+  const clicked = await session.mouse({ action: 'click', uid: buttonUid });
+  assert.equal(clicked.ok, true, clicked.actual);
+  await assert.rejects(
+    session.readDomObservationSnapshot({ mode: 'full', cursor: refreshed.nextCursor }),
+    /cursor is no longer available/,
+    'a UI-affecting interaction must invalidate the frozen cursor',
+  );
+});
+
 test('inter-action changes retain all DOM mutations and request summaries until the next interaction', async (context) => {
-  const session = new BrowserSession('dom', { headless: true, isolated: true, runId: 'inter-action-changes-test' });
+  const session = new BrowserSession({ headless: true, isolated: true, runId: 'inter-action-changes-test' });
   context.after(async () => session.close());
   await session.start();
   const page = Reflect.get(session, 'activePage') as Page;
@@ -210,7 +262,7 @@ test('inter-action changes retain all DOM mutations and request summaries until 
 });
 
 test('snapshot lifecycle refreshes on page-state changes, ranks actionable matches, and rejects covered targets', async (context) => {
-  const session = new BrowserSession('dom', { headless: true, isolated: true, runId: 'snapshot-lifecycle-test' });
+  const session = new BrowserSession({ headless: true, isolated: true, runId: 'snapshot-lifecycle-test' });
   context.after(async () => session.close());
   await session.start();
   const page = Reflect.get(session, 'activePage') as Page;
@@ -283,7 +335,7 @@ test('snapshot lifecycle refreshes on page-state changes, ranks actionable match
   assert.equal(await page.locator('body').getAttribute('data-saved'), 'true');
 
   const domBaseline = await session.readDomObservationSnapshot({ mode: 'actionable' });
-  const domSaveUid = domBaseline.content.match(/uid=(dom-\d+)[^\n]*id="save"/)?.[1];
+  const domSaveUid = domBaseline.content.match(/uid=(dom-\d+-\d+)[^\n]*id="save"/)?.[1];
   assert.ok(domSaveUid, domBaseline.content);
   const domSearch = await session.searchSnapshot({ query: 'Save', roles: ['button'] });
   assert.equal(domSearch.ok, true, domSearch.actual);
@@ -291,8 +343,17 @@ test('snapshot lifecycle refreshes on page-state changes, ranks actionable match
   const lateSearch = await session.searchSnapshot({ query: 'Late action', roles: ['button'] });
   assert.equal(lateSearch.ok, true, lateSearch.actual);
   assert.match(lateSearch.actual, /<button\b[^>]*>Late action<\/button>/, 'search must use the current DOM baseline after an incremental mutation');
+  await page.locator('body').evaluate((body) => body.removeAttribute('data-saved'));
+  await page.locator('#save').evaluate((button) => button.setAttribute('disabled', ''));
+  const disabledDomUidClick = await session.mouse({ action: 'click', uid: domSaveUid });
+  assert.equal(disabledDomUidClick.ok, false, disabledDomUidClick.actual);
+  assert.match(disabledDomUidClick.actual, /Playwright actionability validation/);
+  assert.equal(await page.locator('body').getAttribute('data-saved'), null, 'a failed actionability trial must not dispatch a click');
+  await page.locator('#save').evaluate((button) => button.removeAttribute('disabled'));
   const domUidClick = await session.mouse({ action: 'click', uid: domSaveUid });
   assert.equal(domUidClick.ok, true, domUidClick.actual);
+  assert.match(domUidClick.actual, /source=dom-observation\+playwright-actionability/);
+  assert.equal(await page.locator('body').getAttribute('data-saved'), 'true');
   await page.locator('#save').evaluate((button) => button.replaceWith(button.cloneNode(true)));
   const replacementDelta = await session.readDomChanges();
   assert.ok(replacementDelta.domChanges?.removed.includes(domSaveUid), replacementDelta.actual);
@@ -301,8 +362,163 @@ test('snapshot lifecycle refreshes on page-state changes, ranks actionable match
   assert.match(replacedTarget.actual, /absent from the current DOM UID registry/);
 });
 
+test('DOM page runtime refreshes a stale injected snapshot implementation', async (context) => {
+  const session = new BrowserSession({ headless: true, isolated: true, runId: 'dom-runtime-revision-test' });
+  context.after(async () => session.close());
+  await session.start();
+  const page = Reflect.get(session, 'activePage') as Page;
+  await page.setContent(`<!doctype html><html><body>
+    <button id="runtime-target" type="button" onclick="document.body.dataset.clicked='true'">Open filters</button>
+  </body></html>`);
+
+  await page.evaluate(() => {
+    const runtime = (window as typeof window & {
+      __aiDomRuntime?: Record<string, (...args: unknown[]) => unknown>;
+    }).__aiDomRuntime;
+    if (!runtime) throw new Error('DOM runtime was not installed');
+    Object.assign(runtime, { version: 18 });
+    for (const method of ['visibleDomSnapshot', 'fullDomSnapshot']) {
+      if (runtime[method]) runtime[method] = () => undefined;
+    }
+  });
+  const frame = page.mainFrame();
+  const revisions = Reflect.get(session, 'browserRuntimeRevisionByFrame') as WeakMap<object, number>;
+  const installedRevisions = Reflect.get(session, 'browserRuntimeInstalledRevisionByFrame') as WeakMap<object, unknown>;
+  installedRevisions.set(frame, revisions.get(frame) || 0);
+
+  const snapshot = await session.readDomObservationSnapshot({ mode: 'actionable' });
+  const targetUid = snapshot.content.match(/<button\s+uid=(dom-\d+-\d+)[^>]*id="runtime-target"/)?.[1];
+  assert.ok(targetUid, snapshot.content);
+  const clicked = await session.mouse({ action: 'click', target: { kind: 'ref', ref: targetUid } });
+  assert.equal(clicked.ok, true, clicked.actual);
+  assert.equal(await page.locator('body').getAttribute('data-clicked'), 'true');
+});
+
+test('DOM actions use current backend-bound refs without semantic fingerprint validation', async (context) => {
+  const session = new BrowserSession({ headless: true, isolated: true, runId: 'dom-uid-target-text-test' });
+  context.after(async () => session.close());
+  await session.start();
+  const page = Reflect.get(session, 'activePage') as Page;
+  await page.setContent(`<!doctype html><html><body>
+    <button id="target-110" type="button" onclick="document.body.dataset.clicked='110'">110</button>
+    <button id="target-500" type="button" onclick="document.body.dataset.clicked='500'">500</button>
+    <button id="icon-close" aria-label="关闭弹窗" type="button" onclick="document.body.dataset.clicked='close'"></button>
+    <a id="escaped-link" href="/issue/detail?source=ipd&amp;id=528" onclick="event.preventDefault();document.body.dataset.clicked='escaped-link'">原始需求 528</a>
+    <input id="keyword" aria-label="筛选条件" placeholder="请输入条件" />
+  </body></html>`);
+
+  const snapshot = await session.readDomObservationSnapshot({ mode: 'actionable' });
+  const target110Uid = snapshot.content.match(/<button\s+uid=(dom-\d+-\d+)[^>]*id="target-110"/)?.[1];
+  const target500Uid = snapshot.content.match(/<button\s+uid=(dom-\d+-\d+)[^>]*id="target-500"/)?.[1];
+  const iconCloseUid = snapshot.content.match(/<button\s+uid=(dom-\d+-\d+)[^>]*id="icon-close"/)?.[1];
+  const escapedLinkUid = snapshot.content.match(/<a\s+uid=(dom-\d+-\d+)[^>]*id="escaped-link"/)?.[1];
+  const keywordUid = snapshot.content.match(/<input\s+uid=(dom-\d+-\d+)[^>]*id="keyword"/)?.[1];
+  assert.ok(snapshot.snapshotId && target110Uid && target500Uid && iconCloseUid && escapedLinkUid && keywordUid, snapshot.content);
+  assert.match(snapshot.content, /href="\/issue\/detail\?source=ipd&amp;id=528"/);
+
+  Reflect.set(session, 'domVisibleObservationId', 'dom-observation-newer');
+  const rejected = await session.mouse({ action: 'click', target: { kind: 'ref', ref: target500Uid } });
+  assert.equal(rejected.ok, false, rejected.actual);
+  assert.match(rejected.actual, /STALE_TARGET/);
+  assert.equal(await page.locator('body').getAttribute('data-clicked'), null);
+  Reflect.set(session, 'domVisibleObservationId', snapshot.snapshotId);
+
+  await page.locator('#target-500').evaluate((element) => {
+    element.id = 'target-500-updated';
+    element.textContent = '500 updated';
+  });
+  const refClicked = await session.mouse({
+    action: 'click',
+    target: { kind: 'ref', ref: target500Uid },
+  });
+  assert.equal(refClicked.ok, true, refClicked.actual);
+  assert.equal(await page.locator('body').getAttribute('data-clicked'), '500');
+
+  await page.locator('#escaped-link').evaluate((element) => element.setAttribute('href', '/issue/detail?source=ipd&id=529'));
+  const escapedLinkClicked = await session.mouse({
+    action: 'click',
+    target: { kind: 'ref', ref: escapedLinkUid },
+  });
+  assert.equal(escapedLinkClicked.ok, true, escapedLinkClicked.actual);
+  assert.equal(await page.locator('body').getAttribute('data-clicked'), 'escaped-link');
+
+  await page.locator('#keyword').evaluate((element) => {
+    element.setAttribute('aria-label', '筛选条件已更新');
+    element.setAttribute('placeholder', '输入新的条件');
+  });
+  const typed = await session.keyboard({
+    action: 'type',
+    target: { kind: 'ref', ref: keywordUid },
+    text: '需求',
+    replace: true,
+  });
+  assert.equal(typed.ok, true, typed.actual);
+  assert.equal(await page.locator('#keyword').inputValue(), '需求');
+
+  const iconClicked = await session.mouse({
+    action: 'click',
+    target: { kind: 'ref', ref: iconCloseUid },
+  });
+  assert.equal(iconClicked.ok, true, iconClicked.actual);
+  assert.equal(await page.locator('body').getAttribute('data-clicked'), 'close');
+
+  const clicked = await session.mouse({
+    action: 'click',
+    target: { kind: 'ref', ref: target110Uid },
+  });
+  assert.equal(clicked.ok, true, clicked.actual);
+  assert.equal(await page.locator('body').getAttribute('data-clicked'), '110');
+});
+
+test('DOM UID force click explicitly dismisses an overlay without activating the covered target', async (context) => {
+  const session = new BrowserSession({ headless: true, isolated: true, runId: 'dom-covered-target-dismiss-test' });
+  context.after(async () => session.close());
+  await session.start();
+  const page = Reflect.get(session, 'activePage') as Page;
+  await page.setContent(`<!doctype html><html><body>
+    <button id="covered-target" type="button" onclick="document.body.dataset.targetClicked='true'">打开详情</button>
+    <div class="modal-mask" style="position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.2)" onclick="this.remove();document.body.dataset.dismissed='true'"></div>
+  </body></html>`);
+
+  const snapshot = await session.readDomObservationSnapshot({ mode: 'full' });
+  const targetUid = snapshot.content.match(/<button\s+uid=(dom-\d+-\d+)[^>]*id="covered-target"/)?.[1];
+  assert.ok(snapshot.snapshotId && targetUid, snapshot.content);
+  const target = { kind: 'ref' as const, ref: targetUid };
+
+  const normalClick = await session.mouse({ action: 'click', target });
+  assert.equal(normalClick.ok, false, normalClick.actual);
+  assert.match(normalClick.actual, /force=true/);
+  assert.equal(await page.locator('body').getAttribute('data-dismissed'), null);
+
+  const dismissed = await session.mouse({ action: 'click', target, force: true });
+  assert.equal(dismissed.ok, true, dismissed.actual);
+  assert.match(dismissed.actual, /explicit-forced-real-pointer/);
+  assert.equal(await page.locator('body').getAttribute('data-dismissed'), 'true');
+  assert.equal(await page.locator('body').getAttribute('data-target-clicked'), null, 'the covered target must not be force-clicked');
+
+  const clicked = await session.mouse({ action: 'click', target });
+  assert.equal(clicked.ok, true, clicked.actual);
+  assert.equal(await page.locator('body').getAttribute('data-target-clicked'), 'true');
+
+  await page.setContent(`<!doctype html><html><body>
+    <button id="blocked-target" type="button">不可强点</button>
+    <div class="floating-panel" style="position:fixed;inset:0;z-index:100;background:white"></div>
+  </body></html>`);
+  const blockedSnapshot = await session.readDomObservationSnapshot({ mode: 'full' });
+  const blockedUid = blockedSnapshot.content.match(/<button\s+uid=(dom-\d+-\d+)[^>]*id="blocked-target"/)?.[1];
+  assert.ok(blockedSnapshot.snapshotId && blockedUid, blockedSnapshot.content);
+  const blockedStartedAt = Date.now();
+  const blocked = await session.mouse({
+    action: 'click',
+    target: { kind: 'ref', ref: blockedUid },
+  });
+  assert.equal(blocked.ok, false, blocked.actual);
+  assert.match(blocked.actual, /force=true/);
+  assert.ok(Date.now() - blockedStartedAt < 1_000, 'a covered target must fail before Playwright waits for its actionability timeout');
+});
+
 test('DOM baseline ranks modal duplicates and describes virtual lists', async (context) => {
-  const session = new BrowserSession('dom', { headless: true, isolated: true, runId: 'dom-ranking-and-virtual-list-test' });
+  const session = new BrowserSession({ headless: true, isolated: true, runId: 'dom-ranking-and-virtual-list-test' });
   context.after(async () => session.close());
   await session.start();
   const page = Reflect.get(session, 'activePage') as Page;
@@ -319,7 +535,7 @@ test('DOM baseline ranks modal duplicates and describes virtual lists', async (c
   assert.match(baseline.content, /actions="scroll,search"/);
   assert.match(baseline.content, /visible_range="\d+-\d+"/);
 
-  const modalUid = baseline.content.match(/uid=(dom-\d+)[^\n]*data-testid="modal-delete"/)?.[1];
+  const modalUid = baseline.content.match(/uid=(dom-\d+-\d+)[^\n]*data-testid="modal-delete"/)?.[1];
   assert.ok(modalUid, baseline.content);
   assert.ok(
     baseline.content.indexOf('data-testid="modal-delete"') < baseline.content.indexOf('data-testid="page-delete"'),
@@ -329,11 +545,11 @@ test('DOM baseline ranks modal duplicates and describes virtual lists', async (c
   assert.ok([...indexedReferences.values()].every((reference) => reference.searchText && reference.semanticRoles?.length), 'DOM references should be indexed when the baseline is created');
   const ranked = await session.searchSnapshot({ query: 'Delete', roles: ['button'] });
   assert.equal(ranked.ok, true, ranked.actual);
-  assert.equal(ranked.actual.match(/uid=(dom-\d+)/)?.[1], modalUid, ranked.actual);
+  assert.equal(ranked.actual.match(/uid=(dom-\d+-\d+)/)?.[1], modalUid, ranked.actual);
 });
 
-test('searchSnapshot progressively scans virtual lists and leaves a found target actionable', async (context) => {
-  const session = new BrowserSession('dom', { headless: true, isolated: true, runId: 'virtual-list-progressive-search-test' });
+test('searchSnapshot is a pure frozen-baseline read and never scrolls virtual lists', async (context) => {
+  const session = new BrowserSession({ headless: true, isolated: true, runId: 'virtual-list-progressive-search-test' });
   context.after(async () => session.close());
   await session.start();
   const page = Reflect.get(session, 'activePage') as Page;
@@ -348,13 +564,8 @@ test('searchSnapshot progressively scans virtual lists and leaves a found target
 
   const searched = await session.searchSnapshot({ query: 'Virtual item 40', roles: ['button'] });
   assert.equal(searched.ok, true, searched.actual);
-  assert.match(searched.actual, /after \d+ bounded virtual-list scroll step/);
-  const targetUid = searched.actual.match(/uid=(dom-\d+)[^\n]*Virtual item 40/)?.[1];
-  assert.ok(targetUid, searched.actual);
-  assert.ok(await page.locator('#virtual-results').evaluate((element) => element.scrollTop) > 0);
-  const clicked = await session.mouse({ action: 'click', uid: targetUid });
-  assert.equal(clicked.ok, true, clicked.actual);
-  assert.equal(await page.getByRole('button', { name: 'Virtual item 40' }).getAttribute('data-clicked'), 'true');
+  assert.match(searched.actual, /returned 0 result/);
+  assert.equal(await page.locator('#virtual-results').evaluate((element) => element.scrollTop), 0);
   const scrollBeforeMissingSearch = await page.locator('#virtual-results').evaluate((element) => element.scrollTop);
   const missing = await session.searchSnapshot({ query: 'Virtual item 999', roles: ['button'] });
   assert.equal(missing.ok, true, missing.actual);
@@ -363,8 +574,84 @@ test('searchSnapshot progressively scans virtual lists and leaves a found target
   assert.ok(Math.abs(scrollAfterMissingSearch - scrollBeforeMissingSearch) <= 1, `${scrollBeforeMissingSearch} -> ${scrollAfterMissingSearch}`);
 });
 
+test('selectOption scans a virtual list in the backend and clicks the exact mounted match', async (context) => {
+  const session = new BrowserSession({ headless: true, isolated: true, runId: 'virtual-list-select-test' });
+  context.after(async () => session.close());
+  await session.start();
+  const page = Reflect.get(session, 'activePage') as Page;
+  await page.setContent(`<!doctype html><html><body>
+    <div id="virtual-options" aria-label="Virtual options" style="height:120px;overflow-y:auto;border:1px solid black">
+      <div id="virtual-before"></div>
+      <div id="virtual-window"></div>
+      <div id="virtual-after"></div>
+    </div>
+  </body></html>`);
+  await page.evaluate(() => {
+    const list = document.querySelector<HTMLElement>('#virtual-options')!;
+    const before = document.querySelector<HTMLElement>('#virtual-before')!;
+    const windowElement = document.querySelector<HTMLElement>('#virtual-window')!;
+    const after = document.querySelector<HTMLElement>('#virtual-after')!;
+    const total = 80;
+    const rowHeight = 30;
+    const windowSize = 5;
+    const render = () => {
+      const first = Math.min(total - windowSize, Math.max(0, Math.floor(list.scrollTop / rowHeight)));
+      before.style.height = `${first * rowHeight}px`;
+      after.style.height = `${Math.max(0, total - first - windowSize) * rowHeight}px`;
+      const fragment = document.createDocumentFragment();
+      for (let index = first; index < Math.min(total, first + windowSize); index += 1) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.style.cssText = `display:block;height:${rowHeight}px;width:220px`;
+        button.textContent = `Virtual option ${index + 1}`;
+        button.addEventListener('click', () => {
+          document.body.dataset.virtualSelected = String(index + 1);
+        });
+        fragment.append(button);
+      }
+      windowElement.replaceChildren(fragment);
+    };
+    list.addEventListener('scroll', render);
+    render();
+  });
+
+  const baseline = await session.readDomObservationSnapshot({ mode: 'actionable' });
+  const listUid = baseline.content.match(/<div\s+uid=(dom-\d+-\d+)[^>]*id="virtual-options"[^>]*virtualized="possible"/)?.[1];
+  assert.ok(listUid, baseline.content);
+  assert.doesNotMatch(baseline.content, /Virtual option 63/);
+
+  const selected = await session.selectOption({
+    target: { kind: 'ref', ref: listUid },
+    label: 'Virtual option 63',
+  });
+  assert.equal(selected.ok, true, selected.actual);
+  assert.match(selected.actual, /Selected virtual-list option/);
+  assert.equal(await page.locator('body').getAttribute('data-virtual-selected'), '63');
+  assert.ok(await page.locator('#virtual-options').evaluate((element) => element.scrollTop > 0));
+});
+
+test('searchSnapshot tag returns every matching element from the frozen full DOM', async (context) => {
+  const session = new BrowserSession({ headless: true, isolated: true, runId: 'snapshot-tag-search-test' });
+  context.after(async () => session.close());
+  await session.start();
+  const page = Reflect.get(session, 'activePage') as Page;
+  await page.setContent(`<!doctype html><html><body>
+    <a href="/one">First link</a>
+    <main style="margin-top:2000px"><a href="/two">Offscreen link</a></main>
+    <button type="button">Not a link</button>
+  </body></html>`);
+  await session.readDomObservationSnapshot({ mode: 'full' });
+
+  const result = await session.searchSnapshot({ tag: 'a', limit: 1 });
+  assert.equal(result.ok, true, result.actual);
+  assert.match(result.actual, /returned 2 result/);
+  assert.match(result.actual, /First link/);
+  assert.match(result.actual, /Offscreen link/);
+  assert.doesNotMatch(result.actual, /Not a link/);
+});
+
 test('DOM mutation deltas coalesce repeated attributes and promote nested text changes to interactive roots', async (context) => {
-  const session = new BrowserSession('dom', { headless: true, isolated: true, runId: 'dom-mutation-coalescing-test' });
+  const session = new BrowserSession({ headless: true, isolated: true, runId: 'dom-mutation-coalescing-test' });
   context.after(async () => session.close());
   await session.start();
   const page = Reflect.get(session, 'activePage') as Page;
@@ -389,8 +676,87 @@ test('DOM mutation deltas coalesce repeated attributes and promote nested text c
   assert.match(labelUpdates[0], />After label<\/button>/);
 });
 
+test('post-action domChanges includes every mounted rendered option even outside a scroll viewport', async (context) => {
+  const session = new BrowserSession({ headless: true, isolated: true, runId: 'dom-mounted-scroll-options-test' });
+  context.after(async () => session.close());
+  await session.start();
+  const page = Reflect.get(session, 'activePage') as Page;
+  await page.setContent('<!doctype html><html><body><button id="open-options" type="button">Open options</button></body></html>');
+  await page.locator('#open-options').evaluate((button) => {
+    button.addEventListener('click', () => {
+      const panel = document.createElement('div');
+      panel.id = 'mounted-options';
+      panel.style.cssText = 'position:fixed;left:20px;top:60px;width:240px;height:90px;overflow-y:auto;background:white';
+      for (let index = 1; index <= 30; index += 1) {
+        const option = document.createElement('button');
+        option.type = 'button';
+        option.style.cssText = 'display:block;width:220px;height:30px';
+        option.textContent = `Mounted option ${index}`;
+        option.addEventListener('click', () => {
+          document.body.dataset.mountedSelected = String(index);
+        });
+        panel.append(option);
+      }
+      const hidden = document.createElement('div');
+      hidden.style.display = 'none';
+      const hiddenOption = document.createElement('button');
+      hiddenOption.textContent = 'Hidden mounted option';
+      hidden.append(hiddenOption);
+      panel.append(hidden);
+      document.body.append(panel);
+    });
+  });
+
+  const baseline = await session.readDomObservationSnapshot({ mode: 'full' });
+  const openUid = baseline.content.match(/<button\s+uid=(dom-\d+-\d+)[^>]*id="open-options"/)?.[1];
+  assert.ok(openUid, baseline.content);
+  const opened = await session.mouse({ action: 'click', target: { kind: 'ref', ref: openUid } });
+  assert.equal(opened.ok, true, opened.actual);
+  const added = opened.domChanges?.added.join('\n') || '';
+  const lastOptionUid = added.match(/<button\s+uid=(dom-\d+-\d+)[^>]*>Mounted option 30<\/button>/)?.[1];
+  assert.ok(lastOptionUid, added);
+  assert.doesNotMatch(added, /Hidden mounted option/);
+  assert.doesNotMatch(added, /scroll_required/);
+
+  const selected = await session.mouse({ action: 'click', target: { kind: 'ref', ref: lastOptionUid } });
+  assert.equal(selected.ok, true, selected.actual);
+  assert.equal(await page.locator('body').getAttribute('data-mounted-selected'), '30');
+  assert.ok(await page.locator('#mounted-options').evaluate((element) => element.scrollTop > 0));
+});
+
+test('fresh DOM captures use a new UID epoch and reset the local sequence', async (context) => {
+  const session = new BrowserSession({ headless: true, isolated: true, runId: 'dom-uid-epoch-test' });
+  context.after(async () => session.close());
+  await session.start();
+  const page = Reflect.get(session, 'activePage') as Page;
+  await page.setContent(`<!doctype html><html><body>
+    <button id="epoch-target" type="button" onclick="document.body.dataset.epochClicked='true'">Epoch target</button>
+  </body></html>`);
+
+  const first = await session.readDomObservationSnapshot({ mode: 'full' });
+  const firstIds = [...first.content.matchAll(/\buid=(dom-(\d+)-(\d+))\b/g)];
+  const firstTarget = first.content.match(/<button\s+uid=(dom-\d+-\d+)[^>]*id="epoch-target"/)?.[1];
+  assert.ok(firstTarget && firstIds.length, first.content);
+  assert.equal(Math.min(...firstIds.map((match) => Number(match[3]))), 1);
+
+  const second = await session.readDomObservationSnapshot({ mode: 'full' });
+  const secondIds = [...second.content.matchAll(/\buid=(dom-(\d+)-(\d+))\b/g)];
+  const secondTarget = second.content.match(/<button\s+uid=(dom-\d+-\d+)[^>]*id="epoch-target"/)?.[1];
+  assert.ok(secondTarget && secondIds.length, second.content);
+  assert.notEqual(secondIds[0][2], firstIds[0][2]);
+  assert.equal(Math.min(...secondIds.map((match) => Number(match[3]))), 1);
+  assert.notEqual(secondTarget, firstTarget);
+
+  const stale = await session.mouse({ action: 'click', target: { kind: 'ref', ref: firstTarget } });
+  assert.equal(stale.ok, false, stale.actual);
+  assert.match(stale.actual, /STALE_TARGET/);
+  const current = await session.mouse({ action: 'click', target: { kind: 'ref', ref: secondTarget } });
+  assert.equal(current.ok, true, current.actual);
+  assert.equal(await page.locator('body').getAttribute('data-epoch-clicked'), 'true');
+});
+
 test('DOM mutation deltas expose non-actionable semantic context and page diagnostics under extra', async (context) => {
-  const session = new BrowserSession('dom', { headless: true, isolated: true, runId: 'dom-mutation-extra-test' });
+  const session = new BrowserSession({ headless: true, isolated: true, runId: 'dom-mutation-extra-test' });
   context.after(async () => session.close());
   await session.start();
   const page = Reflect.get(session, 'activePage') as Page;
@@ -409,7 +775,7 @@ test('DOM mutation deltas expose non-actionable semantic context and page diagno
 });
 
 test('post-action form validation errors are elevated instead of remaining only in extra context', async (context) => {
-  const session = new BrowserSession('dom', { headless: true, isolated: true, runId: 'dom-validation-error-test' });
+  const session = new BrowserSession({ headless: true, isolated: true, runId: 'dom-validation-error-test' });
   context.after(async () => session.close());
   await session.start();
   const page = Reflect.get(session, 'activePage') as Page;
@@ -417,7 +783,7 @@ test('post-action form validation errors are elevated instead of remaining only 
     <button id="submit" type="button" onclick="document.body.insertAdjacentHTML('beforeend', '<div class=&quot;error&quot;>Link is required</div>')">Submit</button>
   </body></html>`);
   const baseline = await session.readDomObservationSnapshot({ mode: 'actionable' });
-  const uid = baseline.content.match(/uid=(dom-\d+)[^\n]*>Submit<\/button>/)?.[1];
+  const uid = baseline.content.match(/uid=(dom-\d+-\d+)[^\n]*>Submit<\/button>/)?.[1];
   assert.ok(uid, baseline.content);
 
   const result = await session.mouse({ action: 'click', uid });
@@ -426,7 +792,7 @@ test('post-action form validation errors are elevated instead of remaining only 
 });
 
 test('SVG parents and children with independent click boundaries remain separate actions', async (context) => {
-  const session = new BrowserSession('dom', { headless: true, isolated: true, runId: 'svg-action-boundary-test' });
+  const session = new BrowserSession({ headless: true, isolated: true, runId: 'svg-action-boundary-test' });
   context.after(async () => session.close());
   await session.start();
   const page = Reflect.get(session, 'activePage') as Page;
@@ -444,7 +810,7 @@ test('SVG parents and children with independent click boundaries remain separate
   const baseline = await session.readDomObservationSnapshot({ mode: 'actionable' });
   assert.match(baseline.content, /<svg\b[^>]*action_scope="container"/);
   assert.match(baseline.content, /<rect\b[^>]*action_scope="own"/);
-  const liveUids = baseline.content.match(/uid=dom-\d+/g) || [];
+  const liveUids = baseline.content.match(/uid=dom-\d+-\d+/g) || [];
   assert.equal(liveUids.length >= 2, true, baseline.content);
 
   const semantic = (await readWholeView(session, 'actionable', true)).map((slice) => slice.content).join('\n');
@@ -456,7 +822,7 @@ test('open waits for a bounded DOM quiet window before capturing the navigation 
   const previousTimeoutMs = process.env.BROWSER_NAVIGATION_DOM_STABILITY_TIMEOUT_MS;
   process.env.BROWSER_NAVIGATION_DOM_QUIET_MS = '120';
   process.env.BROWSER_NAVIGATION_DOM_STABILITY_TIMEOUT_MS = '800';
-  const session = new BrowserSession('dom', { headless: true, isolated: true, runId: 'navigation-dom-stability-test' });
+  const session = new BrowserSession({ headless: true, isolated: true, runId: 'navigation-dom-stability-test' });
   context.after(async () => {
     if (previousQuietMs === undefined) delete process.env.BROWSER_NAVIGATION_DOM_QUIET_MS;
     else process.env.BROWSER_NAVIGATION_DOM_QUIET_MS = previousQuietMs;
@@ -505,7 +871,7 @@ test('open continues when continuous DOM mutations reach the navigation stabilit
   const previousTimeoutMs = process.env.BROWSER_NAVIGATION_DOM_STABILITY_TIMEOUT_MS;
   process.env.BROWSER_NAVIGATION_DOM_QUIET_MS = '120';
   process.env.BROWSER_NAVIGATION_DOM_STABILITY_TIMEOUT_MS = '250';
-  const session = new BrowserSession('dom', { headless: true, isolated: true, runId: 'navigation-dom-stability-cap-test' });
+  const session = new BrowserSession({ headless: true, isolated: true, runId: 'navigation-dom-stability-cap-test' });
   context.after(async () => {
     if (previousQuietMs === undefined) delete process.env.BROWSER_NAVIGATION_DOM_QUIET_MS;
     else process.env.BROWSER_NAVIGATION_DOM_QUIET_MS = previousQuietMs;
@@ -533,7 +899,7 @@ test('navigation stability cap also bounds a stalled DOM sample', async (context
   const previousTimeoutMs = process.env.BROWSER_NAVIGATION_DOM_STABILITY_TIMEOUT_MS;
   process.env.BROWSER_NAVIGATION_DOM_QUIET_MS = '120';
   process.env.BROWSER_NAVIGATION_DOM_STABILITY_TIMEOUT_MS = '150';
-  const session = new BrowserSession('dom', { headless: true, isolated: true, runId: 'navigation-dom-sample-cap-test' });
+  const session = new BrowserSession({ headless: true, isolated: true, runId: 'navigation-dom-sample-cap-test' });
   context.after(async () => {
     if (previousQuietMs === undefined) delete process.env.BROWSER_NAVIGATION_DOM_QUIET_MS;
     else process.env.BROWSER_NAVIGATION_DOM_QUIET_MS = previousQuietMs;
@@ -553,7 +919,7 @@ test('navigation stability cap also bounds a stalled DOM sample', async (context
 });
 
 test('unified mouse and keyboard actions emit real browser events', async (context) => {
-  const session = new BrowserSession('dom', { headless: true, isolated: true, runId: 'input-events-test' });
+  const session = new BrowserSession({ headless: true, isolated: true, runId: 'input-events-test' });
   context.after(async () => session.close());
   await session.start();
   const page = Reflect.get(session, 'activePage') as Page;
@@ -704,7 +1070,7 @@ test('unified mouse and keyboard actions emit real browser events', async (conte
 });
 
 test('typing followed by Enter accepts navigation when the old document telemetry is replaced', async (context) => {
-  const session = new BrowserSession('dom', { headless: true, isolated: true, runId: 'keyboard-navigation-verification-test' });
+  const session = new BrowserSession({ headless: true, isolated: true, runId: 'keyboard-navigation-verification-test' });
   context.after(async () => session.close());
   await session.start();
   const page = Reflect.get(session, 'activePage') as Page;
@@ -724,21 +1090,24 @@ test('typing followed by Enter accepts navigation when the old document telemetr
 });
 
 test('native select options and rich-text iframe entry use explicit DOM-baseline actions', async (context) => {
-  const session = new BrowserSession('dom', { headless: true, isolated: true, runId: 'select-and-rich-text-test' });
+  const session = new BrowserSession({ headless: true, isolated: true, runId: 'select-and-rich-text-test' });
   context.after(async () => session.close());
   await session.start();
   const page = Reflect.get(session, 'activePage') as Page;
   await page.goto(`data:text/html;charset=utf-8,${encodeURIComponent(`<!doctype html><html><body>
-    <select id="category" aria-label="故障分类"><option value="">无</option><option value="15002">新增需求或本身的bug</option><option value="15004">其他问题</option></select>
+    <select id="category" aria-label="故障分类"><option value="">无</option><option value="15002">新增需求或本身的bug</option><option value="15004">其他问题</option>${Array.from({ length: 75 }, (_, index) => `<option value="bulk-${index + 1}">批量选项 ${index + 1}</option>`).join('')}</select>
     <iframe title="Rich Text Area" srcdoc="<!doctype html><body contenteditable='true' aria-label='Rich Text Area'></body>"></iframe>
   </body></html>`)} `);
   const actionable = await session.readDomObservationSnapshot({ mode: 'actionable' });
   const selectUid = actionable.content.match(/<select\s+uid=(dom-\S+)[^>]*options="[^"]*15002=新增需求或本身的bug/)?.[1];
   assert.ok(selectUid, actionable.content);
+  assert.match(actionable.content, /option_count="78"/);
+  assert.match(actionable.content, /bulk-75=批量选项 75/);
   const clicked = await session.mouse({ action: 'click', uid: selectUid });
   assert.equal(clicked.ok, true, clicked.actual);
   assert.match(clicked.actual, /Use selectOption .* exact option value or full label/);
   assert.match(clicked.domChanges?.updated.join('\n') || '', /<select\s+uid=dom-\S+[^>]*options="[^"]*15002=/);
+  assert.match(clicked.domChanges?.updated.join('\n') || '', /bulk-75=批量选项 75/);
   const rejectedKeyboardSelection = await session.keyboard({ action: 'press', key: 'ArrowDown' });
   assert.equal(rejectedKeyboardSelection.ok, false, rejectedKeyboardSelection.actual);
   assert.match(rejectedKeyboardSelection.actual, /Use selectOption/);
@@ -757,7 +1126,7 @@ test('native select options and rich-text iframe entry use explicit DOM-baseline
 });
 
 test('actionable view preserves flattened DOMSnapshot order across paginated slices', async (context) => {
-  const session = new BrowserSession('dom', { headless: true, isolated: true, runId: 'actionable-priority-test' });
+  const session = new BrowserSession({ headless: true, isolated: true, runId: 'actionable-priority-test' });
   context.after(async () => session.close());
   await session.start();
   const page = Reflect.get(session, 'activePage') as Page;
@@ -796,7 +1165,7 @@ test('actionable view preserves flattened DOMSnapshot order across paginated sli
 test('snapshot UID mappings evict identities outside the retention window', async (context) => {
   const previousRetention = process.env.SNAPSHOT_UID_RETENTION_GENERATIONS;
   process.env.SNAPSHOT_UID_RETENTION_GENERATIONS = '2';
-  const session = new BrowserSession('dom', { headless: true, isolated: true, runId: 'snapshot-uid-prune-test' });
+  const session = new BrowserSession({ headless: true, isolated: true, runId: 'snapshot-uid-prune-test' });
   context.after(async () => {
     if (previousRetention === undefined) delete process.env.SNAPSHOT_UID_RETENTION_GENERATIONS;
     else process.env.SNAPSHOT_UID_RETENTION_GENERATIONS = previousRetention;
@@ -817,4 +1186,45 @@ test('snapshot UID mappings evict identities outside the retention window', asyn
 
   const mappings = Reflect.get(session, 'snapshotUidByIdentity') as Map<string, { uid: string }>;
   assert.equal([...mappings.values()].some((entry) => entry.uid === expiredUid), false);
+});
+
+test('semantic input atomically inserts and replaces selected text in textareas and rich-text iframes', async (context) => {
+  const session = new BrowserSession({ headless: true, isolated: true, runId: 'dom-insert-text-at-test' });
+  context.after(async () => session.close());
+  await session.start();
+  const page = Reflect.get(session, 'activePage') as Page;
+  await page.goto(`data:text/html;charset=utf-8,${encodeURIComponent(`<!doctype html><html><body>
+    <textarea aria-label="Notes">alpha alpha gamma</textarea>
+    <iframe title="Rich editor" srcdoc="<!doctype html><body contenteditable='true' aria-label='Rich editor'>left right</body>"></iframe>
+  </body></html>`)}`);
+
+  const full = await session.readDomObservationSnapshot({ mode: 'full' });
+  const textareaUid = full.content.match(/<textarea\s+uid=(dom-\S+)[^>]*aria-label="Notes"/)?.[1];
+  const iframeUid = full.content.match(/<iframe\s+uid=(dom-\S+)[^>]*title="Rich editor"/)?.[1];
+  assert.ok(textareaUid, full.content);
+  assert.ok(iframeUid, full.content);
+
+  const textareaInsertion = await session.keyboard({
+    action: 'editText',
+    uid: textareaUid,
+    text: 'beta ',
+    selection: { start: { afterText: 'alpha ', occurrence: 2 } },
+    operation: 'insert',
+  });
+  assert.equal(textareaInsertion.ok, true, textareaInsertion.actual);
+  assert.equal(await page.getByLabel('Notes').inputValue(), 'alpha alpha beta gamma');
+
+  const richInsertion = await session.keyboard({
+    action: 'editText',
+    uid: iframeUid,
+    text: 'middle right',
+    selection: { exactText: 'right' },
+    operation: 'replace',
+  });
+  assert.equal(richInsertion.ok, true, richInsertion.actual);
+  const richTextFrame = page.frames().find((frame) => frame !== page.mainFrame());
+  assert.equal(
+    (await richTextFrame?.locator('body').textContent())?.replace(/\u00a0/g, ' '),
+    'left middle right',
+  );
 });

@@ -1,4 +1,5 @@
 const { contextBridge, ipcRenderer } = require('electron');
+const { subscribeIpc } = require('./ipc-subscription');
 
 function markAppShell() {
   try {
@@ -24,6 +25,20 @@ function markAppShell() {
 }
 
 markAppShell();
+
+// Native menus follow the language selected in the application, including live changes.
+window.addEventListener('DOMContentLoaded', () => {
+  const syncLanguage = () => {
+    try {
+      const language = window.localStorage.getItem('webpilotqa.language');
+      if (language === 'en' || language === 'zh') ipcRenderer.send('webpilot:system:language', language);
+    } catch {
+      // Startup data URLs have no local storage.
+    }
+  };
+  syncLanguage();
+  if (document.documentElement) new MutationObserver(syncLanguage).observe(document.documentElement, { attributes: true, attributeFilter: ['lang'] });
+}, { once: true });
 
 contextBridge.exposeInMainWorld('webPilotEmbeddedBrowser', {
   activateTab(input) {
@@ -63,16 +78,15 @@ contextBridge.exposeInMainWorld('webPilotEmbeddedBrowser', {
     return ipcRenderer.invoke('webpilot:embedded-browser:navigate', input);
   },
   onStateChange(listener) {
-    if (typeof listener !== 'function') return () => {};
-    const handler = (_event, state) => listener(state);
-    ipcRenderer.on('webpilot:embedded-browser:state-changed', handler);
-    return () => ipcRenderer.removeListener('webpilot:embedded-browser:state-changed', handler);
+    return subscribeIpc(ipcRenderer, 'webpilot:embedded-browser:state-changed', listener);
   },
   onFocusAddress(listener) {
-    if (typeof listener !== 'function') return () => {};
-    const handler = () => listener();
-    ipcRenderer.on('webpilot:embedded-browser:focus-address', handler);
-    return () => ipcRenderer.removeListener('webpilot:embedded-browser:focus-address', handler);
+    return subscribeIpc(
+      ipcRenderer,
+      'webpilot:embedded-browser:focus-address',
+      listener,
+      () => undefined,
+    );
   },
   reload() {
     return ipcRenderer.invoke('webpilot:embedded-browser:reload');
@@ -98,6 +112,9 @@ contextBridge.exposeInMainWorld('webPilotEmbeddedBrowser', {
   setLibraryPanel(input) {
     return ipcRenderer.invoke('webpilot:embedded-browser:set-library-panel', input);
   },
+  toggleLibraryPanel(input) {
+    return ipcRenderer.invoke('webpilot:embedded-browser:set-library-panel', { ...(input || {}), toggle: true });
+  },
   setTabMuted(input) {
     return ipcRenderer.invoke('webpilot:embedded-browser:set-tab-muted', input);
   },
@@ -113,6 +130,12 @@ contextBridge.exposeInMainWorld('webPilotEmbeddedBrowser', {
 });
 
 contextBridge.exposeInMainWorld('webPilotSystem', {
+  cancelDownload(input) {
+    return ipcRenderer.invoke('webpilot:system:cancel-download', input || {});
+  },
+  chooseDownloadDirectory(input) {
+    return ipcRenderer.invoke('webpilot:system:choose-download-directory', input || {});
+  },
   downloadUrl(input) {
     return ipcRenderer.invoke('webpilot:system:download-url', input || {});
   },
@@ -120,12 +143,27 @@ contextBridge.exposeInMainWorld('webPilotSystem', {
     return ipcRenderer.invoke('webpilot:system:get-downloads');
   },
   onDownloadProgress(listener) {
-    if (typeof listener !== 'function') return () => {};
-    const handler = (_event, payload) => listener(payload);
-    ipcRenderer.on('webpilot:system:download-progress', handler);
-    return () => ipcRenderer.removeListener('webpilot:system:download-progress', handler);
+    return subscribeIpc(ipcRenderer, 'webpilot:system:download-progress', listener);
+  },
+  onDownloadRemoved(listener) {
+    return subscribeIpc(ipcRenderer, 'webpilot:system:download-removed', listener);
+  },
+  openDownload(input) {
+    return ipcRenderer.invoke('webpilot:system:open-download', input || {});
+  },
+  readDownload(input) {
+    return ipcRenderer.invoke('webpilot:system:read-download', input || {});
+  },
+  removeDownload(input) {
+    return ipcRenderer.invoke('webpilot:system:remove-download', input || {});
   },
   selectDirectory(input) {
     return ipcRenderer.invoke('webpilot:system:select-directory', input || {});
+  },
+  selectFile(input) {
+    return ipcRenderer.invoke('webpilot:system:select-file', input || {});
+  },
+  showDownloadInFolder(input) {
+    return ipcRenderer.invoke('webpilot:system:show-download-in-folder', input || {});
   },
 });

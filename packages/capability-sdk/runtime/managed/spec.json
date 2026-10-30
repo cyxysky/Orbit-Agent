@@ -1,0 +1,20 @@
+{
+  "uvVersion": "0.12.13",
+  "pythonVersion": "3.11",
+  "uv": {
+    "win32-x64": { "file": "uv-x86_64-pc-windows-msvc.zip", "sha256": "a86c9dc7bad9b03f388583b7187c05fe9951c2e0d392217e8fd43d97787f6ec2" },
+    "linux-x64": { "file": "uv-x86_64-unknown-linux-gnu.tar.gz", "sha256": "745765a3b6e360ad76743599ae5c42e9278c7edf8bbff9fc76d05bf2623a04dd" },
+    "linux-arm64": { "file": "uv-aarch64-unknown-linux-gnu.tar.gz", "sha256": "2eaa5d94f5db7b3a1a092156b9420459e42ab0217d917fe74a876309cef9b5e9" }
+  },
+  "libreoffice": {
+    "version": "26.2.6",
+    "url": "https://download.documentfoundation.org/libreoffice/stable/26.2.6/win/x86_64/LibreOffice_26.2.6_Win_x86-64.msi",
+    "sha256": "f9877032fd908beb9c0ddf06df4af5c2e85f419c42e14876c4cce5aae5fb2660"
+  },
+  "models": {
+    "gliner": "fastino/gliner2.5-multi-v1",
+    "chinese": "uer/roberta-base-finetuned-cluener2020-chinese",
+    "pii": "LiquidAI/LFM2.5-Encoder-350M-PII-Detector"
+  },
+  "linuxPackages": ["ca-certificates", "libreoffice-writer", "libreoffice-calc", "libreoffice-impress", "libreoffice-draw", "python3-uno", "python3-venv", "ffmpeg", "fontconfig", "fonts-dejavu-core", "fonts-liberation", "fonts-noto-cjk", "fonts-noto-color-emoji"]
+}

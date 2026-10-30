@@ -1,0 +1,258 @@
+import { z } from 'zod';
+import {
+  createCapabilityRuntime,
+  defineCapabilityInput,
+  defineCapabilityTool,
+  type CapabilityExecutionContext,
+  type CapabilityManifest,
+  type CapabilityProvider,
+  type CapabilityResult,
+  type CapabilityRunContext,
+  type CapabilityToolSet,
+} from '../index.ts';
+import { browserCapabilitySettings } from './settings.ts';
+import { browserRuntimeSkill, browserRuntimeReferenceSkills, browserInteractiveQaSkill } from './runtime-skill.ts';
+
+export * from './output-settings.ts';
+export * from './interaction-schema.ts';
+export * from './runtime-skill.ts';
+export * from './settings.ts';
+export * from './session-group.ts';
+
+const reason = z.string().trim().min(1).max(300);
+const recoveryReview = z.string().min(1).max(6000).optional().describe('After a browser failure: concise Markdown with observed screenshot state, evidence-based cause (label uncertainty), changed recovery action, verification and prevention rule. Put review here, not in assistant narrative. Only claim images actually received.');
+const stateOptions = {
+  scope: z.enum(['active', 'all']).optional(),
+  frame: z.string().trim().min(1).max(200).optional(),
+  selector: z.string().trim().min(1).max(2000).optional(),
+  query: z.string().trim().min(1).max(300).optional(),
+  cursor: z.string().min(1).max(1000).optional(),
+};
+
+const readBrowserStateParser = z.object({
+  action: z.literal('state'),
+  reason,
+  recoveryReview,
+  ...stateOptions,
+  maxOutputChars: z.number().int().min(1_000).max(200_000).optional(),
+}).strict();
+const browserCodeParser = z.object({
+  action: z.literal('code'),
+  reason,
+  recoveryReview,
+  code: z.string().min(1).max(40_000),
+  observationMode: z.enum(['replace', 'append', 'keep-pair']).optional(),
+  maxOutputChars: z.number().int().min(1_000).optional(),
+}).strict();
+const waitForHumanVerificationParser = z.object({
+  action: z.literal('waitForHumanVerification'),
+  reason,
+  recoveryReview,
+  maxMs: z.number().int().min(1_000).max(30 * 60_000).optional(),
+}).strict();
+// Keep the provider-facing JSON Schema flat. Several OpenAI-compatible models
+// treat the first `oneOf` branch as a default and then keep emitting `state`
+// even when their reason describes a code/iframe operation. Runtime parsing
+// below still validates the exact action-specific shape.
+const browserParser = z.object({
+  ...stateOptions,
+  action: z.enum(['code', 'state', 'waitForHumanVerification']).describe(
+    'Required operation. Use code for Playwright interaction. Use state for an active-surface snapshot, or narrow it with scope/frame/selector/query and continue with the returned nextCursor.',
+  ),
+  reason,
+  observationMode: z.enum(['replace', 'append', 'keep-pair']).optional().describe('After code: replace old screenshots, append a continuous observation, or keep a before/after pair. Host bounds history and preserves the current observation.'),
+  recoveryReview,
+  code: z.string().min(1).max(40_000).optional().describe(
+    'Required only when action=code. JavaScript executed in the persistent Playwright runtime.',
+  ),
+  maxOutputChars: z.number().int().min(1_000).optional().describe('Optional explicit output limit. Code returns the complete result when omitted. State supports scope, frame, selector, query and nextCursor continuation, with a maximum page size of 200000 characters.'),
+  maxMs: z.number().int().min(1_000).max(30 * 60_000).optional().describe('Optional only when action=waitForHumanVerification.'),
+}).strict();
+
+/**
+ * `action` is the browser tool's discriminant and therefore the authoritative
+ * execution boundary. Models occasionally copy fields from a previous action;
+ * prune those unrelated fields before the strict union parser sees them.
+ */
+export function normalizeBrowserToolInput(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const input = value as Record<string, unknown>;
+  if (input.action === 'state') {
+    return { action: 'state', reason: input.reason, ...(input.recoveryReview !== undefined ? { recoveryReview: input.recoveryReview } : {}),
+      ...Object.fromEntries(['scope', 'frame', 'selector', 'query', 'cursor', 'maxOutputChars'].filter((key) => input[key] !== undefined).map((key) => [key, input[key]])),
+    };
+  }
+  if (input.action === 'code') {
+    return {
+      action: 'code',
+      reason: input.reason,
+      ...(input.recoveryReview !== undefined ? { recoveryReview: input.recoveryReview } : {}),
+      code: input.code,
+      ...(input.observationMode !== undefined ? { observationMode: input.observationMode } : {}),
+      ...(input.maxOutputChars !== undefined ? { maxOutputChars: input.maxOutputChars } : {}),
+    };
+  }
+  if (input.action === 'waitForHumanVerification') {
+    return {
+      action: 'waitForHumanVerification',
+      reason: input.reason,
+      ...(input.recoveryReview !== undefined ? { recoveryReview: input.recoveryReview } : {}),
+      ...(input.maxMs !== undefined ? { maxMs: input.maxMs } : {}),
+    };
+  }
+  return value;
+}
+
+export type ReadBrowserStateInput = z.infer<typeof readBrowserStateParser>;
+export type BrowserCodeInput = z.infer<typeof browserCodeParser>;
+export type WaitForHumanVerificationInput = z.infer<typeof waitForHumanVerificationParser>;
+export type BrowserToolInput = ReadBrowserStateInput | BrowserCodeInput | WaitForHumanVerificationInput;
+
+export const browserCapabilityToolNames = Object.freeze({
+  browser: 'browser',
+} as const);
+
+export const browserCapabilityActions = Object.freeze({
+  state: 'state',
+  code: 'code',
+  waitForHumanVerification: 'waitForHumanVerification',
+} as const);
+
+export const browserToolInput = defineCapabilityInput(
+  z.toJSONSchema(browserParser) as Readonly<Record<string, unknown>>,
+  (value): BrowserToolInput => {
+    const normalized = browserParser.parse(normalizeBrowserToolInput(value));
+    if (normalized.action === 'code') return browserCodeParser.parse(normalized);
+    if (normalized.action === 'state') return readBrowserStateParser.parse(normalized);
+    return waitForHumanVerificationParser.parse(normalized);
+  },
+);
+
+export type BrowserOperationResult = {
+  ok: boolean;
+  actual?: string;
+  data?: unknown;
+  summary?: string;
+  failureCategory?: string;
+  referenceImagePath?: string;
+  referenceImagePaths?: string[];
+  browserObservation?: { width?: number; height?: number; surfaceId?: string; visualHash?: string; id?: string; domEpoch?: number; actionable?: boolean; retention?: 'replace' | 'append' | 'keep-pair'; disabledReason?: 'automatic-screenshot-disabled' | 'model-image-input-unavailable'; status: 'available' | 'unavailable' | 'disabled'; path?: string; url?: string; capturedAt?: string; error?: string };
+  [key: string]: unknown;
+};
+
+export type BrowserOperationEnvelope = {
+  runtime: 'webpilot.browser-operation';
+  result: BrowserOperationResult;
+};
+
+export function browserOperationSummary(result: Pick<BrowserOperationResult, 'ok' | 'actual' | 'summary'>): string {
+  return result.summary || result.actual || (result.ok ? 'Browser operation completed.' : 'Browser operation failed.');
+}
+
+export function browserOperationToCapabilityResult(
+  result: BrowserOperationResult,
+): CapabilityResult<BrowserOperationEnvelope> {
+  const envelope: BrowserOperationEnvelope = {
+    runtime: 'webpilot.browser-operation',
+    result,
+  };
+  const content = result.browserObservation?.path
+    ? [{ type: 'image' as const, artifactId: result.browserObservation.path, mediaType: 'image/png' }] : undefined;
+  if (!result.ok) {
+    return {
+      ok: false,
+      content,
+      error: {
+        code: result.failureCategory || 'browser-operation-failed',
+        message: browserOperationSummary(result),
+        details: envelope,
+      },
+    };
+  }
+  return { ok: true, summary: browserOperationSummary(result), data: envelope, content };
+}
+
+export function browserOperationFromCapabilityResult(
+  result: CapabilityResult,
+): BrowserOperationResult {
+  const value = result.ok ? result.data : result.error.details;
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const envelope = value as Partial<BrowserOperationEnvelope>;
+    if (envelope.runtime === 'webpilot.browser-operation' && envelope.result) return envelope.result;
+  }
+  return result.ok
+    ? { ok: true, actual: result.summary }
+    : { ok: false, actual: result.error.message, failureCategory: result.error.code };
+}
+
+export type BrowserCapabilityOperations = {
+  readBrowserState(
+    input: ReadBrowserStateInput,
+    context: CapabilityExecutionContext,
+  ): Promise<CapabilityResult>;
+  browserCode(
+    input: BrowserCodeInput,
+    context: CapabilityExecutionContext,
+  ): Promise<CapabilityResult>;
+  waitForHumanVerification(
+    input: WaitForHumanVerificationInput,
+    context: CapabilityExecutionContext,
+  ): Promise<CapabilityResult>;
+  health?(): Promise<import('../index.ts').CapabilityHealth>;
+  dispose?(): Promise<void>;
+};
+
+export const browserCapabilityManifest = Object.freeze({
+  schemaVersion: 1,
+  id: 'com.webpilot.browser',
+  name: 'Browser',
+  version: '0.1.0',
+  description: 'Persistent Playwright browser sessions, code execution, snapshots, and visual evidence.',
+  permissions: ['browser:launch', 'browser:cdp', 'network:access', 'artifact:write'],
+  runtimeRequirements: { node: '>=22.16', patchright: '1.63.0' },
+  configuration: { settings: browserCapabilitySettings },
+  skills: [browserRuntimeSkill, ...browserRuntimeReferenceSkills, browserInteractiveQaSkill],
+} satisfies CapabilityManifest);
+
+export function createBrowserTools(operations: BrowserCapabilityOperations): CapabilityToolSet {
+  return Object.freeze({
+    [browserCapabilityToolNames.browser]: defineCapabilityTool<BrowserToolInput, unknown>({
+      name: browserCapabilityToolNames.browser,
+      description: 'Execute one bounded Playwright JavaScript cell, read scoped browser state with cursor continuation, or pause for human verification. Inspect and attempt ordinary verification through the page UI first; request human help after bounded attempts fail or a step needs user-owned credentials, OTP, QR scan or device approval. State accepts scope/frame/selector/query; pass nextCursor as cursor to continue the same capture. The action field is authoritative and unrelated fields are discarded before validation.',
+      input: browserToolInput,
+      inputExamples: [
+        { action: 'code', reason: 'Read the current page URL and title', code: 'nodeRepl.write({ url: page.url(), title: await page.title() })' },
+        { action: 'state', reason: 'Read the current top-level browser state once' },
+        { action: 'waitForHumanVerification', reason: 'Wait for the user to complete verification', maxMs: 180_000 },
+      ],
+      policy: {
+        concurrency: 'serial',
+        concurrencyGroup: 'browser',
+        permissions: browserCapabilityManifest.permissions,
+      },
+      execute: (input, context) => {
+        if (input.action === 'state') return operations.readBrowserState(input, context);
+        if (input.action === 'code') return operations.browserCode(input, context);
+        return operations.waitForHumanVerification(input, context);
+      },
+    }),
+  });
+}
+
+export function createBrowserCapability(options: {
+  createOperations(
+    context: CapabilityRunContext,
+  ): BrowserCapabilityOperations | Promise<BrowserCapabilityOperations>;
+}): CapabilityProvider {
+  return {
+    manifest: browserCapabilityManifest,
+    async createRuntime(context) {
+      const operations = await options.createOperations(context);
+      return createCapabilityRuntime({
+        tools: createBrowserTools(operations),
+        health: operations.health,
+        dispose: operations.dispose,
+      });
+    },
+  };
+}

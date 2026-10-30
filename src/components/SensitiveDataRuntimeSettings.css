@@ -1,0 +1,8 @@
+.settings-local-runtime { display: grid; gap: 14px; max-width: 900px; padding: 20px; }
+.settings-local-runtime h3, .settings-local-runtime p { margin: 0; }
+.settings-local-runtime p { line-height: 1.7; }
+.settings-local-runtime-status, .settings-local-runtime-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.settings-local-runtime pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; max-height: 180px; overflow: auto; }
+.settings-local-runtime-directory { overflow-wrap: anywhere; opacity: .7; font-size: 12px; }
+.settings-local-runtime-actions button { display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border: 1px solid var(--border-color, #8885); border-radius: 8px; background: transparent; color: inherit; cursor: pointer; }
+.settings-local-runtime-actions button:disabled { opacity: .5; cursor: default; }

@@ -1,0 +1,584 @@
+import type { WeComBotConnection, WeComInboundMessage } from '@cjfclonedeep/capability-sdk/integrations/communication/node';
+import { createWeComMessageArguments } from '@cjfclonedeep/capability-sdk/integrations/communication/node';
+import { CommunicationDeliveryError } from '@cjfclonedeep/capability-sdk/integrations/communication';
+import {
+  createBrowserChatSession, deleteBrowserChatSession, getBrowserChatSession,
+  sendBrowserChatMessage, subscribeBrowserChatUIStream, resolveBrowserChatToolConfirmation,
+  type BrowserChatMessage, type BrowserChatToolConfirmation,
+} from '@/server/ai/agents/browser-chat.service';
+import { communicationArtifactReader } from '@/server/storage/artifact-access';
+import { readBrowserChatSessionSummaries } from '@/server/storage/database-record-store';
+import { readBrowserChatSessionOwner } from '@/server/storage/browser-chat-history-store';
+import { store } from '@/server/db/store';
+import { enabledModelProviders, modelsForProvider, modelSelectionValue, resolveRuntimeModelSelection } from '@/lib/model-selection';
+import { browserChatAttachmentLimit } from '@/server/ai/agents/browser-chat-attachments';
+import {
+  communicationId, readCommunicationConversation, saveCommunicationConversation,
+  readCommunicationInbound, readCommunicationConfirmationSource,
+  receiveCommunicationMessage, saveCommunicationInbound, listPendingCommunicationMessages,
+  readWaitingCommunicationAttachments, consumeCommunicationAttachments, cancelCommunicationAttachments,
+  type CommunicationConversation, type CommunicationInbound,
+} from '@/server/storage/communication-conversation-store';
+import { resolveExternalIntegrations, type ResolvedExternalIntegration } from './external-integration-vault';
+import { closeUnusedWeComConnections, getWeComConnection } from './wecom-connections';
+import { communicationReplyContents, splitCommunicationText } from './communication-reply';
+import { communicationReplyWithResponseExports } from './communication-response-exports';
+import { importCommunicationAttachments } from './communication-attachments';
+
+type Watcher = { item: CommunicationInbound; stop: () => void };
+type Receiver = { integration: ResolvedExternalIntegration; bot: WeComBotConnection; stop: () => void };
+type Runtime = {
+  started: boolean; ticking: boolean; lastRefresh: number;
+  refreshing?: Promise<void>;
+  receivers: Map<string, Receiver>; watchers: Map<string, Watcher>;
+  scheduled: Set<string>; queues: Map<string, Promise<void>>;
+  timer?: ReturnType<typeof setTimeout>;
+};
+const state: Runtime = ((globalThis as typeof globalThis & { __orbitCommunicationRuntime?: Runtime }).__orbitCommunicationRuntime ??= {
+  started: false, ticking: false, lastRefresh: 0,
+  receivers: new Map(), watchers: new Map(), scheduled: new Set(), queues: new Map(),
+});
+
+// End the placeholder before WeCom's six-minute stream window expires.
+const streamLoadingTimeoutMs = 5 * 60_000;
+const streamLifetimeMs = 6 * 60_000;
+const streamTimers = ((globalThis as typeof globalThis & {
+  __orbitCommunicationStreamTimers?: Map<string, ReturnType<typeof setTimeout>>;
+}).__orbitCommunicationStreamTimers ??= new Map());
+
+function clearStreamTimer(id: string) {
+  clearTimeout(streamTimers.get(id));
+  streamTimers.delete(id);
+}
+
+function hasUnfinishedStream(item: CommunicationInbound) {
+  return item.replyStream?.status === 'opening' || item.replyStream?.status === 'open';
+}
+
+function scheduleStreamTimeout(item: CommunicationInbound) {
+  if (!item.replyStream || !hasUnfinishedStream(item) || streamTimers.has(item.id)) return;
+  const timer = setTimeout(() => {
+    void enqueue(item.conversationId, async () => {
+      try {
+        const latest = await readCommunicationInbound(item.id);
+        if (!latest || !hasUnfinishedStream(latest)) return;
+        const conversation = await readCommunicationConversation(latest.conversationId);
+        if (!conversation) return;
+        await sendReplyText(conversation, latest, latest.confirmationNotice
+          ? `对话 ${latest.sessionId || ''} 仍在等待操作确认，请使用确认卡片或 /confirm ${latest.confirmationNotice.id}、/cancel ${latest.confirmationNotice.id} 处理。`
+          : '任务仍在处理中，完成后会另行发送结果，你也可以在网页对话中查看进度。');
+      } finally { clearStreamTimer(item.id); }
+    }).catch(() => console.error('[communication] 未能结束企微等待提示。'));
+  }, Math.max(0, item.replyStream.startedAt + streamLoadingTimeoutMs - Date.now()));
+  timer.unref?.();
+  streamTimers.set(item.id, timer);
+}
+
+function failureMessage(error: unknown) {
+  const value = error as { errcode?: unknown; message?: unknown; errmsg?: unknown } | undefined;
+  if (typeof value?.errcode === 'number') return `企业微信返回错误码 ${value.errcode}。`;
+  return String(value?.message || value?.errmsg || '消息处理失败。')
+    .replace(/https?:\/\/\S+/gi, '[服务地址]')
+    .replace(/(apikey|secret|token)\s*[:=]\s*\S+/gi, '$1=[已隐藏]').slice(0, 300);
+}
+
+function enqueue(key: string, work: () => Promise<void>) {
+  const next = (state.queues.get(key) || Promise.resolve()).then(work);
+  const settled = next.catch(() => { console.error('[communication] 消息处理失败，详情已记录到接收任务。'); });
+  state.queues.set(key, settled);
+  void settled.finally(() => { if (state.queues.get(key) === settled) state.queues.delete(key); });
+  return next;
+}
+
+async function receive(integration: ResolvedExternalIntegration, message: WeComInboundMessage, requestId: string) {
+  const userId = integration.configuration.ownerUserId;
+  if (!userId) return;
+  const conversationId = communicationId(integration.id, message.botId, userId, message.target.kind, message.target.id);
+  if (message.cardAction) {
+    if (integration.configuration.receiveMessages !== 'true') return;
+    const conversation = await readCommunicationConversation(conversationId);
+    if (!conversation) return;
+    const { taskId, key } = message.cardAction;
+    let description: string;
+    try {
+      if (key !== 'confirm' && key !== 'cancel') throw new Error('卡片操作无效。');
+      description = await resolveCommunicationConfirmation(conversation, message.senderId, taskId, key);
+    } catch (error) { description = failureMessage(error); }
+    // Card callbacks have a five-second reply window; do not queue behind file uploads.
+    await getWeComConnection(integration).updateTemplateCard(requestId, {
+      card_type: 'text_notice', task_id: taskId,
+      main_title: { title: '操作确认结果' }, sub_title_text: description.slice(0, 112),
+      card_action: { type: 0 },
+    }, [message.senderId]).catch(() => console.warn('[communication] 卡片结果更新未确认，请在网页查看当前状态。'));
+    return;
+  }
+  // Receipt acknowledgement must not wait behind attachment downloads or delivery.
+  await enqueue(`receive:${conversationId}`, async () => {
+    let conversation = await readCommunicationConversation(conversationId);
+    if (!conversation) {
+      conversation = { id: conversationId, integrationId: integration.id, botId: message.botId, userId, target: message.target, sessions: [] };
+      await saveCommunicationConversation(conversation);
+    }
+    if (integration.configuration.receiveMessages === 'true') {
+      const id = communicationId(integration.id, message.botId, message.id);
+      if (await readCommunicationInbound(id)) return;
+      const item: CommunicationInbound = {
+        id, conversationId,
+        text: message.text, senderId: message.senderId, status: 'received',
+        media: message.media,
+      };
+      const stream: NonNullable<CommunicationInbound['replyStream']> = {
+        requestId, id: communicationId('stream', id), startedAt: Date.now(), status: 'opening',
+      };
+      item.replyStream = stream;
+      state.scheduled.add(id);
+      try {
+        await receiveCommunicationMessage(item);
+        try {
+          // An empty unfinished stream lets the client render its native loading.
+          await getWeComConnection(integration).replyStream(requestId, stream.id, '', false);
+          stream.status = 'open';
+        } catch (error) {
+          // A lost acknowledgement may still have created the bubble; close the same ID later.
+          if (error instanceof CommunicationDeliveryError && error.outcome === 'not-sent') stream.status = 'unavailable';
+          stream.error = failureMessage(error);
+          console.warn('[communication] 企微等待提示未确认，任务将继续处理。');
+        }
+        await saveCommunicationInbound(item);
+        scheduleStreamTimeout(item);
+      } finally { state.scheduled.delete(id); }
+    }
+  });
+  void tick();
+}
+
+async function reconcileConnections() {
+  const integrations = (await resolveExternalIntegrations('communication'))
+    .filter(item => item.driverId === 'wecom-aibot-mcp' && item.enabled && item.configuration.botId && item.configuration.botSecret);
+  for (const [id, receiver] of state.receivers) {
+    const integration = integrations.find(item => item.id === id);
+    if (!integration || integration.updatedAt !== receiver.integration.updatedAt) {
+      receiver.stop(); state.receivers.delete(id);
+    }
+  }
+  closeUnusedWeComConnections(new Set(integrations.map(item => item.configuration.botId)));
+  for (const integration of integrations) {
+    const bot = getWeComConnection(integration);
+    const receiver = state.receivers.get(integration.id);
+    if (receiver?.bot === bot) continue;
+    receiver?.stop();
+    const stop = integration.configuration.ownerUserId
+      ? bot.onMessage((message, requestId) => { void receive(integration, message, requestId).catch(() => console.error('[communication] 无法持久化企微消息。')); })
+      : () => {};
+    state.receivers.set(integration.id, { integration, bot, stop });
+    bot.connect();
+  }
+  for (const [id, watcher] of state.watchers) {
+    if (watcher.item.sessionId && !await readBrowserChatSessionOwner(watcher.item.sessionId)) {
+      await enqueue(watcher.item.conversationId, () => cancelItem(id));
+    }
+  }
+  state.lastRefresh = Date.now();
+}
+
+function reconcile() {
+  return state.refreshing ??= reconcileConnections().finally(() => { state.refreshing = undefined; });
+}
+
+function receiverFor(conversation: CommunicationConversation) {
+  const receiver = state.receivers.get(conversation.integrationId);
+  if (!receiver || receiver.integration.configuration.receiveMessages !== 'true'
+    || receiver.integration.configuration.botId !== conversation.botId
+    || receiver.integration.configuration.ownerUserId !== conversation.userId) return undefined;
+  return receiver;
+}
+
+/** Only the first text closes the stream; later chunks and media remain separate messages. */
+async function sendReplyText(conversation: CommunicationConversation, item: CommunicationInbound, text: string) {
+  const receiver = receiverFor(conversation);
+  if (!receiver) throw new Error('企微接收渠道已停用或连接配置已变更。');
+  const stream = item.replyStream;
+  clearStreamTimer(item.id);
+  if (stream && hasUnfinishedStream(item)) {
+    // Persist the attempt before sending. An ambiguous receipt must not replay a final result.
+    stream.status = 'unavailable';
+    await saveCommunicationInbound(item);
+    if (Date.now() - stream.startedAt < streamLifetimeMs) {
+      try {
+        await receiver.bot.replyStream(stream.requestId, stream.id, text, true);
+        stream.status = 'finished';
+        delete stream.error;
+        await saveCommunicationInbound(item);
+        return;
+      } catch (error) {
+        stream.error = failureMessage(error);
+        await saveCommunicationInbound(item);
+        // Only an explicit rejection permits resending the content as a new message.
+        if (!(error instanceof CommunicationDeliveryError && error.outcome === 'not-sent')) throw error;
+      }
+    }
+  }
+  await receiver.bot.sendText(conversation.target.id, text);
+}
+
+async function cancelItem(id: string) {
+  state.watchers.get(id)?.stop(); state.watchers.delete(id);
+  const item = await readCommunicationInbound(id);
+  if (!item || !['received', 'running', 'replying'].includes(item.status)) return;
+  item.status = 'cancelled';
+  await saveCommunicationInbound(item);
+  const conversation = await readCommunicationConversation(item.conversationId);
+  if (conversation) await sendReplyText(conversation, item, '对话已删除，本轮处理已取消。').catch(() => {});
+  clearStreamTimer(id);
+}
+
+async function replyText(item: CommunicationInbound, text: string) {
+  item.replies = splitCommunicationText(text).map(body => ({ content: { format: 'markdown', body }, status: 'pending' }));
+  item.status = 'replying';
+  await saveCommunicationInbound(item);
+}
+
+async function deliver(conversation: CommunicationConversation, item: CommunicationInbound) {
+  const receiver = receiverFor(conversation);
+  if (!receiver || item.status !== 'replying') return;
+  // A crash after sending but before its receipt is persisted is ambiguous: never blindly resend it.
+  if (item.replies?.some(reply => reply.status === 'sending')) {
+    item.status = 'failed'; item.error = '回复发送结果未确认，未自动重发。';
+    await saveCommunicationInbound(item);
+    await sendReplyText(conversation, item, `上一条回复的送达状态未能确认，未自动重发。请在网页查看对话 ${item.sessionId || ''}。`).catch(() => {});
+    return;
+  }
+  try {
+    for (const reply of item.replies || []) {
+      if (reply.status === 'sent') continue;
+      if (item.sessionId) {
+        const latest = await readCommunicationConversation(conversation.id);
+        if (!latest?.sessions.some(session => session.id === item.sessionId)) {
+          await cancelItem(item.id); return;
+        }
+      }
+      if ('body' in reply.content) {
+        reply.status = 'sending'; await saveCommunicationInbound(item);
+        await sendReplyText(conversation, item, reply.content.body);
+      } else {
+        const context = { invocationId: item.id };
+        const args = await createWeComMessageArguments({
+          content: reply.content, target: conversation.target, context,
+          media: { readArtifact: communicationArtifactReader(conversation.userId), upload: receiver.bot.upload },
+        });
+        const body = args[reply.content.format] as { media_id: string; title?: string; description?: string };
+        reply.status = 'sending'; await saveCommunicationInbound(item);
+        await receiver.bot.sendMedia(conversation.target.id, reply.content.format, body.media_id, body);
+      }
+      reply.status = 'sent'; await saveCommunicationInbound(item);
+    }
+    if (hasUnfinishedStream(item)) await sendReplyText(conversation, item, '本轮处理已完成。');
+    item.status = 'done'; await saveCommunicationInbound(item);
+  } catch (error) {
+    item.status = 'failed'; item.error = failureMessage(error);
+    await saveCommunicationInbound(item);
+    await sendReplyText(conversation, item, `本轮回复未完整送达：${item.error}\n请在网页查看对话 ${item.sessionId || ''}，未自动重复发送。`).catch(() => {});
+  }
+}
+
+async function finish(conversation: CommunicationConversation, item: CommunicationInbound, message: BrowserChatMessage) {
+  const latest = await readCommunicationInbound(item.id);
+  if (!latest) return;
+  item = latest;
+  if (item.status !== 'running') return;
+  await consumeCommunicationAttachments(item.attachmentMessageIds || []);
+  state.watchers.get(item.id)?.stop(); state.watchers.delete(item.id);
+  const contents = item.sessionId
+    ? await communicationReplyWithResponseExports(message, item.sessionId, conversation.userId)
+    : communicationReplyContents(message);
+  // Export can outlive a deletion/cancellation; do not restore a cancelled reply.
+  const current = await readCommunicationInbound(item.id);
+  if (!current || current.status !== 'running') return;
+  item = current;
+  item.replies = contents.map(content => ({ content, status: 'pending' }));
+  item.status = 'replying'; await saveCommunicationInbound(item);
+  await deliver(conversation, item);
+}
+
+async function resolveCommunicationConfirmation(
+  conversation: CommunicationConversation, senderId: string, confirmationId: string, action: 'confirm' | 'cancel',
+) {
+  const source = await readCommunicationConfirmationSource(conversation.id, confirmationId);
+  if (!source?.sessionId) throw new Error('确认请求已处理或失效，请查看最新确认卡片。');
+  if (source.senderId !== senderId) throw new Error('请由发起该任务的用户处理确认。');
+  const session = await getBrowserChatSession(source.sessionId, conversation.userId);
+  if (session?.pendingToolConfirmation?.id !== confirmationId) throw new Error('确认请求已处理或失效，请查看最新确认卡片。');
+  await resolveBrowserChatToolConfirmation(source.sessionId, confirmationId, action, conversation.userId);
+  return action === 'confirm' ? '已确认执行，任务将继续。' : '已取消本次工具操作，任务将继续。';
+}
+
+async function notifyConfirmation(
+  conversation: CommunicationConversation, item: CommunicationInbound, pending: BrowserChatToolConfirmation,
+) {
+  const latest = await readCommunicationInbound(item.id);
+  if (!latest || latest.status !== 'running' || latest.confirmationNotice?.id === pending.id) return;
+  const session = latest.sessionId ? await getBrowserChatSession(latest.sessionId, conversation.userId) : undefined;
+  if (session?.pendingToolConfirmation?.id !== pending.id) return;
+  latest.confirmationNotice = { id: pending.id, status: 'sending' };
+  item.confirmationNotice = latest.confirmationNotice;
+  await saveCommunicationInbound(latest);
+  const text = [
+    '需要你的确认', pending.prompt, pending.reason && pending.reason !== pending.prompt ? pending.reason : '',
+    '对话：' + latest.sessionId,
+    '确认执行：/confirm ' + pending.id, '取消操作：/cancel ' + pending.id,
+  ].filter(Boolean).join('\n\n');
+  let delivered = false;
+  try {
+    for (const chunk of splitCommunicationText(text)) { await sendReplyText(conversation, latest, chunk); delivered = true; }
+  }
+  catch { console.warn('[communication] 确认文字提示的送达未确认，将尝试独立卡片。'); }
+  try {
+    const receiver = receiverFor(conversation);
+    if (!receiver) throw new Error('企微连接不可用');
+    await receiver.bot.sendTemplateCard(conversation.target.id, {
+      card_type: 'button_interaction', task_id: pending.id,
+      main_title: { title: '需要你的确认', desc: pending.toolName.slice(0, 30) },
+      sub_title_text: pending.prompt.slice(0, 112),
+      button_list: [{ text: '确认执行', key: 'confirm', style: 1 }, { text: '取消', key: 'cancel', style: 4 }],
+    });
+    delivered = true;
+  } catch { console.warn('[communication] 确认卡片送达未确认，可使用文字命令或网页卡片处理。'); }
+  latest.confirmationNotice.status = delivered ? 'sent' : 'unknown';
+  item.confirmationNotice = latest.confirmationNotice;
+  await saveCommunicationInbound(latest);
+}
+
+function watch(conversation: CommunicationConversation, item: CommunicationInbound) {
+  if (!item.sessionId || state.watchers.has(item.id)) return;
+  const watcher = { item, stop: () => {} };
+  state.watchers.set(item.id, watcher);
+  watcher.stop = subscribeBrowserChatUIStream(item.sessionId, item.id, update => {
+    const message = update.message;
+    if (['passed', 'failed', 'interrupted'].includes(message?.status || '') || (message?.status === 'blocked' && update.pendingToolConfirmation?.messageId !== message.id)) {
+      void enqueue(conversation.id, () => finish(conversation, item, message!)).catch(() => {});
+    } else if (update.pendingToolConfirmation && update.pendingToolConfirmation.messageId === message?.id) {
+      const pending = update.pendingToolConfirmation;
+      if (item.confirmationNotice?.id !== pending.id) {
+        void enqueue(conversation.id, () => notifyConfirmation(conversation, item, pending)).catch(() => {});
+      }
+    }
+  });
+}
+
+async function createSession(conversation: CommunicationConversation, item: CommunicationInbound) {
+  const existing = item.sessionId ? await getBrowserChatSession(item.sessionId, conversation.userId) : undefined;
+  const session = existing || await createBrowserChatSession({ userId: conversation.userId, title: '企业微信对话', safetyMode: 'full', selectRuntime: false });
+  item.sessionId = session.id;
+  await saveCommunicationInbound(item);
+  if (!conversation.sessions.some(entry => entry.id === session.id)) conversation.sessions.push({ id: session.id, title: session.title });
+  conversation.activeSessionId = session.id;
+  await saveCommunicationConversation(conversation);
+  return session.id;
+}
+
+async function processReceived(conversation: CommunicationConversation, item: CommunicationInbound) {
+  const [commandToken, ...args] = item.text.trim().split(/\s+/);
+  const command = commandToken.toLowerCase();
+  const help = [
+    '/help 查看帮助',
+    '/start 新建对话',
+    '/delete 删除当前对话',
+    '/list [offset] [limit] 分页查看当前网页账号的对话，按创建时间从新到旧排列；offset 从 0 开始，limit 为 1～500，默认 /list 10 10。例：/list 10 5 跳过前 10 个，取后面 5 个；/list 0 10 查看第一页。',
+    '/select chat_xxx 切换对话',
+    '/confirm confirm_xxx 确认对应卡片的工具操作',
+    '/cancel confirm_xxx 取消对应卡片的工具操作',
+    '/model-list 查看已启用的对话模型及当前选中模型',
+    '/model-switch id 复制模型列表中的 ID，切换当前通信会话后续消息使用的模型；正在执行的消息不受影响。',
+  ].join('\n\n');
+  const offset = args[0] === undefined ? 10 : Number(args[0]);
+  const limit = args[1] === undefined ? 10 : Number(args[1]);
+  const valid = ['/help', '/start', '/delete', '/model-list'].includes(command) ? args.length === 0
+    : ['/select', '/model-switch', '/confirm', '/cancel'].includes(command) ? args.length === 1
+      : command === '/list' && args.length <= 2 && args.every(value => /^\d+$/.test(value))
+        && Number.isSafeInteger(offset) && offset >= 0 && Number.isSafeInteger(limit) && limit >= 1 && limit <= 500;
+  if (item.text.trimStart().startsWith('/') && !item.media?.length && !item.attachments?.length) {
+    if (!valid || command === '/help') {
+      await replyText(item, `${!valid ? '命令或参数无效。\n\n' : ''}${help}`);
+    } else {
+      if (command === '/start') {
+        const id = await createSession(conversation, item);
+        await replyText(item, `已开启新对话：${id}。后续消息将在此对话继续，网页中也可查看。`);
+      } else if (command === '/list') {
+        const sessions = await readBrowserChatSessionSummaries<{ id: string; title: string }>({ userId: conversation.userId, offset, limit: limit + 1 });
+        const page = sessions.slice(0, limit);
+        await replyText(item, page.length
+          ? [`对话列表：offset=${offset}，本页 ${page.length} 个`, ...page.map(session => `${session.id === conversation.activeSessionId ? '当前：' : ''}${session.id} · ${session.title || '新对话'}`),
+            sessions.length > limit ? `下一页：/list ${offset + limit} ${limit}` : '已到最后一页。'].join('\n\n')
+          : offset ? '该位置之后没有对话。使用 /list 0 10 查看第一页。' : '当前网页账号还没有对话，发送消息或 /start 即可创建。');
+      } else if (command === '/model-list' || command === '/model-switch') {
+        const config = await store.getModelConfig();
+        const available = enabledModelProviders(config).flatMap(provider => modelsForProvider(config, provider)
+          .map(model => ({ provider, model, id: modelSelectionValue(provider, model) })));
+        if (command === '/model-list') {
+          const selected = resolveRuntimeModelSelection(config, conversation.modelSelection);
+          const selectedId = modelSelectionValue(selected.provider, selected.model);
+          await replyText(item, available.length ? available.map(model => `${model.id === selectedId ? '当前选中：' : ''}${model.provider} / ${model.model}\nID：${model.id}`).join('\n\n')
+            : '当前没有已启用的对话模型，请先在网页模型设置中配置。');
+        } else {
+          const selected = available.find(model => model.id === args[0]);
+          if (!selected) await replyText(item, '模型 ID 不存在或未启用，请用 /model-list 查看并复制完整 ID。');
+          else {
+            conversation.modelSelection = { provider: selected.provider, model: selected.model };
+            await saveCommunicationConversation(conversation);
+            await replyText(item, `已选中 ${selected.provider} / ${selected.model}，当前通信会话的后续消息将使用此模型。`);
+          }
+        }
+      } else if (command === '/confirm' || command === '/cancel') {
+        try {
+          await replyText(item, await resolveCommunicationConfirmation(conversation, item.senderId, args[0], command === '/confirm' ? 'confirm' : 'cancel'));
+        } catch (error) { await replyText(item, failureMessage(error)); }
+      } else if (command === '/select') {
+        const session = await getBrowserChatSession(args[0], conversation.userId);
+        if (!session || session.status === 'closed') await replyText(item, '对话不存在、已关闭或不属于当前网页账号。请用 /list 查看可用 ID。');
+        else {
+          if (!conversation.sessions.some(entry => entry.id === session.id)) conversation.sessions.push({ id: session.id, title: session.title });
+          conversation.activeSessionId = session.id; await saveCommunicationConversation(conversation);
+          await replyText(item, `已切换到 ${session.id}：${session.title || '新对话'}。将保留原有上下文继续。`);
+        }
+      } else {
+        const id = conversation.activeSessionId;
+        if (!id) await replyText(item, '当前没有选中的对话。');
+        else {
+          for (const [key, watcher] of state.watchers) {
+            if (watcher.item.sessionId !== id) continue;
+            if (watcher.item.conversationId === conversation.id) await cancelItem(key);
+            else void enqueue(watcher.item.conversationId, () => cancelItem(key)).catch(() => {});
+          }
+          await deleteBrowserChatSession(id, conversation.userId);
+          await cancelCommunicationAttachments(id);
+          conversation.sessions = conversation.sessions.filter(session => session.id !== id);
+          conversation.activeSessionId = undefined; await saveCommunicationConversation(conversation);
+          await replyText(item, `已删除对话 ${id}。下一条消息会创建新对话。`);
+        }
+      }
+    }
+    await deliver(conversation, item); return;
+  }
+  let sessionId = item.sessionId || conversation.activeSessionId;
+  if (sessionId) {
+    const session = await getBrowserChatSession(sessionId, conversation.userId);
+    if (!session || session.status === 'closed') {
+      if (item.sessionId) throw new Error('这条消息所属的对话已关闭或删除，请在当前对话重新发送。');
+      sessionId = undefined;
+    }
+  }
+  sessionId ||= await createSession(conversation, item);
+  item.sessionId = sessionId;
+  await saveCommunicationInbound(item);
+  const receiver = receiverFor(conversation);
+  if (!receiver) return;
+  await importCommunicationAttachments(item, receiver.bot, conversation.userId);
+  const waiting = await readWaitingCommunicationAttachments(conversation.id, sessionId, item.senderId);
+  const attachments = [...new Map([...waiting.flatMap(entry => entry.attachments || []), ...(item.attachments || [])]
+    .map(attachment => [attachment.id, attachment])).values()];
+  if (attachments.length > browserChatAttachmentLimit) {
+    throw new Error(`同一轮最多处理 ${browserChatAttachmentLimit} 个附件。已暂存的附件仍保留，请先发送文字处理上一批附件。`);
+  }
+  if (!item.text.trim()) {
+    item.status = 'waiting';
+    await saveCommunicationInbound(item);
+    await sendReplyText(conversation, item, `已收到 ${item.attachments?.length || 0} 个附件，请继续发送文字说明要如何处理。`).catch(() => {});
+    return;
+  }
+  item.attachments = attachments;
+  item.attachmentMessageIds = waiting.map(entry => entry.id);
+  item.sessionId = sessionId; item.status = 'running'; await saveCommunicationInbound(item);
+  watch(conversation, item);
+  try {
+    const currentSession = await getBrowserChatSession(sessionId, conversation.userId);
+    await sendBrowserChatMessage(sessionId, item.text, currentSession?.safetyMode || 'full', conversation.modelSelection?.provider, conversation.modelSelection?.model, item.id, attachments, undefined, conversation.userId);
+  } catch (error) {
+    state.watchers.get(item.id)?.stop(); state.watchers.delete(item.id);
+    if (attachments.length) {
+      item.status = 'waiting';
+      await saveCommunicationInbound(item);
+      await sendReplyText(conversation, item, `本轮未能开始：${failureMessage(error)}\n附件已保留，处理原因后可重新发送文字说明。`).catch(() => {});
+    } else {
+      await replyText(item, `本轮消息未能开始执行：${failureMessage(error)}\n请在网页对话 ${sessionId} 查看模型配置或消息队列状态。`);
+      await deliver(conversation, item);
+    }
+    return;
+  }
+  await consumeCommunicationAttachments(item.attachmentMessageIds).catch(() => console.error('[communication] 暂存附件状态将在本轮完成时再次同步。'));
+}
+
+async function processItem(id: string) {
+  // Polling may have queued this ID while a reply was still uploading/sending.
+  // Read after acquiring the conversation queue, never execute a polling snapshot.
+  const item = await readCommunicationInbound(id);
+  if (!item || !['received', 'running', 'replying'].includes(item.status)) return;
+  const conversation = await readCommunicationConversation(item.conversationId);
+  if (!conversation || !receiverFor(conversation)) return;
+  scheduleStreamTimeout(item);
+  if (item.status === 'received') return processReceived(conversation, item);
+  if (item.status === 'replying') return deliver(conversation, item);
+  // Recover completed output after restart. Do not repeat interrupted tools.
+  const session = item.sessionId ? await getBrowserChatSession(item.sessionId, conversation.userId) : undefined;
+  const message = session?.messages.find(message => message.role === 'assistant' && message.clientMessageId === item.id);
+  if (message && ['passed', 'failed', 'interrupted', 'blocked'].includes(message.status || '')) {
+    await consumeCommunicationAttachments(item.attachmentMessageIds || []);
+    return finish(conversation, item, message);
+  }
+  await replyText(item, `服务重启或连接恢复前的执行未完成，请在网页对话 ${item.sessionId || ''} 查看后重新发送消息。上下文已保留，未重复执行工具。`);
+  await deliver(conversation, item);
+}
+
+async function tick() {
+  if (state.ticking) return;
+  state.ticking = true;
+  try {
+    if (Date.now() - state.lastRefresh > 15_000) await reconcile();
+    const receiving = [...state.receivers.values()].filter(receiver => receiver.integration.configuration.receiveMessages === 'true').map(({ integration }) => ({
+      id: integration.id, botId: integration.configuration.botId, userId: integration.configuration.ownerUserId,
+    }));
+    for (const item of await listPendingCommunicationMessages(receiving)) {
+      if (state.watchers.has(item.id) || state.scheduled.has(item.id)) continue;
+      state.scheduled.add(item.id);
+      void enqueue(item.conversationId, async () => {
+        try { await processItem(item.id); }
+        catch (error) {
+          const latest = await readCommunicationInbound(item.id);
+          if (!latest || !['received', 'running', 'replying'].includes(latest.status)) return;
+          latest.status = 'failed'; latest.error = failureMessage(error); await saveCommunicationInbound(latest);
+          const conversation = await readCommunicationConversation(latest.conversationId);
+          state.watchers.get(item.id)?.stop(); state.watchers.delete(item.id);
+          if (conversation) await sendReplyText(conversation, latest, `消息处理失败：${latest.error}`).catch(() => {});
+        }
+      }).finally(() => { state.scheduled.delete(item.id); }).catch(() => console.error('[communication] 无法保存接收任务状态。'));
+    }
+  } catch { console.error('[communication] 机器人消息循环暂时不可用，将重试。'); }
+  finally { state.ticking = false; }
+}
+
+export function startCommunicationRuntime() {
+  if (state.started || ['ui', 'api'].includes(process.env.WEBPILOT_SERVER_ROLE || '')) return;
+  state.started = true;
+  const schedule = () => {
+    if (!state.started) return;
+    state.timer = setTimeout(() => { void tick().finally(schedule); }, 1_000);
+    state.timer.unref?.();
+  };
+  void tick().finally(schedule);
+}
+
+export function stopCommunicationRuntime() {
+  state.started = false;
+  if (state.timer) clearTimeout(state.timer);
+  for (const timer of streamTimers.values()) clearTimeout(timer);
+  streamTimers.clear();
+  for (const receiver of state.receivers.values()) receiver.stop();
+  for (const watcher of state.watchers.values()) watcher.stop();
+  state.receivers.clear();
+  state.watchers.clear();
+  closeUnusedWeComConnections(new Set());
+}
+
+export async function refreshCommunicationRuntime() {
+  startCommunicationRuntime();
+  await reconcile();
+}

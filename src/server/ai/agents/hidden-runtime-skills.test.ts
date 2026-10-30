@@ -1,0 +1,97 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { browserCodeRuntimeSkillId } from '@cjfclonedeep/capability-sdk/browser/runtime-skill';
+import {
+  fileArtifactRuntimeSkillContent,
+  fileArtifactRuntimeSkillId,
+} from '@cjfclonedeep/capability-sdk/file/runtime-skill';
+import {
+  hiddenRuntimeSkillContent,
+  requiredHiddenRuntimeSkillId,
+} from './hidden-runtime-skills';
+import {
+  subagentRuntimeSkillContent,
+  subagentRuntimeSkillId,
+} from './subagent-runtime-skill';
+
+test('hidden runtime policy gates only the configured tool actions', () => {
+  assert.equal(requiredHiddenRuntimeSkillId('browser', { action: 'code', code: 'nodeRepl.write(1)' }), browserCodeRuntimeSkillId);
+  assert.equal(requiredHiddenRuntimeSkillId('browser', { action: 'state' }), undefined);
+
+  for (const action of ['list', 'read', 'download', 'plan', 'generate', 'edit', 'render', 'convert', 'jsApi', 'unoApi']) {
+    assert.equal(requiredHiddenRuntimeSkillId('file', { action }), fileArtifactRuntimeSkillId);
+  }
+
+  assert.equal(requiredHiddenRuntimeSkillId('file', { action: 'visualIndex' }), fileArtifactRuntimeSkillId);
+  assert.equal(requiredHiddenRuntimeSkillId('file', { action: 'visualRead' }), fileArtifactRuntimeSkillId);
+  assert.equal(requiredHiddenRuntimeSkillId('subagent', { action: 'spawn' }), subagentRuntimeSkillId);
+  assert.equal(requiredHiddenRuntimeSkillId('subagent', { action: 'read' }), undefined);
+});
+
+test('hidden built-in Skills are directly readable without entering the user Skill catalog', () => {
+  assert.match(hiddenRuntimeSkillContent(browserCodeRuntimeSkillId) || '', /Browser Code Runtime/);
+  assert.equal(hiddenRuntimeSkillContent(fileArtifactRuntimeSkillId), fileArtifactRuntimeSkillContent);
+  assert.equal(hiddenRuntimeSkillContent(subagentRuntimeSkillId), subagentRuntimeSkillContent);
+  assert.equal(hiddenRuntimeSkillContent('user-managed-skill'), undefined);
+});
+
+test('file and subagent runtime Skills carry the state, QA, and browser ownership contracts', () => {
+  assert.match(fileArtifactRuntimeSkillContent, /list.*read.*download/);
+  assert.match(fileArtifactRuntimeSkillContent, /plan.*generate.*edit.*render/);
+  assert.match(fileArtifactRuntimeSkillContent, /documentId/);
+  assert.match(fileArtifactRuntimeSkillContent, /exactly one current editable source/);
+  assert.doesNotMatch(fileArtifactRuntimeSkillContent, /currentRevision|restoreRevision/);
+  assert.match(fileArtifactRuntimeSkillContent, /Source and render digests are informational runtime metadata/);
+  assert.match(fileArtifactRuntimeSkillContent, /renderedDigest/);
+  assert.match(fileArtifactRuntimeSkillContent, /UNO and JavaScript modes/);
+  assert.match(fileArtifactRuntimeSkillContent, /single editable source buffer/);
+  assert.match(fileArtifactRuntimeSkillContent, /validation-failed candidate (?:is|are) saved/);
+  assert.match(fileArtifactRuntimeSkillContent, /visualQaDigest equals renderedDigest/);
+  assert.match(fileArtifactRuntimeSkillContent, /Prefer `slide\.addChart\(\)` for standard column charts, horizontal bar charts, and doughnut charts/);
+  assert.match(fileArtifactRuntimeSkillContent, /Prefer `slide\.addTable\(\)` for standard tables/);
+  assert.match(fileArtifactRuntimeSkillContent, /Use `slide\.addShape\(\)` to construct KPI progress bars, mini charts, and special infographics/);
+  assert.match(fileArtifactRuntimeSkillContent, /job\.writer/);
+  assert.doesNotMatch(fileArtifactRuntimeSkillContent, /job\.expert\(/);
+  assert.match(fileArtifactRuntimeSkillContent, /elementId/);
+  assert.match(fileArtifactRuntimeSkillContent, /Continue the original document workflow/);
+  assert.match(fileArtifactRuntimeSkillContent, /## file API signatures/);
+  assert.match(fileArtifactRuntimeSkillContent, /declare function file\(input: FileInput\)/);
+  assert.match(fileArtifactRuntimeSkillContent, /action: "generate"/);
+  assert.match(fileArtifactRuntimeSkillContent, /startLine\?: number/);
+  assert.match(fileArtifactRuntimeSkillContent, /Proven UNO suite decisions/);
+  assert.match(fileArtifactRuntimeSkillContent, /pages\/s30-risk-matrix/);
+  assert.match(fileArtifactRuntimeSkillContent, /one Codex apply_patch document/);
+  assert.match(fileArtifactRuntimeSkillContent, /patchBaseDigest/);
+  assert.match(fileArtifactRuntimeSkillContent, /never calculate or emit hunk line counts/i);
+  assert.match(fileArtifactRuntimeSkillContent, /retain the current source's original whitespace and indentation/);
+  assert.match(fileArtifactRuntimeSkillContent, /guarded complete replacement is an exceptional last resort only/);
+  assert.match(fileArtifactRuntimeSkillContent, /No source-version hash is required for edit or replacement/);
+  assert.doesNotMatch(fileArtifactRuntimeSkillContent, /baseDigest/);
+  assert.doesNotMatch(fileArtifactRuntimeSkillContent, /replaceExisting/);
+  assert.match(fileArtifactRuntimeSkillContent, /replacement is truly unavoidable/);
+  assert.doesNotMatch(fileArtifactRuntimeSkillContent, /restoreRevision\?:/);
+  assert.match(fileArtifactRuntimeSkillContent, /patch: string/);
+  assert.match(fileArtifactRuntimeSkillContent, /## Visual file actions and examples/);
+  assert.doesNotMatch(fileArtifactRuntimeSkillContent, /declare function fileVisual/);
+  assert.match(fileArtifactRuntimeSkillContent, /action: "visualRead"/);
+  assert.match(fileArtifactRuntimeSkillContent, /screenshot-0001/);
+  assert.match(fileArtifactRuntimeSkillContent, /placeholder categories such as 1\/2\/3/);
+  assert.match(fileArtifactRuntimeSkillContent, /known visible defect is a failed review/i);
+  assert.match(fileArtifactRuntimeSkillContent, /four images is not at least five/i);
+  assert.match(fileArtifactRuntimeSkillContent, /Element IDs may use Unicode/);
+
+  assert.match(subagentRuntimeSkillContent, /independent and useful in parallel/);
+  assert.match(subagentRuntimeSkillContent, /same interactive page/);
+  assert.match(subagentRuntimeSkillContent, /Cookie-backed login state/);
+  assert.match(subagentRuntimeSkillContent, /own page or tab/);
+  assert.match(subagentRuntimeSkillContent, /must not steal foreground focus/);
+  assert.match(subagentRuntimeSkillContent, /returned order/);
+  assert.match(subagentRuntimeSkillContent, /parent Agent alone/);
+  assert.match(subagentRuntimeSkillContent, /surface id/);
+  assert.match(subagentRuntimeSkillContent, /## Host tool boundary and API signatures/);
+  assert.match(subagentRuntimeSkillContent, /declare function subagent\(input: SubagentInput\)/);
+  assert.match(subagentRuntimeSkillContent, /type SpawnActual/);
+  assert.match(subagentRuntimeSkillContent, /content\?: string/);
+  assert.match(subagentRuntimeSkillContent, /## Spawn examples/);
+  assert.match(subagentRuntimeSkillContent, /## Automatic result delivery/);
+});

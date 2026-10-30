@@ -1,0 +1,236 @@
+import { browserChatSubagentBatchVersion } from './browser-chat-subagent-model';
+
+/** Restore structural sharing after JSON transport / SDK structuredClone.
+ * Records are immutable JSON values; unchanged branches keep their identity.
+ */
+export function shareBrowserChatValue<T>(previous: T, incoming: T): T {
+  if (Object.is(previous, incoming)) return previous;
+  if (!previous || !incoming || typeof previous !== 'object' || typeof incoming !== 'object'
+    || Array.isArray(previous) !== Array.isArray(incoming)) return incoming;
+  const before = previous as Record<string, unknown>;
+  const after = incoming as Record<string, unknown>;
+  const keys = Object.keys(after);
+  let unchanged = keys.length === Object.keys(before).length;
+  let next = after;
+  for (const key of keys) {
+    const shared = shareBrowserChatValue(before[key], after[key]);
+    if (!Object.hasOwn(before, key) || shared !== before[key]) unchanged = false;
+    if (shared !== after[key]) {
+      if (next === after) next = Array.isArray(incoming)
+        ? [...incoming] as unknown as Record<string, unknown> : { ...after };
+      next[key] = shared;
+    }
+  }
+  return (unchanged ? previous : next) as T;
+}
+
+export type BrowserChatRealtimeCollectionPatch<
+  TMessage extends { clientMessageId?: string; id: string; role?: string; status?: string; createdAt?: string; updatedAt?: string },
+  TStep extends { index: number },
+  TLog extends { id: string; time?: string },
+> = {
+  logs?: TLog[];
+  messages?: TMessage[];
+  removedLogIds?: string[];
+  removedMessageIds?: string[];
+  removedStepIndexes?: number[];
+  steps?: TStep[];
+};
+
+export function parseBrowserChatRealtimePatch<T extends { session?: { id?: unknown } }>(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const patch = value as T;
+  if (!patch.session || typeof patch.session.id !== 'string' || !patch.session.id) return undefined;
+  return patch;
+}
+
+export function mergeBrowserChatRealtimeRecords<T extends { id: string; revision?: number }>(
+  current: T[] | undefined,
+  incoming: Array<Partial<T> & Pick<T, 'id'>> | undefined,
+) {
+  const original = current || [];
+  if (!incoming?.length) return original;
+  let records = original;
+  const indexes = new Map(records.map((record, index) => [record.id, index]));
+  for (const record of incoming || []) {
+    const index = indexes.get(record.id);
+    if (index === undefined) {
+      if (records === original) records = [...records];
+      indexes.set(record.id, records.length);
+      records.push(record as T);
+      continue;
+    }
+    if (typeof records[index].revision === 'number'
+      && (record.revision === undefined || record.revision < records[index].revision!)) continue;
+    const shared = shareBrowserChatValue(records[index], { ...records[index], ...record });
+    if (shared === records[index]) continue;
+    if (records === original) records = [...records];
+    records[index] = shared;
+  }
+  return records;
+}
+
+function removeRealtimeRecords<T>(
+  current: T[],
+  removedValues: readonly (string | number)[] | undefined,
+  valueOf: (record: T) => string | number,
+) {
+  if (!removedValues?.length) return current;
+  const removed = new Set(removedValues);
+  const next = current.filter((record) => !removed.has(valueOf(record)));
+  return next.length === current.length ? current : next;
+}
+
+function insertRealtimeRecord<T>(
+  current: T[],
+  record: T,
+  comesAfter: (candidate: T) => boolean,
+) {
+  const index = current.findIndex(comesAfter);
+  return index < 0
+    ? [...current, record]
+    : [...current.slice(0, index), record, ...current.slice(index)];
+}
+
+function mergeRealtimeStepTools(current: unknown[] = [], incoming: unknown[] = []) {
+  if (current === incoming || !incoming.length) return current;
+  const merged = [...current];
+  const indexes = new Map<string, number>();
+  current.forEach((tool, index) => {
+    if (!tool || typeof tool !== 'object' || Array.isArray(tool)) return;
+    const id = (tool as Record<string, unknown>).id;
+    if (typeof id === 'string' && id) indexes.set(id, index);
+  });
+  incoming.forEach((tool, incomingIndex) => {
+    if (!tool || typeof tool !== 'object' || Array.isArray(tool)) return;
+    const record = tool as Record<string, unknown>;
+    const id = typeof record.id === 'string' ? record.id : '';
+    const positional = merged[incomingIndex];
+    // Positional matching is only for legacy records without IDs. A new ID
+    // must never replace an unrelated tool just because its array index matches.
+    const index = id ? indexes.get(id)
+      : positional && typeof positional === 'object' && !Array.isArray(positional)
+        && !(positional as Record<string, unknown>).id ? incomingIndex : undefined;
+    if (index === undefined) {
+      if (id) indexes.set(id, merged.length);
+      merged.push(tool);
+      return;
+    }
+    const previous = merged[index] as Record<string, unknown>;
+    if (previous === record) return;
+    let newerSubagentResult = false;
+    if (previous.name === 'subagent' || previous.name === 'spawnSubagents') {
+      const before = browserChatSubagentBatchVersion(previous.rawResult ?? previous.result);
+      const after = browserChatSubagentBatchVersion(record.rawResult ?? record.result);
+      if (before?.batchId && before.batchId === after?.batchId) {
+        // A resumed branch legitimately moves from completed to running. Its
+        // newer batch revision is authoritative; late acknowledgements are not.
+        if (before.revision !== undefined && after.revision !== undefined && before.revision !== after.revision) {
+          if (after.revision < before.revision) return;
+          newerSubagentResult = true;
+        } else if (before.status === 'completed' && after.status === 'running') return;
+      }
+    }
+    const next = { ...previous, ...record };
+    // Realtime events may arrive out of order. Once a tool is terminal, a stale
+    // "started" snapshot must never erase its result and make it look active again.
+    if (previous.ok !== undefined && record.ok === undefined) next.ok = previous.ok;
+    for (const key of ['elapsedMs', 'error', 'rawResult', 'result'] as const) {
+      if (key === 'error' && newerSubagentResult) continue;
+      if (previous[key] !== undefined && record[key] === undefined) next[key] = previous[key];
+    }
+    if (newerSubagentResult) next.error = record.error;
+    for (const key of ['elapsedMs', 'aiRequestElapsedMs'] as const) {
+      if (typeof previous[key] === 'number' && Number.isFinite(previous[key])
+        && (record[key] === undefined || (typeof record[key] === 'number' && record[key] < previous[key]))) next[key] = previous[key];
+    }
+    merged[index] = shareBrowserChatValue(previous, next);
+  });
+  return merged;
+}
+
+export function mergeBrowserChatRealtimeCollections<
+  TMessage extends { clientMessageId?: string; id: string; role?: string; status?: string; createdAt?: string; updatedAt?: string },
+  TStep extends { index: number },
+  TLog extends { id: string; time?: string },
+>(
+  current: { logs: TLog[]; messages: TMessage[]; steps: TStep[] },
+  patch: BrowserChatRealtimeCollectionPatch<TMessage, TStep, TLog>,
+) {
+  const messageKey = (message: TMessage) => message.clientMessageId && message.role
+    ? `client:${message.clientMessageId}:${message.role}`
+    : `id:${message.id}`;
+  let messages = removeRealtimeRecords(current.messages, patch.removedMessageIds, (message) => message.id);
+  for (const message of patch.messages || []) {
+    const key = messageKey(message);
+    const sameIdIndex = messages.findIndex((item) => item.id === message.id);
+    const index = sameIdIndex >= 0 ? sameIdIndex : messages.findIndex((item) => messageKey(item) === key);
+    const existing = index >= 0 ? messages[index] : undefined;
+    const existingTime = existing?.updatedAt || existing?.createdAt || '';
+    const incomingTime = message.updatedAt || message.createdAt || '';
+    if (existing && existing.id === message.id && incomingTime < existingTime) continue;
+    const changedClient = existing?.id === message.id && existing.clientMessageId && message.clientMessageId
+      && existing.clientMessageId !== message.clientMessageId;
+    if (changedClient && existing.status !== 'blocked' && incomingTime === existingTime) continue;
+    if (existing?.id === message.id && existing.status && !['queued', 'running'].includes(existing.status)
+      && (message.status === 'queued' || message.status === 'running') && incomingTime === existingTime
+      && !(existing.status === 'blocked' && changedClient)) continue;
+    if (index >= 0) {
+      const replacement = existing?.id === message.id && existing.createdAt
+        ? { ...message, createdAt: existing.createdAt }
+        : message;
+      const shared = shareBrowserChatValue(messages[index], replacement);
+      if (shared === existing) continue;
+      const next = [...messages];
+      next[index] = shared;
+      messages = next;
+      continue;
+    }
+    const createdAt = message.createdAt || '';
+    messages = insertRealtimeRecord(messages, message, (candidate) => (candidate.createdAt || '') > createdAt);
+  }
+
+  let steps = removeRealtimeRecords(current.steps, patch.removedStepIndexes, (step) => step.index);
+  for (const step of patch.steps || []) {
+    const index = steps.findIndex((item) => item.index === step.index);
+    const existing = (index >= 0 ? steps[index] : undefined) as (TStep & { status?: string; tools?: unknown[] }) | undefined;
+    const incoming = step as TStep & { status?: string; tools?: unknown[] };
+    if (existing === incoming) continue;
+    const wouldRegressCompletedStep = existing
+      && existing.status && !['queued', 'running'].includes(existing.status)
+      && (incoming.status === 'running' || incoming.status === 'queued');
+    if (!existing) {
+      steps = insertRealtimeRecord(steps, step, (candidate) => candidate.index > step.index);
+      continue;
+    }
+    const mergedStep = {
+      ...(wouldRegressCompletedStep ? incoming : existing),
+      ...(wouldRegressCompletedStep ? existing : incoming),
+    } as TStep & { tools?: unknown[] };
+    if (existing.tools || incoming.tools) {
+      mergedStep.tools = mergeRealtimeStepTools(existing.tools, incoming.tools);
+    }
+    const sharedStep = shareBrowserChatValue(existing, mergedStep);
+    if (sharedStep === existing) continue;
+    const next = [...steps];
+    next[index] = sharedStep as TStep;
+    steps = next;
+  }
+
+  let logs = removeRealtimeRecords(current.logs, patch.removedLogIds, (log) => log.id);
+  for (const log of patch.logs || []) {
+    const index = logs.findIndex((item) => item.id === log.id);
+    if (index >= 0) {
+      const shared = shareBrowserChatValue(logs[index], log);
+      if (shared === logs[index]) continue;
+      const next = [...logs];
+      next[index] = shared;
+      logs = next;
+      continue;
+    }
+    const time = log.time || '';
+    logs = insertRealtimeRecord(logs, log, (candidate) => (candidate.time || '') > time);
+  }
+
+  return { logs, messages, steps };
+}

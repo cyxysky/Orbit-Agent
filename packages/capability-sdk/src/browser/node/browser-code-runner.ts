@@ -1,0 +1,3774 @@
+import { spawn, type ChildProcess } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { copyFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { parse } from 'acorn';
+import { createBrowserCodeCdpScope } from './browser-code-cdp-scope.ts';
+import { raceWithAbort } from '../../index.ts';
+import {
+  applyEditableTextSelection,
+  readEditableText,
+  resolveEditableTextSelection,
+  type BrowserTextSelectionSpec,
+} from './editable-text-selection.ts';
+import type { BrowserPageObservation } from './browser-page-observation.ts';
+import { AI_DOM_RUNTIME_VERSION, installAiBrowserPageRuntime } from './browser-page-runtime.ts';
+
+export type BrowserCodeConnection = {
+  protocol: 'playwright' | 'cdp';
+  endpoint: string;
+};
+
+type BrowserCodeKernelInit = {
+  connection: BrowserCodeConnection;
+  ignoreHTTPSErrors?: boolean;
+  playwrightEntryPath: string;
+  websocketEntryPath: string;
+  targetIds?: string[];
+  sessionGroupId?: string;
+};
+
+export type BrowserCodeUidReference = {
+  uid: string;
+  observationId: string;
+  localRef: string;
+  framePath?: string;
+  label: string;
+  descriptor: string;
+  line: string;
+  surfaceId?: string;
+  capabilities?: string[];
+};
+
+export type BrowserCodeExecutionLog = {
+  level: 'log' | 'info' | 'warn' | 'error';
+  text: string;
+  elapsedMs: number;
+};
+
+export type BrowserCodeImage = {
+  data: string;
+  mimeType: 'image/jpeg' | 'image/png' | 'image/webp';
+};
+
+type BrowserCodePageObservation = BrowserPageObservation;
+
+export type BrowserCodeActivity = {
+  actions: string[];
+  navigationChanged: boolean;
+  tabChanged: boolean;
+  surfaceTransitions?: Array<{
+    action: string;
+    beforeId?: string;
+    afterId?: string;
+    openedIds: string[];
+    closedIds: string[];
+  }>;
+};
+
+export type BrowserCodeRunResult = {
+  ok: boolean;
+  value?: unknown;
+  /** Explicit outputs written before a failed cell; never a completion receipt. */
+  partialResults?: unknown;
+  error?: string;
+  diagnostics?: unknown;
+  elapsedMs: number;
+  logs: BrowserCodeExecutionLog[];
+  images?: BrowserCodeImage[];
+  selectedTargetId?: string;
+  ownedTargetIds?: string[];
+  activity?: BrowserCodeActivity;
+  aborted?: boolean;
+  executionState?: BrowserCodeExecutionState;
+  kernelReset?: {
+    reason: 'age-limit' | 'execution-limit' | 'heap-limit' | 'rss-limit' | 'timeout' | 'aborted' | 'crashed' | 'out-of-memory';
+    memoryUsage?: BrowserCodeKernelMemoryUsage;
+  };
+};
+
+export type BrowserCodeExecutionState = {
+  status: 'completed' | 'failed' | 'timeout' | 'aborted' | 'crashed';
+  phase: 'startup' | 'running' | 'finished';
+  attemptedActions: string[];
+  /** Playwright calls that returned successfully; does not assert business success. */
+  completedActions: string[];
+  outcome: 'not-started' | 'returned' | 'unknown';
+  requiresStateRefresh: boolean;
+  safeToRetry: boolean;
+};
+
+function browserCodeFailureText(value: unknown) {
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const message = typeof record.message === 'string' ? record.message.trim() : '';
+  if (message) return message;
+  const name = typeof record.name === 'string' ? record.name.trim() : '';
+  return name || undefined;
+}
+
+/**
+ * A browserCode cell may catch an exception and accidentally publish
+ * `{ ok: false }` as ordinary evidence. Treat that explicit top-level result
+ * shape as a failed execution contract instead of allowing a false success.
+ */
+export function browserCodeReportedFailure(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (record.ok !== false) return undefined;
+  const detail = browserCodeFailureText(record.error) || browserCodeFailureText(record.message);
+  return detail || 'browserCode returned a top-level { ok: false } result.';
+}
+
+export type BrowserCodeKernelMemoryUsage = {
+  arrayBuffers?: number;
+  external: number;
+  heapTotal: number;
+  heapUsed: number;
+  rss: number;
+};
+
+export type BrowserCodeRisk = {
+  requiresConfirmation: boolean;
+  reasons: string[];
+};
+
+function evaluateCallContainsDomClick(code: string) {
+  const evaluatePattern = /\.evaluate(?:All|Handle)?\s*\(/g;
+  let match: RegExpExecArray | null;
+  while ((match = evaluatePattern.exec(code))) {
+    const openingParen = code.indexOf('(', match.index);
+    let depth = 0;
+    let quote = '';
+    let escaped = false;
+    let lineComment = false;
+    let blockComment = false;
+    for (let index = openingParen; index < code.length; index += 1) {
+      const character = code[index];
+      const next = code[index + 1];
+      if (lineComment) {
+        if (character === '\n' || character === '\r') lineComment = false;
+        continue;
+      }
+      if (blockComment) {
+        if (character === '*' && next === '/') {
+          blockComment = false;
+          index += 1;
+        }
+        continue;
+      }
+      if (quote) {
+        if (escaped) escaped = false;
+        else if (character === '\\') escaped = true;
+        else if (character === quote) quote = '';
+        continue;
+      }
+      if (character === '/' && next === '/') {
+        lineComment = true;
+        index += 1;
+        continue;
+      }
+      if (character === '/' && next === '*') {
+        blockComment = true;
+        index += 1;
+        continue;
+      }
+      if (character === '"' || character === "'" || character === '`') {
+        quote = character;
+        continue;
+      }
+      if (character === '(') depth += 1;
+      if (character !== ')') continue;
+      depth -= 1;
+      if (depth > 0) continue;
+      const evaluateCall = code.slice(openingParen + 1, index);
+      if (/\.click\s*\(/i.test(evaluateCall)) return true;
+      evaluatePattern.lastIndex = index + 1;
+      break;
+    }
+  }
+  return false;
+}
+
+type BrowserCodeAstNode = {
+  type: string;
+  [key: string]: unknown;
+};
+
+function parseBrowserCodeAst(code: string) {
+  try {
+    return parse(code, {
+      allowAwaitOutsideFunction: true,
+      allowReturnOutsideFunction: true,
+      ecmaVersion: 'latest',
+      sourceType: 'script',
+    }) as unknown as BrowserCodeAstNode;
+  } catch {
+    return undefined;
+  }
+}
+
+function walkBrowserCodeAst(node: BrowserCodeAstNode, visit: (node: BrowserCodeAstNode) => boolean | void) {
+  if (visit(node) === false) return false;
+  for (const [key, value] of Object.entries(node)) {
+    if (key === 'type' || key === 'start' || key === 'end' || key === 'loc' || key === 'range') continue;
+    if (Array.isArray(value)) {
+      for (const child of value) {
+        if (child && typeof child === 'object' && typeof (child as BrowserCodeAstNode).type === 'string') {
+          if (!walkBrowserCodeAst(child as BrowserCodeAstNode, visit)) return false;
+        }
+      }
+    } else if (value && typeof value === 'object' && typeof (value as BrowserCodeAstNode).type === 'string') {
+      if (!walkBrowserCodeAst(value as BrowserCodeAstNode, visit)) return false;
+    }
+  }
+  return true;
+}
+
+function browserCodeMemberPath(node: BrowserCodeAstNode | undefined): string[] | undefined {
+  if (!node) return undefined;
+  if (node.type === 'Identifier' && typeof node.name === 'string') return [node.name];
+  if (node.type !== 'MemberExpression' && node.type !== 'OptionalMemberExpression') return undefined;
+  const parent = browserCodeMemberPath(node.object as BrowserCodeAstNode | undefined);
+  if (!parent) return undefined;
+  const property = node.property as BrowserCodeAstNode | undefined;
+  const name = node.computed === true
+    ? property?.type === 'Literal' && typeof property.value === 'string' ? property.value : undefined
+    : property?.type === 'Identifier' && typeof property.name === 'string' ? property.name : undefined;
+  return name ? [...parent, name] : undefined;
+}
+
+export function browserCodeHasImageOperation(code: string) {
+  const ast = parseBrowserCodeAst(code);
+  if (!ast) return false;
+  let found = false;
+  walkBrowserCodeAst(ast, (node) => {
+    const path = browserCodeMemberPath(node)?.join('.');
+    if (path === 'nodeRepl.emitImage' || path?.endsWith('.screenshot')) {
+      found = true;
+      return false;
+    }
+    if (
+      node.type === 'VariableDeclarator'
+      && (node.init as BrowserCodeAstNode | undefined)?.type === 'Identifier'
+      && String((node.init as BrowserCodeAstNode).name || '') === 'nodeRepl'
+      && (node.id as BrowserCodeAstNode | undefined)?.type === 'ObjectPattern'
+    ) {
+      const properties = (node.id as BrowserCodeAstNode).properties;
+      if (Array.isArray(properties) && properties.some((property) => {
+        const key = (property as BrowserCodeAstNode).key as BrowserCodeAstNode | undefined;
+        return key?.type === 'Identifier' && ['screenshot', 'emitImage'].includes(String(key.name || ''));
+      })) {
+        found = true;
+        return false;
+      }
+    }
+  });
+  return found;
+}
+
+/** A declared browser input skipped by a conditional is not an executed action.
+ * Inspect the AST so strings, comments and read-only calls do not count. */
+export function browserCodeHasDeclaredBrowserAction(code: string) {
+  const ast = parseBrowserCodeAst(code);
+  if (!ast) return false;
+  const actions = new Set([
+    'click', 'dblclick', 'tap', 'check', 'uncheck', 'setChecked', 'dragTo', 'dragAndDrop',
+    'fill', 'type', 'press', 'pressSequentially', 'selectOption', 'clear', 'setInputFiles',
+    'focus', 'blur', 'selectText', 'setTextSelection', 'goto', 'reload', 'goBack', 'goForward',
+    'setContent', 'insertText', 'move', 'hover', 'wheel', 'scroll', 'scrollIntoViewIfNeeded',
+    'new', 'use', 'close', 'claimTab',
+  ]);
+  let found = false;
+  walkBrowserCodeAst(ast, (node) => {
+    if (node.type !== 'CallExpression' && node.type !== 'OptionalCallExpression') return;
+    const path = browserCodeMemberPath(node.callee as BrowserCodeAstNode | undefined);
+    if (path && path.length > 1 && actions.has(path[path.length - 1])) {
+      found = true;
+      return false;
+    }
+  });
+  return found;
+}
+
+export function browserCodePolicyViolation(code: string) {
+  if (/\.dispatchEvent\s*\(\s*(?:[^,()]+,\s*)?['"]click['"]/i.test(code)) {
+    return 'browserCode forbids dispatchEvent("click") because it bypasses Playwright actionability. Refresh the DOM evidence and use one unique visible Playwright locator.';
+  }
+  if (evaluateCallContainsDomClick(code)) {
+    return 'browserCode forbids DOM element.click() inside evaluate callbacks because it bypasses Playwright actionability. Refresh the DOM evidence and use one unique visible Playwright locator.';
+  }
+  const uploadSource = browserCodeWithoutComments(code).replace(
+    /\battachmentVault\s*\.\s*setInputFiles\s*\(/gi,
+    '(',
+  );
+  if (/\.\s*(?:setInputFiles|setFiles)\s*\(/i.test(uploadSource)) {
+    return 'Use attachmentVault.setInputFiles(locator, attachmentId) for a registered user attachment. Direct paths, reconstructed file payloads, Locator/Page.setInputFiles(), and FileChooser.setFiles() are unavailable to browserCode.';
+  }
+  return undefined;
+}
+
+export type BrowserCodeCredentialBinding = {
+  ref: string;
+  value: string;
+  allowedOrigins: string[];
+};
+
+export type BrowserCodeAttachmentBinding = {
+  name: string;
+  path: string;
+  ref: string;
+};
+
+export type BrowserCodeViewportEvidence = {
+  documentId: string; url: string; width: number; height: number;
+  devicePixelRatio: number; scrollX: number; scrollY: number; capturedAt: number; domEpoch: number;
+};
+
+export type BrowserCodeExecutionInput = {
+  code: string;
+  executionId: string;
+  targetIds?: string[];
+  executionTargetId?: string;
+  maxOutputChars?: number;
+  attachments?: BrowserCodeAttachmentBinding[];
+  credentials?: BrowserCodeCredentialBinding[];
+  uidReferences?: BrowserCodeUidReference[];
+  viewportEvidence?: BrowserCodeViewportEvidence | null;
+  abortSignal?: AbortSignal;
+};
+
+export type BrowserCodeRuntimeStateOperation = {
+  action: 'clear' | 'delete' | 'get' | 'list' | 'set';
+  input?: unknown;
+};
+
+export type BrowserCodeKernelOptions = {
+  environment?: Readonly<Record<string, string | undefined>>;
+  executionTimeoutMs?: number;
+  maxAgeMs?: number;
+  maxExecutions?: number;
+  maxHeapBytes?: number;
+  maxRssBytes?: number;
+  readyTimeoutMs?: number;
+  sessionGroupId?: string;
+  runtimeState?: (operation: BrowserCodeRuntimeStateOperation) => Promise<unknown> | unknown;
+};
+
+type PendingExecution = {
+  attemptedActions: string[];
+  completedActions: string[];
+  abortSignal?: AbortSignal;
+  onAbort: () => void;
+  requestId: string;
+  resolve: (result: BrowserCodeRunResult) => void;
+  startedAt: number;
+};
+
+const maxDiagnosticChars = 4_000;
+const defaultBrowserCodeKernelReadyTimeoutMs = 10_000;
+const defaultBrowserCodeExecutionTimeoutMs = 90_000;
+export const BROWSER_CODE_KERNEL_RUNTIME_REVISION = 59;
+
+function boundedInteger(value: unknown, fallback: number, min: number, max: number) {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  const normalized = Number.isFinite(parsed) ? Math.floor(parsed) : fallback;
+  return Math.min(max, Math.max(min, normalized));
+}
+
+function browserCodeWithoutComments(code: string, eraseStrings = false) {
+  let result = '';
+  let quote = '';
+  let escaped = false;
+  let lineComment = false;
+  let blockComment = false;
+  for (let index = 0; index < code.length; index += 1) {
+    const character = code[index];
+    const next = code[index + 1];
+    if (lineComment) {
+      if (character === '\n' || character === '\r') {
+        lineComment = false;
+        result += character;
+      } else {
+        result += ' ';
+      }
+      continue;
+    }
+    if (blockComment) {
+      if (character === '*' && next === '/') {
+        blockComment = false;
+        result += '  ';
+        index += 1;
+      } else {
+        result += character === '\n' || character === '\r' ? character : ' ';
+      }
+      continue;
+    }
+    if (quote) {
+      result += eraseStrings && character !== '\n' && character !== '\r' ? ' ' : character;
+      if (escaped) escaped = false;
+      else if (character === '\\') escaped = true;
+      else if (character === quote) quote = '';
+      continue;
+    }
+    if (character === '/' && next === '/') {
+      lineComment = true;
+      result += '  ';
+      index += 1;
+      continue;
+    }
+    if (character === '/' && next === '*') {
+      blockComment = true;
+      result += '  ';
+      index += 1;
+      continue;
+    }
+    if (character === '\'' || character === '"' || character === '`') {
+      quote = character;
+      result += eraseStrings ? ' ' : character;
+    } else {
+      result += character;
+    }
+  }
+  return result;
+}
+
+export function browserCodeHasCommittingAction(code: string) {
+  const source = browserCodeWithoutComments(code);
+  return /\.(?:click|dblclick|check|uncheck|press|setInputFiles|selectOption|submit|act|navigate|keyboard|pointer|setTextSelection)\s*\(/i.test(source)
+    || /\bfetch\s*\([\s\S]*?\bmethod\s*:\s*['"`](?:POST|PUT|PATCH|DELETE)['"`]/i.test(source)
+    || /\.open\s*\(\s*['"`](?:POST|PUT|PATCH|DELETE)['"`]/i.test(source)
+    || /\bsendBeacon\s*\(/i.test(source)
+    || /\b(?:localStorage|sessionStorage)\s*\.\s*(?:setItem|removeItem|clear)\s*\(/i.test(source);
+}
+
+export function analyzeBrowserCodeRisk(code: string): BrowserCodeRisk {
+  const source = browserCodeWithoutComments(code);
+  if (!browserCodeHasCommittingAction(source)) return { requiresConfirmation: false, reasons: [] };
+  const reasons: string[] = [];
+  const checks: Array<[RegExp, string]> = [
+    [/\b(?:submit|publish|send|delete|remove|destroy|approve|authorize|pay|purchase|checkout|order|transfer|upload|download|login|logout)\b/i, '代码包含可能对外产生影响或修改数据的操作'],
+    [/(?:提交|发布|发送|删除|移除|确认|批准|授权|支付|购买|下单|转账|上传|下载|登录|退出)/, '代码包含可能对外产生影响或修改数据的操作'],
+    [/\bfetch\s*\([\s\S]*?\bmethod\s*:\s*['"`](?:POST|PUT|PATCH|DELETE)['"`]|\.open\s*\(\s*['"`](?:POST|PUT|PATCH|DELETE)['"`]|\bsendBeacon\s*\(|\b(?:localStorage|sessionStorage)\s*\.\s*(?:setItem|removeItem|clear)\s*\(/i, '页面代码可能发起写请求或修改页面状态'],
+  ];
+  for (const [pattern, reason] of checks) {
+    if (pattern.test(source)) reasons.push(reason);
+  }
+  return { requiresConfirmation: reasons.length > 0, reasons };
+}
+
+function browserCodeKernelMain() {
+  const browserCodeActionTimeoutMs = 5_000;
+  const browserCodeNavigationTimeoutMs = 30_000;
+  // Screenshots may wait for web fonts before capture. Keep their timeout
+  // independent from the intentionally short locator/action timeout so a
+  // slow font response does not make an otherwise healthy capture fail.
+  const browserCodeScreenshotTimeoutMs = 30_000;
+  const browserCodePointerLookupTimeoutMs = 250;
+  const browserCodeFrameObservationTimeoutMs = 1_500;
+  const browserCodePageObservationTimeoutMs = 2_500;
+  const browserCodeAxSnapshotTimeoutMs = 6_000;
+  const browserCodeSnapshotFallbackTimeoutMs = 1_500;
+  const maxBrowserCodeImageBytes = 8 * 1024 * 1024;
+  const maxBrowserCodeImageBytesTotal = 20 * 1024 * 1024;
+  const childRequire = eval('require') as typeof require;
+  const {
+    createHash: childCreateHash,
+    randomUUID: childRandomUUID,
+  } = childRequire('node:crypto') as typeof import('node:crypto');
+  const repl = childRequire('node:repl') as typeof import('node:repl');
+  const { PassThrough } = childRequire('node:stream') as typeof import('node:stream');
+  const { Buffer: ChildBuffer } = childRequire('node:buffer') as typeof import('node:buffer');
+
+  const settleKernelTask = <T>(promise: Promise<T>, timeoutMs: number, label: string) => (
+    new Promise<{ ok: true; value: T } | { ok: false; error: string }>((resolve) => {
+      let settled = false;
+      const finish = (result: { ok: true; value: T } | { ok: false; error: string }) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(result);
+      };
+      const timer = setTimeout(() => {
+        finish({ ok: false, error: `${label} timed out after ${timeoutMs}ms` });
+      }, timeoutMs);
+      timer.unref?.();
+      promise.then(
+        (value) => finish({ ok: true, value }),
+        (error) => finish({ ok: false, error: `${label} failed: ${error instanceof Error ? error.message : String(error)}` }),
+      );
+    })
+  );
+  const hostProcess = process;
+  type CoordinateClickEvidence = {
+    domEpoch: number;
+    capturedAt: number;
+    devicePixelRatio: number;
+    documentId: string;
+    height: number;
+    page: import('patchright').Page;
+    scrollX: number;
+    scrollY: number;
+    url: string;
+    width: number;
+  };
+  type CoordinateRectEvidence = CoordinateClickEvidence & {
+    rect: { height: number; width: number; x: number; y: number };
+    locator: import('patchright').Locator;
+  };
+  type KernelUidBinding = BrowserCodeUidReference & {
+    frame: import('patchright').Frame;
+    page: import('patchright').Page;
+    token: string;
+    boundEpoch: number;
+  };
+  type KernelPageObservation = BrowserCodePageObservation;
+  const compactObservationUrl = (value: string) => (
+    value.length <= 2048
+      ? value
+      : `${value.slice(0, 2000)}...[truncated; length=${value.length}]`
+  );
+  let browser: import('patchright').Browser | undefined;
+  let cdpScope: Awaited<ReturnType<typeof createBrowserCodeCdpScope>> | undefined;
+  let replServer: import('node:repl').REPLServer | undefined;
+  let selectedRuntimePage: import('patchright').Page | undefined;
+  let sessionGroupId = '';
+  let browserIgnoreHTTPSErrors = false;
+  let activeExecution: {
+    actions: string[];
+    logs: BrowserCodeExecutionLog[];
+    images: BrowserCodeImage[];
+    imageBytes: number;
+    outputs: unknown[];
+    startedAt: number;
+    attachments: Map<string, BrowserCodeAttachmentBinding>;
+    credentials: Map<string, BrowserCodeCredentialBinding>;
+    pendingCoordinateClickEvidence: Map<import('patchright').Page, CoordinateClickEvidence>;
+    pendingCoordinateRectEvidence: Map<import('patchright').Page, CoordinateRectEvidence[]>;
+    observationsBeforeAction: WeakMap<import('patchright').Page, KernelPageObservation>;
+    uidBindings: Map<string, KernelUidBinding>;
+    uidBindingErrors: Map<string, string>;
+    uidReferences: Map<string, BrowserCodeUidReference>;
+    requestId: string;
+    surfaceTransitions: NonNullable<BrowserCodeActivity['surfaceTransitions']>;
+  } | undefined;
+  const screenshotProvenance = new WeakMap<object, CoordinateClickEvidence & { fullPage: boolean }>();
+  const screenshotProvenanceByDigest = new Map<string, CoordinateClickEvidence & { fullPage: boolean }>();
+  const coordinateClickEvidenceByDocument = new Map<string, CoordinateClickEvidence>();
+  const coordinateRectEvidenceByDocument = new Map<string, CoordinateRectEvidence[]>();
+  const pendingRuntimeStateOperations = new Map<string, {
+    reject: (error: Error) => void;
+    resolve: (value: unknown) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
+  let chain = Promise.resolve();
+
+  const imageDigest = (value: Uint8Array) => childCreateHash('sha256').update(value).digest('hex');
+
+  const recordAction = (action: string) => {
+    if (activeExecution) {
+      activeExecution.actions.push(action);
+    }
+    if (activeExecution) send({ type: 'action-progress', requestId: activeExecution.requestId, action, completed: false });
+  };
+
+  const send = (payload: Record<string, unknown>) => {
+    if (typeof hostProcess.send === 'function') hostProcess.send(payload);
+  };
+
+  const requestRuntimeStateOperation = (
+    action: BrowserCodeRuntimeStateOperation['action'],
+    input: unknown,
+  ) => new Promise<unknown>((resolve, reject) => {
+    if (!activeExecution) {
+      reject(new Error('agent.state is only available while browserCode is executing.'));
+      return;
+    }
+    const operationId = childRandomUUID();
+    const timer = setTimeout(() => {
+      const pendingOperation = pendingRuntimeStateOperations.get(operationId);
+      if (!pendingOperation) return;
+      pendingRuntimeStateOperations.delete(operationId);
+      pendingOperation.reject(new Error('agent.state operation timed out after 10000ms.'));
+    }, 10_000);
+    pendingRuntimeStateOperations.set(operationId, { reject, resolve, timer });
+    send({
+      type: 'state-operation',
+      requestId: activeExecution.requestId,
+      operationId,
+      action,
+      input,
+    });
+  });
+
+  const jsonSafe = (value: unknown, maxOutputChars?: number) => {
+    const ancestors: object[] = [];
+    const serialized = JSON.stringify(value, function (this: object, _key, item) {
+      if (typeof item === 'bigint') return String(item);
+      if (typeof item === 'function' || typeof item === 'symbol') return undefined;
+      if (item instanceof Error) return { name: item.name, message: item.message };
+      if (item && typeof item === 'object') {
+        // Shared references in sibling branches are valid JSON values. Only
+        // an object already on the current ancestor path forms a cycle.
+        while (ancestors.length && ancestors[ancestors.length - 1] !== this) ancestors.pop();
+        if (ancestors.includes(item)) return '[Circular]';
+        ancestors.push(item);
+      }
+      return item;
+    });
+    if (serialized === undefined) return null;
+    if (maxOutputChars && serialized.length > maxOutputChars) {
+      return {
+        truncated: true,
+        originalChars: serialized.length,
+        preview: serialized.slice(0, maxOutputChars),
+      };
+    }
+    return JSON.parse(serialized);
+  };
+
+  const safeConsole = Object.freeze(Object.fromEntries((['log', 'info', 'warn', 'error'] as const).map((level) => [
+    level,
+    (...args: unknown[]) => {
+      if (!activeExecution || activeExecution.logs.length >= 100) return;
+      const text = args.map((value) => {
+        if (typeof value === 'string') return value;
+        try { return JSON.stringify(value); } catch { return String(value); }
+      }).join(' ');
+      activeExecution.logs.push({
+        level,
+        text: text.slice(0, 4_000),
+        elapsedMs: Date.now() - activeExecution.startedAt,
+      });
+    },
+  ])));
+
+  const nodeRepl = Object.freeze({
+    write(value: unknown) {
+      if (!activeExecution) throw new Error('nodeRepl.write() is only available while browserCode is executing.');
+      activeExecution.outputs.push(value);
+    },
+    async emitImage(value: unknown, options: { mimeType?: BrowserCodeImage['mimeType'] } = {}) {
+      if (!activeExecution) throw new Error('nodeRepl.emitImage() is only available while browserCode is executing.');
+      let mimeType = options.mimeType || 'image/png';
+      let buffer: Buffer;
+      if (typeof value === 'string') {
+        const dataUrl = /^data:(image\/(?:png|jpeg|webp));base64,([\s\S]+)$/i.exec(value.trim());
+        if (!dataUrl) throw new Error('nodeRepl.emitImage() string input must be a base64 image data URL.');
+        mimeType = dataUrl[1].toLowerCase() as BrowserCodeImage['mimeType'];
+        buffer = ChildBuffer.from(dataUrl[2], 'base64');
+      } else if (ChildBuffer.isBuffer(value) || value instanceof Uint8Array) {
+        buffer = ChildBuffer.from(value);
+      } else {
+        throw new Error('nodeRepl.emitImage() expects a Buffer, Uint8Array, or base64 image data URL.');
+      }
+      if (!['image/jpeg', 'image/png', 'image/webp'].includes(mimeType)) {
+        throw new Error(`nodeRepl.emitImage() does not support ${mimeType}.`);
+      }
+      if (!buffer.length || buffer.length > maxBrowserCodeImageBytes) {
+        throw new Error(`browserCode image must contain 1-${maxBrowserCodeImageBytes} bytes.`);
+      }
+      if (activeExecution.imageBytes + buffer.length > maxBrowserCodeImageBytesTotal) {
+        throw new Error(`browserCode emitted images exceed ${maxBrowserCodeImageBytesTotal} total bytes.`);
+      }
+      activeExecution.imageBytes += buffer.length;
+      activeExecution.images.push({ data: buffer.toString('base64'), mimeType });
+      if (value && typeof value === 'object') {
+        const digest = imageDigest(buffer);
+        const provenance = screenshotProvenance.get(value) || screenshotProvenanceByDigest.get(digest);
+        screenshotProvenanceByDigest.delete(digest);
+        if (provenance && !provenance.fullPage) {
+          activeExecution.pendingCoordinateClickEvidence.set(provenance.page, provenance);
+        }
+      }
+      return { bytes: buffer.length, index: activeExecution.images.length - 1, mimeType };
+    },
+  });
+
+  const tabIds = new WeakMap<import('patchright').Page, string>();
+  const tabPages = new WeakMap<object, import('patchright').Page>();
+  const tabWrappers = new WeakMap<import('patchright').Page, object>();
+  const agentCreatedPages = new Set<import('patchright').Page>();
+  const nativeContextNewPages = new WeakMap<import('patchright').BrowserContext, () => Promise<import('patchright').Page>>();
+  const pointerDecoratedPages = new WeakSet<import('patchright').Page>();
+  const decoratedRequestContexts = new WeakSet<import('patchright').APIRequestContext>();
+  const redactRequestErrorHeaders = (message: string) => message
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/^([ \t]*(?:-[ \t]*)?(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token)[ \t]*:)[^\r\n]*/gim, '$1 [redacted]');
+  const screenshotDecoratedPagePrototypes = new WeakSet<object>();
+  const pointerDecoratedLocatorPrototypes = new WeakSet<object>();
+  const credentialLocatorPrototypes = new WeakSet<object>();
+  let nativeFrameLocator: ((this: object, selector: string) => import('patchright').Locator) | undefined;
+  let nativeLocatorFill: ((this: object, value: string) => Promise<void>) | undefined;
+  const nativeLocatorActions = new Map<
+    string,
+    (this: object, ...args: unknown[]) => Promise<unknown>
+  >();
+
+  const actionArgsWithMinimumTimeout = (args: unknown[], optionsIndex: number) => {
+    const options = args[optionsIndex];
+    if (!options || typeof options !== 'object' || Array.isArray(options)) return args;
+    const timeout = Number(Reflect.get(options, 'timeout'));
+    if (!Number.isFinite(timeout) || timeout <= 0 || timeout >= browserCodeActionTimeoutMs) return args;
+    const normalized = [...args];
+    normalized[optionsIndex] = { ...options, timeout: browserCodeActionTimeoutMs };
+    return normalized;
+  };
+
+  const screenshotArgsWithDefaultTimeout = (args: unknown[]) => {
+    const options = args[0];
+    if (options && typeof options === 'object' && !Array.isArray(options)) {
+      const timeout = Number(Reflect.get(options, 'timeout'));
+      if (Number.isFinite(timeout) && timeout > 0) return args;
+      return [{ ...options, timeout: browserCodeScreenshotTimeoutMs }, ...args.slice(1)];
+    }
+    return [{ timeout: browserCodeScreenshotTimeoutMs }, ...args];
+  };
+
+  const createSessionPage = async (targetContext: import('patchright').BrowserContext) => {
+    const nativeNewPage = nativeContextNewPages.get(targetContext) || targetContext.newPage.bind(targetContext);
+    const openerPage = replServer?.context.page as import('patchright').Page | undefined;
+    if (!openerPage || openerPage.isClosed() || openerPage.context() !== targetContext) return nativeNewPage();
+    const [popupPage] = await Promise.all([
+      targetContext.waitForEvent('page', {
+        predicate: async (candidatePage) => await candidatePage.opener().catch(() => undefined) === openerPage,
+        timeout: browserCodeNavigationTimeoutMs,
+      }),
+      openerPage.evaluate(() => {
+        if (!window.open('about:blank', '_blank')) throw new Error('The browser blocked the new tab.');
+      }),
+    ]);
+    return popupPage;
+  };
+
+  const decorateContextNewPage = (browserContext: import('patchright').BrowserContext) => {
+    if (nativeContextNewPages.has(browserContext)) return;
+    nativeContextNewPages.set(browserContext, browserContext.newPage.bind(browserContext));
+    try {
+      Object.defineProperty(browserContext, 'newPage', {
+        configurable: true,
+        value: () => createSessionPage(browserContext),
+        writable: true,
+      });
+    } catch {
+      // browser.tabs.new still uses createSessionPage when the context object is immutable.
+    }
+  };
+
+  const moveVisibleAiPointer = async (
+    page: import('patchright').Page,
+    point: { x: number; y: number } | undefined,
+    kind = 'move',
+  ) => {
+    if (!activeExecution || !point || page.isClosed()) return;
+    await page.evaluate(({ x, y, pointerKind }) => {
+      const browserWindow = window as Window & {
+        __aiMoveMouseCursor?: (cursorX: number, cursorY: number, options?: { kind?: string }) => Promise<void>;
+      };
+      return browserWindow.__aiMoveMouseCursor?.(x, y, { kind: pointerKind });
+    }, { x: point.x, y: point.y, pointerKind: kind }).catch(() => undefined);
+  };
+
+  const locatorFrame = (locator: object) => (
+    Reflect.get(locator, '_frame') as import('patchright').Frame | undefined
+  );
+
+  const locatorPage = (locator: object) => {
+    const frame = locatorFrame(locator) as (import('patchright').Frame & { _page?: import('patchright').Page }) | undefined;
+    if (typeof frame?.page === 'function') return frame.page();
+    return frame?._page;
+  };
+
+  const browserCodeUidAttribute = 'data-ai-browser-code-uid';
+
+  const frameFromUidPath = (page: import('patchright').Page, framePath?: string) => {
+    if (!framePath) return page.mainFrame();
+    const parts = framePath.split('.').map((part) => Number(part));
+    if (parts.some((part) => !Number.isInteger(part) || part < 0)) return undefined;
+    let frame: import('patchright').Frame | undefined = page.mainFrame();
+    for (const part of parts) {
+      frame = frame.childFrames()[part];
+      if (!frame) return undefined;
+    }
+    return frame;
+  };
+
+  const framePathForPage = (page: import('patchright').Page, target: import('patchright').Frame) => {
+    if (target === page.mainFrame()) return undefined;
+    const parts: number[] = [];
+    let frame = target;
+    for (let depth = 0; frame !== page.mainFrame() && depth < 64; depth += 1) {
+      const parent = frame.parentFrame();
+      if (!parent) return undefined;
+      const index = parent.childFrames().indexOf(frame);
+      if (index < 0) return undefined;
+      parts.unshift(index);
+      frame = parent;
+    }
+    return frame === page.mainFrame() ? parts.join('.') : undefined;
+  };
+
+  const bindExecutionUidReferences = async (
+    page: import('patchright').Page,
+    references: BrowserCodeUidReference[],
+  ) => {
+    const execution = activeExecution;
+    if (!execution) return;
+    const groups = new Map<import('patchright').Frame, Array<BrowserCodeUidReference & { token: string }>>();
+    for (const [index, reference] of references.slice(0, 1_000).entries()) {
+      const uid = String(reference.uid || '').trim();
+      if (!/^dom-\d+-\d+$/.test(uid)) continue;
+      execution.uidReferences.set(uid, reference);
+      const frame = frameFromUidPath(page, reference.framePath);
+      if (!frame || frame.isDetached()) {
+        execution.uidBindingErrors.set(uid, `STALE_DOM_EVIDENCE: UID ${uid} belongs to an iframe that is no longer available.`);
+        continue;
+      }
+      const token = `bcu-${execution.requestId.replace(/[^a-z0-9]/gi, '')}-${index}`;
+      const list = groups.get(frame) || [];
+      list.push({ ...reference, token });
+      groups.set(frame, list);
+    }
+    for (const [frame, entries] of groups) {
+      const results = await frame.evaluate((input) => {
+        const browserWindow = window as Window & {
+          __aiDomMutationState?: { epoch?: number };
+          __aiDomRuntime?: { visibleDomElement?: (ref: string) => Element | undefined };
+        };
+        const runtime = browserWindow.__aiDomRuntime;
+        return input.map(({ localRef, token }) => {
+          const element = runtime?.visibleDomElement?.(localRef);
+          if (!element?.isConnected) {
+            return { ok: false as const, reason: 'the observed DOM node is detached or no longer resolves' };
+          }
+          const tokens = new Set((element.getAttribute('data-ai-browser-code-uid') || '').split(/\s+/).filter(Boolean));
+          tokens.add(token);
+          element.setAttribute('data-ai-browser-code-uid', [...tokens].join(' '));
+          return { ok: true as const, epoch: Number(browserWindow.__aiDomMutationState?.epoch || 0) };
+        });
+      }, entries.map(({ localRef, token }) => ({ localRef, token }))).catch((error) => (
+        entries.map(() => ({
+          ok: false as const,
+          reason: error instanceof Error ? error.message : String(error),
+        }))
+      ));
+      for (const [index, entry] of entries.entries()) {
+        const result = results[index];
+        if (!result?.ok) {
+          execution.uidBindingErrors.set(
+            entry.uid,
+            `STALE_DOM_EVIDENCE: UID ${entry.uid} ${result?.reason || 'could not be rebound to the live DOM'}. Capture fresh DOM evidence.`,
+          );
+          continue;
+        }
+        execution.uidBindings.set(entry.uid, {
+          ...entry,
+          boundEpoch: result.epoch,
+          frame,
+          page,
+        });
+      }
+    }
+  };
+
+  const clearExecutionUidBindings = async () => {
+    const execution = activeExecution;
+    if (!execution?.uidBindings.size) return;
+    const tokensByFrame = new Map<import('patchright').Frame, string[]>();
+    for (const binding of execution.uidBindings.values()) {
+      const list = tokensByFrame.get(binding.frame) || [];
+      list.push(binding.token);
+      tokensByFrame.set(binding.frame, list);
+    }
+    await Promise.all([...tokensByFrame].map(async ([frame, tokens]) => {
+      if (frame.isDetached()) return;
+      await frame.evaluate((values) => {
+        const removals = new Set(values);
+        for (const element of Array.from(document.querySelectorAll('[data-ai-browser-code-uid]'))) {
+          const remaining = (element.getAttribute('data-ai-browser-code-uid') || '')
+            .split(/\s+/)
+            .filter((token) => token && !removals.has(token));
+          if (remaining.length) element.setAttribute('data-ai-browser-code-uid', remaining.join(' '));
+          else element.removeAttribute('data-ai-browser-code-uid');
+        }
+      }, tokens).catch(() => undefined);
+    }));
+  };
+
+  const ensureFrameRuntime = async (frame: import('patchright').Frame) => {
+    const installed = await frame.evaluate(() => (
+      (window as Window & { __aiDomRuntime?: { version?: number } }).__aiDomRuntime?.version
+    ));
+    if (installed !== AI_DOM_RUNTIME_VERSION) {
+      // Init scripts and evaluations can use different execution worlds. Check
+      // the current document in the same world used for observations/actions.
+      await frame.evaluate(installAiBrowserPageRuntime, AI_DOM_RUNTIME_VERSION);
+    }
+  };
+
+  const readUnifiedPageObservation = async (
+    page: import('patchright').Page,
+  ): Promise<KernelPageObservation> => {
+    const mainFrame = page.mainFrame();
+    const observations = await Promise.all(page.frames().slice(0, 25).map(async (frame) => {
+      const observationResult = await settleKernelTask((async () => {
+        await ensureFrameRuntime(frame);
+        return frame.evaluate(() => {
+        const browserWindow = window as Window & {
+          __aiDomMutationState?: { epoch?: number };
+          __aiDomRuntime?: { pageObservation?: () => KernelPageObservation };
+        };
+        const shared = browserWindow.__aiDomRuntime?.pageObservation?.();
+        if (shared) return shared;
+        const visible = (element: Element) => {
+          if (
+            !element.isConnected
+            || element.hasAttribute('hidden')
+            || (element as HTMLElement).inert
+            || element.hasAttribute('inert')
+          ) return false;
+          let current: Element | null = element;
+          while (current) {
+            const style = getComputedStyle(current);
+            if (
+              style.display === 'none'
+              || style.visibility === 'hidden'
+              || style.visibility === 'collapse'
+              || style.contentVisibility === 'hidden'
+              || Number(style.opacity || '1') <= 0.01
+            ) return false;
+            current = current.parentElement;
+          }
+          const rect = element.getBoundingClientRect();
+          return rect.width > 2 && rect.height > 2;
+        };
+        const surfaceElements = Array.from(document.querySelectorAll(
+          'dialog[open], [aria-modal="true"], [role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]',
+        )).filter(visible);
+        const descriptor = (element: Element) => `${element.tagName.toLowerCase()}${element.id ? `#${element.id}` : ''}`;
+        const surfaces = surfaceElements.map((surface, index) => {
+          const rect = surface.getBoundingClientRect();
+          return {
+          id: `${descriptor(surface)}|${String(surface.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 80)}`,
+          descriptor: descriptor(surface),
+          kind: surface.getAttribute('role') === 'menu'
+            ? 'menu'
+            : surface.getAttribute('role') === 'listbox' ? 'listbox' : 'dialog',
+          label: String(surface.getAttribute('aria-label') || surface.getAttribute('title') || surface.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 160),
+          modal: surface.getAttribute('aria-modal') === 'true' || surface instanceof HTMLDialogElement,
+          likelyOverlay: true,
+          focusedInside: Boolean(document.activeElement && surface.contains(document.activeElement)),
+          zIndex: Number.parseInt(getComputedStyle(surface).zIndex, 10) || 0,
+          rect: {
+            bottom: rect.bottom,
+            height: rect.height,
+            left: rect.left,
+            right: rect.right,
+            top: rect.top,
+            width: rect.width,
+          },
+          signals: ['fallback-semantic-surface'],
+          ...(surface.id ? { selector: `#${CSS.escape(surface.id)}` } : {}),
+          depth: 0,
+          activationOrder: index + 1,
+        };
+        });
+        const activeSurface = surfaces.at(-1);
+        const focused = document.activeElement instanceof Element && document.activeElement !== document.body
+          ? document.activeElement
+          : undefined;
+        return {
+          epoch: Number(browserWindow.__aiDomMutationState?.epoch || 0),
+          url: (() => {
+            const currentUrl = window.location.href;
+            return currentUrl.length <= 2048
+              ? currentUrl
+              : `${currentUrl.slice(0, 2000)}...[truncated; length=${currentUrl.length}]`;
+          })(),
+          title: document.title,
+          ...(focused ? {
+            focusedElement: {
+              descriptor: descriptor(focused),
+              label: String(
+                focused.getAttribute('aria-label')
+                || focused.getAttribute('title')
+                || focused.getAttribute('placeholder')
+                || focused.textContent
+                || '',
+              ).replace(/\s+/g, ' ').trim().slice(0, 120),
+            },
+          } : {}),
+          ...(activeSurface ? { activeSurface } : {}),
+          surfaces,
+          surfaceStack: activeSurface ? [activeSurface] : [],
+          topSurfaceIds: surfaces.map((surface) => surface.id),
+          surfaceTransition: 'initial' as const,
+        };
+        });
+      })(), browserCodeFrameObservationTimeoutMs, `frame observation ${compactObservationUrl(frame.url()) || 'about:blank'}`);
+      const observation = observationResult.ok ? observationResult.value : undefined;
+      if (!observation) return undefined;
+      const framePath = framePathForPage(page, frame);
+      if (frame !== mainFrame && framePath === undefined) return undefined;
+      return {
+        ...observation,
+        surfaces: observation.surfaces.map((surface) => ({
+          ...surface,
+          ...(frame !== mainFrame ? { framePath } : {}),
+        })),
+        surfaceStack: observation.surfaceStack.map((surface) => ({
+          ...surface,
+          ...(frame !== mainFrame ? { framePath } : {}),
+        })),
+        ...(observation.activeSurface && frame !== mainFrame ? {
+          activeSurface: {
+            ...observation.activeSurface,
+            framePath,
+          },
+        } : {}),
+      } as KernelPageObservation;
+    }));
+    const available = observations.filter((item): item is KernelPageObservation => Boolean(item));
+    const main = available[0];
+    const selectedSurface = available
+      .flatMap((item) => item.activeSurface ? [{ observation: item, surface: item.activeSurface }] : [])
+      .sort((left, right) => (
+        Number(right.surface.likelyOverlay) - Number(left.surface.likelyOverlay)
+        || Number(right.surface.modal) - Number(left.surface.modal)
+        || right.surface.activationOrder - left.surface.activationOrder
+        || right.surface.zIndex - left.surface.zIndex
+      ))[0];
+    const titleResult = main
+      ? undefined
+      : await settleKernelTask(page.title(), browserCodeSnapshotFallbackTimeoutMs, 'page title');
+    return {
+      epoch: available.reduce((max, item) => Math.max(max, item.epoch), 0),
+      url: main?.url || compactObservationUrl(page.url()),
+      title: main?.title || (titleResult?.ok ? titleResult.value : ''),
+      ...(main?.focusedElement ? { focusedElement: main.focusedElement } : {}),
+      ...(selectedSurface ? { activeSurface: selectedSurface.surface } : {}),
+      surfaces: available.flatMap((item) => item.surfaces),
+      surfaceStack: selectedSurface?.observation.surfaceStack || main?.surfaceStack || [],
+      topSurfaceIds: available.flatMap((item) => item.topSurfaceIds),
+      surfaceTransition: selectedSurface?.observation.surfaceTransition || main?.surfaceTransition || 'initial',
+    };
+  };
+
+  const markPageObserved = async (page: import('patchright').Page) => {
+    if (!activeExecution) throw new Error('Page observation is only available while browserCode is executing.');
+    const observation = await readUnifiedPageObservation(page);
+    activeExecution.observationsBeforeAction.set(page, observation);
+    return observation;
+  };
+
+  const prepareStateChangingAction = async (
+    page: import('patchright').Page | undefined,
+    action: string,
+    report = true,
+    retainViewportEvidence = false,
+  ) => {
+    if (page && activeExecution && !activeExecution.observationsBeforeAction.has(page)) {
+      await markPageObserved(page);
+    }
+    if (page) {
+      // A viewport image remains usable for repeated coordinate clicks while
+      // the document and viewport geometry still match. Other inputs retire it.
+      if (!retainViewportEvidence) for (const [id, evidence] of coordinateClickEvidenceByDocument) {
+        if (evidence.page === page) coordinateClickEvidenceByDocument.delete(id);
+      }
+      for (const [id, evidence] of coordinateRectEvidenceByDocument) if (evidence.some(item => item.page === page)) coordinateRectEvidenceByDocument.delete(id);
+      activeExecution?.pendingCoordinateClickEvidence.delete(page);
+      activeExecution?.pendingCoordinateRectEvidence.delete(page);
+    }
+    if (report) recordAction(action);
+  };
+
+  const completeStateChangingAction = async (
+    page: import('patchright').Page | undefined,
+    action: string,
+  ) => {
+    if (!activeExecution || !page) return;
+    send({ type: 'action-progress', requestId: activeExecution.requestId, action, completed: true });
+    const before = activeExecution.observationsBeforeAction.get(page);
+    const after = await readUnifiedPageObservation(page);
+    activeExecution.observationsBeforeAction.set(page, after);
+    if (before) {
+      const beforeIds = new Set(before.surfaces.map((surface) => surface.id));
+      const afterIds = new Set(after.surfaces.map((surface) => surface.id));
+      activeExecution.surfaceTransitions.push({
+        action,
+        ...(before.activeSurface?.id ? { beforeId: before.activeSurface.id } : {}),
+        ...(after.activeSurface?.id ? { afterId: after.activeSurface.id } : {}),
+        openedIds: [...afterIds].filter((id) => !beforeIds.has(id)),
+        closedIds: [...beforeIds].filter((id) => !afterIds.has(id)),
+      });
+      if (activeExecution.surfaceTransitions.length > 20) activeExecution.surfaceTransitions.shift();
+    }
+  };
+
+  const locatorIntentTerms = (selector: string) => {
+    const terms = new Set<string>();
+    const add = (value: string | undefined) => {
+      const normalized = String(value || '')
+        .replace(/\\([\\"'])/g, '$1')
+        .normalize('NFKC')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+      if (normalized.length >= 2 && normalized.length <= 160) terms.add(normalized);
+    };
+    for (const match of selector.matchAll(/["']([^"']{2,160})["']/g)) add(match[1]);
+    for (const match of selector.matchAll(/(?:^|[\s>+~,])([#.][\w-]{2,120})/g)) add(match[1].slice(1));
+    for (const match of selector.matchAll(/internal:role=([\w-]+)/g)) add(match[1]);
+    for (const match of selector.matchAll(/\[([\w-]+)=([^\]\s]+)/g)) {
+      add(match[1]);
+      add(match[2].replace(/^['"]|['"]$/g, ''));
+    }
+    return [...terms].slice(0, 16);
+  };
+
+  const zeroMatchCandidateDiagnostics = async (locator: import('patchright').Locator) => {
+    const frame = locatorFrame(locator);
+    const page = locatorPage(locator);
+    const selector = String(Reflect.get(locator, '_selector') || '').slice(0, 800);
+    const terms = locatorIntentTerms(selector);
+    if (!frame || !page) return '';
+    const snapshotResult = await settleKernelTask(frame.evaluate((input) => {
+      type Candidate = {
+        ref?: string;
+        tag: string;
+        label: string;
+        descriptor: string;
+        line: string;
+        surfaceId?: string;
+        capabilities?: string[];
+        locatorCandidates?: string[];
+        priority?: number;
+      };
+      const browserWindow = window as Window & {
+        __aiDomMutationState?: { epoch?: number };
+        __aiDomRuntime?: {
+          pageObservation?: () => { activeSurface?: { id?: string } };
+          visibleDomSelector?: (ref: string) => string | undefined;
+          visibleDomSnapshot?: (options: {
+            maxChars: number;
+            maxElements: number;
+            preserveExistingRefs: boolean;
+          }) => { items?: Candidate[] };
+        };
+      };
+      const runtime = browserWindow.__aiDomRuntime;
+      const activeSurfaceId = runtime?.pageObservation?.()?.activeSurface?.id;
+      const captured = runtime?.visibleDomSnapshot?.({
+        maxChars: 40_000,
+        maxElements: 250,
+        preserveExistingRefs: true,
+      });
+      const visible = (element: Element) => {
+        if (!element.isConnected || element.hasAttribute('hidden') || (element as HTMLElement).inert) return false;
+        const style = getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.display !== 'none'
+          && style.visibility !== 'hidden'
+          && Number(style.opacity || '1') > 0.01
+          && rect.width > 0
+          && rect.height > 0;
+      };
+      const fallbackItems = () => Array.from(document.querySelectorAll([
+        'button', 'a[href]', 'input:not([type="hidden"])', 'textarea', 'select',
+        '[role="button"]', '[role="checkbox"]', '[role="combobox"]', '[role="link"]',
+        '[role="menuitem"]', '[role="option"]', '[role="radio"]', '[role="tab"]',
+        '[role="textbox"]', '[role="treeitem"]', '[onclick]', '[tabindex]:not([tabindex="-1"])',
+      ].join(','))).filter(visible).slice(0, 250).map((element): Candidate => {
+        const htmlElement = element as HTMLElement;
+        const inputElement = element as HTMLInputElement;
+        const tag = element.tagName.toLowerCase();
+        const role = element.getAttribute('role') || '';
+        const label = String(
+          element.getAttribute('aria-label')
+          || element.getAttribute('placeholder')
+          || element.getAttribute('title')
+          || (inputElement.type !== 'password' ? inputElement.value : '')
+          || htmlElement.innerText
+          || element.textContent
+          || '',
+        ).replace(/\s+/g, ' ').trim().slice(0, 240);
+        const descriptor = `${tag}${element.id ? `#${element.id}` : ''}${role ? `[role="${role}"]` : ''}`;
+        const locatorCandidates = [
+          element.id ? `#${CSS.escape(element.id)}` : '',
+          ...['data-testid', 'data-test', 'data-qa', 'data-cy', 'name', 'placeholder']
+            .flatMap((name) => element.getAttribute(name) ? [`[${name}="${element.getAttribute(name)}"]`] : []),
+        ].filter(Boolean).slice(0, 5);
+        return { tag, label, descriptor, line: `${descriptor} ${label}`, locatorCandidates };
+      });
+      const candidates = (captured?.items?.length ? captured.items : fallbackItems())
+        .filter((item) => Boolean(item && item.tag))
+        .map((item) => {
+          const corpus = [item.tag, item.label, item.descriptor, item.line]
+            .filter(Boolean)
+            .join(' ')
+            .normalize('NFKC')
+            .replace(/\s+/g, ' ')
+            .toLowerCase();
+          const compactCorpus = corpus.replace(/\s+/g, '');
+          let score = Math.min(30, Math.max(0, Number(item.priority) || 0) / 3);
+          if (activeSurfaceId && item.surfaceId === activeSurfaceId) score += 35;
+          for (const term of input.terms) {
+            const compactTerm = term.replace(/\s+/g, '');
+            if (corpus === term) score += 100;
+            else if (corpus.includes(term)) score += 55;
+            else if (compactTerm.length >= 2 && compactCorpus.includes(compactTerm)) score += 45;
+          }
+          return { item, score };
+        })
+        .sort((left, right) => right.score - left.score)
+        .slice(0, 8)
+        .map(({ item, score }) => ({
+          ref: item.ref,
+          selector: item.ref ? runtime?.visibleDomSelector?.(item.ref) : undefined,
+          score: Math.round(score),
+          tag: item.tag,
+          label: String(item.label || '').slice(0, 240),
+          descriptor: String(item.descriptor || '').slice(0, 240),
+          surfaceId: item.surfaceId,
+          capabilities: item.capabilities?.slice(0, 8),
+          locatorCandidates: item.locatorCandidates?.slice(0, 5),
+        }));
+      return {
+        epoch: Number(browserWindow.__aiDomMutationState?.epoch || 0),
+        activeSurfaceId,
+        candidates,
+      };
+    }, { terms }), browserCodeSnapshotFallbackTimeoutMs, 'zero-match candidate diagnostics');
+    if (!snapshotResult.ok) {
+      return ` ZERO_MATCH_DIAGNOSTICS ${JSON.stringify({
+        selector,
+        diagnosticError: snapshotResult.error,
+      })}`;
+    }
+    const uidByLocalRef = new Map<string, string>();
+    for (const binding of activeExecution?.uidBindings.values() || []) {
+      if (binding.frame === frame) uidByLocalRef.set(binding.localRef, binding.uid);
+    }
+    const staleUid = [...(activeExecution?.uidBindings.values() || [])]
+      .find((binding) => selector.includes(binding.token))?.uid;
+    const candidates = snapshotResult.value.candidates.map((candidate) => ({
+      ...(candidate.ref && uidByLocalRef.get(candidate.ref) ? { uid: uidByLocalRef.get(candidate.ref) } : {}),
+      ...candidate,
+      ref: undefined,
+    }));
+    // Visible text is only an intent hint: icon text, aria-labelledby and
+    // aria-label can make the native accessible name differ. Read the actual
+    // AX representation for a few current, uniquely located candidates.
+    const enrichedCandidates = await Promise.all(candidates.map(async (candidate, index) => {
+      if (index >= 3 || !candidate.selector) return candidate;
+      const accessible = await settleKernelTask(
+        frame.locator(candidate.selector).ariaSnapshot({ timeout: 1_000 }),
+        1_500,
+        'zero-match candidate accessibility',
+      );
+      return accessible.ok
+        ? { ...candidate, accessibility: accessible.value.slice(0, 500) }
+        : candidate;
+    }));
+    return ` ZERO_MATCH_DIAGNOSTICS ${JSON.stringify({
+      selector,
+      epoch: snapshotResult.value.epoch,
+      activeSurfaceId: snapshotResult.value.activeSurfaceId,
+      ...(staleUid ? { staleUid } : {}),
+      candidates: enrichedCandidates,
+    }).slice(0, 3_500)}`;
+  };
+
+  const ownerDisabled = (element: Element) => {
+    const runtime = (window as Window & { __aiDomRuntime?: { isDisabledElement?: (target: Element) => boolean } }).__aiDomRuntime;
+    if (!runtime?.isDisabledElement) throw new Error('BROWSER_INPUT_PREFLIGHT_FAILED: containing frame state is not ready.');
+    return runtime.isDisabledElement(element);
+  };
+
+  const assertContainingFramesEnabled = async (frame: import('patchright').Frame | undefined) => {
+    for (let currentFrame = frame; currentFrame?.parentFrame(); currentFrame = currentFrame.parentFrame() || undefined) {
+      const owner = await currentFrame.frameElement();
+      try {
+        if (await owner.evaluate(ownerDisabled)) throw new Error('BROWSER_INPUT_PREFLIGHT_FAILED: containing frame belongs to a disabled control.');
+      } finally { await owner.dispose(); }
+    }
+  };
+
+  const resolveActionableLocator = async (
+    locator: object,
+    action: string,
+  ) => {
+    if (
+      !locator
+      || typeof locator !== 'object'
+      || typeof Reflect.get(locator, 'count') !== 'function'
+      || typeof Reflect.get(locator, 'evaluate') !== 'function'
+      || typeof Reflect.get(locator, 'evaluateAll') !== 'function'
+      || typeof Reflect.get(locator, 'filter') !== 'function'
+    ) {
+      throw new Error(
+        `ACTIONABILITY_FAILED: ${action} requires a real Playwright Locator from the active browser session.`,
+      );
+    }
+    const originalCandidate = locator as import('patchright').Locator;
+    const targetPage = locatorPage(originalCandidate);
+    const targetFrames = targetPage?.frames() || (locatorFrame(originalCandidate) ? [locatorFrame(originalCandidate)!] : []);
+    await Promise.all(targetFrames.filter(frame => !frame.isDetached()).map(ensureFrameRuntime));
+    // A locator bound directly to a child Frame must also honor the state of
+    // its containing iframe and custom/ARIA-disabled hosts in parent documents.
+    await assertContainingFramesEnabled(locatorFrame(originalCandidate));
+    {
+      // FrameLocator keeps its root frame in _frame. Resolve each observed
+      // frame-entry prefix before every input; native trials must not bypass
+      // the semantic disabled state of a containing frame.
+      const selector = String(Reflect.get(originalCandidate, '_selector') || '');
+      const rootFrame = locatorFrame(originalCandidate);
+      const marker = ' >> internal:control=enter-frame >> ';
+      for (let index = selector.indexOf(marker); rootFrame && index >= 0; index = selector.indexOf(marker, index + marker.length)) {
+        if (await rootFrame.locator(selector.slice(0, index)).evaluate(ownerDisabled)) {
+          throw new Error('BROWSER_INPUT_PREFLIGHT_FAILED: containing frame belongs to a disabled control.');
+        }
+      }
+    }
+    if (String(Reflect.get(originalCandidate, '_selector') || '').includes(browserCodeUidAttribute)) {
+      const bindings = activeExecution?.uidBindings;
+      const states = await originalCandidate.evaluateAll(elements => elements.map(element => ({
+        tokens: (element.getAttribute('data-ai-browser-code-uid') || '').split(/\s+/),
+        epoch: Number((window as Window & { __aiDomMutationState?: { epoch?: number } }).__aiDomMutationState?.epoch || 0),
+      })));
+      if (!states.length || states.some(state => ![...(bindings?.values() || [])].some(binding => state.tokens.includes(binding.token) && binding.boundEpoch === state.epoch))) {
+        throw new Error('STALE_DOM_EVIDENCE: the UID observation changed. Read current DOM or resolve a semantic locator before acting.');
+      }
+    }
+    const skipVisibleFilter = action.toLowerCase() === 'setinputfiles';
+    const candidateSet = skipVisibleFilter
+      ? originalCandidate
+      : originalCandidate.filter({ visible: true });
+    // Locator factories resolve live. A menu or form field may mount after its
+    // trigger returns; preserve the normal bounded Playwright wait before
+    // evaluating uniqueness and actionability. Waiting never sends input.
+    if (await candidateSet.count() === 0) {
+      try {
+        await candidateSet.first().waitFor({
+          state: skipVisibleFilter ? 'attached' : 'visible',
+          timeout: browserCodeActionTimeoutMs,
+        });
+      } catch (error) {
+        if (!(error instanceof Error) || error.name !== 'TimeoutError') throw error;
+      }
+    }
+    const originalCount = await originalCandidate.count();
+    const zeroMatchDiagnostics = originalCount === 0
+      ? await zeroMatchCandidateDiagnostics(originalCandidate)
+      : '';
+    // Playwright visibility ignores opacity. A newly mounted dialog can have a
+    // box while its finite entrance animation still makes input imperceptible.
+    // Wait without altering styles; static hiding is still rejected below.
+    await settleKernelTask(candidateSet.evaluateAll(async elements => {
+      const animations = new Set<Animation>();
+      for (const element of elements) {
+        let current: Element | null = element;
+        while (current) {
+          for (const animation of current.getAnimations()) {
+            if (animation.playState === 'running'
+              && Number.isFinite(animation.effect?.getComputedTiming().endTime)) animations.add(animation);
+          }
+          current = current.parentElement || (current.getRootNode() as ShadowRoot).host || null;
+        }
+      }
+      await Promise.all([...animations].map(animation => animation.finished.catch(() => undefined)));
+    }), browserCodeActionTimeoutMs, 'target rendering animations');
+    let results = await candidateSet.evaluateAll((elements, operation) => {
+      const runtime = (window as Window & { __aiDomRuntime?: { actionability?: (
+        element: Element, options?: { action?: string },
+      ) => { ok: boolean; reason: string; descriptor: string; coveredBy?: string;
+        coveredBySurfaceId?: string; activeSurfaceId?: string; failureKind?: 'occluded'; preserveScroll?: boolean } } }).__aiDomRuntime;
+      if (!runtime?.actionability) {
+        throw new Error('BROWSER_INPUT_PREFLIGHT_FAILED: actionability runtime is not ready; refresh state before input.');
+      }
+      return elements.map(element => runtime.actionability!(element, { action: operation }));
+    }, action);
+    const normalizedAction = action.toLowerCase();
+    const trialMethod = normalizedAction === 'setchecked'
+      || normalizedAction === 'dragto'
+      || normalizedAction === 'draganddrop'
+      ? 'click'
+      : ['click', 'dblclick', 'hover', 'tap', 'check', 'uncheck'].includes(normalizedAction)
+        ? normalizedAction
+        : undefined;
+    if (trialMethod) {
+      const locatorSelector = Reflect.get(originalCandidate, '_selector');
+      const locatorRootFrame = locatorFrame(originalCandidate);
+      const enterFrameMarker = ' >> internal:control=enter-frame >> ';
+      const frameOwnerLocators: import('patchright').Locator[] = [];
+      if (locatorRootFrame && typeof locatorSelector === 'string') {
+        let markerIndex = locatorSelector.indexOf(enterFrameMarker);
+        while (markerIndex >= 0) {
+          frameOwnerLocators.push(locatorRootFrame.locator(locatorSelector.slice(0, markerIndex)));
+          markerIndex = locatorSelector.indexOf(enterFrameMarker, markerIndex + enterFrameMarker.length);
+        }
+      }
+      for (const frameElement of frameOwnerLocators) {
+        const ownerActionability = await frameElement.evaluate((element, operation) => {
+          const browserWindow = window as Window & {
+            __aiDomRuntime?: {
+              actionability?: (target: Element, options?: { action?: string }) => {
+                ok: boolean;
+                reason: string;
+                descriptor: string;
+                coveredBy?: string;
+                coveredBySurfaceId?: string;
+                activeSurfaceId?: string;
+                failureKind?: 'occluded';
+                preserveScroll?: boolean;
+              };
+            };
+          };
+          const shared = browserWindow.__aiDomRuntime?.actionability?.(element, { action: operation });
+          if (shared && (!shared.ok || shared.preserveScroll)) return shared;
+          const rect = element.getBoundingClientRect();
+          const candidate = document.elementFromPoint(
+            Math.min(window.innerWidth - 1, Math.max(0, Math.floor(rect.left + rect.width / 2))),
+            Math.min(window.innerHeight - 1, Math.max(0, Math.floor(rect.top + rect.height / 2))),
+          );
+          if (candidate && !candidate.contains(element) && !element.contains(candidate)) {
+            const style = getComputedStyle(candidate);
+            const blockerRect = candidate.getBoundingClientRect();
+            const horizontalCoverage = Math.max(0, Math.min(window.innerWidth, blockerRect.right) - Math.max(0, blockerRect.left));
+            const verticalCoverage = Math.max(0, Math.min(window.innerHeight, blockerRect.bottom) - Math.max(0, blockerRect.top));
+            if (
+              ['fixed', 'absolute', 'sticky'].includes(style.position)
+              && horizontalCoverage >= window.innerWidth * 0.8
+              && verticalCoverage >= window.innerHeight * 0.8
+            ) {
+              const coveredBy = `${candidate.tagName.toLowerCase()}${candidate.id ? `#${candidate.id}` : ''}`;
+              const descriptor = `${element.tagName.toLowerCase()}${element.id ? `#${element.id}` : ''}`;
+              return {
+                ok: false,
+                reason: `${descriptor} is covered by viewport-blocking layer ${coveredBy}`,
+                descriptor,
+                coveredBy,
+                failureKind: 'occluded' as const,
+                preserveScroll: true,
+              };
+            }
+          }
+          return shared;
+        }, normalizedAction).catch(() => undefined);
+        if (ownerActionability && !ownerActionability.ok && ownerActionability.preserveScroll) {
+          results = results.map((result) => ({
+            ...result,
+            ok: false,
+            reason: `${result.descriptor} is inside ${ownerActionability.descriptor}, which is blocked: ${ownerActionability.reason}`,
+            coveredBy: ownerActionability.coveredBy,
+            coveredBySurfaceId: ownerActionability.coveredBySurfaceId,
+            activeSurfaceId: ownerActionability.activeSurfaceId,
+            failureKind: ownerActionability.failureKind,
+            preserveScroll: ownerActionability.preserveScroll,
+          }));
+          break;
+        }
+      }
+      const nativeTrialAction = nativeLocatorActions.get(trialMethod);
+      const trialResults: typeof results = [];
+      for (const [index, result] of results.entries()) {
+        const supplementalOcclusion = result.failureKind === 'occluded'
+          || /no unobstructed actionable point/i.test(result.reason);
+        if (!result.ok && !supplementalOcclusion) {
+          trialResults.push(result);
+          continue;
+        }
+        if (!nativeTrialAction) {
+          trialResults.push({
+            ...result,
+            ok: false,
+            reason: `${result.ok ? '' : `${result.reason}; `}native Locator.${trialMethod} trial is unavailable`,
+          });
+          continue;
+        }
+        const trialCandidate = candidateSet.nth(index);
+        const scrollState = await trialCandidate.evaluate((element) => {
+          const ancestors: Array<{ left: number; top: number }> = [];
+          let current = element.parentElement;
+          while (current) {
+            ancestors.push({ left: current.scrollLeft, top: current.scrollTop });
+            current = current.parentElement;
+          }
+          const scrolling = document.scrollingElement;
+          return {
+            ancestors,
+            documentLeft: scrolling?.scrollLeft || window.scrollX,
+            documentTop: scrolling?.scrollTop || window.scrollY,
+          };
+        }).catch(() => undefined);
+        const topPage = locatorRootFrame?.page();
+        const topPageScrollState = await topPage?.evaluate(() => {
+          const scrolling = document.scrollingElement;
+          return {
+            left: scrolling?.scrollLeft || window.scrollX,
+            top: scrolling?.scrollTop || window.scrollY,
+          };
+        }).catch(() => undefined);
+        const restoreScrollState = async () => {
+          if (scrollState) {
+            await trialCandidate.evaluate((element, state) => {
+              let current = element.parentElement;
+              let ancestorIndex = 0;
+              while (current && ancestorIndex < state.ancestors.length) {
+                const position = state.ancestors[ancestorIndex];
+                current.scrollTo(position.left, position.top);
+                current = current.parentElement;
+                ancestorIndex += 1;
+              }
+              const scrolling = document.scrollingElement;
+              if (scrolling) scrolling.scrollTo(state.documentLeft, state.documentTop);
+              else window.scrollTo(state.documentLeft, state.documentTop);
+            }, scrollState).catch(() => undefined);
+          }
+          if (topPage && topPageScrollState) {
+            await topPage.evaluate((state) => {
+              const scrolling = document.scrollingElement;
+              if (scrolling) scrolling.scrollTo(state.left, state.top);
+              else window.scrollTo(state.left, state.top);
+            }, topPageScrollState).catch(() => undefined);
+          }
+        };
+        try {
+          await Reflect.apply(nativeTrialAction, trialCandidate, [{
+            // A small sticky header can be cleared by native scrolling/retries.
+            // Keep short trials for ambiguous matches and viewport blockers.
+            timeout: result.preserveScroll || results.length > 1
+              ? browserCodePointerLookupTimeoutMs
+              : browserCodeActionTimeoutMs,
+            trial: true,
+          }]);
+          if (result.preserveScroll) await restoreScrollState();
+          trialResults.push({
+            ...result,
+            ok: true,
+            reason: result.ok
+              ? `Playwright ${trialMethod} trial passed`
+              : `${result.reason}; Playwright ${trialMethod} trial passed and is authoritative`,
+            coveredBy: undefined,
+          });
+        } catch (error) {
+          await restoreScrollState();
+          const detail = (error instanceof Error ? error.message : String(error))
+            .replace(/\u001b\[[0-9;]*m/g, '')
+            .replace(/\s+/g, ' ')
+            .slice(0, 600);
+          trialResults.push({
+            ...result,
+            ok: false,
+            reason: `${result.ok ? '' : `${result.reason}; `}Playwright ${trialMethod} trial failed: ${detail}`,
+          });
+        }
+      }
+      results = trialResults;
+    }
+    const actionableIndices = results
+      .map((result, index) => result.ok ? index : -1)
+      .filter((index) => index >= 0);
+    if (actionableIndices.length !== 1) {
+      const visibilityStage = skipVisibleFilter
+        ? `${results.length} candidates entered the file-input exception path`
+        : `${results.length} passed automatic visible filtering`;
+      const diagnostics = results
+        .map((result, index) => ({ index, result }))
+        .slice(0, 12)
+        .map(({ index, result }) => (
+          `#${index + 1} ${result.descriptor}: ${result.ok ? 'actionable' : result.reason}`
+          + (result.coveredBy ? `; covered by ${result.coveredBy}` : '')
+          + (result.coveredBySurfaceId ? `; coveredBySurfaceId=${result.coveredBySurfaceId}` : '')
+          + (result.activeSurfaceId ? `; activeSurfaceId=${result.activeSurfaceId}` : '')
+        )).join(' | ');
+      throw new Error(
+        `ACTIONABILITY_FAILED: ${action} matched ${originalCount} elements; ${visibilityStage}; `
+        + `${actionableIndices.length} passed full actionability. Exactly one candidate must pass both stages.`
+        + (diagnostics ? ` ${diagnostics}` : '')
+        + zeroMatchDiagnostics,
+      );
+    }
+    return candidateSet.nth(actionableIndices[0]);
+  };
+
+  const locatorCenter = async (locator: object) => {
+    const candidate = locator as {
+      boundingBox?: () => Promise<{ x: number; y: number; width: number; height: number } | null>;
+      evaluate?: <T>(
+        callback: (element: Element) => T,
+        argument?: unknown,
+        options?: { timeout?: number },
+      ) => Promise<T>;
+    };
+    await candidate.evaluate?.((element) => {
+      element.scrollIntoView({ block: 'center', inline: 'center' });
+    }, undefined, { timeout: browserCodePointerLookupTimeoutMs }).catch(() => undefined);
+    // Playwright includes iframe offsets; a DOM rect is local to the target frame.
+    const rect = await candidate.boundingBox?.().catch(() => undefined);
+    if (!rect?.width || !rect.height) return undefined;
+    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+  };
+
+  const captureCoordinateClickState = async (
+    page: import('patchright').Page,
+  ): Promise<CoordinateClickEvidence | undefined> => {
+    if (page.isClosed()) return undefined;
+    const state = await page.evaluate<{
+      domEpoch: number;
+      devicePixelRatio: number;
+      documentId: string;
+      height: number;
+      scrollX: number;
+      scrollY: number;
+      url: string;
+      width: number;
+    }>(`(() => {
+      const browserWindow = window;
+      if (!browserWindow.__aiCoordinateEvidenceDocumentId) {
+        browserWindow.__aiCoordinateEvidenceDocumentId = Date.now() + '-' + Math.random();
+      }
+      return {
+        domEpoch: Number(browserWindow.__aiDomMutationState?.epoch || 0),
+        devicePixelRatio: window.devicePixelRatio,
+        documentId: browserWindow.__aiCoordinateEvidenceDocumentId || '',
+        height: window.innerHeight,
+        scrollX: window.scrollX,
+        scrollY: window.scrollY,
+        url: window.location.href,
+        width: window.innerWidth,
+      };
+    })()`).catch(() => undefined);
+    return state ? { ...state, capturedAt: Date.now(), page } : undefined;
+  };
+
+  const sameCoordinateClickState = (
+    evidence: CoordinateClickEvidence,
+    current: CoordinateClickEvidence | undefined,
+  ) => Boolean(
+    current
+    && evidence.url === current.url
+    && evidence.documentId === current.documentId
+    && evidence.domEpoch === current.domEpoch
+    && evidence.width === current.width
+    && evidence.height === current.height
+    && evidence.devicePixelRatio === current.devicePixelRatio
+    && evidence.scrollX === current.scrollX
+    && evidence.scrollY === current.scrollY
+  );
+
+  const sameViewportClickState = (
+    evidence: CoordinateClickEvidence,
+    current: CoordinateClickEvidence | undefined,
+  ) => Boolean(
+    current
+    && evidence.url === current.url
+    && evidence.documentId === current.documentId
+    && evidence.width === current.width
+    && evidence.height === current.height
+    && evidence.devicePixelRatio === current.devicePixelRatio
+    && evidence.scrollX === current.scrollX
+    && evidence.scrollY === current.scrollY
+  );
+
+  const coordinateEvidenceMaxAgeMs = 5 * 60_000;
+
+  const coordinatePointInsideRect = (
+    x: number,
+    y: number,
+    rect: CoordinateRectEvidence['rect'],
+  ) => (
+    Number.isFinite(x)
+    && Number.isFinite(y)
+    && rect.width > 0
+    && rect.height > 0
+    && x >= rect.x
+    && x <= rect.x + rect.width
+    && y >= rect.y
+    && y <= rect.y + rect.height
+  );
+
+  const requireCoordinateClickEvidence = async (
+    page: import('patchright').Page,
+    x: number,
+    y: number,
+  ) => {
+    const current = await captureCoordinateClickState(page);
+    if (!current || !Number.isFinite(x) || !Number.isFinite(y)) {
+      throw new Error('BROWSER_INPUT_PREFLIGHT_FAILED: Coordinate clicking requires finite viewport coordinates and current page evidence.');
+    }
+    if (x < 0 || y < 0 || x > current.width || y > current.height) {
+      throw new Error(`BROWSER_INPUT_PREFLIGHT_FAILED: Coordinate (${x}, ${y}) is outside the current ${current.width}x${current.height} viewport.`);
+    }
+
+    const screenshotEvidence = current
+      ? coordinateClickEvidenceByDocument.get(current.documentId)
+      : undefined;
+    if (
+      screenshotEvidence
+      && Date.now() - screenshotEvidence.capturedAt <= coordinateEvidenceMaxAgeMs
+      && sameViewportClickState(screenshotEvidence, current)
+    ) {
+      return;
+    }
+    if (screenshotEvidence) coordinateClickEvidenceByDocument.delete(current.documentId);
+
+    const publishedRects = coordinateRectEvidenceByDocument.get(current.documentId) || [];
+    const pendingRects = activeExecution?.pendingCoordinateRectEvidence.get(page) || [];
+    const validRects = [...publishedRects, ...pendingRects].filter((evidence) => (
+      Date.now() - evidence.capturedAt <= coordinateEvidenceMaxAgeMs
+      && sameCoordinateClickState(evidence, current)
+    ));
+    for (const evidence of validRects.filter(item => coordinatePointInsideRect(x, y, item.rect))) {
+      // Measuring a covered element is allowed. Using its rect as click evidence
+      // must still validate that exact live target at the moment of dispatch.
+      await resolveActionableLocator(evidence.locator, 'click');
+      const afterTrial = await captureCoordinateClickState(page);
+      if (!sameCoordinateClickState(evidence, afterTrial)) {
+        throw new Error('BROWSER_INPUT_PREFLIGHT_FAILED: Coordinate evidence changed during actionability checking. Read a fresh boundingBox before clicking.');
+      }
+      return;
+    }
+    if (publishedRects.length) {
+      if (validRects.length) coordinateRectEvidenceByDocument.set(current.documentId, validRects.slice(-50));
+      else coordinateRectEvidenceByDocument.delete(current.documentId);
+    }
+
+    throw new Error(
+      'BROWSER_INPUT_PREFLIGHT_FAILED: Coordinate clicking requires either a recent automatic or emitted viewport screenshot visible to the model, '
+      + 'or a point inside the current rect returned by boundingBox() for one exact visible actionable Locator. '
+      + 'Viewport evidence expires after document, URL, viewport, browser zoom, scroll change, or five minutes. Reobserve before another coordinate action; semantic locators can be resolved live.',
+    );
+  };
+
+  const decoratePageScreenshotPrototype = (page: import('patchright').Page) => {
+    const prototype = Object.getPrototypeOf(page) as Record<string, unknown> | null;
+    if (!prototype || screenshotDecoratedPagePrototypes.has(prototype)) return;
+    const nativeScreenshot = Reflect.get(prototype, 'screenshot');
+    if (typeof nativeScreenshot !== 'function') return;
+    try {
+      Object.defineProperty(prototype, 'screenshot', {
+        configurable: true,
+        value: async function trackedPageScreenshot(
+          this: import('patchright').Page,
+          ...args: unknown[]
+        ) {
+          await captureCoordinateClickState(this);
+          const screenshotArgs = screenshotArgsWithDefaultTimeout(args);
+          const image = await Reflect.apply(nativeScreenshot, this, screenshotArgs);
+          const after = await captureCoordinateClickState(this);
+          if (image && typeof image === 'object' && after) {
+            const options = screenshotArgs[0] && typeof screenshotArgs[0] === 'object'
+              ? screenshotArgs[0] as { fullPage?: boolean }
+              : undefined;
+            const provenance = {
+              ...after,
+              capturedAt: Date.now(),
+              fullPage: options?.fullPage === true,
+            };
+            screenshotProvenance.set(image, provenance);
+            if (ChildBuffer.isBuffer(image) || image instanceof Uint8Array) {
+              screenshotProvenanceByDigest.set(imageDigest(ChildBuffer.from(image)), provenance);
+              while (screenshotProvenanceByDigest.size > 20) {
+                const oldestDigest = screenshotProvenanceByDigest.keys().next().value;
+                if (typeof oldestDigest !== 'string') break;
+                screenshotProvenanceByDigest.delete(oldestDigest);
+              }
+            }
+          }
+          return image;
+        },
+        writable: true,
+      });
+      screenshotDecoratedPagePrototypes.add(prototype);
+    } catch {
+      // Keep the native screenshot implementation when the Playwright prototype is immutable.
+    }
+  };
+
+  const credentialVault = Object.freeze({
+    async fill(locator: unknown, credentialRef: unknown) {
+      if (!activeExecution) {
+        throw new Error('credentialVault.fill() is only available while browserCode is executing.');
+      }
+      const ref = typeof credentialRef === 'string' ? credentialRef.trim() : '';
+      const credential = ref ? activeExecution.credentials.get(ref) : undefined;
+      if (!credential) {
+        throw new Error('The requested credential reference is unavailable for this browserCode execution.');
+      }
+      if (!locator || typeof locator !== 'object') {
+        throw new Error('credentialVault.fill() requires a real Playwright Locator as its first argument.');
+      }
+      const locatorPrototype = Object.getPrototypeOf(locator) as object | null;
+      const targetFrame = Reflect.get(locator, '_frame') as import('patchright').Frame | undefined;
+      const selector = Reflect.get(locator, '_selector');
+      const targetPage = targetFrame
+        ? currentPages().find((candidatePage) => candidatePage.frames().includes(targetFrame))
+        : undefined;
+      if (
+        !locatorPrototype
+        || !credentialLocatorPrototypes.has(locatorPrototype)
+        || typeof selector !== 'string'
+        || !targetFrame
+        || !targetPage
+        || targetPage.isClosed()
+      ) {
+        throw new Error('credentialVault.fill() requires a Locator from the active browser session.');
+      }
+      let origin = '';
+      try {
+        const currentUrl = new URL(targetPage.url());
+        if (!['http:', 'https:'].includes(currentUrl.protocol)) throw new Error('unsupported protocol');
+        origin = currentUrl.origin;
+      } catch {
+        throw new Error('credentialVault.fill() requires the target page to have an http(s) origin.');
+      }
+      if (credential.allowedOrigins.length > 0 && !credential.allowedOrigins.includes(origin)) {
+        throw new Error(`The requested credential reference is not allowed for ${origin}.`);
+      }
+      if (!nativeFrameLocator || !nativeLocatorFill) {
+        throw new Error('credentialVault.fill() could not access the trusted Playwright locator implementation.');
+      }
+      const trustedLocator = Reflect.apply(nativeFrameLocator, targetFrame, [selector]);
+      const actionableLocator = await resolveActionableLocator(trustedLocator, 'fill');
+      await prepareStateChangingAction(targetPage, 'credential.fill');
+      await moveVisibleAiPointer(targetPage, await locatorCenter(actionableLocator), 'click');
+      await Reflect.apply(nativeLocatorFill, actionableLocator, [credential.value]);
+      await completeStateChangingAction(targetPage, 'credential.fill');
+      return { filled: true, origin };
+    },
+  });
+
+  const attachmentVault = Object.freeze({
+    async setInputFiles(locator: unknown, attachmentRef: unknown) {
+      if (!activeExecution) {
+        throw new Error('attachmentVault.setInputFiles() is only available while browserCode is executing.');
+      }
+      const ref = typeof attachmentRef === 'string' ? attachmentRef.trim() : '';
+      const attachment = ref ? activeExecution.attachments.get(ref) : undefined;
+      if (!attachment) {
+        throw new Error('The requested user attachment is unavailable for this browserCode execution.');
+      }
+      if (!locator || typeof locator !== 'object') {
+        throw new Error('attachmentVault.setInputFiles() requires a real Playwright Locator.');
+      }
+      const sourceLocator = locator;
+      const locatorPrototype = Object.getPrototypeOf(sourceLocator) as object | null;
+      const targetFrame = Reflect.get(sourceLocator, '_frame') as import('patchright').Frame | undefined;
+      const selector = Reflect.get(sourceLocator, '_selector');
+      const targetPage = targetFrame
+        ? currentPages().find((candidatePage) => candidatePage.frames().includes(targetFrame))
+        : undefined;
+      if (
+        !locatorPrototype
+        || !credentialLocatorPrototypes.has(locatorPrototype)
+        || typeof selector !== 'string'
+        || !targetFrame
+        || !targetPage
+        || targetPage.isClosed()
+      ) {
+        throw new Error('attachmentVault.setInputFiles() requires a Locator from the active browser session.');
+      }
+      const nativeSetInputFiles = nativeLocatorActions.get('setInputFiles');
+      if (!nativeFrameLocator || !nativeSetInputFiles) {
+        throw new Error('attachmentVault.setInputFiles() could not access the trusted Playwright file-input implementation.');
+      }
+      const trustedLocator = Reflect.apply(nativeFrameLocator, targetFrame, [selector]);
+      const fileInput = await resolveActionableLocator(trustedLocator, 'setInputFiles');
+      // Applications commonly consume files during input/change and clear or
+      // replace the input to allow selecting the same file again. Observe the
+      // selection before those handlers; a later empty FileList is not failure.
+      const selection = await fileInput.evaluateHandle((element) => {
+        const input = element as HTMLInputElement;
+        const state = { files: [] as Array<{ name: string; size: number; type: string }> };
+        const files = () => Array.from(input.files || [],
+          file => ({ name: file.name, size: file.size, type: file.type }));
+        const capture = (event: Event) => {
+          if (!event.composedPath().includes(input)) return;
+          const selected = files();
+          if (selected.length) state.files = selected;
+        };
+        window.addEventListener('input', capture, true);
+        window.addEventListener('change', capture, true);
+        return {
+          read: () => ({ selectedFiles: state.files, retainedFiles: files(), inputConnected: input.isConnected }),
+          dispose: () => {
+            window.removeEventListener('input', capture, true);
+            window.removeEventListener('change', capture, true);
+          },
+        };
+      });
+      try {
+        await prepareStateChangingAction(targetPage, 'attachment.setInputFiles');
+        await Reflect.apply(nativeSetInputFiles, fileInput, [attachment.path]);
+        await completeStateChangingAction(targetPage, 'attachment.setInputFiles');
+        const receipt = await selection.evaluate(state => state.read());
+        const selectedFiles = receipt.selectedFiles.length ? receipt.selectedFiles : receipt.retainedFiles;
+        return {
+          attachmentId: attachment.ref,
+          fileName: attachment.name,
+          inputActionCompleted: true,
+          selectionObserved: selectedFiles.some(file => file.name === attachment.name),
+          selectedFiles,
+          retainedFiles: receipt.retainedFiles,
+          inputState: !receipt.inputConnected ? 'detached'
+            : receipt.retainedFiles.length ? 'retained' : 'cleared',
+          uploadStatus: 'not-verified',
+        };
+      } finally {
+        try { await selection.evaluate(state => state.dispose()); } catch {}
+        await selection.dispose();
+      }
+    },
+  });
+
+  const decorateLocatorPrototype = (page: import('patchright').Page) => {
+    const prototype = Object.getPrototypeOf(page.locator('html')) as Record<string, unknown> | null;
+    if (!prototype || pointerDecoratedLocatorPrototypes.has(prototype)) return;
+    credentialLocatorPrototypes.add(prototype);
+    const framePrototype = Object.getPrototypeOf(page.mainFrame()) as Record<string, unknown> | null;
+    const frameLocator = framePrototype && Reflect.get(framePrototype, 'locator');
+    const locatorFill = Reflect.get(prototype, 'fill');
+    const locatorBoundingBox = Reflect.get(prototype, 'boundingBox');
+    if (!nativeFrameLocator && typeof frameLocator === 'function') {
+      nativeFrameLocator = frameLocator as (this: object, selector: string) => import('patchright').Locator;
+    }
+    if (!nativeLocatorFill && typeof locatorFill === 'function') {
+      nativeLocatorFill = locatorFill as (this: object, value: string) => Promise<void>;
+    }
+    pointerDecoratedLocatorPrototypes.add(prototype);
+    if (typeof locatorBoundingBox === 'function') {
+      try {
+        Object.defineProperty(prototype, 'boundingBox', {
+          configurable: true,
+          value: async function trackedLocatorBoundingBox(this: object, ...args: unknown[]) {
+            const targetPage = locatorPage(this);
+            // A geometry read must not run click trials, scroll the page, or fail
+            // because a different surface covers the element being inspected.
+            const rect = await Reflect.apply(locatorBoundingBox, this, args) as {
+              height: number;
+              width: number;
+              x: number;
+              y: number;
+            } | null;
+            if (
+              targetPage
+              && activeExecution
+              && rect
+              && [rect.x, rect.y, rect.width, rect.height].every(Number.isFinite)
+              && rect.width > 0
+              && rect.height > 0
+            ) {
+              const state = await captureCoordinateClickState(targetPage);
+              if (state) {
+                const evidence: CoordinateRectEvidence = {
+                  ...state,
+                  locator: this as import('patchright').Locator,
+                  capturedAt: Date.now(),
+                  rect: { height: rect.height, width: rect.width, x: rect.x, y: rect.y },
+                };
+                const previous = activeExecution.pendingCoordinateRectEvidence.get(targetPage) || [];
+                activeExecution.pendingCoordinateRectEvidence.set(targetPage, [...previous, evidence].slice(-50));
+              }
+            }
+            return rect;
+          },
+          writable: true,
+        });
+      } catch {
+        // Keep the native boundingBox implementation when the Playwright prototype is immutable.
+      }
+    }
+    const patch = (name: string, kind: 'click' | 'double' | 'move', changesState = true) => {
+      const original = Reflect.get(prototype, name);
+      if (typeof original !== 'function') return;
+      if (!nativeLocatorActions.has(name)) {
+        nativeLocatorActions.set(
+          name,
+          original as (this: object, ...args: unknown[]) => Promise<unknown>,
+        );
+      }
+      try {
+        Object.defineProperty(prototype, name, {
+          configurable: true,
+          value: async function pointerVisualizedLocatorAction(this: object, ...args: unknown[]) {
+            const forced = args.some((arg) => arg && typeof arg === 'object' && Reflect.get(arg, 'force') === true);
+            const normalizedArgs = actionArgsWithMinimumTimeout(
+              args,
+              name === 'dragTo' || name === 'setChecked' ? 1 : 0,
+            );
+            const targetPage = locatorPage(this);
+            let actionableLocator = this as import('patchright').Locator;
+            const executionArgs = [...normalizedArgs];
+            if (targetPage && activeExecution) {
+              actionableLocator = forced
+                ? this as import('patchright').Locator
+                : await resolveActionableLocator(this, name);
+              if (name === 'dragTo' && normalizedArgs[0] && typeof normalizedArgs[0] === 'object') {
+                executionArgs[0] = forced
+                  ? normalizedArgs[0]
+                  : await resolveActionableLocator(normalizedArgs[0], name);
+              }
+              if (changesState) await prepareStateChangingAction(targetPage, `locator.${name}`);
+              await moveVisibleAiPointer(targetPage, await locatorCenter(actionableLocator), kind);
+              if (name === 'dragTo' && executionArgs[0] && typeof executionArgs[0] === 'object') {
+                await moveVisibleAiPointer(targetPage, await locatorCenter(executionArgs[0]), 'move');
+              }
+            }
+            const result = await Reflect.apply(original, actionableLocator, executionArgs);
+            if (changesState) await completeStateChangingAction(targetPage, `locator.${name}`);
+            return result;
+          },
+          writable: true,
+        });
+      } catch {
+        // A future Playwright build may make this prototype immutable. Direct
+        // page.mouse actions remain visualized even when a locator cannot be decorated.
+      }
+    };
+    patch('click', 'click');
+    patch('dblclick', 'double');
+    patch('hover', 'move');
+    patch('check', 'click');
+    patch('uncheck', 'click');
+    patch('setChecked', 'click');
+    patch('tap', 'click');
+    patch('dragTo', 'click');
+    for (const name of [
+      'fill',
+      'type',
+      'press',
+      'pressSequentially',
+      'selectOption',
+      'clear',
+      'setInputFiles',
+      'focus',
+      'blur',
+      'selectText',
+      'scrollIntoViewIfNeeded',
+    ]) {
+      const original = Reflect.get(prototype, name);
+      if (typeof original !== 'function') continue;
+      if (!nativeLocatorActions.has(name)) {
+        nativeLocatorActions.set(
+          name,
+          original as (this: object, ...args: unknown[]) => Promise<unknown>,
+        );
+      }
+      try {
+        Object.defineProperty(prototype, name, {
+          configurable: true,
+          value: async function observedLocatorAction(this: object, ...args: unknown[]) {
+            if (name === 'setInputFiles' && activeExecution) {
+              throw new Error('Use attachmentVault.setInputFiles(locator, attachmentId); direct file paths and reconstructed payloads are unavailable to browserCode.');
+            }
+            const targetPage = locatorPage(this);
+            let actionableLocator = this as import('patchright').Locator;
+            if (targetPage && activeExecution) {
+              actionableLocator = await resolveActionableLocator(this, name);
+              await moveVisibleAiPointer(targetPage, await locatorCenter(actionableLocator), 'click');
+            }
+            if (targetPage) await prepareStateChangingAction(targetPage, `locator.${name}`);
+            const result = await Reflect.apply(original, actionableLocator, args);
+            await completeStateChangingAction(targetPage, `locator.${name}`);
+            return result;
+          },
+          writable: true,
+        });
+      } catch {
+        // Keep the native Playwright method when the locator prototype is immutable.
+      }
+    }
+  };
+
+  const decoratePage = (page: import('patchright').Page) => {
+    const request = page.context().request;
+    if (!decoratedRequestContexts.has(request)) {
+      decoratedRequestContexts.add(request);
+      // CDP attachments do not inherit the launch context TLS setting in
+      // their APIRequestContext. Apply the declared session default while
+      // preserving an explicit per-request override.
+      for (const name of ['fetch', 'get', 'head', 'post', 'put', 'patch', 'delete']) {
+        const original = Reflect.get(request, name);
+        if (typeof original !== 'function') continue;
+        Object.defineProperty(request, name, {
+          configurable: true,
+          value: async function (this: unknown, resource: unknown, options?: Record<string, unknown>) {
+            const requestOptions = browserIgnoreHTTPSErrors
+              ? { ...options, ignoreHTTPSErrors: options?.ignoreHTTPSErrors ?? true }
+              : options;
+            try {
+              return await Reflect.apply(original, this, [resource, requestOptions]);
+            } catch (error) {
+              // Native protocol call logs can contain session and auth headers.
+              // Redact before rethrowing so caught errors and their stacks are
+              // safe to return through either result or console channels.
+              if (error instanceof Error) {
+                const stack = error.stack;
+                error.message = redactRequestErrorHeaders(error.message);
+                if (stack) error.stack = redactRequestErrorHeaders(stack);
+                throw error;
+              }
+              throw new Error(redactRequestErrorHeaders(String(error)));
+            }
+          },
+        });
+      }
+    }
+    if (pointerDecoratedPages.has(page)) return;
+    pointerDecoratedPages.add(page);
+    decorateLocatorPrototype(page);
+    decoratePageScreenshotPrototype(page);
+    const pageRecord = page as unknown as Record<string, unknown>;
+    const patchPageAction = (
+      name: string,
+      kind: 'click' | 'double' | 'move',
+      changesState = true,
+      optionsIndex = 1,
+      targetIndices = [0],
+    ) => {
+      const original = Reflect.get(pageRecord, name);
+      if (typeof original !== 'function') return;
+      try {
+        Object.defineProperty(pageRecord, name, {
+          configurable: true,
+          value: async (...args: unknown[]) => {
+            const forced = args.some((arg) => arg && typeof arg === 'object' && Reflect.get(arg, 'force') === true);
+            const normalizedArgs = actionArgsWithMinimumTimeout(args, optionsIndex);
+            const targetLocators = new Map<number, import('patchright').Locator>();
+            if (activeExecution) {
+              for (const targetIndex of targetIndices) {
+                if (typeof normalizedArgs[targetIndex] !== 'string') continue;
+                const locator = page.locator(normalizedArgs[targetIndex] as string);
+                targetLocators.set(
+                  targetIndex,
+                  forced
+                    ? locator
+                    : await resolveActionableLocator(locator, name === 'dragAndDrop' ? 'dragTo' : name),
+                );
+              }
+              if (changesState) await prepareStateChangingAction(page, `page.${name}`);
+              const orderedTargets = targetIndices
+                .map((targetIndex) => targetLocators.get(targetIndex))
+                .filter((locator): locator is import('patchright').Locator => Boolean(locator));
+              for (const [index, locator] of orderedTargets.entries()) {
+                await moveVisibleAiPointer(
+                  page,
+                  await locatorCenter(locator),
+                  index === orderedTargets.length - 1 ? kind : 'move',
+                );
+              }
+            }
+            let result: unknown;
+            const sourceLocator = targetLocators.get(0);
+            if (activeExecution && sourceLocator) {
+              const locatorMethod = name === 'dragAndDrop' ? 'dragTo' : name;
+              const nativeLocatorAction = nativeLocatorActions.get(locatorMethod);
+              if (!nativeLocatorAction) {
+                throw new Error(`browserCode could not access the native Locator.${locatorMethod} implementation.`);
+              }
+              if (name === 'dragAndDrop') {
+                const targetLocator = targetLocators.get(1);
+                if (!targetLocator) {
+                  throw new Error('page.dragAndDrop() requires one resolved source and target locator.');
+                }
+                const rawOptions = normalizedArgs[2];
+                const locatorOptions = rawOptions && typeof rawOptions === 'object' && !Array.isArray(rawOptions)
+                  ? { ...rawOptions as Record<string, unknown> }
+                  : rawOptions;
+                if (locatorOptions && typeof locatorOptions === 'object') {
+                  delete (locatorOptions as Record<string, unknown>).strict;
+                }
+                result = await Reflect.apply(nativeLocatorAction, sourceLocator, [
+                  targetLocator,
+                  locatorOptions,
+                ]);
+              } else {
+                const locatorArgs = normalizedArgs.slice(1).map((arg) => {
+                  if (!arg || typeof arg !== 'object' || Array.isArray(arg) || !Reflect.has(arg, 'strict')) return arg;
+                  const normalized = { ...arg as Record<string, unknown> };
+                  delete normalized.strict;
+                  return normalized;
+                });
+                result = await Reflect.apply(nativeLocatorAction, sourceLocator, locatorArgs);
+              }
+            } else {
+              result = await Reflect.apply(original, page, normalizedArgs);
+            }
+            if (changesState) await completeStateChangingAction(page, `page.${name}`);
+            return result;
+          },
+          writable: true,
+        });
+      } catch {
+        // Keep the native Playwright method when the page object is immutable.
+      }
+    };
+    patchPageAction('click', 'click');
+    patchPageAction('dblclick', 'double');
+    patchPageAction('hover', 'move');
+    patchPageAction('check', 'click');
+    patchPageAction('uncheck', 'click');
+    patchPageAction('tap', 'click');
+    patchPageAction('setChecked', 'click', true, 2);
+    patchPageAction('focus', 'click');
+    patchPageAction('dragAndDrop', 'click', true, 2, [0, 1]);
+    for (const name of ['fill', 'type', 'press', 'selectOption', 'setInputFiles', 'goto', 'reload', 'goBack', 'goForward', 'setContent']) {
+      const original = Reflect.get(pageRecord, name);
+      if (typeof original !== 'function') continue;
+      try {
+        Object.defineProperty(pageRecord, name, {
+          configurable: true,
+          value: async (...args: unknown[]) => {
+            if (name === 'setContent') {
+              // Chromium can crash when document.open/write is used on an image
+              // document. Reject before changing it; preserve the source tab.
+              const contentType = await page.evaluate(() => document.contentType);
+              if (contentType !== 'text/html') {
+                throw new Error(`UNSUPPORTED_DOCUMENT: page.setContent requires an HTML document; the current document is ${contentType}. Open a new about:blank tab with browser action=tabs, tabOperation=open, then build the preview there using absolute asset URLs. The source page was not modified.`);
+              }
+            }
+            const selectorAction = ['fill', 'type', 'press', 'selectOption', 'setInputFiles'].includes(name);
+            let actionableLocator: import('patchright').Locator | undefined;
+            if (activeExecution && selectorAction && typeof args[0] === 'string') {
+              const locator = page.locator(args[0]);
+              actionableLocator = await resolveActionableLocator(locator, name);
+              await moveVisibleAiPointer(page, await locatorCenter(actionableLocator), 'click');
+            }
+            await prepareStateChangingAction(page, `page.${name}`);
+            let result: unknown;
+            if (activeExecution && actionableLocator) {
+              const nativeLocatorAction = nativeLocatorActions.get(name);
+              if (!nativeLocatorAction) {
+                throw new Error(`browserCode could not access the native Locator.${name} implementation.`);
+              }
+              const locatorArgs = args.slice(1).map((arg) => {
+                if (!arg || typeof arg !== 'object' || Array.isArray(arg) || !Reflect.has(arg, 'strict')) return arg;
+                const normalized = { ...arg as Record<string, unknown> };
+                delete normalized.strict;
+                return normalized;
+              });
+              result = await Reflect.apply(nativeLocatorAction, actionableLocator, locatorArgs);
+            } else {
+              result = await Reflect.apply(original, page, args);
+            }
+            await completeStateChangingAction(page, `page.${name}`);
+            return result;
+          },
+          writable: true,
+        });
+      } catch {
+        // Keep the native Playwright method when the page object is immutable.
+      }
+    }
+
+    const mouse = page.mouse as unknown as Record<string, unknown>;
+    const nativeMove = Reflect.get(mouse, 'move');
+    if (typeof nativeMove === 'function') {
+      try {
+        Object.defineProperty(mouse, 'move', {
+          configurable: true,
+          value: async (x: number, y: number, options?: unknown) => {
+            await prepareStateChangingAction(page, 'mouse.move');
+            await moveVisibleAiPointer(page, { x, y }, 'move');
+            const result = await Reflect.apply(nativeMove, page.mouse, [x, y, options]);
+            await completeStateChangingAction(page, 'mouse.move');
+            return result;
+          },
+          writable: true,
+        });
+      } catch {
+        // Keep the native mouse implementation when it cannot be decorated.
+      }
+    }
+    const nativeClick = Reflect.get(mouse, 'click');
+    if (typeof nativeClick === 'function') {
+      try {
+        Object.defineProperty(mouse, 'click', {
+          configurable: true,
+          value: async (x: number, y: number, options?: { button?: string; clickCount?: number }) => {
+            await requireCoordinateClickEvidence(page, x, y);
+            await markPageObserved(page);
+            await prepareStateChangingAction(page, 'mouse.click', true, true);
+            const kind = options?.button === 'right' ? 'right' : (options?.clickCount || 1) > 1 ? 'double' : 'click';
+            await moveVisibleAiPointer(page, { x, y }, kind);
+            const result = await Reflect.apply(nativeClick, page.mouse, [x, y, options]);
+            await completeStateChangingAction(page, 'mouse.click');
+            return result;
+          },
+          writable: true,
+        });
+      } catch {
+        // Keep the native mouse implementation when it cannot be decorated.
+      }
+    }
+    // Native keyboard.type can resolve even when the focused control rejects every
+    // character. Observe delivery at the real editable target, without synthesizing
+    // framework events or exposing entered values (which may contain credentials).
+    const observeTextDelivery = async () => {
+      for (const frame of page.frames()) {
+        await ensureFrameRuntime(frame);
+        const handle = await frame.evaluateHandle(() => {
+          if (!document.hasFocus()) return null;
+          let element = document.activeElement;
+          while (element?.shadowRoot?.activeElement) element = element.shadowRoot.activeElement;
+          const runtime = (window as Window & { __aiDomRuntime?: { isDisabledElement?: (target: Element) => boolean } }).__aiDomRuntime;
+          if (!(element instanceof HTMLElement) || element.matches(':disabled, [readonly]')
+            || runtime?.isDisabledElement?.(element)
+            || !(element.isContentEditable || element.matches('textarea, input:not([type]), input[type="text"], input[type="search"], input[type="email"], input[type="url"], input[type="tel"], input[type="password"], input[type="number"]'))) return null;
+          const value = () => element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement ? element.value : element.textContent || '';
+          const before = value();
+          const counts: Record<string, number> = { beforeinput: 0, input: 0, change: 0, keydown: 0, keyup: 0 };
+          const observe = (event: Event) => { counts[event.type]++; };
+          for (const name of Object.keys(counts)) element.addEventListener(name, observe, true);
+          return { element, value, before, counts, observe };
+        });
+        if (await handle.evaluate(state => state !== null)) {
+          try { await assertContainingFramesEnabled(frame); }
+          catch (error) {
+            await handle.evaluate(state => { if (state) for (const name of Object.keys(state.counts)) state.element.removeEventListener(name, state.observe, true); });
+            await handle.dispose();
+            throw error;
+          }
+          return handle;
+        }
+        await handle.dispose();
+      }
+      throw new Error('BROWSER_INPUT_PREFLIGHT_FAILED: TEXT_INPUT_NOT_EDITABLE: No focused editable text control. Inspect data.diagnostics and focus the actual editor before typing; a picker trigger or decorative caret is not an editable input.');
+    };
+    const patchInputDevice = (
+      device: Record<string, unknown>,
+      name: string,
+      action: string,
+      options: { componentOnly?: boolean } = {},
+    ) => {
+      const original = Reflect.get(device, name);
+      if (typeof original !== 'function') return;
+      try {
+        Object.defineProperty(device, name, {
+          configurable: true,
+          value: async (...args: unknown[]) => {
+            if (options.componentOnly) {
+              await prepareStateChangingAction(page, action);
+              return Reflect.apply(original, device, args);
+            }
+            const textEntry = (name === 'type' || name === 'insertText') && typeof args[0] === 'string' && args[0].length > 0;
+            const delivery = textEntry ? await observeTextDelivery() : undefined;
+            await prepareStateChangingAction(page, action);
+            let result: unknown;
+            try {
+              result = await Reflect.apply(original, device, args);
+              if (delivery) {
+                const observed = await delivery.evaluate(state => state && ({
+                  events: state.counts, valueChanged: state.value() !== state.before,
+                  beforeLength: state.before.length, afterLength: state.value().length,
+                }));
+                if (observed && !observed.events.input && !observed.valueChanged) {
+                  throw new Error(`TEXT_INPUT_NOT_DELIVERED: Native typing produced no input event or value change at the focused editor. Event counts: ${JSON.stringify(observed)}. Inspect the control instead of retrying with another delay.`);
+                }
+              }
+            } finally {
+              if (delivery) {
+                await delivery.evaluate(state => {
+                  if (state) for (const name of Object.keys(state.counts)) state.element.removeEventListener(name, state.observe, true);
+                }).catch(() => undefined);
+                await delivery.dispose();
+              }
+            }
+            await completeStateChangingAction(page, action);
+            return result;
+          },
+          writable: true,
+        });
+      } catch {
+        // Keep the native input method when it cannot be decorated.
+      }
+    };
+    patchInputDevice(mouse, 'wheel', 'mouse.wheel');
+    patchInputDevice(mouse, 'down', 'mouse.down', { componentOnly: true });
+    patchInputDevice(mouse, 'up', 'mouse.up', { componentOnly: true });
+    const keyboard = page.keyboard as unknown as Record<string, unknown>;
+    patchInputDevice(keyboard, 'press', 'keyboard.press');
+    patchInputDevice(keyboard, 'type', 'keyboard.type');
+    patchInputDevice(keyboard, 'insertText', 'keyboard.insertText');
+    const extendedPage = page as import('patchright').Page & {
+      setTextSelection?: (locator: import('patchright').Locator, input: BrowserTextSelectionSpec) => Promise<unknown>;
+    };
+    if (typeof extendedPage.setTextSelection !== 'function') {
+      Object.defineProperty(extendedPage, 'setTextSelection', {
+        configurable: false,
+        enumerable: false,
+        value: (locator: import('patchright').Locator, input: BrowserTextSelectionSpec) => setTextSelection(page, locator, input),
+        writable: false,
+      });
+    }
+  };
+
+  const tabId = (page: import('patchright').Page) => {
+    const existing = tabIds.get(page);
+    if (existing) return existing;
+    const id = childRandomUUID();
+    tabIds.set(page, id);
+    return id;
+  };
+
+  const selectPage = (page: import('patchright').Page) => {
+    if (!replServer) throw new Error('browserCode JavaScript kernel is not initialized.');
+    if (page.isClosed()) throw new Error('Cannot select a closed browser tab.');
+    decoratePage(page);
+    selectedRuntimePage = page;
+    replServer.context.page = page;
+    replServer.context.context = page.context();
+    replServer.context.tab = tabForPage(page);
+    return page;
+  };
+
+  const activatePage = async (page: import('patchright').Page) => {
+    recordAction('tab.use');
+    await page.bringToFront();
+    return selectPage(page);
+  };
+
+  const pageFromTab = (value: unknown) => {
+    if (value && typeof value === 'object') {
+      const direct = tabPages.get(value);
+      if (direct) return direct;
+      const candidate = value as import('patchright').Page;
+      if (typeof candidate.url === 'function' && typeof candidate.context === 'function') return candidate;
+      const id = typeof (value as { id?: unknown }).id === 'string' ? (value as { id: string }).id : '';
+      if (id && browser) {
+        return browser.contexts().flatMap((candidateContext) => candidateContext.pages())
+          .find((candidatePage) => tabId(candidatePage) === id);
+      }
+    }
+    if (typeof value === 'string' && browser) {
+      return browser.contexts().flatMap((candidateContext) => candidateContext.pages())
+        .find((candidatePage) => tabId(candidatePage) === value);
+    }
+    return undefined;
+  };
+
+  const setTextSelection = async (
+    page: import('patchright').Page,
+    locatorInput: import('patchright').Locator,
+    input: BrowserTextSelectionSpec,
+  ) => {
+    if (!activeExecution) throw new Error('page.setTextSelection() is only available while browserCode is executing.');
+    if (
+      !locatorInput
+      || typeof locatorInput !== 'object'
+      || typeof Reflect.get(locatorInput, 'evaluate') !== 'function'
+      || locatorPage(locatorInput) !== page
+    ) {
+      throw new Error('page.setTextSelection() requires a real Playwright Locator from the same Page, including a locator inside one of its frames. Call the method on the locator owner Page.');
+    }
+    const actionableLocator = await resolveActionableLocator(locatorInput, 'focus');
+    await actionableLocator.focus();
+    const before = await actionableLocator.evaluate(readEditableText);
+    const selection = resolveEditableTextSelection(before, input);
+    await actionableLocator.evaluate(applyEditableTextSelection, {
+      direction: selection.direction,
+      end: selection.end,
+      start: selection.start,
+    });
+    return {
+      collapsed: selection.collapsed,
+      direction: selection.direction,
+      editableTextLength: selection.before.length,
+      end: selection.end,
+      selectedText: selection.selectedText,
+      start: selection.start,
+      verified: true,
+    };
+  };
+
+  function tabForPage(page: import('patchright').Page) {
+    decoratePage(page);
+    const existing = tabWrappers.get(page);
+    if (existing) return existing;
+    const extendedPage = page as import('patchright').Page & {
+      getByUid?: (uid: string) => import('patchright').Locator;
+      domSnapshot?: (options?: { scope?: 'active' | 'all' }) => Promise<string>;
+      activeSurface?: () => Promise<Pick<KernelPageObservation, 'activeSurface' | 'surfaces' | 'surfaceStack' | 'topSurfaceIds'>>;
+      setTextSelection?: (locator: import('patchright').Locator, input: BrowserTextSelectionSpec) => Promise<unknown>;
+      expectNavigation?: <T>(action: () => Promise<T>, options?: { timeoutMs?: number; url?: string | RegExp; waitUntil?: NonNullable<Parameters<import('patchright').Page['waitForURL']>[1]>['waitUntil'] }) => Promise<T>;
+    };
+    if (typeof extendedPage.getByUid !== 'function') {
+      Object.defineProperty(extendedPage, 'getByUid', {
+        configurable: false,
+        enumerable: false,
+        value: (uidInput: string) => {
+          const uid = String(uidInput || '').trim();
+          if (!activeExecution) throw new Error('page.getByUid() is only available while browserCode is executing.');
+          const binding = activeExecution.uidBindings.get(uid);
+          if (!binding) {
+            const knownError = activeExecution.uidBindingErrors.get(uid);
+            if (knownError) throw new Error(knownError);
+            throw new Error(
+              `STALE_DOM_EVIDENCE: UID ${uid || '[empty]'} is not an exposed current DOM UID `
+              + `(${activeExecution.uidBindings.size} live UIDs are available). Use an exact uid from the latest DOM evidence.`,
+            );
+          }
+          if (binding.page !== page || binding.frame.isDetached()) {
+            throw new Error(`STALE_DOM_EVIDENCE: UID ${uid} belongs to another page or a detached iframe. Capture fresh DOM evidence.`);
+          }
+          return binding.frame.locator(`[${browserCodeUidAttribute}~="${binding.token}"]`);
+        },
+        writable: false,
+      });
+    }
+    if (typeof extendedPage.domSnapshot !== 'function') {
+      Object.defineProperty(extendedPage, 'domSnapshot', {
+        configurable: false,
+        enumerable: false,
+        value: async (options: { scope?: 'active' | 'all' } = {}) => {
+          const observationResult = await settleKernelTask(
+            readUnifiedPageObservation(page),
+            browserCodePageObservationTimeoutMs,
+            'page observation',
+          );
+          const observation: KernelPageObservation = observationResult.ok
+            ? observationResult.value
+            : {
+              epoch: 0,
+              url: compactObservationUrl(page.url()),
+              title: '',
+              surfaces: [],
+              surfaceStack: [],
+              topSurfaceIds: [],
+              surfaceTransition: 'initial',
+            };
+          const scope = options.scope || 'active';
+          const targetFrame = frameFromUidPath(page, observation.activeSurface?.framePath);
+          if (!targetFrame || targetFrame.isDetached()) {
+            throw new Error('STALE_FRAME_EVIDENCE: the observed surface frame is unavailable; read fresh state.');
+          }
+          const axResult = await settleKernelTask((async () => {
+            if (scope === 'active' && observation.activeSurface) {
+              if (!observation.activeSurface.selector) {
+                throw new Error('STALE_SURFACE_EVIDENCE: the active surface has no live selector; read fresh state.');
+              }
+              const selectedSurface = targetFrame.locator(observation.activeSurface.selector).filter({ visible: true });
+              if (await selectedSurface.count() !== 1) {
+                throw new Error('STALE_SURFACE_EVIDENCE: the observed surface is no longer uniquely visible; read fresh state.');
+              }
+              return selectedSurface.ariaSnapshot({ timeout: browserCodeActionTimeoutMs });
+            }
+            return page.locator('body').ariaSnapshot({ timeout: browserCodeActionTimeoutMs });
+          })(), browserCodeAxSnapshotTimeoutMs, 'AX snapshot');
+          const warnings = [
+            ...(!observationResult.ok ? [observationResult.error] : []),
+            ...(!axResult.ok ? [axResult.error] : []),
+          ];
+          let snapshot = axResult.ok ? axResult.value : '';
+          if (!snapshot) {
+            const fallbackResult = await settleKernelTask(
+              targetFrame.locator('body').innerText({ timeout: browserCodeSnapshotFallbackTimeoutMs }),
+              browserCodeSnapshotFallbackTimeoutMs,
+              'snapshot text fallback',
+            );
+            snapshot = fallbackResult.ok && fallbackResult.value.trim()
+              ? `[text-fallback]\n${fallbackResult.value.trim().slice(0, 12_000)}`
+              : '[snapshot unavailable]';
+            if (!fallbackResult.ok) warnings.push(fallbackResult.error);
+          }
+          return [
+            `[page-state] ${JSON.stringify(observation)}`,
+            ...(warnings.length ? [`[snapshot-warning] ${warnings.join('; ')}`] : []),
+            `[ax-tree scope=${scope}]`,
+            snapshot,
+          ].join('\n');
+        },
+        writable: false,
+      });
+    }
+    if (typeof extendedPage.activeSurface !== 'function') {
+      Object.defineProperty(extendedPage, 'activeSurface', {
+        configurable: false,
+        enumerable: false,
+        value: async () => {
+          const observation = await readUnifiedPageObservation(page);
+          return {
+            activeSurface: observation.activeSurface,
+            surfaces: observation.surfaces,
+            surfaceStack: observation.surfaceStack,
+            topSurfaceIds: observation.topSurfaceIds,
+          };
+        },
+        writable: false,
+      });
+    }
+    if (typeof extendedPage.expectNavigation !== 'function') {
+      Object.defineProperty(extendedPage, 'expectNavigation', {
+        configurable: false,
+        enumerable: false,
+        value: async <T>(action: () => Promise<T>, options: { timeoutMs?: number; url?: string | RegExp; waitUntil?: NonNullable<Parameters<import('patchright').Page['waitForURL']>[1]>['waitUntil'] } = {}) => {
+          const navigation = options.url
+            ? page.waitForURL(options.url, { timeout: options.timeoutMs, waitUntil: options.waitUntil })
+            : page.waitForNavigation({ timeout: options.timeoutMs, waitUntil: options.waitUntil });
+          const [actionResult] = await Promise.all([action(), navigation]);
+          return actionResult;
+        },
+        writable: false,
+      });
+    }
+    const cua = Object.freeze({
+      click: async (input: { button?: 'left' | 'middle' | 'right'; clickCount?: number; x: number; y: number }) => {
+        await page.mouse.click(input.x, input.y, { button: input.button, clickCount: input.clickCount });
+      },
+      keypress: async (input: { keys: string[] | string }) => {
+        const keys = Array.isArray(input.keys) ? input.keys : [input.keys];
+        for (const key of keys) await page.keyboard.press(key);
+      },
+      move: async (input: { steps?: number; x: number; y: number }) => {
+        await page.mouse.move(input.x, input.y, { steps: input.steps });
+      },
+      type: async (input: { text: string; delay?: number }) => page.keyboard.type(input.text, { delay: input.delay ?? 50 }),
+      wheel: async (input: { deltaX?: number; deltaY?: number }) => page.mouse.wheel(input.deltaX || 0, input.deltaY || 0),
+    });
+    const wrapper = Object.freeze({
+      id: tabId(page),
+      playwright: page,
+      cua,
+      close: () => {
+        recordAction('tab.close');
+        return page.close();
+      },
+      goto: (url: string, options?: Parameters<import('patchright').Page['goto']>[1]) => {
+        recordAction('tab.goto');
+        return page.goto(url, options);
+      },
+      screenshot: (options: Parameters<import('patchright').Page['screenshot']>[0] = {}) => page.screenshot(options),
+      title: () => page.title(),
+      url: () => page.url(),
+      use: () => activatePage(page),
+    });
+    tabPages.set(wrapper, page);
+    tabWrappers.set(page, wrapper);
+    return wrapper;
+  }
+
+  const tabInfo = async (page: import('patchright').Page) => {
+    const group = await page.evaluate(() => ({
+      id: document.documentElement.getAttribute('data-ai-web-test-session-group-id') || undefined,
+      title: document.documentElement.getAttribute('data-ai-web-test-session-group-title') || undefined,
+    })).catch(() => ({ id: undefined, title: undefined }));
+    return {
+      id: tabId(page),
+      active: selectedRuntimePage === page,
+      groupId: group.id,
+      groupTitle: group.title,
+      lastOpened: Date.now(),
+      title: await page.title().catch(() => ''),
+      url: page.url(),
+    };
+  };
+
+  const currentPages = () => browser
+    ? browser.contexts().flatMap((candidateContext) => candidateContext.pages()).filter((candidatePage) => !candidatePage.isClosed())
+    : [];
+
+  const currentSessionTabEntries = async () => {
+    const entries = await Promise.all(currentPages().map(async (candidatePage) => ({
+      info: await tabInfo(candidatePage),
+      page: candidatePage,
+    })));
+    if (!sessionGroupId) return entries;
+    return entries.filter((entry) => entry.info.groupId === sessionGroupId);
+  };
+
+  const browserRuntime = Object.freeze({
+    capabilities: Object.freeze({ cua: true, images: true, playwright: true, tabLifecycle: true }),
+    documentation: async () => [
+      'browserCode exposes one controlled browser runtime in ordinary JavaScript.',
+      'Use browser.tabs.list()/new()/use()/finalize(), browser.user.openTabs()/claimTab(), tab.playwright, tab.cua, page.getByUid(), page.domSnapshot(), page.activeSurface(), page.setTextSelection(), page.expectNavigation(), attachmentVault.setInputFiles(), and nodeRepl.emitImage().',
+      'page.domSnapshot() returns page-state plus a read-only Playwright AX tree scoped to the active surface by default; pass { scope: "all" } only for background context. browser.user.openTabs() reports only tabs owned by the current conversation group, with active-tab and tab-group metadata.',
+      'Page and Locator factory methods expose only currently rendered matches: CSS-hidden descendants and zero-rectangle nodes are excluded before count() and positional selection. aria-hidden changes accessibility exposure but does not by itself make a geometrically rendered target invisible or unactionable. Element actions then validate target computed style and hit testing, run an action-specific Playwright trial for every remaining pointer candidate, and execute only the unique candidate that passes all stages; CSS-hidden file inputs used by setInputFiles are recovered only at that action boundary.',
+      'Coordinate clicks use the latest automatic or explicitly emitted viewport screenshot visible to the model, or a point inside a rect returned by boundingBox() for one exact visible actionable Locator. Repeated coordinate clicks may use the same viewport while its document, URL, viewport, zoom, and scroll position remain unchanged. Rect-derived clicks work without image input.',
+      'page.verifyState() is not available. After browser actions, inspect the returned result and the host-supplied post-action state and screenshot. Use ordinary Playwright waits or targeted reads in the cell when the next action depends on a specific condition; a completed input alone does not prove a business outcome.',
+      'Every session Page exposes setTextSelection(locator, spec). Call it on the Page that owns the locator, including for frame locators, then use that same Page keyboard.insertText()/press() in the same cell. Use browser.tabs.use(tab) or tab.use() when the global page binding should switch tabs.',
+      'page.getByUid(uid) synchronously returns a normal Playwright Locator for an exact dom-* UID exposed by the latest DOM evidence. A stale, unexposed, navigated, or detached UID fails with STALE_DOM_EVIDENCE and must be replaced from fresh evidence.',
+      `Playwright action timeout: ${browserCodeActionTimeoutMs}ms; navigation timeout: ${browserCodeNavigationTimeoutMs}ms.`,
+      `Playwright screenshot timeout: ${browserCodeScreenshotTimeoutMs}ms unless an explicit positive timeout is provided.`,
+    ].join('\n'),
+    id: 'current',
+    name: 'Current browser session',
+    nameSession: async (name: string) => { void name; },
+    tabs: Object.freeze({
+      finalize: async (input: { keep?: Array<{ status: 'deliverable' | 'handoff'; tab: unknown }> } = {}) => {
+        recordAction('tabs.finalize');
+        const keepPages = new Set((input.keep || []).map((item) => pageFromTab(item.tab)).filter(Boolean));
+        const closing = [...agentCreatedPages].filter((candidatePage) => !candidatePage.isClosed() && !keepPages.has(candidatePage));
+        await Promise.all(closing.map((candidatePage) => candidatePage.close().catch(() => undefined)));
+        for (const candidatePage of [...agentCreatedPages]) {
+          if (candidatePage.isClosed() || keepPages.has(candidatePage)) agentCreatedPages.delete(candidatePage);
+        }
+        return Promise.all([...keepPages].filter(Boolean).map((candidatePage) => tabInfo(candidatePage!)));
+      },
+      list: async () => (await currentSessionTabEntries()).map((entry) => tabForPage(entry.page)),
+      new: async (input: string | { url?: string } = {}) => {
+        recordAction('tabs.new');
+        if (typeof input !== 'string' && (!input || typeof input !== 'object' || Array.isArray(input))) {
+          throw new Error('browser.tabs.new expects a URL string or an options object such as { url: "https://example.com/" }.');
+        }
+        const options = typeof input === 'string' ? { url: input } : input;
+        const requestedUrl = options.url?.trim();
+        if (options.url !== undefined && !requestedUrl) {
+          throw new Error('browser.tabs.new received an empty URL. Omit the argument for a blank tab or provide a non-empty URL.');
+        }
+        const selected = selectedRuntimePage?.context();
+        const targetContext = selected || browser?.contexts()[0];
+        if (!targetContext) throw new Error('No browser context is available.');
+        const newPage = await createSessionPage(targetContext);
+        agentCreatedPages.add(newPage);
+        await activatePage(newPage);
+        if (requestedUrl) await newPage.goto(requestedUrl);
+        return tabForPage(newPage);
+      },
+      use: async (value: unknown) => {
+        const selectedPage = pageFromTab(value);
+        if (!selectedPage) throw new Error('The requested browser tab is no longer available.');
+        if (sessionGroupId) {
+          const selectedTabInfo = await tabInfo(selectedPage);
+          if (selectedTabInfo.groupId !== sessionGroupId) {
+            throw new Error('The requested browser tab does not belong to the current conversation tab group.');
+          }
+        }
+        await activatePage(selectedPage);
+        return tabForPage(selectedPage);
+      },
+    }),
+    type: 'playwright',
+    user: Object.freeze({
+      claimTab: async (value: unknown) => {
+        const currentPage = selectedRuntimePage;
+        const claimedPage = value === undefined || value === null
+          ? currentPage && !currentPage.isClosed() ? currentPage : currentPages().at(-1)
+          : pageFromTab(value);
+        if (!claimedPage) throw new Error('The requested browser tab is no longer available.');
+        if (sessionGroupId) {
+          const claimedTabInfo = await tabInfo(claimedPage);
+          if (claimedTabInfo.groupId !== sessionGroupId) {
+            throw new Error('The requested browser tab does not belong to the current conversation tab group.');
+          }
+        }
+        await activatePage(claimedPage);
+        return tabForPage(claimedPage);
+      },
+      openTabs: async () => (await currentSessionTabEntries()).map((entry) => entry.info),
+    }),
+  });
+
+  const stateKeyInput = (input: unknown) => typeof input === 'string' ? { key: input } : input;
+  const statePrefixInput = (input: unknown) => typeof input === 'string' ? { prefix: input } : input;
+  const conversationStateRuntime = Object.freeze({
+    get: (input: unknown) => requestRuntimeStateOperation('get', stateKeyInput(input)),
+    set: (input: unknown, value?: unknown, options?: unknown) => {
+      if (typeof input !== 'string') return requestRuntimeStateOperation('set', input);
+      const optionRecord = options && typeof options === 'object' && !Array.isArray(options)
+        ? options as Record<string, unknown>
+        : {};
+      return requestRuntimeStateOperation('set', { ...optionRecord, key: input, value });
+    },
+    delete: (input: unknown, options?: unknown) => {
+      if (typeof input !== 'string') return requestRuntimeStateOperation('delete', input);
+      const optionRecord = options && typeof options === 'object' && !Array.isArray(options)
+        ? options as Record<string, unknown>
+        : {};
+      return requestRuntimeStateOperation('delete', { ...optionRecord, key: input });
+    },
+    list: (input: unknown = {}) => requestRuntimeStateOperation('list', statePrefixInput(input)),
+    clear: (input: unknown = {}) => requestRuntimeStateOperation('clear', statePrefixInput(input)),
+  });
+
+  const agentRuntime = Object.freeze({
+    state: conversationStateRuntime,
+    browsers: Object.freeze({
+      get: async (id: string) => {
+        if (id !== browserRuntime.id && id !== 'default') throw new Error(`Unknown browser runtime: ${id}`);
+        return browserRuntime;
+      },
+      getDefault: async () => browserRuntime,
+      list: async () => [browserRuntime],
+    }),
+  });
+
+  const evaluateCell = (code: string) => new Promise<unknown>((resolve, reject) => {
+    if (!replServer) {
+      reject(new Error('browserCode JavaScript kernel is not initialized.'));
+      return;
+    }
+    const errorKey = `__browserCodeCellError_${childRandomUUID().replace(/-/g, '')}`;
+    const wrappedCode = [
+      `globalThis[${JSON.stringify(errorKey)}] = undefined;`,
+      'try {',
+      code,
+      `\n} catch (__browserCodeCellError) { globalThis[${JSON.stringify(errorKey)}] = __browserCodeCellError; }`,
+    ].join('\n');
+    replServer.eval(wrappedCode, replServer.context, 'browserCode.js', (error, value) => {
+      const cellError = replServer?.context[errorKey];
+      if (replServer) delete replServer.context[errorKey];
+      if (error) reject(error);
+      else if (cellError) reject(cellError);
+      else resolve(value);
+    });
+  });
+
+  const initialize = async (input: BrowserCodeKernelInit) => {
+    if (browser || replServer) return;
+    sessionGroupId = String(input.sessionGroupId || '').trim();
+    browserIgnoreHTTPSErrors = input.ignoreHTTPSErrors === true;
+    // A bare import here probes ancestors of the temporary kernel directory
+    // before NODE_PATH, which can fail the permission check during resolution.
+    const { chromium } = childRequire(input.playwrightEntryPath) as typeof import('patchright');
+    if (input.connection.protocol === 'cdp' && input.targetIds) {
+      send({ type: 'startup-stage', stage: 'scoped-cdp-connection' });
+      cdpScope = await createBrowserCodeCdpScope({
+        endpoint: input.connection.endpoint,
+        targetIds: input.targetIds,
+        timeoutMs: 5_000,
+        websocketModule: childRequire(input.websocketEntryPath) as typeof import('ws'),
+      });
+    }
+    send({ type: 'startup-stage', stage: 'playwright-page-initialization' });
+    browser = input.connection.protocol === 'cdp'
+      ? await chromium.connectOverCDP(cdpScope?.endpoint || input.connection.endpoint)
+      : await chromium.connect(input.connection.endpoint);
+    for (const candidateContext of browser.contexts()) {
+      candidateContext.on('page', decoratePage);
+      for (const candidatePage of candidateContext.pages()) decoratePage(candidatePage);
+    }
+
+    const inputStream = new PassThrough();
+    send({ type: 'startup-stage', stage: 'javascript-repl' });
+    const outputStream = new PassThrough();
+    outputStream.resume();
+    replServer = repl.start({
+      input: inputStream,
+      output: outputStream,
+      prompt: '',
+      terminal: false,
+      useGlobal: false,
+    });
+    const sharedBindings: PropertyDescriptorMap = Object.fromEntries(
+      ['Buffer', 'global', 'module', 'process', 'require'].map(name => [name, {
+        configurable: false,
+        enumerable: false,
+        get: () => undefined,
+        set: () => { throw new Error(`BROWSER_RUNTIME_BINDING_RESERVED: ${name} is a reserved runtime name. Use a task-specific variable name; the assignment was not applied.`); },
+      }]),
+    );
+    Object.defineProperties(replServer.context, {
+      ...sharedBindings,
+      console: { configurable: false, enumerable: true, value: safeConsole, writable: false },
+      nodeRepl: { configurable: false, enumerable: true, value: nodeRepl, writable: false },
+      attachmentVault: { configurable: false, enumerable: true, value: attachmentVault, writable: false },
+      credentialVault: { configurable: false, enumerable: true, value: credentialVault, writable: false },
+      agent: { configurable: false, enumerable: true, value: agentRuntime, writable: false },
+      browser: { configurable: false, enumerable: true, value: browserRuntime, writable: false },
+    });
+    send({ type: 'ready' });
+  };
+
+  const pageTargetIds = new WeakMap<import('patchright').Page, Promise<string>>();
+  const targetIdForPage = (page: import('patchright').Page) => {
+    let id = pageTargetIds.get(page);
+    if (!id) {
+      id = (async () => {
+        const client = await page.context().newCDPSession(page);
+        try { return (await client.send('Target.getTargetInfo')).targetInfo.targetId; }
+        finally { await client.detach(); }
+      })();
+      pageTargetIds.set(page, id);
+    }
+    return id;
+  };
+  const findExecutionPage = async (executionId: string, targetId?: string) => {
+    if (!browser) throw new Error('browserCode browser connection is not initialized.');
+    if (targetId) {
+      // Newly attached host-created tabs initialize asynchronously in Playwright.
+      // Wait for the exact target, never fall back to the previously selected tab.
+      const deadline = Date.now() + browserCodeActionTimeoutMs;
+      do {
+        for (const candidate of browser.contexts().flatMap((context) => context.pages())) {
+          if (candidate.isClosed()) continue;
+          if (await targetIdForPage(candidate) === targetId) return candidate;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      } while (Date.now() < deadline);
+      throw new Error('browserCode could not initialize the selected session page.');
+    }
+    const candidates = browser.contexts()
+      .flatMap((browserContext) => browserContext.pages())
+      .filter((candidate) => !candidate.isClosed());
+    for (const candidate of candidates) {
+      const matches = await candidate.evaluate((id) => {
+        const win = window as Window & { __aiBrowserCodeExecutionId?: string };
+        return win.__aiBrowserCodeExecutionId === id;
+      }, executionId).catch(() => false);
+      if (matches) return candidate;
+    }
+    // A navigation can replace the document after the host writes the
+    // execution marker but before this Playwright client scans for it. The
+    // Page target itself remains stable, so reuse this kernel's last selected
+    // live page. A single live page is also unambiguous for a fresh kernel.
+    if (selectedRuntimePage && candidates.includes(selectedRuntimePage)) return selectedRuntimePage;
+    if (candidates.length === 1) return candidates[0];
+    throw new Error('browserCode could not find the active Playwright page.');
+  };
+
+  const execute = async (input: {
+    code: string;
+    attachments?: BrowserCodeAttachmentBinding[];
+    credentials?: BrowserCodeCredentialBinding[];
+    uidReferences?: BrowserCodeUidReference[];
+    viewportEvidence?: BrowserCodeViewportEvidence | null;
+    executionId: string;
+    targetIds?: string[];
+    executionTargetId?: string;
+    maxOutputChars?: number;
+    requestId: string;
+  }) => {
+    if (!replServer) throw new Error('browserCode JavaScript kernel is not initialized.');
+    if (cdpScope && input.targetIds) await cdpScope.updateTargets(input.targetIds);
+    const page = await findExecutionPage(input.executionId, input.executionTargetId);
+    const browserContext = page.context();
+    const initialPage = page;
+    const initialUrl = page.url();
+    const initialPageCount = browserContext.pages().filter((candidatePage) => !candidatePage.isClosed()).length;
+    decorateContextNewPage(browserContext);
+    browserContext.setDefaultTimeout(browserCodeActionTimeoutMs);
+    browserContext.setDefaultNavigationTimeout(browserCodeNavigationTimeoutMs);
+    for (const contextPage of browserContext.pages()) {
+      decoratePage(contextPage);
+      contextPage.setDefaultTimeout(browserCodeActionTimeoutMs);
+      contextPage.setDefaultNavigationTimeout(browserCodeNavigationTimeoutMs);
+    }
+    selectedRuntimePage = page;
+    tabForPage(page);
+    replServer.context.page = page;
+    replServer.context.context = browserContext;
+    replServer.context.tab = tabForPage(page);
+    activeExecution = {
+      actions: [],
+      imageBytes: 0,
+      images: [],
+      logs: [],
+      outputs: [],
+      startedAt: Date.now(),
+      attachments: new Map((input.attachments || []).map((attachment) => [attachment.ref, attachment])),
+      credentials: new Map((input.credentials || []).map((credential) => [credential.ref, credential])),
+      pendingCoordinateClickEvidence: new Map(),
+      pendingCoordinateRectEvidence: new Map(),
+      observationsBeforeAction: new WeakMap(),
+      uidBindings: new Map(),
+      uidBindingErrors: new Map(),
+      uidReferences: new Map(),
+      surfaceTransitions: [],
+      requestId: input.requestId,
+    };
+    const publishPendingCoordinateClickEvidence = async () => {
+      if (!activeExecution) return;
+      for (const evidence of activeExecution.pendingCoordinateClickEvidence.values()) {
+        coordinateClickEvidenceByDocument.delete(evidence.documentId);
+        coordinateClickEvidenceByDocument.set(evidence.documentId, evidence);
+        while (coordinateClickEvidenceByDocument.size > 20) {
+          const oldestDocumentId = coordinateClickEvidenceByDocument.keys().next().value;
+          if (typeof oldestDocumentId !== 'string') break;
+          coordinateClickEvidenceByDocument.delete(oldestDocumentId);
+        }
+      }
+      for (const evidenceList of activeExecution.pendingCoordinateRectEvidence.values()) {
+        for (const evidence of evidenceList) {
+          const previous = coordinateRectEvidenceByDocument.get(evidence.documentId) || [];
+          coordinateRectEvidenceByDocument.delete(evidence.documentId);
+          coordinateRectEvidenceByDocument.set(evidence.documentId, [...previous, evidence].slice(-50));
+        }
+        while (coordinateRectEvidenceByDocument.size > 20) {
+          const oldestDocumentId = coordinateRectEvidenceByDocument.keys().next().value;
+          if (typeof oldestDocumentId !== 'string') break;
+          coordinateRectEvidenceByDocument.delete(oldestDocumentId);
+        }
+      }
+    };
+
+    try {
+      // Only the host can supply this evidence, after publishing its final viewport.
+      // Clear earlier screenshots so a different tab/failed capture cannot authorize clicks.
+      if (input.viewportEvidence !== undefined) coordinateClickEvidenceByDocument.clear();
+      if (input.viewportEvidence) {
+        const current = await captureCoordinateClickState(page);
+        const evidence = { ...input.viewportEvidence, page };
+        if (sameViewportClickState(evidence, current)
+          && Date.now() - evidence.capturedAt <= coordinateEvidenceMaxAgeMs) {
+          coordinateClickEvidenceByDocument.set(evidence.documentId, evidence);
+        }
+      }
+      await bindExecutionUidReferences(page, input.uidReferences || []);
+      await evaluateCell(String(input.code));
+      await publishPendingCoordinateClickEvidence();
+      const outputs = activeExecution.outputs;
+      const images = activeExecution.images;
+      const logs = activeExecution.logs;
+      const selectedPage = selectedRuntimePage;
+      const finalPage = selectedPage && !selectedPage.isClosed() ? selectedPage : undefined;
+      const finalPageCount = browserContext.pages().filter((candidatePage) => !candidatePage.isClosed()).length;
+      const navigationChanged = Boolean(finalPage && finalPage.url() !== initialUrl);
+      const tabChanged = finalPage !== initialPage || finalPageCount !== initialPageCount;
+      const activity: BrowserCodeActivity = {
+        actions: [...activeExecution.actions],
+        navigationChanged,
+        tabChanged,
+        ...(activeExecution.surfaceTransitions.length ? { surfaceTransitions: [...activeExecution.surfaceTransitions] } : {}),
+      };
+      const selectedTargetId = finalPage ? await targetIdForPage(finalPage) : undefined;
+      const ownedTargetIds = cdpScope?.targetIds()
+        || await Promise.all(browserContext.pages().filter((candidate) => !candidate.isClosed()).map(targetIdForPage));
+      const value = outputs.length === 0 ? null : outputs.length === 1 ? outputs[0] : outputs;
+      send({
+        type: 'result',
+        requestId: input.requestId,
+        ok: true,
+        value: jsonSafe(value, input.maxOutputChars),
+        logs,
+        images,
+        selectedTargetId,
+        ownedTargetIds,
+        activity,
+        memoryUsage: hostProcess.memoryUsage(),
+      });
+    } catch (error: unknown) {
+      await publishPendingCoordinateClickEvidence();
+      const diagnosticPage = selectedRuntimePage && !selectedRuntimePage.isClosed() ? selectedRuntimePage : page;
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const pageUnavailable = /page crashed|target crashed|target page, context or browser has been closed|browser has been closed/i.test(errorMessage);
+      const diagnosticRead = await settleKernelTask((async () => {
+        if (pageUnavailable) return { unavailable: errorMessage,
+          note: 'The renderer or browser target is unavailable. Open a new about:blank tab with browser action=tabs, tabOperation=open, or explicitly navigate to a known URL. Read fresh state before continuing. Do not replay the failed cell or treat an unavailable snapshot as an empty page.' };
+        if (errorMessage.startsWith('UNSUPPORTED_DOCUMENT:')) return { unavailable: errorMessage };
+        // Do not fabricate an empty live diagnosis when renderer reads fail.
+        await diagnosticPage.title();
+        const observation = await readUnifiedPageObservation(diagnosticPage);
+        const fields = await Promise.all(diagnosticPage.frames().slice(0, 24).map(async frame => {
+          const read = await settleKernelTask(frame.evaluate(() => {
+            const focused = document.activeElement;
+            const controls = Array.from(document.querySelectorAll(
+              'input, textarea, [contenteditable=""], [contenteditable="true"], [role="combobox"], button, [role="button"], [class*="close-icon"]',
+            ));
+            if (focused && !controls.includes(focused)) controls.unshift(focused);
+            const runtime = (window as Window & { __aiDomRuntime?: {
+              activeSurfaceElement?: () => Element | undefined;
+              isDisabledElement?: (element: Element) => boolean;
+            } }).__aiDomRuntime;
+            const activeSurfaceElement = runtime?.activeSurfaceElement?.();
+            return controls.flatMap(element => {
+              const rect = element.getBoundingClientRect();
+              const style = getComputedStyle(element);
+              if (!rect.width || !rect.height || style.visibility !== 'visible' || style.display === 'none') return [];
+              if (rect.bottom <= 0 || rect.right <= 0 || rect.top >= innerHeight || rect.left >= innerWidth) return [];
+              const input = element as HTMLInputElement;
+              const disabled = runtime?.isDisabledElement?.(element) ?? Boolean(input.disabled || element.getAttribute('aria-disabled') === 'true');
+              const hit = document.elementFromPoint(Math.max(0, Math.min(innerWidth - 1, rect.x + rect.width / 2)), Math.max(0, Math.min(innerHeight - 1, rect.y + rect.height / 2)));
+              const topmost = hit === element || Boolean(hit && element.contains(hit));
+              const buttonText = element.matches('button, [role="button"], [class*="close-icon"]')
+                ? element.textContent?.trim().replace(/\s+/g, ' ').slice(0, 100) : undefined;
+              const label = element.getAttribute('aria-label') || element.getAttribute('title')
+                || input.labels?.[0]?.textContent?.trim() || buttonText;
+              if (!label && element !== focused && !element.matches('input, textarea, [contenteditable]')) return [];
+              return [{ descriptor: element.tagName.toLowerCase() + (element.id ? '#' + element.id : ''),
+                ...(element.id ? { selector: '#' + CSS.escape(element.id) } : {}),
+                role: element.getAttribute('role'), type: element.getAttribute('type'),
+                name: element.getAttribute('name'), placeholder: element.getAttribute('placeholder'),
+                label,
+                focused: element === focused, editable: ((element as HTMLElement).isContentEditable || element.matches('input:read-write, textarea:read-write'))
+                  && !input.readOnly && !disabled,
+                readOnly: Boolean(input.readOnly), disabled, topmost,
+                inActiveSurface: Boolean(activeSurfaceElement?.contains(element)),
+                ...(!topmost && hit ? { blocker: hit.tagName.toLowerCase()
+                  + (hit.id ? '#' + hit.id : '')
+                  + (typeof hit.className === 'string' && hit.className ? '.' + hit.className.trim().replace(/\s+/g, '.').slice(0, 90) : '') } : {}),
+                rect: { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) },
+              }];
+            }).sort((a, b) => Number(b.inActiveSurface) - Number(a.inActiveSurface)
+              || Number(b.focused) - Number(a.focused) || Number(b.topmost) - Number(a.topmost)).slice(0, 24);
+          }), 500, 'editable control diagnosis');
+          return read.ok ? read.value.map(control => ({ ...control, frameUrl: compactObservationUrl(frame.url()) })) : [];
+        }));
+        return { activeSurface: observation.activeSurface, focusedElement: observation.focusedElement,
+          surfaces: observation.surfaces?.slice(0, 12).map(surface => ({ id: surface.id, selector: surface.selector,
+            kind: surface.kind, label: surface.label, parentId: surface.parentId, zIndex: surface.zIndex })),
+          surfaceStack: observation.surfaceStack?.map(surface => ({ id: surface.id, selector: surface.selector,
+            kind: surface.kind, label: surface.label })),
+          controls: fields.flat().sort((a, b) => Number(b.inActiveSurface) - Number(a.inActiveSurface)
+            || Number(b.focused) - Number(a.focused) || Number(b.topmost) - Number(a.topmost)).slice(0, 24),
+          note: 'Live read-only diagnosis; no input values. A popup blocking Cancel/Close must be dismissed first through the browser dismissSurface action or an observed close control. Observe again before clicking the intended control. Overlay DOM order is not a reliable target; avoid .last() on generic overlay roots. A forced click on a covered control does not close the popup.' };
+      })(), 2000, 'interaction diagnosis');
+      send({
+        type: 'result',
+        requestId: input.requestId,
+        ok: false,
+        error: errorMessage,
+        ...(activeExecution.outputs.length ? { partialResults: jsonSafe(activeExecution.outputs, input.maxOutputChars) } : {}),
+        diagnostics: diagnosticRead.ok ? diagnosticRead.value : { unavailable: diagnosticRead.error },
+        selectedTargetId: selectedRuntimePage && !selectedRuntimePage.isClosed()
+          ? await targetIdForPage(selectedRuntimePage).catch(() => undefined) : undefined,
+        ownedTargetIds: cdpScope?.targetIds(),
+        images: activeExecution.images,
+        logs: activeExecution.logs,
+        activity: {
+          actions: [...activeExecution.actions],
+          navigationChanged: false,
+          tabChanged: false,
+          ...(activeExecution.surfaceTransitions.length ? { surfaceTransitions: [...activeExecution.surfaceTransitions] } : {}),
+        },
+        memoryUsage: hostProcess.memoryUsage(),
+      });
+    } finally {
+      await settleKernelTask(clearExecutionUidBindings(), 1000, 'UID binding cleanup');
+      activeExecution = undefined;
+    }
+  };
+
+  hostProcess.on('message', (rawInput: unknown) => {
+    if (!rawInput || typeof rawInput !== 'object') return;
+    const input = rawInput as Record<string, unknown>;
+    if (input.type === 'state-operation-result') {
+      const operationId = typeof input.operationId === 'string' ? input.operationId : '';
+      const pendingOperation = pendingRuntimeStateOperations.get(operationId);
+      if (!pendingOperation) return;
+      pendingRuntimeStateOperations.delete(operationId);
+      clearTimeout(pendingOperation.timer);
+      if (input.ok === true) pendingOperation.resolve(input.value);
+      else pendingOperation.reject(new Error(typeof input.error === 'string' ? input.error : 'agent.state operation failed.'));
+      return;
+    }
+    chain = chain.then(async () => {
+      if (input.type === 'init') {
+        await initialize(input as BrowserCodeKernelInit);
+        return;
+      }
+      if (input.type === 'execute') {
+        await execute(input as {
+          code: string;
+          attachments?: BrowserCodeAttachmentBinding[];
+          credentials?: BrowserCodeCredentialBinding[];
+          uidReferences?: BrowserCodeUidReference[];
+          viewportEvidence?: BrowserCodeViewportEvidence | null;
+          executionId: string;
+          maxOutputChars?: number;
+          requestId: string;
+        });
+      }
+    }).catch((error: unknown) => {
+      if (input.type === 'init') {
+        const diagnostic = error instanceof Error
+          ? error as Error & { code?: string; permission?: string; resource?: string }
+          : undefined;
+        send({
+          type: 'init-error',
+          error: [
+            diagnostic?.stack || String(error),
+            diagnostic?.code ? `code=${diagnostic.code}` : '',
+            diagnostic?.permission ? `permission=${diagnostic.permission}` : '',
+            diagnostic?.resource ? `resource=${diagnostic.resource}` : '',
+          ].filter(Boolean).join('\n'),
+        });
+        return;
+      }
+      send({
+        type: 'result',
+        requestId: typeof input.requestId === 'string' ? input.requestId : '',
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+        logs: activeExecution?.logs || [],
+        memoryUsage: hostProcess.memoryUsage(),
+      });
+      activeExecution = undefined;
+    });
+  });
+  hostProcess.on('disconnect', () => hostProcess.exit(0));
+}
+
+function childSource() {
+  // Keep the stdin entry self-contained. The kernel runs in a separate CommonJS
+  // process, so module-scope helpers are not part of the serialized closure.
+  // Declaring them explicitly here prevents rarely used APIs such as
+  // page.setTextSelection() from failing with a late ReferenceError.
+  return [
+    'const __name = (target) => target;',
+    `const readEditableText = ${readEditableText.toString()};`,
+    `const applyEditableTextSelection = ${applyEditableTextSelection.toString()};`,
+    `const resolveEditableTextSelection = ${resolveEditableTextSelection.toString()};`,
+    `const createBrowserCodeCdpScope = ${createBrowserCodeCdpScope.toString()};`,
+    `const AI_DOM_RUNTIME_VERSION = ${AI_DOM_RUNTIME_VERSION};`,
+    `const installAiBrowserPageRuntime = ${installAiBrowserPageRuntime.toString()};`,
+    `(${browserCodeKernelMain.toString()})();`,
+  ].join('\n');
+}
+
+// Obtain createRequire at runtime: Webpack rewrites statically imported calls
+// with dynamic paths to undefined. Both resolvers must use Node's real loader
+// so dependency paths and the child's read permissions match the deployed tree.
+const browserCodeNodeModule = process.getBuiltinModule('node:module');
+const browserCodeHostRequire = browserCodeNodeModule.createRequire(import.meta.url);
+
+function browserCodeResolvedPackageReadRoots(playwrightEntryPath: string) {
+  const roots: string[] = [];
+  const playwrightRequire = browserCodeNodeModule.createRequire(playwrightEntryPath);
+  for (const resolvedPath of [playwrightEntryPath, playwrightRequire.resolve('patchright-core'), browserCodeHostRequire.resolve('ws')]) {
+    let current = path.dirname(path.resolve(resolvedPath));
+    roots.push(current);
+    while (path.basename(current).toLowerCase() !== 'node_modules') {
+      const parent = path.dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+    if (path.basename(current).toLowerCase() === 'node_modules') roots.push(current);
+  }
+  return roots;
+}
+
+/** One policy for between-cell recycling and the child's in-cell allocation ceiling. */
+function browserCodeKernelMemoryLimits(options: BrowserCodeKernelOptions) {
+  const mb = 1024 * 1024;
+  const environment = options.environment || process.env;
+  const maxHeapBytes = boundedInteger(options.maxHeapBytes
+    ?? Number(environment.AI_BROWSER_CODE_KERNEL_MAX_HEAP_MB ?? 256) * mb, 256 * mb, 16 * mb, 1024 * mb);
+  // Playwright, serialization and one cell's temporaries need headroom beyond
+  // retained heap. A fixed 128 MB ceiling could be below the recycle threshold.
+  const hardHeapMb = Math.max(256, Math.ceil(maxHeapBytes / mb) * 2);
+  const defaultRssBytes = (hardHeapMb + 256) * mb;
+  const maxRssBytes = boundedInteger(options.maxRssBytes
+    ?? Number(environment.AI_BROWSER_CODE_KERNEL_MAX_RSS_MB ?? hardHeapMb + 256) * mb,
+  defaultRssBytes, 32 * mb, 4 * 1024 * mb);
+  return { maxHeapBytes, maxRssBytes, hardHeapMb };
+}
+
+function browserCodeModuleReadRoots(playwrightEntryPath: string, environment: Readonly<Record<string, string | undefined>> = process.env) {
+  const roots = [
+    path.resolve(process.cwd(), 'node_modules'),
+    ...browserCodeResolvedPackageReadRoots(playwrightEntryPath),
+  ];
+  for (const entry of String(environment.NODE_PATH || '').split(path.delimiter)) {
+    if (entry.trim()) roots.push(path.resolve(entry.trim()));
+  }
+  return Array.from(new Set(roots));
+}
+
+function browserCodeChildArgs(
+  tempDir: string,
+  entryPath: string,
+  moduleReadRoots: string[],
+  hardHeapMb: number,
+) {
+  return [
+    '--permission',
+    '--experimental-vm-modules',
+    ...moduleReadRoots.map((root) => `--allow-fs-read=${root}`),
+    `--allow-fs-read=${tempDir}`,
+    `--allow-fs-write=${tempDir}`,
+    `--max-old-space-size=${hardHeapMb}`,
+    '--max-semi-space-size=32',
+    '--stack-size=4096',
+    entryPath,
+  ];
+}
+
+function browserCodeChildEnv(
+  tempDir: string,
+  moduleReadRoots: string[],
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): NodeJS.ProcessEnv {
+  const env = Object.fromEntries(
+    ['SystemRoot', 'WINDIR', 'HOME', 'ELECTRON_RUN_AS_NODE']
+      .flatMap((name) => environment[name] ? [[name, environment[name] as string]] : []),
+  );
+  return {
+    ...env,
+    NODE_ENV: 'production',
+    NODE_PATH: moduleReadRoots.join(path.delimiter),
+    TEMP: tempDir,
+    TMP: tempDir,
+    TMPDIR: tempDir,
+  };
+}
+
+function removeBrowserCodeTempDir(tempDir?: string) {
+  if (!tempDir) return;
+  try {
+    rmSync(tempDir, { force: true, recursive: true });
+  } catch {
+    // The child may still be releasing a Playwright transport handle on Windows.
+  }
+}
+
+export class BrowserCodeKernel {
+  private readonly memoryLimits;
+  private child?: ChildProcess;
+  private childStartedAt = 0;
+  private closed = false;
+  private executionCount = 0;
+  private executionTimer?: ReturnType<typeof setTimeout>;
+  private pending?: PendingExecution;
+  private readyPromise?: Promise<void>;
+  private readyReject?: (error: Error) => void;
+  private readyResolve?: () => void;
+  private readyTimer?: ReturnType<typeof setTimeout>;
+  private stderr = '';
+  private startupStage = 'process-start';
+  private tail = Promise.resolve();
+  private tempDir?: string;
+
+  constructor(
+    private readonly connection: BrowserCodeConnection,
+    private readonly options: BrowserCodeKernelOptions = {},
+  ) { this.memoryLimits = browserCodeKernelMemoryLimits(options); }
+
+  execute(input: BrowserCodeExecutionInput): Promise<BrowserCodeRunResult> {
+    const task = this.tail.then(() => this.executeNow(input));
+    this.tail = task.then(() => undefined, () => undefined);
+    return task;
+  }
+
+  async close() {
+    this.closed = true;
+    this.rejectReady(new Error('browserCode JavaScript kernel was closed.'));
+    if (this.pending) {
+      this.finishPending(this.interrupted('aborted', 'browserCode execution was aborted.'));
+    }
+    this.stopChild();
+    await this.tail.catch(() => undefined);
+  }
+
+  private async executeNow(input: BrowserCodeExecutionInput): Promise<BrowserCodeRunResult> {
+    const startedAt = Date.now();
+    if (input.abortSignal?.aborted) {
+      return { ...this.interrupted('aborted', 'browserCode execution was aborted.', 'startup'), kernelReset: undefined, elapsedMs: 0 };
+    }
+
+    try {
+      await raceWithAbort(this.ensureReady(input.targetIds), input.abortSignal);
+    } catch (error) {
+      const normalized = error instanceof Error ? error : new Error(String(error));
+      this.rejectReady(normalized);
+      this.stopChild();
+      return {
+        ...this.interrupted(input.abortSignal?.aborted ? 'aborted' : normalized.name === 'TimeoutError' ? 'timeout' : 'crashed', normalized.message, 'startup'),
+        elapsedMs: Date.now() - startedAt,
+      };
+    }
+    if (input.abortSignal?.aborted) {
+      return { ...this.interrupted('aborted', 'browserCode execution was aborted.', 'startup'), kernelReset: undefined, elapsedMs: Date.now() - startedAt };
+    }
+    if (!this.child?.connected) {
+      this.stopChild();
+      return { ...this.interrupted('crashed', 'browserCode JavaScript kernel is not connected.', 'startup'), elapsedMs: Date.now() - startedAt };
+    }
+
+    // The cell's explicit output is evidence. Only shorten it when the caller
+    // requested an output limit; the host owns conversation compaction.
+    const maxOutputChars = typeof input.maxOutputChars === 'number' && Number.isFinite(input.maxOutputChars)
+      ? Math.max(1_000, Math.floor(input.maxOutputChars))
+      : undefined;
+    let attachmentBindings: BrowserCodeAttachmentBinding[] = [];
+    if (/\battachmentVault\s*\.\s*setInputFiles\s*\(/i.test(browserCodeWithoutComments(input.code))) {
+      try {
+        if (!this.tempDir) throw new Error('browserCode attachment staging directory is unavailable.');
+        attachmentBindings = (input.attachments || []).map((attachment, index) => {
+          const fileName = path.basename(String(attachment.name || '').trim()) || 'attachment';
+          const stagingDir = path.join(this.tempDir!, 'attachments', `${index}-${randomUUID()}`);
+          mkdirSync(stagingDir, { recursive: true });
+          const stagedPath = path.join(stagingDir, fileName);
+          copyFileSync(attachment.path, stagedPath);
+          return { name: fileName, path: stagedPath, ref: String(attachment.ref || '') };
+        });
+      } catch (error) {
+        return {
+          ok: false,
+          error: `Unable to stage the registered user attachment: ${error instanceof Error ? error.message : String(error)}`,
+          elapsedMs: Date.now() - startedAt,
+          logs: [],
+          executionState: { status: 'failed', phase: 'startup', attemptedActions: [], completedActions: [],
+            outcome: 'not-started', requiresStateRefresh: false, safeToRetry: false },
+        };
+      }
+    }
+    const requestId = randomUUID();
+    return new Promise<BrowserCodeRunResult>((resolve) => {
+      const onAbort = () => {
+        this.finishPending(this.interrupted('aborted', 'browserCode execution was aborted.'));
+        this.stopChild();
+      };
+      this.pending = {
+        attemptedActions: [],
+        completedActions: [],
+        abortSignal: input.abortSignal,
+        onAbort,
+        requestId,
+        resolve,
+        startedAt,
+      };
+      input.abortSignal?.addEventListener('abort', onAbort, { once: true });
+      const executionTimeoutMs = boundedInteger(
+        this.options.executionTimeoutMs ?? this.options.environment?.AI_BROWSER_CODE_EXECUTION_TIMEOUT_MS ?? process.env.AI_BROWSER_CODE_EXECUTION_TIMEOUT_MS,
+        defaultBrowserCodeExecutionTimeoutMs,
+        100,
+        10 * 60_000,
+      );
+      this.executionTimer = setTimeout(() => {
+        if (this.pending?.requestId !== requestId) return;
+        this.finishPending(this.interrupted('timeout', `browserCode execution timed out after ${executionTimeoutMs}ms; the JavaScript kernel was stopped and will restart on the next cell.`));
+        this.stopChild();
+      }, executionTimeoutMs);
+      this.child?.send({
+        type: 'execute',
+        attachments: attachmentBindings.map((attachment) => ({
+          name: String(attachment.name || ''),
+          path: String(attachment.path || ''),
+          ref: String(attachment.ref || ''),
+        })),
+        code: input.code,
+        viewportEvidence: input.viewportEvidence,
+        credentials: (input.credentials || []).map((credential) => ({
+          ref: String(credential.ref || ''),
+          value: String(credential.value || ''),
+          allowedOrigins: Array.from(new Set((credential.allowedOrigins || []).map((origin) => String(origin)))),
+        })),
+        uidReferences: (input.uidReferences || []).map((reference) => ({
+          uid: String(reference.uid || ''),
+          observationId: String(reference.observationId || ''),
+          localRef: String(reference.localRef || ''),
+          framePath: reference.framePath ? String(reference.framePath) : undefined,
+          label: String(reference.label || ''),
+          descriptor: String(reference.descriptor || ''),
+          line: String(reference.line || ''),
+          surfaceId: reference.surfaceId ? String(reference.surfaceId) : undefined,
+          capabilities: Array.isArray(reference.capabilities)
+            ? reference.capabilities.map((capability) => String(capability))
+            : undefined,
+        })),
+        executionId: input.executionId,
+        targetIds: input.targetIds,
+        executionTargetId: input.executionTargetId,
+        maxOutputChars,
+        requestId,
+      }, (error) => {
+        if (!error) return;
+        this.finishPending(this.interrupted('crashed', error.message));
+        this.stopChild();
+      });
+    });
+  }
+
+  private ensureReady(targetIds?: string[]) {
+    if (this.closed) return Promise.reject(new Error('browserCode JavaScript kernel is closed.'));
+    if (this.readyPromise) return this.readyPromise;
+
+    const kernelId = randomUUID();
+    const tempDir = path.join(os.tmpdir(), 'webpilot-browser-code', kernelId);
+    const entryPath = path.join(tempDir, 'browser-code-kernel.cjs');
+    let playwrightEntryPath: string;
+    let moduleReadRoots: string[];
+    try {
+      playwrightEntryPath = browserCodeHostRequire.resolve('patchright');
+      moduleReadRoots = browserCodeModuleReadRoots(playwrightEntryPath, this.options.environment);
+      mkdirSync(tempDir, { recursive: true });
+      writeFileSync(entryPath, childSource(), 'utf8');
+    } catch (error) {
+      removeBrowserCodeTempDir(tempDir);
+      return Promise.reject(error);
+    }
+    this.tempDir = tempDir;
+    this.stderr = '';
+    this.startupStage = 'process-start';
+    const readyPromise = new Promise<void>((resolve, reject) => {
+      this.readyResolve = resolve;
+      this.readyReject = reject;
+    });
+    this.readyPromise = readyPromise;
+    let child: ChildProcess;
+    try {
+      child = spawn(process.execPath, browserCodeChildArgs(tempDir, entryPath, moduleReadRoots, this.memoryLimits.hardHeapMb), {
+        cwd: process.cwd(),
+        env: browserCodeChildEnv(tempDir, moduleReadRoots, this.options.environment),
+        stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+        windowsHide: true,
+      });
+    } catch (error) {
+      const normalized = error instanceof Error ? error : new Error(String(error));
+      this.rejectReady(normalized);
+      this.tempDir = undefined;
+      removeBrowserCodeTempDir(tempDir);
+      return readyPromise;
+    }
+    this.child = child;
+    this.childStartedAt = Date.now();
+    this.executionCount = 0;
+    child.stderr?.on('data', (chunk: Buffer) => {
+      this.stderr = `${this.stderr}${chunk.toString('utf8')}`.slice(-maxDiagnosticChars);
+    });
+    child.on('message', (message: unknown) => { if (this.child === child) this.handleMessage(message); });
+    child.on('error', (error) => {
+      if (this.child !== child) return;
+      this.rejectReady(error);
+      this.finishPending(this.interrupted('crashed', error.message));
+      this.stopChild();
+    });
+    child.on('exit', (code, signal) => {
+      removeBrowserCodeTempDir(tempDir);
+      if (this.child !== child) return;
+      const diagnostic = this.stderr.trim() ? ` ${this.stderr.trim()}` : '';
+      const error = new Error(`browserCode JavaScript kernel exited (code ${code ?? 'none'}, signal ${signal || 'none'}).${diagnostic}`);
+      this.child = undefined;
+      this.readyPromise = undefined;
+      this.rejectReady(error);
+      const interrupted = this.interrupted('crashed', error.message);
+      if (/heap out of memory|allocation failed.*heap|reached heap limit/i.test(diagnostic)) {
+        interrupted.kernelReset = { reason: 'out-of-memory' };
+      }
+      this.finishPending(interrupted);
+    });
+    const readyTimeoutMs = boundedInteger(
+      this.options.readyTimeoutMs ?? this.options.environment?.AI_BROWSER_CODE_KERNEL_READY_TIMEOUT_MS ?? process.env.AI_BROWSER_CODE_KERNEL_READY_TIMEOUT_MS,
+      defaultBrowserCodeKernelReadyTimeoutMs,
+      100,
+      60_000,
+    );
+    this.readyTimer = setTimeout(() => {
+      if (this.child !== child) return;
+      const error = new Error(`browserCode JavaScript kernel startup timed out after ${readyTimeoutMs}ms (stage: ${this.startupStage}).${this.stderr.trim() ? ` ${this.stderr.trim()}` : ''}`);
+      error.name = 'TimeoutError';
+      this.rejectReady(error);
+      this.stopChild();
+    }, readyTimeoutMs);
+    child.send({
+      type: 'init',
+      connection: this.connection,
+      ignoreHTTPSErrors: (this.options.environment?.BROWSER_IGNORE_HTTPS_ERRORS ?? process.env.BROWSER_IGNORE_HTTPS_ERRORS) === 'true',
+      playwrightEntryPath,
+      websocketEntryPath: browserCodeHostRequire.resolve('ws'),
+      targetIds,
+      sessionGroupId: String(this.options.sessionGroupId || '').trim(),
+    }, (error) => {
+      if (!error) return;
+      this.rejectReady(error);
+      this.stopChild();
+    });
+    return readyPromise;
+  }
+
+  private kernelResetAfterResult(record: Record<string, unknown>): BrowserCodeRunResult['kernelReset'] {
+    this.executionCount += 1;
+    const memoryRecord = record.memoryUsage && typeof record.memoryUsage === 'object' && !Array.isArray(record.memoryUsage)
+      ? record.memoryUsage as Record<string, unknown>
+      : undefined;
+    const numberValue = (key: string) => {
+      const value = Number(memoryRecord?.[key]);
+      return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
+    };
+    const memoryUsage: BrowserCodeKernelMemoryUsage | undefined = memoryRecord ? {
+      arrayBuffers: numberValue('arrayBuffers'),
+      external: numberValue('external'),
+      heapTotal: numberValue('heapTotal'),
+      heapUsed: numberValue('heapUsed'),
+      rss: numberValue('rss'),
+    } : undefined;
+    const { maxHeapBytes, maxRssBytes } = this.memoryLimits;
+    const maxExecutions = boundedInteger(
+      this.options.maxExecutions ?? this.options.environment?.AI_BROWSER_CODE_KERNEL_MAX_EXECUTIONS ?? process.env.AI_BROWSER_CODE_KERNEL_MAX_EXECUTIONS,
+      80,
+      1,
+      1_000,
+    );
+    const maxAgeMs = boundedInteger(
+      this.options.maxAgeMs ?? this.options.environment?.AI_BROWSER_CODE_KERNEL_MAX_AGE_MS ?? process.env.AI_BROWSER_CODE_KERNEL_MAX_AGE_MS,
+      20 * 60_000,
+      60_000,
+      4 * 60 * 60_000,
+    );
+    if (memoryUsage && memoryUsage.heapUsed >= maxHeapBytes) return { reason: 'heap-limit', memoryUsage };
+    if (memoryUsage && memoryUsage.rss >= maxRssBytes) return { reason: 'rss-limit', memoryUsage };
+    if (this.executionCount >= maxExecutions) return { reason: 'execution-limit', memoryUsage };
+    if (this.childStartedAt && Date.now() - this.childStartedAt >= maxAgeMs) return { reason: 'age-limit', memoryUsage };
+    return undefined;
+  }
+
+  private handleMessage(message: unknown) {
+    if (!message || typeof message !== 'object') return;
+    const record = message as Record<string, unknown>;
+    if (record.type === 'startup-stage' && typeof record.stage === 'string') {
+      this.startupStage = record.stage.slice(0, 100);
+      return;
+    }
+    if (record.type === 'ready') {
+      this.resolveReady();
+      return;
+    }
+    if (record.type === 'init-error') {
+      const error = new Error(typeof record.error === 'string' ? record.error : 'browserCode JavaScript kernel failed to initialize.');
+      this.rejectReady(error);
+      this.stopChild();
+      return;
+    }
+    if (record.type === 'state-operation') {
+      this.handleRuntimeStateOperation(record);
+      return;
+    }
+    if (!this.pending || record.requestId !== this.pending.requestId) return;
+    if (record.type === 'action-progress') {
+      if (typeof record.action === 'string') {
+        const actions = record.completed === true ? this.pending.completedActions : this.pending.attemptedActions;
+        if (actions.length < 1000) actions.push(record.action.slice(0, 200));
+      }
+      return;
+    }
+    if (record.type !== 'result') return;
+    const logs = Array.isArray(record.logs) ? record.logs as BrowserCodeExecutionLog[] : [];
+    const images = Array.isArray(record.images) ? record.images as BrowserCodeImage[] : [];
+    const kernelReset = this.kernelResetAfterResult(record);
+    if (record.ok === true) {
+      this.finishPending({
+        ok: true,
+        value: record.value,
+        logs,
+        images,
+        selectedTargetId: typeof record.selectedTargetId === 'string' ? record.selectedTargetId : undefined,
+        ownedTargetIds: Array.isArray(record.ownedTargetIds) ? record.ownedTargetIds.filter((id): id is string => typeof id === 'string') : undefined,
+        activity: record.activity && typeof record.activity === 'object'
+          ? record.activity as BrowserCodeActivity
+          : undefined,
+        kernelReset,
+      });
+    } else {
+      this.finishPending({
+        ok: false,
+        error: typeof record.error === 'string' ? record.error : 'browserCode execution failed.',
+        partialResults: record.partialResults,
+        diagnostics: record.diagnostics,
+        selectedTargetId: typeof record.selectedTargetId === 'string' ? record.selectedTargetId : undefined,
+        ownedTargetIds: Array.isArray(record.ownedTargetIds) ? record.ownedTargetIds.filter((id): id is string => typeof id === 'string') : undefined,
+        images,
+        logs,
+        activity: record.activity && typeof record.activity === 'object'
+          ? record.activity as BrowserCodeActivity
+          : undefined,
+        kernelReset,
+      });
+    }
+    if (kernelReset) this.stopChild();
+  }
+
+  private handleRuntimeStateOperation(record: Record<string, unknown>) {
+    const child = this.child;
+    const operationId = typeof record.operationId === 'string' ? record.operationId : '';
+    if (!child?.connected || !operationId) return;
+    const sendResult = (payload: Record<string, unknown>) => {
+      if (this.child !== child || !child.connected) return;
+      child.send({ type: 'state-operation-result', operationId, ...payload });
+    };
+    if (!this.pending || record.requestId !== this.pending.requestId) {
+      sendResult({ ok: false, error: 'agent.state operation is not associated with the active browserCode cell.' });
+      return;
+    }
+    const action = typeof record.action === 'string' ? record.action : '';
+    if (!['clear', 'delete', 'get', 'list', 'set'].includes(action)) {
+      sendResult({ ok: false, error: `Unsupported agent.state action: ${action}.` });
+      return;
+    }
+    const runtimeState = this.options.runtimeState;
+    if (!runtimeState) {
+      sendResult({ ok: false, error: 'agent.state is unavailable outside a persistent browser conversation.' });
+      return;
+    }
+    // Invoke through a resolved promise so synchronous validation/storage
+    // errors are returned to the kernel instead of leaving agent.state await
+    // pending until the whole browserCode cell watchdog expires.
+    void Promise.resolve().then(() => runtimeState({
+      action: action as BrowserCodeRuntimeStateOperation['action'],
+      input: record.input,
+    })).then(
+      (value) => sendResult({ ok: true, value }),
+      (error: unknown) => sendResult({ ok: false, error: error instanceof Error ? error.message : String(error) }),
+    );
+  }
+
+  private finishPending(result: Omit<BrowserCodeRunResult, 'elapsedMs'>) {
+    const pending = this.pending;
+    if (!pending) return;
+    this.pending = undefined;
+    this.clearExecutionTimer();
+    pending.abortSignal?.removeEventListener('abort', pending.onAbort);
+    // A normally returned actionability rejection happens before input. A lost
+    // or interrupted kernel can have unreported effects and stays unknown.
+    const rejectedBeforeInput = !result.ok && /(?:ACTIONABILITY_FAILED|BROWSER_INPUT_PREFLIGHT_FAILED):/.test(result.error || '')
+      && pending.attemptedActions.length === 0 && pending.completedActions.length === 0;
+    pending.resolve({ ...result,
+      executionState: result.executionState || {
+        status: result.ok ? 'completed' : /page crashed|target crashed/i.test(result.error || '') ? 'crashed' : 'failed', phase: 'finished',
+        attemptedActions: pending.attemptedActions, completedActions: pending.completedActions,
+        outcome: result.ok ? 'returned' : rejectedBeforeInput ? 'not-started' : 'unknown', requiresStateRefresh: !result.ok, safeToRetry: false,
+      }, elapsedMs: Date.now() - pending.startedAt });
+  }
+
+  executionProgress() {
+    return {
+      attemptedActions: [...(this.pending?.attemptedActions || [])],
+      completedActions: [...(this.pending?.completedActions || [])],
+    };
+  }
+
+  private interrupted(reason: 'timeout' | 'aborted' | 'crashed', error: string, phase: 'startup' | 'running' = 'running'): Omit<BrowserCodeRunResult, 'elapsedMs'> {
+    const attemptedActions = this.pending?.attemptedActions || [];
+    const completedActions = this.pending?.completedActions || [];
+    return { ok: false, error, logs: [], aborted: reason === 'aborted', kernelReset: { reason },
+      activity: { actions: attemptedActions, navigationChanged: false, tabChanged: false },
+      executionState: { status: reason, phase, attemptedActions, completedActions,
+        outcome: phase === 'startup' ? 'not-started' : 'unknown', requiresStateRefresh: phase !== 'startup', safeToRetry: phase === 'startup' && reason !== 'aborted' },
+    };
+  }
+
+  private rejectReady(error: Error) {
+    this.clearReadyTimer();
+    this.readyReject?.(error);
+    this.readyReject = undefined;
+    this.readyResolve = undefined;
+    this.readyPromise = undefined;
+  }
+
+  private resolveReady() {
+    const resolve = this.readyResolve;
+    this.clearReadyTimer();
+    this.readyReject = undefined;
+    this.readyResolve = undefined;
+    resolve?.();
+  }
+
+  private clearExecutionTimer() {
+    if (!this.executionTimer) return;
+    clearTimeout(this.executionTimer);
+    this.executionTimer = undefined;
+  }
+
+  private clearReadyTimer() {
+    if (!this.readyTimer) return;
+    clearTimeout(this.readyTimer);
+    this.readyTimer = undefined;
+  }
+
+  private stopChild() {
+    const child = this.child;
+    const tempDir = this.tempDir;
+    this.child = undefined;
+    this.childStartedAt = 0;
+    this.executionCount = 0;
+    this.readyPromise = undefined;
+    this.tempDir = undefined;
+    this.clearExecutionTimer();
+    this.clearReadyTimer();
+    if (child && !child.killed) child.kill();
+    removeBrowserCodeTempDir(tempDir);
+  }
+}

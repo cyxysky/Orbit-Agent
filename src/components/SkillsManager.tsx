@@ -1,24 +1,30 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { ChevronDown, Edit3, Loader2, Plus, Save, Trash2, X } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { TextArea } from '@heroui/react/textarea';
+import { ChevronDown, Clock3, Edit3, Loader2, Plus, Save, Trash2, X } from 'lucide-react';
+import { ConfirmDeleteModal } from '@/components/ConfirmDeleteModal';
 import { CustomSelect } from '@/components/CustomSelect';
+import { DataTransferButtons } from '@/components/DataTransferButtons';
 import { LiquidGlassLoader } from '@/components/LiquidGlassLoader';
+import { ManagementDataTable } from '@/components/ManagementDataTable';
 import { useI18n } from '@/i18n/I18nProvider';
 import { readApiJson } from '@/lib/api-client';
-import { startGlobalLoading, stopGlobalLoading } from '@/lib/global-loading';
-import type { SkillRecord } from '@/server/ai/schemas/test-case.schema';
+import { waitForMinimumLoading } from '@/lib/minimum-loading';
+import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
+import type { SkillRecord } from '@/server/ai/schemas/runtime.schema';
+import { AppInput } from '@/components/ui/app-input';
+import { AppModal } from '@/components/ui/app-modal';
+import { ExpandableActionLabel } from '@/components/ui/expandable-action-label';
 
 type SkillDraft = {
+  shared: boolean;
   title: string;
   description: string;
   status: SkillRecord['status'];
-  tags: string;
   triggerPhrases: string;
-  workflow: string;
-  recovery: string;
-  verification: string;
+  details: string;
+  resources: Array<{ name: string; content: string }>;
 };
 
 type EditorMode = 'create' | 'edit' | null;
@@ -32,30 +38,24 @@ type SkillMutationResponse = {
 };
 
 const emptyDraft: SkillDraft = {
+  shared: false,
   title: '',
   description: '',
   status: 'ready',
-  tags: '',
   triggerPhrases: '',
-  workflow: '',
-  recovery: '',
-  verification: '',
+  details: '',
+  resources: [],
 };
-
-function lines(items?: string[]) {
-  return (items || []).join('\n');
-}
 
 function draftFromSkill(skill: SkillRecord): SkillDraft {
   return {
+    shared: skill.shared,
     title: skill.title,
     description: skill.description,
     status: skill.status,
-    tags: skill.tags.join(', '),
     triggerPhrases: skill.triggerPhrases.join('\n'),
-    workflow: lines(skill.content.workflow),
-    recovery: lines(skill.content.recovery),
-    verification: lines(skill.content.verification),
+    details: skill.content.details,
+    resources: skill.content.resources || [],
   };
 }
 
@@ -63,21 +63,16 @@ function splitList(value: string) {
   return value.split(/[\n,\uFF0C]+/).map((item) => item.trim()).filter(Boolean);
 }
 
-function splitLines(value: string) {
-  return value.split('\n').map((item) => item.trim()).filter(Boolean);
-}
-
 function payloadFromDraft(draft: SkillDraft) {
   return {
+    shared: draft.shared,
     title: draft.title.trim(),
     description: draft.description.trim(),
     status: draft.status,
-    tags: splitList(draft.tags),
     triggerPhrases: splitList(draft.triggerPhrases),
     content: {
-      workflow: splitLines(draft.workflow),
-      recovery: splitLines(draft.recovery),
-      verification: splitLines(draft.verification),
+      details: draft.details.trim(),
+      resources: draft.resources,
     },
   };
 }
@@ -88,64 +83,48 @@ function statusLabel(status: SkillRecord['status']) {
   return '可用';
 }
 
-function DetailList({ emptyText, items }: { emptyText: string; items?: string[] }) {
-  const values = (items || []).filter(Boolean);
-  if (!values.length) return <p className="skills-manager-muted">{emptyText}</p>;
-  return (
-    <ul className="skills-manager-detail-list">
-      {values.map((item, index) => (
-        <li key={`${item}-${index}`}>{item}</li>
-      ))}
-    </ul>
-  );
-}
-
-export function SkillsManager({ onChanged }: { onChanged?: () => void } = {}) {
-  const { t } = useI18n();
+export function SkillsManager({
+  onChanged,
+  showTitle = true,
+  userId = '1',
+}: {
+  onChanged?: () => void;
+  showTitle?: boolean;
+  userId?: string;
+} = {}) {
+  const { language, t } = useI18n();
+  const normalizedUserId = userId.trim() || '1';
+  const skillsApiUrl = useCallback((path: string) => withWebPilotBasePath(path), []);
   const [skills, setSkills] = useState<SkillRecord[]>([]);
   const [expandedSkillIds, setExpandedSkillIds] = useState<string[]>([]);
-  const [portalReady, setPortalReady] = useState(false);
   const [editorMode, setEditorMode] = useState<EditorMode>(null);
   const [editingSkillId, setEditingSkillId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<SkillRecord | null>(null);
   const [draft, setDraft] = useState<SkillDraft>(emptyDraft);
   const [loading, setLoading] = useState(true);
+  const loadSequenceRef = useRef(0);
   const [saving, setSaving] = useState(false);
   const [deletingSkillId, setDeletingSkillId] = useState<string | null>(null);
 
   const loadSkills = useCallback(async () => {
+    const loadingSequence = ++loadSequenceRef.current;
+    const loadingStartedAt = Date.now();
     setLoading(true);
     try {
-      const response = await fetch('/api/skills', { cache: 'no-store' });
+      const response = await fetch(skillsApiUrl('/api/skills'), { cache: 'no-store' });
       const data = await readApiJson<SkillsListResponse>(response, t('加载 Skills 失败'));
       setSkills(Array.isArray(data.skills) ? data.skills : []);
     } catch (error) {
       window.alert(error instanceof Error ? error.message : t('加载 Skills 失败'));
     } finally {
-      setLoading(false);
+      await waitForMinimumLoading(loadingStartedAt);
+      if (loadSequenceRef.current === loadingSequence) setLoading(false);
     }
-  }, [t]);
+  }, [skillsApiUrl, t]);
 
   useEffect(() => {
     void loadSkills();
   }, [loadSkills]);
-
-  useEffect(() => {
-    setPortalReady(true);
-  }, []);
-
-  useEffect(() => {
-    if (!editorMode && !deleteTarget) return undefined;
-    function closeOnEscape(event: KeyboardEvent) {
-      if (event.key !== 'Escape' || saving || deletingSkillId) return;
-      setEditorMode(null);
-      setEditingSkillId(null);
-      setDeleteTarget(null);
-      setDraft(emptyDraft);
-    }
-    window.addEventListener('keydown', closeOnEscape);
-    return () => window.removeEventListener('keydown', closeOnEscape);
-  }, [deleteTarget, deletingSkillId, editorMode, saving]);
 
   function update(patch: Partial<SkillDraft>) {
     setDraft((current) => ({ ...current, ...patch }));
@@ -170,6 +149,7 @@ export function SkillsManager({ onChanged }: { onChanged?: () => void } = {}) {
   }
 
   function openEditSkill(skill: SkillRecord) {
+    if (skill.userId !== normalizedUserId) return;
     setEditingSkillId(skill.id);
     setDraft(draftFromSkill(skill));
     setEditorMode('edit');
@@ -183,20 +163,13 @@ export function SkillsManager({ onChanged }: { onChanged?: () => void } = {}) {
   }
 
   function requestDeleteSkill(skill: SkillRecord) {
+    if (skill.userId !== normalizedUserId) return;
     setDeleteTarget(skill);
   }
 
   function closeDeleteModal() {
     if (deletingSkillId) return;
     setDeleteTarget(null);
-  }
-
-  function detailSections(skill: SkillRecord) {
-    return [
-      { key: 'workflow', label: t('操作流程'), items: skill.content.workflow },
-      { key: 'recovery', label: t('恢复策略'), items: skill.content.recovery },
-      { key: 'verification', label: t('验证方式'), items: skill.content.verification },
-    ];
   }
 
   async function saveSkill() {
@@ -209,12 +182,19 @@ export function SkillsManager({ onChanged }: { onChanged?: () => void } = {}) {
       window.alert(t('请输入 Skill 描述'));
       return;
     }
+    if (!payload.content.details) {
+      window.alert(t('请输入 Skill 详细内容'));
+      return;
+    }
+    if (draft.resources.some((resource) => !resource.name.trim() || !resource.content.trim())) {
+      window.alert(t('请填写参考资料的名称和内容'));
+      return;
+    }
 
     const skillId = editingSkillId;
     setSaving(true);
-    startGlobalLoading(t('正在保存 Skill'));
     try {
-      const response = await fetch(skillId ? `/api/skills/${skillId}` : '/api/skills', {
+      const response = await fetch(skillsApiUrl(skillId ? `/api/skills/${skillId}` : '/api/skills'), {
         method: skillId ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -233,45 +213,54 @@ export function SkillsManager({ onChanged }: { onChanged?: () => void } = {}) {
       window.alert(error instanceof Error ? error.message : t('保存 Skill 失败'));
     } finally {
       setSaving(false);
-      stopGlobalLoading();
     }
+  }
+
+  async function deleteSkill(target: SkillRecord) {
+    if (target.userId !== normalizedUserId) throw new Error(t('只读'));
+    const response = await fetch(skillsApiUrl(`/api/skills/${encodeURIComponent(target.id)}`), { method: 'DELETE' });
+    await readApiJson<unknown>(response, t('删除 Skill 失败'));
+    setSkills((current) => current.filter((item) => item.id !== target.id));
+    setExpandedSkillIds((current) => current.filter((id) => id !== target.id));
+    if (editingSkillId === target.id) closeEditorModal();
+    onChanged?.();
   }
 
   async function confirmDeleteSkill() {
     if (!deleteTarget) return;
     const target = deleteTarget;
     setDeletingSkillId(target.id);
-    startGlobalLoading(t('正在删除 Skill'));
     try {
-      const response = await fetch(`/api/skills/${target.id}`, { method: 'DELETE' });
-      await readApiJson<unknown>(response, t('删除 Skill 失败'));
-      setSkills((current) => current.filter((item) => item.id !== target.id));
-      setExpandedSkillIds((current) => current.filter((id) => id !== target.id));
-      if (editingSkillId === target.id) closeEditorModal();
+      await deleteSkill(target);
       setDeleteTarget(null);
-      onChanged?.();
     } catch (error) {
       window.alert(error instanceof Error ? error.message : t('删除 Skill 失败'));
     } finally {
       setDeletingSkillId(null);
-      stopGlobalLoading();
     }
   }
 
+  const managerActions = (
+    <div className="personal-memory-head-actions">
+      <DataTransferButtons kind="skills" onImported={loadSkills} />
+      <button aria-label={t('新建 Skill')} className="ui-button ui-button--primary management-toolbar-action is-primary" onClick={openCreateSkill} type="button">
+        <Plus size={15} />
+        <ExpandableActionLabel>{t('新建 Skill')}</ExpandableActionLabel>
+      </button>
+    </div>
+  );
+
   return (
     <section className={loading ? 'skills-manager is-loading' : 'skills-manager'}>
-      <div className="settings-section-head skills-manager-head">
+      {showTitle ? <div className="settings-section-head skills-manager-head">
         <div>
           <h2>{t('Skills 管理')}</h2>
         </div>
-        <button className="ui-button ui-icon-button" onClick={openCreateSkill} type="button">
-          <Plus size={15} />
-          {t('新建 Skill')}
-        </button>
-      </div>
+        {managerActions}
+      </div> : null}
 
       <div className="skills-manager-layout">
-        <div className="settings-card skills-manager-list">
+        <div className="skills-manager-list">
           <div className="skills-manager-list-body">
             {loading ? (
               <div className="settings-loading-panel compact" role="status" aria-live="polite" aria-label={t('正在加载 Skills')}>
@@ -280,107 +269,188 @@ export function SkillsManager({ onChanged }: { onChanged?: () => void } = {}) {
                   <h2>{t('正在加载 Skills')}</h2>
                 </div>
               </div>
-            ) : skills.length ? skills.map((skill) => {
-              const expanded = expandedSkillIds.includes(skill.id);
-              return (
-                <div
-                  className={expanded ? 'skills-manager-item expanded' : 'skills-manager-item'}
-                  key={skill.id}
-                >
-                  <div className="skills-manager-item-row">
-                    <button
-                      aria-expanded={expanded}
-                      className="skills-manager-item-main"
-                      onClick={() => toggleSkillDetails(skill.id)}
-                      type="button"
-                    >
-                      <ChevronDown className={expanded ? 'skills-manager-chevron open' : 'skills-manager-chevron'} size={16} />
-                      <b>{skill.title}</b>
-                    </button>
-                    <div className="skills-manager-item-actions">
-                      <button
-                        aria-label={t('编辑 Skill')}
-                        className="ui-icon-button"
-                        onClick={() => openEditSkill(skill)}
-                        title={t('编辑')}
-                        type="button"
-                      >
-                        <Edit3 size={14} />
-                      </button>
-                      <button
-                        aria-label={t('删除 Skill')}
-                        className="ui-icon-button ui-icon-button--danger"
-                        disabled={deletingSkillId === skill.id}
-                        onClick={() => requestDeleteSkill(skill)}
-                        title={t('删除')}
-                        type="button"
-                      >
-                        {deletingSkillId === skill.id ? <Loader2 className="spin" size={14} /> : <Trash2 size={14} />}
-                      </button>
-                    </div>
-                  </div>
-
-                  {expanded ? (
-                    <div className="skills-manager-item-detail">
-                      <p className="skills-manager-item-description">{skill.description || skill.id}</p>
-                      <div className="skills-manager-chip-row">
-                        <em className={`skill-status status-${skill.status}`}>{t(statusLabel(skill.status))}</em>
-                        {skill.tags.length ? skill.tags.map((tag) => (
-                          <span className="skills-manager-chip" key={tag}>{tag}</span>
-                        )) : <span className="skills-manager-muted">{t('暂无标签')}</span>}
-                      </div>
-
-                      <div className="skills-manager-section wide">
-                        <div>
-                          <h4>{t('触发词')}</h4>
-                          <span>{skill.triggerPhrases.length}</span>
+            ) : (
+              <ManagementDataTable
+                columns={[
+                  {
+                    key: 'skill',
+                    label: t('Skill'),
+                    className: 'management-table-primary-column',
+                    filter: { getValue: (skill) => [skill.title, skill.description, skill.id], type: 'text' },
+                    render: (skill) => {
+                      const expanded = expandedSkillIds.includes(skill.id);
+                      return (
+                        <button
+                          aria-expanded={expanded}
+                          className="management-table-primary-button"
+                          onClick={() => toggleSkillDetails(skill.id)}
+                          type="button"
+                        >
+                          <ChevronDown className={expanded ? 'skills-manager-chevron open' : 'skills-manager-chevron'} size={16} />
+                          <span>
+                            <strong>{skill.title}</strong>
+                            <small>{skill.description || skill.id}</small>
+                          </span>
+                        </button>
+                      );
+                    },
+                  },
+                  {
+                    key: 'scope',
+                    label: t('共享范围'),
+                    className: 'skills-manager-scope-column',
+                    filter: {
+                      getValue: (skill) => skill.shared ? t('所有 ID 共享') : t('仅创建 ID'),
+                      type: 'text',
+                    },
+                    render: (skill) => <span>{skill.shared ? t('所有 ID 共享') : t('仅创建 ID')}</span>,
+                  },
+                  {
+                    key: 'triggers',
+                    label: t('触发词'),
+                    className: 'skills-manager-trigger-column',
+                    filter: { getValue: (skill) => skill.triggerPhrases, type: 'text' },
+                    render: (skill) => (
+                      skill.triggerPhrases.length ? (
+                        <div className="skills-manager-table-triggers">
+                          {skill.triggerPhrases.slice(0, 2).map((phrase) => <span key={phrase} title={phrase}>{phrase}</span>)}
+                          {skill.triggerPhrases.length > 2 ? <small>+{skill.triggerPhrases.length - 2}</small> : null}
                         </div>
-                        <div className="skills-manager-trigger-list">
-                          {skill.triggerPhrases.length ? skill.triggerPhrases.map((phrase) => (
-                            <span key={phrase}>{phrase}</span>
-                          )) : <p className="skills-manager-muted">{t('暂无触发词')}</p>}
+                      ) : <span className="management-table-muted">{t('暂无触发词')}</span>
+                    ),
+                  },
+                  {
+                    key: 'status',
+                    label: t('状态'),
+                    className: 'skills-manager-status-column',
+                    filter: {
+                      getValue: (skill) => skill.status,
+                      options: [
+                        { label: t('可用'), value: 'ready' },
+                        { label: t('草稿'), value: 'draft' },
+                        { label: t('停用'), value: 'disabled' },
+                      ],
+                      type: 'select',
+                    },
+                    render: (skill) => <span className={`skill-status status-${skill.status}`}>{t(statusLabel(skill.status))}</span>,
+                  },
+                  {
+                    key: 'updated',
+                    label: t('最近更新'),
+                    className: 'management-table-date-column',
+                    filter: { getValue: (skill) => skill.updatedAt, type: 'datetime' },
+                    render: (skill) => <span className="management-table-muted">{new Date(skill.updatedAt).toLocaleString(language === 'en' ? 'en-US' : 'zh-CN')}</span>,
+                  },
+                  {
+                    key: 'actions',
+                    label: t('操作'),
+                    className: 'management-table-actions-column',
+                    render: (skill) => (
+                      <div className="skills-manager-item-actions">
+                        {skill.userId === normalizedUserId ? <>
+                          <button
+                            aria-label={t('编辑 Skill')}
+                            className="ui-icon-button"
+                            onClick={() => openEditSkill(skill)}
+                            title={t('编辑')}
+                            type="button"
+                          >
+                            <Edit3 size={14} />
+                          </button>
+                          <button
+                            aria-label={t('删除 Skill')}
+                            className="ui-icon-button ui-icon-button--danger"
+                            disabled={deletingSkillId === skill.id}
+                            onClick={() => requestDeleteSkill(skill)}
+                            title={t('删除')}
+                            type="button"
+                          >
+                            {deletingSkillId === skill.id ? <Loader2 className="spin" size={14} /> : <Trash2 size={14} />}
+                          </button>
+                        </> : <span className="resource-readonly-label">{t('只读')}</span>}
+                      </div>
+                    ),
+                  },
+                ]}
+                emptyText={t('暂无 Skills')}
+                getId={(skill) => skill.id}
+                getSearchText={(skill) => [
+                  skill.title,
+                  skill.description,
+                  ...skill.triggerPhrases,
+                  skill.content.details,
+                  t(statusLabel(skill.status)),
+                  skill.shared ? t('所有 ID 共享') : t('仅创建 ID'),
+                  skill.userId,
+                ]}
+                items={skills}
+                canDeleteItem={(skill) => skill.userId === normalizedUserId}
+                onDeleteItem={deleteSkill}
+                renderExpandedRow={(skill) => expandedSkillIds.includes(skill.id) ? (
+                    <div className="skills-manager-item-detail">
+                      <div className="skills-manager-item-intro">
+                        <p className="skills-manager-item-description">{skill.description || skill.id}</p>
+                        <div className="skills-manager-chip-row">
+                          <em className={`skill-status status-${skill.status}`}>{t(statusLabel(skill.status))}</em>
+                          {skill.shared ? <em className="resource-shared-badge">{skill.userId === normalizedUserId ? t('所有 ID 共享') : t('ID {id} 共享', { id: skill.userId })}</em> : null}
                         </div>
                       </div>
 
                       <div className="skills-manager-section-grid">
-                        {detailSections(skill).map((section) => (
-                          <div className={section.key === 'workflow' ? 'skills-manager-section wide' : 'skills-manager-section'} key={section.key}>
-                            <div>
-                              <h4>{section.label}</h4>
-                              <span>{section.items?.length || 0}</span>
-                            </div>
-                            <DetailList emptyText={t('暂无内容')} items={section.items} />
+                        <div className="skills-manager-section">
+                          <div>
+                            <h4>{t('触发词')}</h4>
+                            <span>{skill.triggerPhrases.length}</span>
                           </div>
-                        ))}
+                          <div className="skills-manager-trigger-list">
+                            {skill.triggerPhrases.length ? skill.triggerPhrases.map((phrase) => (
+                              <span key={phrase}>{phrase}</span>
+                            )) : <p className="skills-manager-muted">{t('暂无触发词')}</p>}
+                          </div>
+                        </div>
+
+                        <div className="skills-manager-section">
+                          <div>
+                            <h4>{t('详细内容')}</h4>
+                          </div>
+                          {skill.content.details
+                            ? <div className="skills-manager-details">{skill.content.details}</div>
+                            : <p className="skills-manager-muted">{t('暂无内容')}</p>}
+                          {skill.content.resources?.map((resource, index) => <details key={index}>
+                            <summary>{t('参考资料')} · {resource.name}</summary>
+                            <div className="skills-manager-details">{resource.content}</div>
+                          </details>)}
+                        </div>
                       </div>
 
                       <div className="skills-manager-footnote">
-                        <Edit3 size={14} />
-                        <span>{t('最近更新')}：{new Date(skill.updatedAt).toLocaleString()}</span>
+                        <Clock3 size={13} />
+                        <span>{t('最近更新')}：{new Date(skill.updatedAt).toLocaleString(language === 'en' ? 'en-US' : 'zh-CN')}</span>
                       </div>
                     </div>
                   ) : null}
-                </div>
-              );
-            }) : (
-              <div className="empty-state">{t('暂无 Skills')}</div>
+                rowClassName={(skill) => expandedSkillIds.includes(skill.id) ? 'is-expanded' : ''}
+                searchPlaceholder={t('筛选 Skills')}
+                toolbarActions={showTitle ? undefined : managerActions}
+              />
             )}
           </div>
         </div>
       </div>
 
-      {editorMode && portalReady ? createPortal((
-        <div className="ui-modal-overlay">
-          <section
-            aria-labelledby="skills-manager-modal-title"
-            aria-modal="true"
-            className="ui-modal ui-modal--skill"
-            role="dialog"
-          >
+      {editorMode ? (
+        <AppModal
+          ariaLabelledBy="skills-manager-modal-title"
+          dialogClassName="ui-modal ui-modal--form ui-modal--skill"
+          dismissable={!saving}
+          keyboardDismissable={!saving}
+          onClose={closeEditorModal}
+          size="wide"
+        >
             <header className="ui-modal-header">
               <div className="ui-modal-heading">
                 <h2 className="ui-modal-title" id="skills-manager-modal-title">{editorMode === 'edit' ? t('编辑 Skill') : t('新建 Skill')}</h2>
-                <p className="ui-modal-subtitle">{editorMode === 'edit' ? editingSkillId : t('保存后即可在对话和测试用例中使用')}</p>
+                <p className="ui-modal-subtitle">{editorMode === 'edit' ? editingSkillId : t('保存后即可在对话中使用')}</p>
               </div>
               <button aria-label={t('关闭')} className="ui-icon-button ui-modal-close" onClick={closeEditorModal} type="button">
                 <X size={16} />
@@ -390,7 +460,7 @@ export function SkillsManager({ onChanged }: { onChanged?: () => void } = {}) {
             <div className="ui-modal-body skills-manager-form">
               <label className={editorMode === 'create' ? 'skills-manager-field wide' : 'skills-manager-field'}>
                 <span>{t('标题')}</span>
-                <input className="input settings-control" value={draft.title} onChange={(event) => update({ title: event.target.value })} />
+                <AppInput value={draft.title} onChange={(event) => update({ title: event.target.value })} />
               </label>
               {editorMode === 'edit' ? <label className="skills-manager-field">
                 <span>{t('状态')}</span>
@@ -407,28 +477,37 @@ export function SkillsManager({ onChanged }: { onChanged?: () => void } = {}) {
               </label> : null}
               <label className="skills-manager-field wide">
                 <span>{t('描述')}</span>
-                <textarea className="textarea settings-control" value={draft.description} onChange={(event) => update({ description: event.target.value })} placeholder={t('一句话说明能力和适用场景')} />
-              </label>
-              {editorMode === 'edit' ? <label className="skills-manager-field">
-                <span>{t('标签')}</span>
-                <textarea className="textarea settings-control compact" value={draft.tags} onChange={(event) => update({ tags: event.target.value })} placeholder={t('逗号或换行分隔')} />
-              </label> : null}
-              <label className={editorMode === 'create' ? 'skills-manager-field wide' : 'skills-manager-field'}>
-                <span>{t('触发词')}</span>
-                <textarea className="textarea settings-control compact" value={draft.triggerPhrases} onChange={(event) => update({ triggerPhrases: event.target.value })} placeholder={t('每行一个精确的用户意图')} />
+                <TextArea fullWidth value={draft.description} onChange={(event) => update({ description: event.target.value })} placeholder={t('一句话说明能力和适用场景')} />
               </label>
               <label className="skills-manager-field wide">
-                <span>{t('操作流程')}</span>
-                <textarea className="textarea settings-control tall" value={draft.workflow} onChange={(event) => update({ workflow: event.target.value })} placeholder={t('每行一个步骤')} />
+                <span>{t('触发词')}</span>
+                <TextArea fullWidth value={draft.triggerPhrases} onChange={(event) => update({ triggerPhrases: event.target.value })} placeholder={t('每行一个精确的用户意图')} />
               </label>
-              <label className="skills-manager-field">
-                <span>{t('恢复策略')}</span>
-                <textarea className="textarea settings-control" value={draft.recovery} onChange={(event) => update({ recovery: event.target.value })} placeholder={t('只填写失败时的替代操作')} />
+              <label className="skills-manager-field wide">
+                <span>{t('详细内容')}</span>
+                <TextArea className="resource-content-textarea" fullWidth maxLength={100_000} value={draft.details} onChange={(event) => update({ details: event.target.value })} placeholder={t('填写完整操作规则；示例、文档和附录可以放入下方参考资料')} />
               </label>
-              <label className="skills-manager-field">
-                <span>{t('验证方式')}</span>
-                <textarea className="textarea settings-control" value={draft.verification} onChange={(event) => update({ verification: event.target.value })} placeholder={t('只填写最终可观察的成功信号')} />
-              </label>
+              <div className="skills-manager-field wide">
+                <span>{t('参考资料')}</span>
+                <small>{t('按需读取。必须遵守的规则请保留在详细内容中。')}</small>
+                {draft.resources.map((resource, index) => <div key={index} className="skills-manager-field wide">
+                  <AppInput aria-label={t('资料名称')} maxLength={120} value={resource.name} onChange={(event) => update({ resources: draft.resources.map((item, i) => i === index ? { ...item, name: event.target.value } : item) })} />
+                  <TextArea className="resource-content-textarea" aria-label={t('资料内容')} fullWidth maxLength={100_000} value={resource.content} onChange={(event) => update({ resources: draft.resources.map((item, i) => i === index ? { ...item, content: event.target.value } : item) })} />
+                  <button type="button" className="ui-button ui-button--neutral" onClick={() => update({ resources: draft.resources.filter((_, i) => i !== index) })}>{t('移除资料')}</button>
+                </div>)}
+                <button type="button" className="ui-button ui-button--neutral" disabled={draft.resources.length >= 20} onClick={() => update({ resources: [...draft.resources, { name: '', content: '' }] })}><Plus size={15} />{t('添加参考资料')}</button>
+              </div>
+              <div className="resource-sharing-field wide">
+                <div>
+                  <strong>{t('所有 ID 共享')}</strong>
+                  <small>{t('其他 ID 可以使用此 Skill，但只有创建 ID {id} 可以编辑或删除', {
+                    id: editorMode === 'edit' ? skills.find((skill) => skill.id === editingSkillId)?.userId || normalizedUserId : normalizedUserId,
+                  })}</small>
+                </div>
+                <button aria-pressed={draft.shared} className={`settings-toggle${draft.shared ? ' on' : ''}`} disabled={saving} onClick={() => update({ shared: !draft.shared })} type="button">
+                  <span />
+                </button>
+              </div>
             </div>
 
             <footer className="ui-modal-footer">
@@ -441,45 +520,20 @@ export function SkillsManager({ onChanged }: { onChanged?: () => void } = {}) {
                 {t('保存')}
               </button>
             </footer>
-          </section>
-        </div>
-      ), document.body) : null}
+        </AppModal>
+      ) : null}
 
-      {deleteTarget && portalReady ? createPortal((
-        <div className="ui-modal-overlay" onMouseDown={closeDeleteModal}>
-          <section
-            aria-labelledby="skills-manager-delete-title"
-            aria-modal="true"
-            className="ui-modal ui-modal--compact"
-            onMouseDown={(event) => event.stopPropagation()}
-            role="dialog"
-          >
-            <header className="ui-modal-header">
-              <h2 className="ui-modal-title" id="skills-manager-delete-title">{t('删除 Skill')}</h2>
-              <button aria-label={t('关闭')} className="ui-icon-button ui-modal-close" onClick={closeDeleteModal} type="button">
-                <X size={16} />
-              </button>
-            </header>
-            <div className="ui-modal-body skills-manager-delete-body">
-              <div className="skills-manager-delete-icon">
-                <Trash2 size={20} />
-              </div>
-              <h3>{deleteTarget.title}</h3>
-              <p>{t('确定删除这个 Skill 吗？已加载它的测试用例会自动移除引用。')}</p>
-            </div>
-            <footer className="ui-modal-footer">
-              <button className="ui-button ui-button--neutral" disabled={Boolean(deletingSkillId)} onClick={closeDeleteModal} type="button">
-                <X size={15} />
-                {t('取消')}
-              </button>
-              <button className="ui-button ui-button--danger" disabled={Boolean(deletingSkillId)} onClick={() => void confirmDeleteSkill()} type="button">
-                {deletingSkillId ? <Loader2 className="spin" size={15} /> : <Trash2 size={15} />}
-                {t('删除')}
-              </button>
-            </footer>
-          </section>
-        </div>
-      ), document.body) : null}
+      {deleteTarget ? (
+        <ConfirmDeleteModal
+          deleting={Boolean(deletingSkillId)}
+          description={t('确定删除这个 Skill 吗？')}
+          id="skills-manager-delete-title"
+          itemTitle={deleteTarget.title}
+          onClose={closeDeleteModal}
+          onConfirm={confirmDeleteSkill}
+          title={t('删除 Skill')}
+        />
+      ) : null}
     </section>
   );
 }

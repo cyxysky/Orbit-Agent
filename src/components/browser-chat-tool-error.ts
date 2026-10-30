@@ -1,0 +1,271 @@
+import { asRecord } from '@/lib/unknown-value';
+
+type ValidationIssue = {
+  code?: string;
+  expected?: string;
+  message?: string;
+  path?: Array<string | number>;
+  received?: string;
+};
+
+type OfficeSourceDiagnostic = {
+  code?: string;
+  column?: number;
+  line?: number;
+  message?: string;
+  severity?: string;
+};
+
+function parsedJsonValue(value: string) {
+  const source = value.trim();
+  if (!source || (source[0] !== '{' && source[0] !== '[')) return undefined;
+  try {
+    return JSON.parse(source) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+function officeSourceValidationFailure(value: unknown) {
+  const seen = new WeakSet<object>();
+  const visit = (current: unknown, depth = 0): Record<string, unknown> | undefined => {
+    if (depth > 7 || current === null || current === undefined) return undefined;
+    if (typeof current === 'string') {
+      const parsed = parsedJsonValue(current);
+      if (parsed === undefined && /^Office source(?:-unit)? validation failed:/.test(current)) {
+        return {
+          kind: 'uno-draft-validation', validation: 'failed',
+          saved: /workingSourceSaved=true/.test(current),
+          error: current.match(/(?:^|;\s*)error=([^;]+)/)?.[1] || '源码校验未通过',
+        };
+      }
+      return parsed === undefined ? undefined : visit(parsed, depth + 1);
+    }
+    if (Array.isArray(current)) {
+      for (const item of current) {
+        const match = visit(item, depth + 1);
+        if (match) return match;
+      }
+      return undefined;
+    }
+    const record = asRecord(current);
+    if (!record || seen.has(record)) return undefined;
+    seen.add(record);
+    const kind = typeof record.kind === 'string' ? record.kind : '';
+    const validation = typeof record.validation === 'string'
+      ? record.validation
+      : typeof record.validationStatus === 'string'
+        ? record.validationStatus
+        : '';
+    if (
+      validation === 'failed'
+      && (kind.startsWith('uno-draft-') || kind === 'office-source-unit-validation')
+    ) return record;
+    if (record.editStatus === 'partial-patch-applied') return record;
+    for (const key of ['actual', 'rawResult', 'result', 'error', 'cause']) {
+      const match = visit(record[key], depth + 1);
+      if (match) return match;
+    }
+    return undefined;
+  };
+  return visit(value);
+}
+
+function officeSourceDiagnostic(value: unknown): OfficeSourceDiagnostic | undefined {
+  const record = asRecord(value);
+  if (!record) return undefined;
+  return {
+    code: typeof record.code === 'string' ? record.code : undefined,
+    column: typeof record.column === 'number' ? record.column : undefined,
+    line: typeof record.line === 'number' ? record.line : undefined,
+    message: typeof record.message === 'string' ? record.message.trim() : undefined,
+    severity: typeof record.severity === 'string' ? record.severity : undefined,
+  };
+}
+
+function officeSourceFailureLabel(code: string | undefined) {
+  switch (code) {
+    case 'PRESENTATION_OVERLAP':
+      return '布局重叠';
+    case 'PRESENTATION_TEXT_OVERFLOW':
+      return '文本溢出';
+    case 'PRESENTATION_GEOMETRY_INVALID':
+      return '几何边界错误';
+    case 'UNO_RUNTIME_ERROR':
+    case 'UNO_BRIDGE_STARTUP':
+    case 'UNO_BRIDGE_DISPOSED':
+      return 'UNO 运行错误';
+    case 'PYTHON_SYNTAX':
+    case 'JAVASCRIPT_SYNTAX':
+    case 'JS1005':
+      return '语法错误';
+    default:
+      return '校验错误';
+  }
+}
+
+function localizedOfficeSourceMessage(message: string) {
+  const expectedMatch = message.match(/^'(.+)' expected\.?$/i);
+  if (expectedMatch) return `缺少“${expectedMatch[1]}”`;
+  return message.replace(/\.$/, '');
+}
+
+export function browserChatToolOutcomeLabel(value: unknown) {
+  const record = asRecord(typeof value === 'string' ? parsedJsonValue(value) : value);
+  const data = asRecord(record?.data);
+  if (data?.kind === 'context-compression' && data.committed === true) {
+    if (data.status === 'partial') return '部分完成，已保存';
+    if (data.status === 'limited') return '已压缩，保留必要内容';
+  }
+  if (record?.outcome === 'not-executed' || (typeof value === 'string' && value.startsWith('未执行：'))) return '未执行';
+  if (record?.failureCategory === 'missing-tool-receipt') return '无执行记录';
+  const failure = officeSourceValidationFailure(value);
+  if (!failure) return undefined;
+  if (failure.validation === 'failed' || failure.validationStatus === 'failed') {
+    return failure.saved === true ? '已保存，校验失败' : '校验失败';
+  }
+  return '部分已保存，仍有冲突';
+}
+
+export function browserChatToolActionSkipped(value: unknown) {
+  const result = asRecord(typeof value === 'string' ? parsedJsonValue(value) : value);
+  return asRecord(result?.data)?.actionOutcome === 'skipped' || result?.failureCategory === 'browser-no-action';
+}
+
+export function browserChatSkippedActionLabel(value: unknown) {
+  if (!browserChatToolActionSkipped(value)) return undefined;
+  const result = asRecord(typeof value === 'string' ? parsedJsonValue(value) : value);
+  const data = asRecord(result?.data);
+  return data?.result === null || data?.result === undefined ? '动作未执行' : '已返回数据，未操作';
+}
+
+export function browserChatToolFailureSummary(value: unknown) {
+  const failure = officeSourceValidationFailure(value);
+  if (!failure) return undefined;
+  if (failure.editStatus === 'partial-patch-applied' && failure.validation !== 'failed' && failure.validationStatus !== 'failed') {
+    return '部分修改已保存；请读取当前源码和新版本摘要，仅修复返回的冲突项。';
+  }
+  const diagnostics = Array.isArray(failure.diagnostics)
+    ? failure.diagnostics.map(officeSourceDiagnostic).filter((item): item is OfficeSourceDiagnostic => Boolean(item))
+    : [];
+  const diagnostic = diagnostics.find((item) => item.severity === 'error') || diagnostics[0];
+  const fallbackError = typeof failure.error === 'string' ? failure.error.trim() : '';
+  const fallbackMatch = fallbackError.match(/^(\d+):(\d+)\s+(.+)$/);
+  const line = diagnostic?.line || (fallbackMatch ? Number(fallbackMatch[1]) : undefined);
+  const column = diagnostic?.column || (fallbackMatch ? Number(fallbackMatch[2]) : undefined);
+  const message = diagnostic?.message || fallbackMatch?.[3] || fallbackError || '源码校验未通过';
+  const location = line
+    ? `第 ${line} 行${column ? `第 ${column} 列` : ''}`
+    : '';
+  const failureLabel = officeSourceFailureLabel(diagnostic?.code);
+  return `文件源码${location}${failureLabel}：${localizedOfficeSourceMessage(message)}（草稿已保留）`;
+}
+
+function validationIssue(value: unknown): ValidationIssue | undefined {
+  const record = asRecord(value);
+  if (!record) return undefined;
+  const message = typeof record.message === 'string' ? record.message.trim() : '';
+  const path = Array.isArray(record.path)
+    ? record.path.filter((part): part is string | number => typeof part === 'string' || typeof part === 'number')
+    : undefined;
+  if (!message && !path?.length) return undefined;
+  return {
+    code: typeof record.code === 'string' ? record.code : undefined,
+    expected: typeof record.expected === 'string' ? record.expected : undefined,
+    message: message || undefined,
+    path,
+    received: typeof record.received === 'string' ? record.received : undefined,
+  };
+}
+
+function parseJsonArrayAfterMarker(value: string) {
+  const markerIndex = value.indexOf('Error message:');
+  const searchStart = markerIndex >= 0 ? markerIndex + 'Error message:'.length : 0;
+  const arrayStart = value.indexOf('[', searchStart);
+  if (arrayStart < 0) return undefined;
+  let depth = 0;
+  let quoted = false;
+  let escaped = false;
+  for (let index = arrayStart; index < value.length; index += 1) {
+    const character = value[index];
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (character === '\\') escaped = true;
+      else if (character === '"') quoted = false;
+      continue;
+    }
+    if (character === '"') {
+      quoted = true;
+      continue;
+    }
+    if (character === '[') depth += 1;
+    if (character !== ']') continue;
+    depth -= 1;
+    if (depth !== 0) continue;
+    try {
+      const parsed = JSON.parse(value.slice(arrayStart, index + 1));
+      return Array.isArray(parsed) ? parsed : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+function collectValidationIssues(value: unknown) {
+  const issues: ValidationIssue[] = [];
+  const seen = new WeakSet<object>();
+  const visit = (current: unknown, depth = 0) => {
+    if (depth > 7 || current === null || current === undefined) return;
+    if (typeof current === 'string') {
+      const parsed = parseJsonArrayAfterMarker(current);
+      for (const item of parsed || []) {
+        const issue = validationIssue(item);
+        if (issue) issues.push(issue);
+      }
+      return;
+    }
+    if (Array.isArray(current)) {
+      for (const item of current) visit(item, depth + 1);
+      return;
+    }
+    const record = asRecord(current);
+    if (!record || seen.has(record)) return;
+    seen.add(record);
+    const direct = validationIssue(record);
+    if (direct && (direct.code || direct.expected || direct.received)) issues.push(direct);
+    visit(record.issues, depth + 1);
+    visit(record.cause, depth + 1);
+    visit(record.error, depth + 1);
+    visit(record.message, depth + 1);
+  };
+  visit(value);
+  return issues;
+}
+
+function typeNames(issue: ValidationIssue) {
+  const match = issue.message?.match(/expected\s+([^,]+),\s*received\s+([^\s,.;]+)/i);
+  return {
+    expected: issue.expected || match?.[1]?.trim(),
+    received: issue.received || match?.[2]?.trim(),
+  };
+}
+
+export function browserChatToolValidationSummary(value: unknown) {
+  const issues = collectValidationIssues(value);
+  const summaries: string[] = [];
+  const summarizedPaths = new Set<string>();
+  for (const issue of issues) {
+    const path = issue.path?.length ? issue.path.join('.') : 'input';
+    const { expected, received } = typeNames(issue);
+    if (summarizedPaths.has(path) || !expected || !received) continue;
+    summarizedPaths.add(path);
+    summaries.push(`${path}：应为 ${expected}，实际为 ${received}`);
+  }
+  if (summaries.length) {
+    const visible = summaries.slice(0, 3);
+    const remainder = summaries.length - visible.length;
+    return `${visible.join('；')}${remainder > 0 ? `；另 ${remainder} 项` : ''}`;
+  }
+  return '工具输入不符合 schema；请打开详情查看完整错误';
+}

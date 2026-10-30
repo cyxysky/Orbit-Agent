@@ -1,14 +1,17 @@
 import type { Metadata } from 'next';
-import { ClickParticleEffect } from '@/components/ClickParticleEffect';
+import Script from 'next/script';
+import { WorkspaceBrandProvider } from '@/brand/WorkspaceBrandProvider';
+import { product } from '@/brand/product';
 import { InterfaceMotion } from '@/components/InterfaceMotion';
+import { FilePreviewProvider } from '@/components/FilePreviewProvider';
 import { NavigationLoading } from '@/components/NavigationLoading';
 import { I18nProvider } from '@/i18n/I18nProvider';
 import { ThemeProvider } from '@/theme/ThemeProvider';
-import './globals.css';
+import './styles/foundation.css';
 
 export const metadata: Metadata = {
-  title: 'WebPilot QA',
-  description: 'AI-assisted browser testing and evidence reporting.',
+  title: product.name,
+  description: product.description,
 };
 
 const themeBootScript = `
@@ -23,13 +26,16 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
   return (
     <html lang="zh-CN" suppressHydrationWarning>
       <body>
-        <script dangerouslySetInnerHTML={{ __html: themeBootScript }} />
+        <Script id="theme-bootstrap" strategy="beforeInteractive">{themeBootScript}</Script>
         <ThemeProvider>
           <I18nProvider>
-            <InterfaceMotion />
-            <ClickParticleEffect />
-            {children}
-            <NavigationLoading />
+            <WorkspaceBrandProvider>
+              <FilePreviewProvider>
+                <InterfaceMotion />
+                {children}
+                <NavigationLoading />
+              </FilePreviewProvider>
+            </WorkspaceBrandProvider>
           </I18nProvider>
         </ThemeProvider>
       </body>

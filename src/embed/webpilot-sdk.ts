@@ -1,16 +1,33 @@
-export const WEBPILOT_EMBED_SDK = String.raw`
+export const ORBIT_EMBED_SDK = String.raw`
 (function () {
   'use strict';
 
-  var VERSION = '0.2.0';
+  var VERSION = '0.4.0';
   var ELEMENT_NAME = 'webpilot-browser-chat';
   var currentScript = document.currentScript;
-  var defaultBaseUrl = currentScript && currentScript.src
-    ? new URL(currentScript.src, window.location.href).origin
-    : window.location.origin;
+
+  function scriptBaseUrl(script) {
+    if (!script || !script.src) return window.location.origin;
+    var url = new URL(script.src, window.location.href);
+    var suffix = url.pathname.endsWith('/embed/orbit.js') ? '/embed/orbit.js' : '/embed/webpilot.js';
+    if (url.pathname.endsWith(suffix)) {
+      url.pathname = url.pathname.slice(0, -suffix.length) || '/';
+    } else {
+      url.pathname = url.pathname.replace(/\/[^/]*$/g, '') || '/';
+    }
+    url.search = '';
+    url.hash = '';
+    return url.toString().replace(/\/+$/g, '');
+  }
+
+  var defaultBaseUrl = scriptBaseUrl(currentScript);
 
   function joinUrl(base, path) {
     return String(base || '').replace(/\/+$/g, '') + '/' + String(path || '').replace(/^\/+/g, '');
+  }
+
+  function normalizeBaseUrl(value) {
+    return new URL(String(value || defaultBaseUrl), window.location.href).toString().replace(/\/+$/g, '');
   }
 
   function parseJsonResponse(response) {
@@ -29,6 +46,11 @@ export const WEBPILOT_EMBED_SDK = String.raw`
   }
 
   function dispatch(element, name, detail) {
+    element.dispatchEvent(new CustomEvent('orbit:' + name, {
+      bubbles: true,
+      composed: true,
+      detail: detail
+    }));
     element.dispatchEvent(new CustomEvent('webpilot:' + name, {
       bubbles: true,
       composed: true,
@@ -38,12 +60,11 @@ export const WEBPILOT_EMBED_SDK = String.raw`
 
   function normalizeConfig(config) {
     var next = Object.assign({}, config || {});
-    next.apiBaseUrl = String(next.apiBaseUrl || defaultBaseUrl).replace(/\/+$/g, '');
+    next.apiBaseUrl = normalizeBaseUrl(next.apiBaseUrl);
     if (!next.iframeUrl) {
-      var frameUrl = new URL('/browser-chat', next.apiBaseUrl);
+      var frameUrl = new URL(joinUrl(next.apiBaseUrl, '/browser-chat'));
       frameUrl.searchParams.set('webpilotEmbed', '1');
       if (next.sessionId) frameUrl.searchParams.set('sessionId', next.sessionId);
-      if (next.userId) frameUrl.searchParams.set('userId', next.userId);
       if (next.targetUrl) frameUrl.searchParams.set('targetUrl', next.targetUrl);
       next.iframeUrl = frameUrl.toString();
     }
@@ -51,7 +72,7 @@ export const WEBPILOT_EMBED_SDK = String.raw`
   }
 
   function frameTitle(config) {
-    return config.title || 'WebPilot QA';
+    return config.title || 'Orbit';
   }
 
   class WebPilotBrowserChatElement extends HTMLElement {
@@ -120,7 +141,10 @@ export const WEBPILOT_EMBED_SDK = String.raw`
 
   function init(options) {
     options = Object.assign({ targetUrl: window.location.href }, options || {});
-    var apiBaseUrl = String(options.apiBaseUrl || defaultBaseUrl).replace(/\/+$/g, '');
+    if (!String(options.userId || '').trim()) {
+      return Promise.reject(new Error('Orbit mount requires userId.'));
+    }
+    var apiBaseUrl = normalizeBaseUrl(options.apiBaseUrl);
     return fetch(joinUrl(apiBaseUrl, '/api/embed/browser-chat/init'), {
       method: 'POST',
       cache: 'no-store',
@@ -145,7 +169,7 @@ export const WEBPILOT_EMBED_SDK = String.raw`
       target = null;
     }
     var container = resolveTarget(target, options);
-    if (!container) return Promise.reject(new Error('WebPilot mount target was not found.'));
+    if (!container) return Promise.reject(new Error('Orbit mount target was not found.'));
     var ready = options && options.iframeUrl
       ? Promise.resolve(options)
       : init(Object.assign({}, options, { mountId: options.mountId || container.id || undefined }));
@@ -169,7 +193,7 @@ export const WEBPILOT_EMBED_SDK = String.raw`
     return true;
   }
 
-  var WebPilotQA = Object.assign(window.WebPilotQA || {}, {
+  var Orbit = Object.assign(window.Orbit || window.WebPilotQA || {}, {
     version: VERSION,
     elementName: ELEMENT_NAME,
     apiBaseUrl: defaultBaseUrl,
@@ -179,17 +203,20 @@ export const WEBPILOT_EMBED_SDK = String.raw`
     unmount: unmount
   });
 
-  window.WebPilotQA = WebPilotQA;
+  window.Orbit = Orbit;
+  window.WebPilotQA = Orbit;
   define();
 
   if (currentScript && currentScript.dataset && currentScript.dataset.mount) {
     mount(currentScript.dataset.mount, {
       apiBaseUrl: currentScript.dataset.apiBaseUrl || defaultBaseUrl,
-      userId: currentScript.dataset.userId || currentScript.dataset.qzUserId || '',
+      userId: currentScript.dataset.userId || '',
       targetUrl: currentScript.dataset.targetUrl || window.location.href
     }).catch(function (error) {
-      console.error('[WebPilotQA] auto mount failed:', error);
+      console.error('[Orbit] auto mount failed:', error);
     });
   }
 })();
 `;
+
+export const WEBPILOT_EMBED_SDK = ORBIT_EMBED_SDK;

@@ -1,36 +1,50 @@
 'use client';
 
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
+import { Fragment, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { Check, ChevronDown, Search } from 'lucide-react';
+import { FloatingLayer } from '@/components/FloatingLayer';
+import { HoverCard } from '@/components/HoverCard';
 import { useI18n } from '@/i18n/I18nProvider';
 
 export type CustomSelectOption = {
   description?: string;
   disabled?: boolean;
   group?: string;
+  icon?: ReactNode;
   label: string;
   selectedLabel?: string;
+  selected?: boolean;
   value: string;
 };
 
-type MenuLayout = {
-  maxHeight: number;
-  placement: 'up' | 'down';
+const menuMaxHeight = 360;
+
+type CustomSelectSubmenu = {
+  label: string;
+  description?: string;
+  disabled?: boolean;
+  value: string;
+  options: CustomSelectOption[];
+  onChange: (value: string) => void;
 };
 
-const menuGap = 6;
-const viewportMargin = 8;
-
 export function CustomSelect({
+  ariaLabel,
   className,
   disabled = false,
   id,
   onChange,
   options,
+  searchable = false,
   searchPlaceholder,
+  submenu,
   title,
+  tooltip,
+  tooltipTitle,
+  tooltipWidth,
   value,
 }: {
+  ariaLabel?: string;
   className?: string;
   disabled?: boolean;
   id?: string;
@@ -38,21 +52,27 @@ export function CustomSelect({
   options: CustomSelectOption[];
   searchable?: boolean;
   searchPlaceholder?: string;
+  submenu?: CustomSelectSubmenu;
   title?: string;
+  tooltip?: ReactNode;
+  tooltipTitle?: ReactNode;
+  tooltipWidth?: number;
   value: string;
 }) {
   const { t } = useI18n();
+  const menuId = useId();
   const [open, setOpen] = useState(false);
   const [menuVisible, setMenuVisible] = useState(false);
-  const [menuLayout, setMenuLayout] = useState<MenuLayout | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
-  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [submenuOpen, setSubmenuOpen] = useState(false);
+  const submenuId = useId();
+  const submenuSelection = submenu?.options.find(option => option.value === submenu.value);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const searchRef = useRef<HTMLInputElement | null>(null);
   const closeTimerRef = useRef<number | undefined>(undefined);
-  const searchEnabled = true;
+  const searchEnabled = searchable;
   const normalizedQuery = searchQuery.trim().toLocaleLowerCase();
   const filteredOptions = useMemo(() => options
     .map((option, index) => ({ option, index }))
@@ -68,17 +88,7 @@ export function CustomSelect({
   const selectedOption = options.find((option) => option.value === value) || options[0];
   const selectedIndex = Math.max(0, options.findIndex((option) => option.value === value));
 
-  useEffect(() => {
-    function closeOnOutside(event: MouseEvent) {
-      if (!rootRef.current?.contains(event.target as Node)) closeMenu();
-    }
-
-    document.addEventListener('mousedown', closeOnOutside);
-    return () => {
-      document.removeEventListener('mousedown', closeOnOutside);
-      window.clearTimeout(closeTimerRef.current);
-    };
-  }, []);
+  useEffect(() => () => window.clearTimeout(closeTimerRef.current), []);
 
   useEffect(() => {
     if (!open) return;
@@ -87,42 +97,6 @@ export function CustomSelect({
     setMenuVisible(true);
     if (searchEnabled) requestAnimationFrame(() => searchRef.current?.focus());
   }, [open, searchEnabled, selectedIndex]);
-
-  useLayoutEffect(() => {
-    if (!open || !menuVisible) return undefined;
-
-    function updateMenuLayout() {
-      const button = buttonRef.current;
-      const menu = menuRef.current;
-      if (!button || !menu) return;
-
-      const buttonRect = button.getBoundingClientRect();
-      const viewportHeight = document.documentElement.clientHeight;
-      const spaceAbove = Math.max(0, buttonRect.top - menuGap - viewportMargin);
-      const spaceBelow = Math.max(0, viewportHeight - buttonRect.bottom - menuGap - viewportMargin);
-      const desiredHeight = menu.getBoundingClientRect().height;
-      const placement = desiredHeight <= spaceBelow
-        ? 'down'
-        : desiredHeight <= spaceAbove
-          ? 'up'
-          : spaceAbove > spaceBelow
-            ? 'up'
-            : 'down';
-      const maxHeight = Math.floor(placement === 'up' ? spaceAbove : spaceBelow);
-
-      setMenuLayout((current) => current?.placement === placement && current.maxHeight === maxHeight
-        ? current
-        : { maxHeight, placement });
-    }
-
-    updateMenuLayout();
-    window.addEventListener('resize', updateMenuLayout);
-    window.addEventListener('scroll', updateMenuLayout, true);
-    return () => {
-      window.removeEventListener('resize', updateMenuLayout);
-      window.removeEventListener('scroll', updateMenuLayout, true);
-    };
-  }, [menuVisible, open]);
 
   useEffect(() => {
     if (!open || !enabledOptions.length) return;
@@ -138,13 +112,13 @@ export function CustomSelect({
   function openMenu() {
     if (disabled) return;
     window.clearTimeout(closeTimerRef.current);
-    setMenuLayout(null);
     setMenuVisible(true);
     setOpen(true);
   }
 
   function closeMenu() {
     setOpen(false);
+    setSubmenuOpen(false);
     window.clearTimeout(closeTimerRef.current);
     closeTimerRef.current = window.setTimeout(() => setMenuVisible(false), 170);
   }
@@ -218,33 +192,47 @@ export function CustomSelect({
   }
 
   return (
-    <div className={className ? `custom-select ${className}` : 'custom-select'} ref={rootRef}>
-      <button
-        aria-expanded={open}
-        aria-haspopup="listbox"
-        className="custom-select-button"
-        disabled={disabled}
-        id={id}
-        onClick={toggleMenu}
-        onKeyDown={handleKeyDown}
-        ref={buttonRef}
-        title={title}
-        type="button"
+    <div className={className ? `custom-select ${className}` : 'custom-select'}>
+      <HoverCard anchorRef={buttonRef} content={tooltip} disabled={open} title={tooltipTitle} width={tooltipWidth}>
+        {(hoverProps) => (
+          <button
+            {...hoverProps}
+            aria-controls={menuId}
+            aria-label={ariaLabel}
+            aria-expanded={open}
+            aria-haspopup={submenu ? 'dialog' : 'listbox'}
+            className="custom-select-button"
+            disabled={disabled}
+            id={id}
+            onClick={toggleMenu}
+            onKeyDown={handleKeyDown}
+            title={tooltip || tooltipTitle ? undefined : title}
+            type="button"
+          >
+            <div className="custom-select-button-content">
+              {selectedOption?.icon ? <span className="custom-select-icon">{selectedOption.icon}</span> : null}
+              <span className="custom-select-button-label">{selectedOption?.selectedLabel || selectedOption?.label || value}</span>
+            </div>
+            <ChevronDown className={open ? 'open' : undefined} size={16} />
+          </button>
+        )}
+      </HoverCard>
+      <FloatingLayer
+        active={open}
+        align={className?.includes('browser-chat-provider-select') ? 'end' : 'start'}
+        anchorRef={buttonRef}
+        className={`custom-select-menu${className?.includes('browser-chat-provider-select') ? ' browser-chat-provider-select-menu' : ''}${submenu ? ' has-submenu' : ''}${submenuOpen ? ' submenu-expanded' : ''} ${open ? 'open' : 'closing'}`}
+        id={menuId}
+        layerRef={menuRef}
+        matchAnchorWidth={!className?.includes('browser-chat-provider-select')}
+        maxHeight={submenuOpen ? menuMaxHeight + 120 : menuMaxHeight}
+        onDismiss={closeMenu}
+        preferredWidth={className?.includes('browser-chat-provider-select') ? 336 : undefined}
+        present={menuVisible}
+        role={submenu ? 'dialog' : 'listbox'}
+        ariaLabel={submenu ? ariaLabel || t('当前模型') : ariaLabel}
+        ariaMultiselectable={!submenu && options.some((option) => option.selected !== undefined) || undefined}
       >
-        <div>{selectedOption?.selectedLabel || selectedOption?.label || value}</div>
-        <ChevronDown className={open ? 'open' : undefined} size={16} />
-      </button>
-      {menuVisible ? (
-        <div
-          className={`custom-select-menu custom-select-menu--${menuLayout?.placement || 'down'} ${open ? 'open' : 'closing'}`}
-          onAnimationEnd={() => {
-            if (!open) setMenuVisible(false);
-          }}
-          ref={menuRef}
-          role="listbox"
-          style={{ '--custom-select-menu-max-height': `${Math.max(0, menuLayout?.maxHeight ?? 360)}px` } as CSSProperties}
-          tabIndex={-1}
-        >
           {searchEnabled ? (
             <div className="custom-select-search">
               <Search aria-hidden="true" size={15} />
@@ -261,7 +249,9 @@ export function CustomSelect({
               />
             </div>
           ) : null}
-          <div className="custom-select-options">
+          <div className="custom-select-options" role={submenu ? 'listbox' : undefined}
+            aria-label={submenu ? ariaLabel || t('当前模型') : undefined}
+            aria-multiselectable={submenu && options.some(option => option.selected !== undefined) || undefined}>
             {filteredOptions.map(({ option, index }, filteredIndex) => {
               const previous = filteredOptions[filteredIndex - 1]?.option;
               const showGroup = Boolean(option.group && option.group !== previous?.group);
@@ -269,7 +259,7 @@ export function CustomSelect({
                 <Fragment key={option.value}>
                   {showGroup ? <div className="custom-select-group">{option.group}</div> : null}
                   <button
-                    aria-selected={option.value === value}
+                    aria-selected={option.selected ?? option.value === value}
                     className={`custom-select-option${index === activeIndex ? ' active' : ''}`}
                     disabled={option.disabled}
                     onClick={() => selectOption(option)}
@@ -277,19 +267,47 @@ export function CustomSelect({
                     role="option"
                     type="button"
                   >
-                    <span>
-                      <b>{option.label}</b>
-                      {option.description ? <small>{option.description}</small> : null}
+                    <span className={`custom-select-option-content${option.icon ? ' has-icon' : ''}`}>
+                      {option.icon ? <span className="custom-select-icon">{option.icon}</span> : null}
+                      <span className="custom-select-option-copy">
+                        <b>{option.label}</b>
+                        {option.description ? <small>{option.description}</small> : null}
+                      </span>
                     </span>
-                    {option.value === value ? <Check size={15} /> : null}
+                    {(option.selected ?? option.value === value) ? <Check size={15} /> : null}
                   </button>
                 </Fragment>
               );
             })}
             {!filteredOptions.length ? <p className="custom-select-empty">{t('未找到匹配选项')}</p> : null}
           </div>
-        </div>
-      ) : null}
+          {submenu ? (
+            <div className="custom-select-submenu">
+              <button className="custom-select-submenu-trigger" type="button"
+                aria-expanded={submenuOpen} aria-controls={submenuId}
+                onClick={() => setSubmenuOpen(current => !current)}>
+                <span>{submenu.label}</span>
+                <span className="custom-select-submenu-value">{submenuSelection?.label}</span>
+                <ChevronDown aria-hidden="true" className={submenuOpen ? 'open' : undefined} size={15} />
+              </button>
+              {submenuOpen ? (
+                <div id={submenuId} className="custom-select-submenu-body">
+                  <div className="custom-select-submenu-options" role="group" aria-label={submenu.label}>
+                    {submenu.options.map(option => (
+                      <button key={option.value} className="custom-select-submenu-option" type="button"
+                        aria-pressed={option.value === submenu.value} disabled={submenu.disabled || option.disabled}
+                        onClick={() => submenu.onChange(option.value)}>
+                        <span>{option.label}</span>
+                        {option.value === submenu.value ? <Check aria-hidden="true" size={14} /> : null}
+                      </button>
+                    ))}
+                  </div>
+                  {submenu.description ? <p className="custom-select-submenu-description">{submenu.description}</p> : null}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+      </FloatingLayer>
     </div>
   );
 }

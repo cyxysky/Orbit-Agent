@@ -1,0 +1,114 @@
+import { executeBrowserSessionOperation, type BrowserSessionCommand } from '@cjfclonedeep/capability-sdk/browser/node';
+import { z } from 'zod';
+import { browserToolInput, browserRuntimeSkill, browserVerificationInstructions } from '@cjfclonedeep/capability-sdk/browser';
+import type { BrowserSession } from '@cjfclonedeep/capability-sdk/browser/node';
+import { type BrowserCodeAttachmentBinding, type BrowserCodeCredentialBinding } from '@cjfclonedeep/capability-sdk/browser/node';
+import { normalizeBrowserChatInteractionMode, type BrowserChatInteractionMode } from '@/lib/browser-chat-interaction-mode';
+import { browserControlShape, visualBrowserInputSchema, visualBrowserSkill } from './runtime-browser-visual';
+import { executePlaywrightMcpOperation } from './runtime-browser-mcp';
+
+const domShape = {
+  ...browserControlShape,
+  action: z.enum(['state', 'snapshot', 'code', 'dismissSurface', 'navigate', 'tabs', 'waitForHumanVerification', 'requestUserInput'])
+    .describe('snapshot reads actionable elements and surfaces; code acts and returns data.postActionState after attempted input, data.actionOutcome="skipped" when a conditional action did not run, and data.pageErrorIndicators for visible HTTP errors (page.verifyState does not exist); dismissSurface always sends a direct mouse click at viewport (0,0), then reports data.closureConfirmed and postActionState. A delivered click is not proof that the popup closed.'),
+  reason: z.string().min(1).max(300),
+  question: z.string().min(1).max(4000).optional().describe('requestUserInput: the complete user-facing question in Markdown. Preserve paragraph breaks; use headings and lists for multiple options or files. Ask for specific user-owned information or an attachment; the user reply resumes the same task.'),
+  code: z.string().min(1).max(40000).optional(),
+  scope: z.enum(['active', 'all']).optional(), frame: z.string().max(200).optional(),
+  selector: z.string().max(2000).optional(), query: z.string().max(300).optional(), cursor: z.string().max(1000).optional(),
+  maxOutputChars: z.number().int().min(1000).max(200000).optional(),
+  maxMs: z.number().int().min(1000).max(1800000).optional(),
+  snapshotView: z.enum(['actionable', 'full', 'text']).optional().describe('snapshot only: actionable controls by default, full semantic tree, or readable text.'),
+  snapshotCursor: z.string().min(1).max(1000).optional().describe('snapshot only: nextCursor from the same DOM observation.'),
+  recoveryReview: z.string().max(6000).optional(),
+  observationMode: z.enum(['replace', 'append', 'keep-pair']).optional(),
+};
+const domSchema = z.object(domShape).strict().superRefine((value, ctx) => {
+  if (value.action === 'code' && !value.code) ctx.addIssue({ code: 'custom', path: ['code'], message: 'code is required' });
+  if (value.action === 'navigate' || value.action === 'tabs') {
+    const result = visualBrowserInputSchema.safeParse(value);
+    if (!result.success) for (const issue of result.error.issues) ctx.addIssue({ code: 'custom', path: issue.path, message: issue.message });
+  }
+});
+const hybridSchema = z.object({ ...visualBrowserInputSchema.shape, ...domShape,
+  action: z.enum(['state', 'snapshot', 'code', 'dismissSurface', 'observe', 'act', 'images', 'navigate', 'tabs', 'waitForHumanVerification', 'requestUserInput'])
+    .describe('snapshot reads actionable elements and surfaces; code acts and returns data.postActionState after attempted input, data.actionOutcome="skipped" when a conditional action did not run, and data.pageErrorIndicators for visible HTTP errors (page.verifyState does not exist); dismissSurface always sends a direct mouse click at viewport (0,0), then reports data.closureConfirmed and postActionState. A delivered click is not proof that the popup closed.'),
+}).strict().superRefine((value, ctx) => {
+  try { parseBrowserInteractionInput(value, 'hybrid'); }
+  catch (error) { ctx.addIssue({ code: 'custom', message: error instanceof Error ? error.message : 'Invalid browser action' }); }
+});
+const mcpSchema = z.object({
+  ...browserControlShape,
+  action: z.enum(['mcp', 'dismissSurface', 'navigate', 'tabs', 'waitForHumanVerification', 'requestUserInput'])
+    .describe('dismissSurface directly clicks viewport (0,0) to dismiss an option surface; inspect closureConfirmed and postActionState.'),
+  reason: z.string().min(1).max(300),
+  question: visualBrowserInputSchema.shape.question,
+  tool: z.string().min(1).max(100).optional().describe('Use list to discover tools, then an exact official Playwright MCP browser_* tool name.'),
+  arguments: z.record(z.string(), z.unknown()).optional(),
+  maxMs: z.number().int().min(1000).max(1800000).optional(),
+}).strict().superRefine((value, ctx) => {
+  if (value.action === 'requestUserInput' && !value.question) ctx.addIssue({ code: 'custom', path: ['question'], message: 'requestUserInput requires question' });
+  if (value.action === 'mcp' && !value.tool) ctx.addIssue({ code: 'custom', path: ['tool'], message: 'mcp requires tool' });
+  if (value.action === 'navigate' || value.action === 'tabs') {
+    const result = visualBrowserInputSchema.safeParse(value);
+    if (!result.success) for (const issue of result.error.issues) ctx.addIssue({ code: 'custom', path: issue.path, message: issue.message });
+  }
+});
+
+export function browserInteractionSchema(mode: BrowserChatInteractionMode) {
+  return mode === 'mcp' ? mcpSchema : mode === 'visual' ? visualBrowserInputSchema : mode === 'dom' ? domSchema : hybridSchema;
+}
+export function parseBrowserInteractionInput(value: unknown, mode: BrowserChatInteractionMode) {
+  const action = value && typeof value === 'object' ? (value as { action?: string }).action : undefined;
+  if (mode === 'mcp') return mcpSchema.parse(value);
+  if (mode !== 'visual' && (action === 'snapshot' || action === 'dismissSurface')) return domSchema.parse(value);
+  if (mode !== 'visual' && (action === 'state' || action === 'code')) {
+    return browserToolInput.parse(domSchema.parse(value));
+  }
+  if (mode === 'dom' && !['navigate', 'tabs', 'waitForHumanVerification', 'requestUserInput'].includes(action || '')) throw new Error('DOM mode allows state, snapshot, code, dismissSurface, navigate, tabs, waitForHumanVerification and requestUserInput.');
+  return visualBrowserInputSchema.parse(value);
+}
+const browserInteractionCommonInstructions = browserVerificationInstructions + '\n' + 'To close a still-open option surface (select, cascader, tree picker, dropdown menu, date/time picker) without applying a pending choice, call browser action=dismissSurface FIRST. It directly clicks viewport (0,0) without a surface ID or screenshot coordinate. Read data.closureConfirmed, data.outcome, data.postActionState when available, and the latest screenshot; outer ok only confirms delivery. If that surface remains open, do not repeat the same click: use a currently observed alternative. An activeSurface.kind of overlay does not make a full-viewport dialog an option surface; its backdrop may ignore (0,0). For a dialog with an explicit Close or Cancel button, use that button first. Use an explicit Apply/Done/Confirm control when needed to commit a selection. ';
+export function browserInteractionInstructions(mode: BrowserChatInteractionMode) {
+  if (mode === 'mcp') return browserInteractionCommonInstructions + 'Browser interaction mode: PLAYWRIGHT MCP. The browser tool accepts action=mcp, tool=list to discover the official server tools and their schemas, then action=mcp with an exact browser_* tool name and its arguments. Use browser_snapshot to inspect live accessibility state and browser_click/browser_type/browser_fill_form for interaction. Use native action=navigate and action=tabs for URLs and session-owned tabs; MCP tab management is unavailable to the model. The official MCP server attaches to this conversation browser through its automation endpoint; do not use historical tab indexes or element references. browser_run_code_unsafe is unavailable. After each call, read the returned snapshot and the latest screenshot pixels in [Current browser observation] when image input is available. A successful MCP receipt is not proof of the requested page or business outcome. If a target is covered by a picker, use the picker itself or an evidenced dismissal action before clicking behind it. Use action=waitForHumanVerification for secret entry that requires the user. Use action=requestUserInput with a concrete question only when user-owned information or an attachment is essential and cannot be obtained from available evidence; the reply resumes the same task.';
+  return browserInteractionCommonInstructions + 'Use navigate for URL/route navigation and tabs for listing, opening, selecting or closing session tabs. These browser controls are available in every mode. After navigation or tab changes in DOM/hybrid/MCP mode, inspect data.postActionState; a URL change alone does not prove the intended destination rendered. Confirm actual identity, form, active filters/date range and sample effective period when the next action depends on them. A truncated snapshot or an empty result in an unconfirmed scope is not proof of missing data. Do not swallow a failed required action and continue as if it succeeded. Page keyboard actions cannot control the address bar or browser tabs. Use requestUserInput with a concrete question only when user-owned information or an attachment is essential and independent work is complete. The user may reply in the conversation and the same task resumes; do not report the task complete while waiting. For code calls, data.actionOutcome="skipped" means reads succeeded but a conditional browser action did not run; inspect data.recoveryState and do not claim the action completed. ' + (mode === 'visual'
+    ? 'Browser interaction mode: VISUAL. Use observe/act/images with current screenshot evidence. DOM, AX, locators and page scripts are unavailable. Never bypass this mode through other tools or recalled historical instructions.'
+    : mode === 'dom'
+      ? 'Browser interaction mode: DOM. Use snapshot for actionable semantic controls and the current surface, state for scoped Playwright AX tree, and code for Playwright actions. page.verifyState does not exist. After attempted code input, inspect data.postActionState and the returned result before dependent work; use ordinary Playwright reads inside a cell if a dependent action needs immediate evidence. When image input and automatic capture are available, the next request also includes the latest viewport pixels in [Current browser observation]; inspect them without a separate image-read call. If unavailable, use live DOM without claiming visual inspection. dismissSurface always sends a direct mouse click at viewport (0,0), without Escape or a surface-id prerequisite. Outer ok means the click was delivered, not that the popup closed; inspect data.closureConfirmed, data.outcome, data.postActionState, and the latest screenshot before continuing.'
+      : 'Browser interaction mode: HYBRID. Use snapshot for actionable semantic controls and the current surface, state for scoped Playwright AX tree, code for Playwright actions, and observe/act/images for visual interaction. page.verifyState does not exist. After attempted code input, inspect data.postActionState and the returned result before dependent work; use ordinary Playwright reads inside a cell if a dependent action needs immediate evidence. When image input and automatic capture are available, the next request also includes the latest viewport pixels in [Current browser observation]; inspect them without a separate image-read call. If unavailable, use live DOM without claiming visual inspection. dismissSurface always sends a direct mouse click at viewport (0,0), without Escape or a surface-id prerequisite. Outer ok means the click was delivered, not that the popup closed; inspect data.closureConfirmed, data.outcome, data.postActionState, and the latest screenshot before continuing.');
+}
+
+// One installed Skill describes the protocol; the host-selected mode and schema
+// narrow it on every request, including when the user changes modes mid-session.
+export const browserInteractionSkill = {
+  ...browserRuntimeSkill,
+  id: 'system-browser-interaction-runtime',
+  summary: '<system_skill><id>system-browser-interaction-runtime</id><title>Browser</title><description>DOM, visual, hybrid or Playwright MCP browser interaction according to the host-selected mode.</description></system_skill>',
+  content: `The host-selected browser interaction mode overrides mode-specific guidance below. Only use actions in the current tool schema. Historical mode settings do not authorize unavailable actions. ${browserInteractionCommonInstructions}In Playwright MCP mode, use the official MCP tool definitions returned by browser action=mcp tool=list, and use native navigate/tabs for session-owned navigation. MCP tool results and the current screenshot are evidence, not business success. Use requestUserInput with a concrete question only when essential information or a file must come from the user; their reply resumes the same task.\n\nDOM and hybrid code protocol:\n${browserRuntimeSkill.content.replaceAll(browserRuntimeSkill.id, 'system-browser-interaction-runtime')}\n\nVisual protocol (visual mode; also available in hybrid):\n${visualBrowserSkill.content}\n\nIn hybrid mode the visual protocol restrictions on DOM/AX/code apply only to the act action; state and code remain available. In DOM mode use DOM/locators for actions, and inspect the attached latest screenshot as outcome evidence when image input is supported. Receiving an image does not require a separate read tool call; do not ignore its visible state when planning the next dependent action.`,
+  activation: [{ toolName: 'browser', actions: ['state', 'snapshot', 'code', 'dismissSurface', 'observe', 'act', 'images', 'navigate', 'tabs', 'waitForHumanVerification', 'requestUserInput', 'mcp'] }],
+};
+
+export async function executeBrowserInteraction(session: BrowserSession, raw: unknown, options: {
+  mode?: BrowserChatInteractionMode; runId?: string; stepIndex?: number; imageInputAvailable?: boolean;
+  abortSignal?: AbortSignal; ensureStarted?: (signal?: AbortSignal) => Promise<void>;
+  attachments?: BrowserCodeAttachmentBinding[]; credentials?: BrowserCodeCredentialBinding[];
+  selectImages?: (ids: string[]) => unknown;
+}) {
+  const mode = normalizeBrowserChatInteractionMode(options.mode);
+  const command = parseBrowserInteractionInput(raw, mode);
+  const signal = options.abortSignal;
+  if (command.action === 'requestUserInput') return { ok: true,
+    actual: '已暂停当前任务，等待用户通过对话输入文字或附件。收到回复后继续同一任务。',
+    userInput: { requested: true, question: command.question } };
+  await options.ensureStarted?.(signal);
+  if (command.action === 'mcp') {
+    const result = await executePlaywrightMcpOperation(session, { tool: command.tool!, arguments: command.arguments }, {
+      runId: options.runId || 'browser', abortSignal: signal,
+    });
+    if (command.tool === 'list') return result;
+    const postActionState = await session.readBrowserState({ scope: 'active', maxOutputChars: 4000, abortSignal: signal })
+      .catch(error => ({ ok: false, actual: error instanceof Error ? error.message : String(error) }));
+    return { ...result, data: { ...('data' in result ? result.data : {}), postActionState } };
+  }
+  return executeBrowserSessionOperation(session, command as BrowserSessionCommand, { ...options, mode });
+}

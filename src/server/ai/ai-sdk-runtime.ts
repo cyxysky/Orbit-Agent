@@ -1,0 +1,193 @@
+import type { LanguageModelCallOptions, TelemetryOptions } from 'ai';
+import type { LanguageModelV4CallOptions } from '@ai-sdk/provider';
+import { currentReasoningEffort } from './reasoning-scope';
+import type { ReasoningEffortSetting } from '@/lib/reasoning-effort';
+
+export type AiReasoningEffort = NonNullable<LanguageModelCallOptions['reasoning']>;
+
+const reasoningEfforts = new Set<AiReasoningEffort>([
+  'provider-default',
+  'none',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+]);
+
+function positiveInteger(value: string | undefined, fallback: number) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+export function aiReasoningEffort(setting = currentReasoningEffort()): AiReasoningEffort | undefined {
+  const value = setting as AiReasoningEffort;
+  // SDK-neutral reasoning currently ends at xhigh. MiniMax's additional max
+  // level is supplied through provider options at the model boundary below.
+  if (String(value) === 'max') return 'xhigh';
+  return reasoningEfforts.has(value) && value !== 'provider-default' ? value : undefined;
+}
+
+export function withAiReasoningSettings(options: LanguageModelV4CallOptions, provider: string, setting: ReasoningEffortSetting = currentReasoningEffort()): LanguageModelV4CallOptions {
+  const reasoning = options.reasoning ?? aiReasoningEffort(setting);
+  const maximum = setting === 'max' && reasoning === 'xhigh';
+  return { ...options, reasoning,
+    ...(maximum && provider.startsWith('minimax.') ? { providerOptions: {
+      ...options.providerOptions,
+      minimax: { reasoningEffort: 'max', ...options.providerOptions?.minimax },
+    } } : {}),
+  };
+}
+
+export function aiRequestTimeoutMs(fallback = 120_000) {
+  return positiveInteger(process.env.AI_REQUEST_TIMEOUT_MS, fallback);
+}
+
+/** Agent Loop requests can spend substantially longer on a large prompt before
+ * emitting their first chunk. Keep this deadline separate from short auxiliary
+ * model calls and expose it in runtime settings. */
+export function aiRuntimeRequestTimeoutMs() {
+  return positiveInteger(process.env.AI_RUNTIME_REQUEST_TIMEOUT_MS, 600_000);
+}
+
+/**
+ * Providers can leave a stalled connection open even after the SDK timeout.
+ * This watchdog has its own abort signal and a hard rejection deadline so the
+ * runtime can record a terminal failure and apply its normal retry policy.
+ */
+export class AiRequestWatchdogTimeoutError extends Error {
+  readonly timeoutMs: number;
+
+  constructor(timeoutMs: number) {
+    super(`AI request watchdog timed out after ${timeoutMs}ms.`);
+    this.name = 'AiRequestWatchdogTimeoutError';
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+export class AiFirstChunkTimeoutError extends AiRequestWatchdogTimeoutError {
+  constructor(timeoutMs: number) {
+    super(timeoutMs);
+    this.name = 'AiFirstChunkTimeoutError';
+    this.message = `AI first chunk timed out after ${timeoutMs}ms (including response headers).`;
+  }
+}
+
+export function createAiRequestWatchdog(parentSignal?: AbortSignal, timeoutMs = aiRequestTimeoutMs()) {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let paused = false;
+  let firstChunkDeadline: number | undefined;
+  let firstChunkTimeoutMs: number | undefined;
+  let timeoutReject: ((reason: unknown) => void) | undefined;
+  const abortFromParent = () => {
+    controller.abort(parentSignal?.reason);
+    timeoutReject?.(parentSignal?.reason instanceof Error ? parentSignal.reason : new Error('AI request aborted.'));
+  };
+  if (parentSignal) {
+    if (parentSignal.aborted) abortFromParent();
+    else parentSignal.addEventListener('abort', abortFromParent, { once: true });
+  }
+  const clear = () => {
+    if (timer) clearTimeout(timer);
+    timer = undefined;
+  };
+  const arm = () => {
+    clear();
+    if (paused || controller.signal.aborted) return;
+    timer = setTimeout(() => {
+      const error = firstChunkTimeoutMs === undefined
+        ? new AiRequestWatchdogTimeoutError(timeoutMs)
+        : new AiFirstChunkTimeoutError(firstChunkTimeoutMs);
+      controller.abort(error);
+      timeoutReject?.(error);
+    }, firstChunkDeadline === undefined ? timeoutMs : Math.max(0, firstChunkDeadline - Date.now()));
+  };
+  return {
+    abortSignal: controller.signal,
+    touch: arm,
+    waitForFirstChunk(ms: number) {
+      paused = false;
+      firstChunkTimeoutMs = ms;
+      firstChunkDeadline = Date.now() + ms;
+      arm();
+    },
+    firstChunkReceived() {
+      if (firstChunkDeadline === undefined) return;
+      firstChunkDeadline = undefined;
+      firstChunkTimeoutMs = undefined;
+      arm();
+    },
+    pause() {
+      paused = true;
+      clear();
+    },
+    resume() {
+      paused = false;
+      arm();
+    },
+    async run<T>(operation: Promise<T>) {
+      if (controller.signal.aborted) {
+        throw controller.signal.reason instanceof Error
+          ? controller.signal.reason
+          : new Error('AI request was aborted before it started.');
+      }
+      arm();
+      try {
+        return await Promise.race([
+          operation,
+          new Promise<never>((_resolve, reject) => { timeoutReject = reject; }),
+        ]);
+      } finally {
+        timeoutReject = undefined;
+        clear();
+      }
+    },
+    dispose() {
+      clear();
+      timeoutReject = undefined;
+      parentSignal?.removeEventListener('abort', abortFromParent);
+    },
+  };
+}
+
+export function aiStreamTimeouts(requestTimeoutMs = aiRequestTimeoutMs()) {
+  const requestMs = requestTimeoutMs;
+  const toolMs = positiveInteger(process.env.AI_TOOL_TIMEOUT_MS, 120_000);
+  // First output is independent of the much longer agent/tool deadline.
+  // The runtime watchdog also covers provider setup and response-header wait.
+  const configuredFirstChunkMs = positiveInteger(process.env.AI_STREAM_FIRST_CHUNK_TIMEOUT_MS, requestMs);
+  const configuredChunkMs = positiveInteger(process.env.AI_STREAM_CHUNK_TIMEOUT_MS, requestMs);
+  return {
+    firstChunkMs: configuredFirstChunkMs,
+    // AI SDK keeps the inter-chunk timer running while a tool executes. Keep
+    // it above the complete tool window so a successful long-running tool does
+    // not abort the stream before the following model step can begin.
+    chunkMs: Math.max(requestMs, configuredChunkMs, toolMs + requestMs),
+    toolMs,
+  };
+}
+
+/** Agent prompts and reasoning can need minutes before the first useful output.
+ * Auxiliary-call settings must not prematurely cancel the agent request.
+ * Recovery increases the first-output allowance, bounded by its request timeout. */
+export function aiRuntimeStreamTimeouts(requestTimeoutMs = aiRuntimeRequestTimeoutMs(), retryAttempt = 0, subagent = false) {
+  const baseMs = positiveInteger(subagent ? process.env.AI_SUBAGENT_FIRST_CHUNK_TIMEOUT_MS
+    ?? process.env.AI_RUNTIME_FIRST_CHUNK_TIMEOUT_MS : process.env.AI_RUNTIME_FIRST_CHUNK_TIMEOUT_MS, 180_000);
+  // A silent child must not keep its parent waiting through 3 + 6 + 10 minutes.
+  // Requests that are producing output still use the inactivity watchdog.
+  const exponent = subagent ? 0 : Math.min(10, Math.max(0, Math.floor(retryAttempt) || 0));
+  return {
+    ...aiStreamTimeouts(requestTimeoutMs),
+    firstChunkMs: Math.min(requestTimeoutMs, baseMs * 2 ** exponent),
+  };
+}
+
+export function aiTelemetry(functionId: string): TelemetryOptions {
+  return {
+    isEnabled: process.env.AI_TELEMETRY_ENABLED !== 'false',
+    functionId,
+    recordInputs: false,
+    recordOutputs: false,
+  };
+}

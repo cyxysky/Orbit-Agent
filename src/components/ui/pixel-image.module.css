@@ -1,0 +1,54 @@
+.root {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  position: relative;
+  border-radius: 20px;
+  vertical-align: middle;
+}
+
+.root > .original {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  opacity: 0;
+}
+
+.root[data-complete] > .original { opacity: 1; }
+
+.pieces, .piece {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.piece {
+  animation: pixel-reveal var(--pixel-duration) ease-out both;
+}
+
+.piece > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  object-fit: fill;
+}
+
+.grayscale {
+  animation: pixel-color var(--pixel-duration) var(--pixel-color-delay) ease-out both;
+}
+
+@keyframes pixel-reveal {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes pixel-color {
+  from { filter: grayscale(1); }
+  to { filter: grayscale(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .root > .original { opacity: 1; }
+  .pieces { display: none; }
+}

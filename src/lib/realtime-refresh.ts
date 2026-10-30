@@ -1,39 +1,50 @@
 'use client';
 
+import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
+
 export type RealtimeRefreshEvent = {
   type: 'refresh';
-  entityType: 'run' | 'browserChatSession';
+  entityType: string;
   id: string;
   updatedAt: string;
   version: number;
   deleted?: boolean;
+  patch?: unknown;
 };
 
 type RealtimeMessage = RealtimeRefreshEvent | {
   type: 'heartbeat' | 'hello';
   [key: string]: unknown;
+} | {
+  type: 'refresh-batch';
+  events: RealtimeRefreshEvent[];
 };
 
 type RefreshListener = (event: RealtimeRefreshEvent) => void;
-type StatusListener = (connected: boolean) => void;
 
-const listeners = new Set<RefreshListener>();
-const statusListeners = new Set<StatusListener>();
+type RefreshSubscription = {
+  listener: RefreshListener;
+  onResync?: () => void | Promise<void>;
+};
+
+const subscriptions = new Set<RefreshSubscription>();
 
 let socket: WebSocket | undefined;
 let reconnectTimer: number | undefined;
 let reconnectDelay = 800;
 let connecting = false;
-let connected = false;
+let handshakeCompleted = false;
+let resyncRequired = false;
 
-function setConnected(next: boolean) {
-  if (connected === next) return;
-  connected = next;
-  for (const listener of [...statusListeners]) listener(next);
+function notifyResyncRequired() {
+  for (const subscription of [...subscriptions]) {
+    if (!subscription.onResync) continue;
+    void Promise.resolve(subscription.onResync()).catch(() => undefined);
+  }
 }
 
 function scheduleReconnect() {
-  if (reconnectTimer || !listeners.size) return;
+  if (reconnectTimer || !subscriptions.size) return;
   reconnectTimer = window.setTimeout(() => {
     reconnectTimer = undefined;
     void connectRefreshWebSocket();
@@ -42,7 +53,8 @@ function scheduleReconnect() {
 }
 
 async function refreshWebSocketUrl() {
-  const response = await fetch('/api/realtime/ws', { cache: 'no-store' });
+  const endpoint = withWebPilotBasePath('/api/realtime/ws');
+  const response = await fetch(endpoint, { cache: 'no-store', method: 'POST' });
   const data = await response.json();
   if (!response.ok || typeof data.url !== 'string') throw new Error(data.error || 'Realtime WebSocket is unavailable');
   return data.url as string;
@@ -50,37 +62,53 @@ async function refreshWebSocketUrl() {
 
 async function connectRefreshWebSocket() {
   if (connecting || socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) return;
-  if (!listeners.size) return;
+  if (!subscriptions.size) return;
   connecting = true;
   try {
     const url = await refreshWebSocketUrl();
-    if (!listeners.size) return;
-    socket = new WebSocket(url);
-    socket.onopen = () => {
+    if (!subscriptions.size) return;
+    const nextSocket = new WebSocket(url);
+    let helloReceived = false;
+    socket = nextSocket;
+    nextSocket.onopen = () => {
       reconnectDelay = 800;
-      setConnected(true);
     };
-    socket.onmessage = (message) => {
+    nextSocket.onmessage = (message) => {
       let payload: RealtimeMessage | undefined;
       try {
         payload = JSON.parse(String(message.data)) as RealtimeMessage;
       } catch {
         return;
       }
-      if (payload?.type !== 'refresh') return;
-      for (const listener of [...listeners]) listener(payload);
+      if (payload?.type === 'hello') {
+        helloReceived = true;
+        const shouldResync = handshakeCompleted && resyncRequired;
+        handshakeCompleted = true;
+        resyncRequired = false;
+        if (shouldResync) notifyResyncRequired();
+        return;
+      }
+      const refreshEvents = payload?.type === 'refresh-batch' && Array.isArray(payload.events)
+        ? payload.events
+        : payload?.type === 'refresh'
+          ? [payload]
+          : [];
+      for (const event of refreshEvents) {
+        if (event?.type !== 'refresh') continue;
+        for (const subscription of [...subscriptions]) subscription.listener(event);
+      }
     };
-    socket.onclose = () => {
+    nextSocket.onclose = () => {
+      if (socket !== nextSocket) return;
       socket = undefined;
-      setConnected(false);
+      if (subscriptions.size && (helloReceived || handshakeCompleted)) resyncRequired = true;
       scheduleReconnect();
     };
-    socket.onerror = () => {
-      setConnected(false);
-      socket?.close();
+    nextSocket.onerror = () => {
+      nextSocket.close();
     };
   } catch {
-    setConnected(false);
+    if (handshakeCompleted) resyncRequired = true;
     scheduleReconnect();
   } finally {
     connecting = false;
@@ -88,29 +116,24 @@ async function connectRefreshWebSocket() {
 }
 
 function closeIfIdle() {
-  if (listeners.size) return;
+  if (subscriptions.size) return;
   if (reconnectTimer) {
     window.clearTimeout(reconnectTimer);
     reconnectTimer = undefined;
   }
   socket?.close();
   socket = undefined;
-  setConnected(false);
 }
 
 export function subscribeRealtimeRefresh(
   listener: RefreshListener,
-  options: { onStatus?: StatusListener } = {},
+  options: { onResync?: () => void | Promise<void> } = {},
 ) {
-  listeners.add(listener);
-  if (options.onStatus) {
-    statusListeners.add(options.onStatus);
-    options.onStatus(connected);
-  }
+  const subscription: RefreshSubscription = { listener, onResync: options.onResync };
+  subscriptions.add(subscription);
   void connectRefreshWebSocket();
   return () => {
-    listeners.delete(listener);
-    if (options.onStatus) statusListeners.delete(options.onStatus);
+    subscriptions.delete(subscription);
     closeIfIdle();
   };
 }

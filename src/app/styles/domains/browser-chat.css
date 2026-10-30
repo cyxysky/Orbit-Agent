@@ -1,0 +1,12 @@
+/* Browser Chat styles: shared foundations followed by domain and responsive rules. */
+@import "../shared-base.css";
+@import "./chat-base.css";
+@import "./settings-base.css";
+@import "../workspace-shared.css";
+@import "./settings.css";
+@import "./chat.css";
+@import "./embedded-browser.css";
+@import "./onboarding.css";
+@import "../browser-chat-debug.css";
+/* Apply compact chat geometry after the shared desktop layers. */
+@import "./chat-responsive.css";

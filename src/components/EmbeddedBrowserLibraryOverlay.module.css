@@ -2,38 +2,30 @@
   align-items: flex-start;
   background: transparent;
   display: flex;
-  height: 100vh;
+  height: 100dvh;
   justify-content: flex-end;
   overflow: hidden;
-  padding: 12px;
+  padding:
+    max(12px, env(safe-area-inset-top))
+    max(12px, env(safe-area-inset-right))
+    max(12px, env(safe-area-inset-bottom))
+    max(12px, env(safe-area-inset-left));
   width: 100%;
 }
 
 .card {
-  animation: library-card-in 0.2s cubic-bezier(0.2, 0.8, 0.2, 1) both;
-  background: color-mix(in srgb, var(--panel) 97%, #f4f7fb);
-  border-radius: 16px;
+  background: color-mix(in srgb, var(--panel-elevated) 97%, var(--panel-soft));
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border-radius: var(--modal-radius);
   box-shadow:
-    0 24px 64px rgba(15, 23, 42, 0.3),
-    inset 0 0 0 1px color-mix(in srgb, var(--border) 86%, transparent);
+    var(--shadow-lg),
+    inset 0 1px 0 color-mix(in srgb, #ffffff 32%, transparent);
   color: var(--foreground);
   display: flex;
   flex-direction: column;
   height: min(680px, 100%);
   overflow: hidden;
   width: min(520px, 100%);
-}
-
-@keyframes library-card-in {
-  from {
-    opacity: 0;
-    transform: translateY(-8px) scale(0.985);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
 }
 
 .header {
@@ -47,7 +39,7 @@
 .header>strong {
   flex: 1 1 auto;
   font-size: 18px;
-  font-weight: 740;
+  font-weight: 600;
   letter-spacing: -0.02em;
 }
 
@@ -59,7 +51,6 @@
 }
 
 .headerActions button,
-.searchBar button,
 .removeItem {
   align-items: center;
   background: transparent;
@@ -76,52 +67,24 @@
 }
 
 .headerActions button:hover,
-.searchBar button:hover,
-.removeItem:hover,
-.activeAction {
-  background: color-mix(in srgb, var(--foreground) 8%, transparent) !important;
+.removeItem:hover {
+  background: transparent !important;
   color: var(--foreground) !important;
 }
 
+.activeAction {
+  background: transparent !important;
+  color: var(--accent-strong) !important;
+}
+
 .headerActions button:active,
-.searchBar button:active,
 .removeItem:active {
   transform: scale(0.94);
 }
 
-.searchBar {
-  align-items: center;
-  background: color-mix(in srgb, var(--foreground) 5%, transparent);
-  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
-  border-radius: 10px;
-  color: var(--muted);
-  display: flex;
-  gap: 8px;
-  height: 38px;
-  margin: 10px 14px 2px;
-  padding: 0 8px 0 11px;
-}
 
-.searchBar:focus-within {
-  border-color: color-mix(in srgb, var(--accent) 52%, var(--border));
-  box-shadow: 0 0 0 3px var(--focus);
-}
 
-.searchBar input {
-  background: transparent;
-  border: 0;
-  color: var(--foreground);
-  flex: 1 1 auto;
-  font: inherit;
-  font-size: 13px;
-  min-width: 0;
-  outline: none;
-}
 
-.searchBar button {
-  height: 26px;
-  width: 26px;
-}
 
 .content {
   display: flex;
@@ -129,6 +92,21 @@
   flex: 1 1 auto;
   min-height: 0;
   padding: 10px 10px 12px;
+}
+
+.combinedContent {
+  display: block;
+  overflow-y: auto;
+}
+
+.librarySection {
+  min-width: 0;
+}
+
+.librarySection + .librarySection {
+  border-top: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
+  margin-top: 8px;
+  padding-top: 8px;
 }
 
 .sectionHeading {
@@ -170,7 +148,7 @@
 .sectionHeading strong {
   color: var(--foreground);
   font-size: 13px;
-  font-weight: 670;
+  font-weight: 600;
 }
 
 .sectionHeading>span {
@@ -184,8 +162,6 @@
   min-height: 0;
   overflow: auto;
   padding: 2px 2px 4px;
-  scrollbar-color: color-mix(in srgb, var(--muted) 65%, transparent) transparent;
-  scrollbar-width: thin;
 }
 
 .item {
@@ -199,7 +175,7 @@
   align-items: center;
   background: transparent;
   border: 0;
-  border-radius: 9px;
+  border-radius: var(--app-radius-sm);
   color: var(--foreground);
   cursor: pointer;
   display: grid;
@@ -250,7 +226,7 @@
 
 .itemCopy strong {
   font-size: 13px;
-  font-weight: 580;
+  font-weight: 500;
 }
 
 .itemCopy>span {
@@ -269,44 +245,30 @@
   opacity: 1;
 }
 
+.combinedContent .list {
+  flex: 0 0 auto;
+  overflow: visible;
+}
+
 .removeItem:hover {
   color: var(--danger) !important;
 }
 
-.empty {
-  align-content: center;
+.sectionEmpty {
+  align-items: center;
   color: var(--muted);
-  display: grid;
-  flex: 1 1 auto;
-  gap: 8px;
-  justify-items: center;
-  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  gap: 7px;
+  justify-content: center;
+  min-height: 88px;
+  padding: 16px;
   text-align: center;
 }
 
-.empty>span {
-  align-items: center;
-  background: color-mix(in srgb, var(--foreground) 7%, transparent);
-  border-radius: 13px;
+.sectionEmpty svg {
   color: var(--muted-strong);
-  display: inline-flex;
-  height: 48px;
-  justify-content: center;
-  margin-bottom: 3px;
-  width: 48px;
-}
-
-.empty strong {
-  color: var(--foreground);
-  font-size: 15px;
-  font-weight: 680;
-}
-
-.empty p {
-  font-size: 12px;
-  line-height: 1.6;
-  margin: 0;
-  max-width: 220px;
 }
 
 .error {
@@ -320,10 +282,55 @@
 }
 
 :global(:root[data-theme='dark']) .card {
-  background: var(--panel);
+  background: var(--panel-elevated);
   box-shadow:
     0 26px 70px rgba(0, 0, 0, 0.48),
     inset 0 0 0 1px rgba(255, 255, 255, 0.11);
+}
+
+@media (hover: none), (pointer: coarse) {
+.headerActions button,
+.removeItem,
+.sectionHeading {
+    min-height: 44px;
+  }
+
+  .headerActions button,
+.removeItem {
+    width: 44px;
+  }
+
+  .removeItem {
+    opacity: 1;
+  }
+
+  .openItem {
+    min-height: 52px;
+  }
+}
+
+@media (max-width: 620px) {
+  .overlay {
+    padding: 0;
+  }
+
+  .card {
+    border-bottom: 0;
+    border-left: 0;
+    border-radius: 0;
+    border-right: 0;
+    height: 100dvh;
+    width: 100%;
+  }
+
+  .header {
+    min-height: calc(58px + env(safe-area-inset-top));
+    padding: env(safe-area-inset-top) 8px 0 16px;
+  }
+
+  .content {
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
 }
 
 :global(:root[data-theme='dark']) .itemIcon {
@@ -335,10 +342,9 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .card,
-  .headerActions button,
-  .searchBar button,
-  .removeItem {
+.card,
+.headerActions button,
+.removeItem {
     transition: none;
   }
 }

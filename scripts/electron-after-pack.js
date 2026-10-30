@@ -1,5 +1,9 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const { createRequire } = require('node:module');
+const {
+  assertSensitiveDataRuntime,
+} = require('../packages/capability-sdk/scripts/sensitive-data/runtime-layout.cjs');
 
 function findBrowserRevisionDir(executablePath) {
   let dir = path.dirname(executablePath);
@@ -8,14 +12,14 @@ function findBrowserRevisionDir(executablePath) {
     if (/^chromium(?:_headless_shell)?-\d+$/.test(name)) return dir;
     dir = path.dirname(dir);
   }
-  throw new Error(`Unable to locate Playwright Chromium revision directory from: ${executablePath}`);
+  throw new Error(`Unable to locate Patchright Chromium revision directory from: ${executablePath}`);
 }
 
 function copyPlaywrightChromium(context) {
-  const { chromium } = require('playwright');
+  const { chromium } = require('patchright');
   const executablePath = chromium.executablePath();
   if (!fs.existsSync(executablePath)) {
-    throw new Error(`Playwright Chromium executable was not found: ${executablePath}. Run "npx playwright install chromium" before packaging.`);
+    throw new Error(`Patchright Chromium executable was not found: ${executablePath}. Run "npx patchright install chromium" before packaging.`);
   }
 
   const sourceChromiumDir = findBrowserRevisionDir(executablePath);
@@ -28,7 +32,53 @@ function copyPlaywrightChromium(context) {
 
   const packagedExecutable = path.join(targetChromiumDir, path.relative(sourceChromiumDir, executablePath));
   if (!fs.existsSync(packagedExecutable)) {
-    throw new Error(`Packaged Playwright Chromium executable is missing: ${packagedExecutable}`);
+    throw new Error(`Packaged Patchright Chromium executable is missing: ${packagedExecutable}`);
+  }
+}
+
+function findLibreOfficeRoot() {
+  const candidates = [
+    process.env.LIBREOFFICE_BUNDLE_DIR,
+    process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'LibreOffice'),
+    process.env['ProgramFiles(x86)'] && path.join(process.env['ProgramFiles(x86)'], 'LibreOffice'),
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    const root = path.resolve(candidate);
+    if (fs.existsSync(path.join(root, 'program', 'soffice.exe'))) return root;
+  }
+
+  throw new Error(
+    'LibreOffice was not found. Install LibreOffice or set LIBREOFFICE_BUNDLE_DIR to its installation directory before packaging.',
+  );
+}
+
+function copyLibreOffice(context) {
+  const sourceRoot = findLibreOfficeRoot();
+  const targetRoot = path.join(context.appOutDir, 'resources', 'libreoffice');
+
+  fs.rmSync(targetRoot, { recursive: true, force: true });
+  fs.mkdirSync(path.dirname(targetRoot), { recursive: true });
+  fs.cpSync(sourceRoot, targetRoot, { recursive: true });
+
+  const packagedExecutable = path.join(targetRoot, 'program', 'soffice.exe');
+  if (!fs.existsSync(packagedExecutable)) {
+    throw new Error(`Packaged LibreOffice executable is missing: ${packagedExecutable}`);
+  }
+}
+
+function assertPackagedServerRuntime(serverRoot) {
+  const runtimeRequire = createRequire(path.join(serverRoot, 'webpilot-server.js'));
+  const packageRoot = path.join(serverRoot, 'node_modules') + path.sep;
+  for (const dependency of ['next', 'patchright']) {
+    try {
+      const resolved = runtimeRequire.resolve(dependency);
+      if (!resolved.startsWith(packageRoot)) {
+        throw new Error(`resolved outside the packaged server: ${resolved}`);
+      }
+    } catch (error) {
+      throw new Error(`The packaged server cannot resolve "${dependency}" from ${serverRoot}.`, { cause: error });
+    }
   }
 }
 
@@ -45,12 +95,9 @@ exports.default = async function afterPack(context) {
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.cpSync(source, target, { recursive: true });
 
-  for (const dependency of ['next', 'playwright']) {
-    const dependencyPath = path.join(target, dependency);
-    if (!fs.existsSync(dependencyPath)) {
-      throw new Error(`Packaged server dependency is missing: ${dependencyPath}`);
-    }
-  }
+  assertPackagedServerRuntime(path.join(context.appOutDir, 'resources', 'server'));
+  assertSensitiveDataRuntime(path.join(context.appOutDir, 'resources', 'server', 'sensitive-data-runtime'));
 
   copyPlaywrightChromium(context);
+  copyLibreOffice(context);
 };

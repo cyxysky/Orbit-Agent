@@ -1,0 +1,193 @@
+import { existsSync } from 'node:fs';
+import { chromium } from 'patchright';
+import { managedChromiumOptions } from '@cjfclonedeep/capability-sdk/runtime';
+import {
+  WEBPILOT_ONBOARDING_VERSION,
+  isWebPilotOnboardingStep,
+  webPilotOnboardingSteps,
+  type WebPilotOnboardingReadiness,
+  type WebPilotOnboardingState,
+  type WebPilotOnboardingStatus,
+  type WebPilotOnboardingStep,
+} from '@/lib/onboarding';
+import { modelProviderDefinition } from '@/config/settings';
+import { modelCapabilities } from '@/lib/model-capabilities';
+import { enabledModelProviders } from '@/lib/model-selection';
+import { executeDatabase, queryDatabaseOne } from '@/server/db/database';
+import { readModelSettingsState } from '@/server/settings/settings-snapshot';
+import {
+  resolveLibreOfficeExecutable,
+  resolveLibreOfficePythonExecutable,
+  resolveUnoProgramWorker,
+} from '@cjfclonedeep/capability-sdk/file/node';
+import { store } from '@/server/db/store';
+
+type OnboardingRow = {
+  completed_steps_json: string;
+  dismissed_at: string | null;
+  status: string;
+  tutorial_version: number;
+  updated_at: string;
+};
+
+function completedStepsFromJson(value: string) {
+  try {
+    const parsed = JSON.parse(value) as unknown[];
+    return Array.isArray(parsed) ? parsed.filter(isWebPilotOnboardingStep) : [];
+  } catch {
+    return [];
+  }
+}
+
+function stateFromRow(row: OnboardingRow): WebPilotOnboardingState {
+  const status: WebPilotOnboardingStatus = ['completed', 'dismissed', 'in_progress', 'not_started'].includes(row.status)
+    ? row.status as WebPilotOnboardingStatus
+    : 'not_started';
+  return {
+    completedSteps: completedStepsFromJson(row.completed_steps_json),
+    dismissedAt: row.dismissed_at || undefined,
+    status,
+    tutorialVersion: row.tutorial_version,
+    updatedAt: row.updated_at,
+  };
+}
+
+export async function readOnboardingState(userId: string): Promise<WebPilotOnboardingState> {
+  const existing = await queryDatabaseOne<OnboardingRow>(`
+    SELECT tutorial_version, status, completed_steps_json, dismissed_at, updated_at
+    FROM user_onboarding_state
+    WHERE user_id = ?
+  `, [userId]);
+  if (existing) {
+    if (existing.tutorial_version === WEBPILOT_ONBOARDING_VERSION) return stateFromRow(existing);
+    return writeOnboardingState(userId, { completedSteps: [], status: 'not_started' });
+  }
+
+  const timestamp = new Date().toISOString();
+  const completedSteps: WebPilotOnboardingStep[] = [];
+  await executeDatabase(`
+    INSERT INTO user_onboarding_state (
+      user_id, tutorial_version, status, completed_steps_json, dismissed_at, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, NULL, ?, ?)
+  `, [
+    userId,
+    WEBPILOT_ONBOARDING_VERSION,
+    'not_started',
+    JSON.stringify(completedSteps),
+    timestamp,
+    timestamp,
+  ]);
+  return {
+    completedSteps,
+    status: 'not_started',
+    tutorialVersion: WEBPILOT_ONBOARDING_VERSION,
+    updatedAt: timestamp,
+  };
+}
+
+async function writeOnboardingState(userId: string, input: {
+  completedSteps: WebPilotOnboardingStep[];
+  dismissedAt?: string;
+  status: WebPilotOnboardingStatus;
+}): Promise<WebPilotOnboardingState> {
+  const timestamp = new Date().toISOString();
+  await executeDatabase(`
+    INSERT INTO user_onboarding_state (
+      user_id, tutorial_version, status, completed_steps_json, dismissed_at, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET
+      tutorial_version = excluded.tutorial_version,
+      status = excluded.status,
+      completed_steps_json = excluded.completed_steps_json,
+      dismissed_at = excluded.dismissed_at,
+      updated_at = excluded.updated_at
+  `, [
+    userId,
+    WEBPILOT_ONBOARDING_VERSION,
+    input.status,
+    JSON.stringify(Array.from(new Set(input.completedSteps)).filter(isWebPilotOnboardingStep)),
+    input.dismissedAt || null,
+    timestamp,
+    timestamp,
+  ]);
+  return readOnboardingState(userId);
+}
+
+export async function updateOnboardingState(userId: string, input: {
+  action: 'complete' | 'complete_step' | 'reset' | 'skip' | 'start';
+  step?: WebPilotOnboardingStep;
+}) {
+  const current = await readOnboardingState(userId);
+  if (input.action === 'reset') return writeOnboardingState(userId, { completedSteps: [], status: 'not_started' });
+  if (input.action === 'skip') return writeOnboardingState(userId, {
+    completedSteps: current.completedSteps,
+    dismissedAt: new Date().toISOString(),
+    status: 'dismissed',
+  });
+  if (input.action === 'complete') return writeOnboardingState(userId, {
+    completedSteps: [...webPilotOnboardingSteps],
+    status: 'completed',
+  });
+  if (input.action === 'start') return writeOnboardingState(userId, {
+    completedSteps: current.completedSteps,
+    status: 'in_progress',
+  });
+  if (!input.step) throw new Error('complete_step requires a valid onboarding step.');
+  const completedSteps = Array.from(new Set([...current.completedSteps, input.step]));
+  return writeOnboardingState(userId, {
+    completedSteps,
+    status: webPilotOnboardingSteps.every((step) => completedSteps.includes(step)) ? 'completed' : 'in_progress',
+  });
+}
+
+export async function readOnboardingReadiness(): Promise<WebPilotOnboardingReadiness> {
+  await store.applyRuntimeEnv();
+  const modelState = await readModelSettingsState();
+  const configuredProvider = modelState.config.provider;
+  const provider = modelState.config.providers?.[configuredProvider]?.enabled
+    ? configuredProvider
+    : enabledModelProviders(modelState.config)[0] || configuredProvider;
+  const providerDefinition = modelProviderDefinition(provider);
+  const providerSettings = modelState.config.providers?.[provider];
+  const localProvider = ['codex', 'llama-cpp', 'lmstudio', 'ollama'].includes(provider);
+  const customCompatibleReady = provider.startsWith('openai-compatible') && Boolean(providerSettings?.baseURL);
+  const modelReady = Boolean(providerSettings?.enabled && providerSettings.model && (
+    providerDefinition.localAuth || localProvider || customCompatibleReady || providerSettings.hasApiKey
+  ));
+  const selectedModel = String(providerSettings?.model || '');
+  const visionReady = modelCapabilities(providerSettings, provider, selectedModel).imageInput;
+  const libreOfficeExecutable = await resolveLibreOfficeExecutable();
+  const libreOfficePython = libreOfficeExecutable
+    ? await resolveLibreOfficePythonExecutable(libreOfficeExecutable)
+    : undefined;
+  const libreOfficeWorker = await resolveUnoProgramWorker();
+  const libreOfficeReady = Boolean(libreOfficeExecutable && libreOfficePython && libreOfficeWorker);
+  let browserReady = false;
+  try {
+    browserReady = existsSync(managedChromiumOptions().executablePath || chromium.executablePath());
+  } catch {
+    browserReady = false;
+  }
+  return {
+    browser: {
+      detail: browserReady ? 'Patchright 浏览器运行时已安装' : '未找到 Patchright 浏览器运行时',
+      ready: browserReady,
+    },
+    libreOffice: {
+      detail: libreOfficeReady
+        ? 'LibreOffice UNO 可用于 Office 创建、排版、预览与格式转换'
+        : libreOfficeExecutable
+          ? 'LibreOffice 已安装，但 Python/PyUNO Worker 不可用，Office 文件生成会受限'
+          : '未找到 LibreOffice，Office 创建、预览与格式转换不可用',
+      ready: libreOfficeReady,
+    },
+    model: {
+      detail: modelReady ? `${provider} / ${providerSettings?.model}` : '尚未完成可用模型配置',
+      ready: modelReady,
+    },
+    vision: {
+      detail: visionReady ? '当前模型配置支持图片输入' : '当前模型配置未启用图片输入',
+      ready: visionReady,
+    },
+  };
+}

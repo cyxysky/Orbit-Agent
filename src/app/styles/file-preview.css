@@ -1,0 +1,127 @@
+.file-preview-overlay {
+  z-index: 2147483005 !important;
+}
+
+.file-preview-dialog {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  width: calc(100vw - 40px);
+}
+
+.file-preview-dialog > [data-slot="modal-body"] {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+}
+
+.file-preview-header {
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  min-height: 58px;
+  padding: 9px 12px 9px 16px;
+}
+
+.file-preview-heading-icon {
+  color: var(--muted-strong);
+  display: inline-grid;
+  place-items: center;
+}
+
+.file-preview-heading-copy {
+  min-width: 0;
+}
+
+.file-preview-heading-copy h2,
+.file-preview-heading-copy p {
+  margin: 0;
+}
+
+.file-preview-heading-copy h2 {
+  font-size: 14px;
+  font-weight: 680;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-preview-heading-copy p {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.file-preview-stage {
+  align-items: center;
+  background: var(--panel-soft);
+  display: flex;
+  justify-content: center;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+  height: 100%;
+  width: 100%;
+}
+
+.file-preview-header:has(> .file-preview-edit-button) { grid-template-columns: auto minmax(0, 1fr) auto auto; }
+.file-preview-edit-button { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.file-preview-video-editor-dialog .file-preview-stage { display: block; overflow: auto; padding: 16px; }
+.browser-chat-video-edit-panel { width: 100%; min-width: 0; }
+.browser-chat-video-edit-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
+
+.file-preview-stage > .ofv-root,
+.file-preview-stage > div:has(> .ofv-root) {
+  height: 100% !important;
+  min-height: 0;
+  width: 100% !important;
+}
+
+.file-preview-stage .ofv-root {
+  border: 0 !important;
+  box-shadow: none !important;
+  height: 100% !important;
+}
+
+/* A presentation slide is a fixed canvas, not an independent scroll
+   container. The viewer viewport owns navigation/zoom scrolling; clipping at
+   the slide boundary matches PowerPoint/Impress and prevents native browser
+   scrollbars from being painted over slide content. */
+.file-preview-stage .ofv-pptx-viewer > div[data-slide-index] {
+  overflow: hidden !important;
+}
+
+.file-preview-stage > .beautiful-loading-state {
+  padding: 16px 24px;
+}
+
+.file-preview-error {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 520px;
+  padding: 32px;
+  text-align: center;
+}
+
+.file-preview-error strong {
+  color: var(--foreground);
+  font-size: 14px;
+}
+
+.file-preview-error span {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 720px) {
+  .file-preview-dialog {
+    border-radius: 0;
+    height: 100dvh;
+    width: 100vw;
+  }
+}
