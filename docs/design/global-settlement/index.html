@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Orbit · 全界面布局对比</title>
+<link rel="stylesheet" href="base.css"><link rel="stylesheet" href="settings.css"><link rel="stylesheet" href="workspaces.css"><link rel="stylesheet" href="overlays.css"><link rel="stylesheet" href="refinements.css">
+</head>
+<body>
+<div class="review-bar" aria-label="设计预览工具">
+  <strong class="review-label">Orbit <span>设计预览</span></strong>
+  <div class="variant-control" aria-label="选择布局"><button data-variant="a">A 侧栏分区</button><button data-variant="b">B 上下工作台</button><button data-variant="c">C 连续阅读</button></div>
+  <label class="review-picker"><span>页面</span><select id="page-picker" aria-label="预览页面"></select></label>
+  <label class="review-picker overlay-picker"><span>浮层</span><select id="overlay-picker" aria-label="预览弹窗与浮层"><option value="">选择浮层</option></select></label>
+  <button class="review-theme" id="theme-toggle" aria-label="切换深浅主题" title="切换深浅主题"></button>
+  <a class="review-index" href="comparison.html" target="_blank">并排对比</a><button class="review-index" data-open-index>总览</button>
+</div>
+<div class="review-notice" id="review-notice">参考 Global Settlement · 同色彩，三种布局 · 所有数据为示例，操作不写入业务系统</div>
+<div id="app" class="app layout-a"></div>
+<div id="overlay-root"></div>
+<div id="nav-layer"></div>
+<div class="preview-toast" id="preview-toast" role="status" hidden></div>
+<script src="shared.js"></script><script src="settings.js"></script><script src="workspaces.js"></script><script src="overlays.js"></script><script src="shell.js"></script>
+</body></html>

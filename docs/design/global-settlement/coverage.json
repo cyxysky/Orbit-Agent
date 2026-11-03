@@ -1,0 +1,609 @@
+{
+  "reference": "https://ui.oiloil.org/works/global-settlement/",
+  "variants": [
+    "a",
+    "b",
+    "c"
+  ],
+  "pages": [
+    {
+      "id": "general",
+      "title": "通用设置",
+      "group": "settings"
+    },
+    {
+      "id": "model",
+      "title": "模型配置",
+      "group": "settings"
+    },
+    {
+      "id": "runtime",
+      "title": "运行配置",
+      "group": "settings"
+    },
+    {
+      "id": "knowledge",
+      "title": "知识库",
+      "group": "settings"
+    },
+    {
+      "id": "browser",
+      "title": "浏览器配置",
+      "group": "settings"
+    },
+    {
+      "id": "capabilities",
+      "title": "能力配置",
+      "group": "settings"
+    },
+    {
+      "id": "sensitive",
+      "title": "敏感数据",
+      "group": "settings"
+    },
+    {
+      "id": "skills",
+      "title": "技能管理",
+      "group": "resources"
+    },
+    {
+      "id": "memory",
+      "title": "个性化记忆",
+      "group": "resources"
+    },
+    {
+      "id": "accounts",
+      "title": "登录账号",
+      "group": "resources"
+    },
+    {
+      "id": "chat",
+      "title": "当前对话",
+      "group": "chat"
+    },
+    {
+      "id": "new-chat",
+      "title": "新对话",
+      "group": "chat"
+    },
+    {
+      "id": "automation",
+      "title": "自动化任务",
+      "group": "automation"
+    },
+    {
+      "id": "automation-detail",
+      "title": "任务详情",
+      "group": "automation"
+    },
+    {
+      "id": "schedules",
+      "title": "执行计划",
+      "group": "automation"
+    },
+    {
+      "id": "runs",
+      "title": "执行记录",
+      "group": "automation"
+    },
+    {
+      "id": "operations",
+      "title": "运营总览",
+      "group": "operations"
+    },
+    {
+      "id": "trends",
+      "title": "趋势分析",
+      "group": "operations"
+    },
+    {
+      "id": "usage",
+      "title": "用户与模型",
+      "group": "operations"
+    },
+    {
+      "id": "browser-library",
+      "title": "浏览器库",
+      "group": "utilities"
+    },
+    {
+      "id": "tutorial",
+      "title": "新手演练",
+      "group": "utilities"
+    }
+  ],
+  "overlays": [
+    {
+      "id": "files",
+      "title": "对话文件",
+      "kind": "popover"
+    },
+    {
+      "id": "recovery",
+      "title": "长期记忆审核",
+      "kind": "popover"
+    },
+    {
+      "id": "approval",
+      "title": "确认这次操作",
+      "kind": "dialog"
+    },
+    {
+      "id": "more",
+      "title": "更多操作",
+      "kind": "popover"
+    },
+    {
+      "id": "export",
+      "title": "导出对话",
+      "kind": "dialog"
+    },
+    {
+      "id": "download",
+      "title": "下载文件管理",
+      "kind": "dialog"
+    },
+    {
+      "id": "tab-groups",
+      "title": "标签页分组",
+      "kind": "popover"
+    },
+    {
+      "id": "tool-detail",
+      "title": "工具调用详情",
+      "kind": "dialog"
+    },
+    {
+      "id": "logs",
+      "title": "运行日志",
+      "kind": "window"
+    },
+    {
+      "id": "terminal",
+      "title": "对话终端",
+      "kind": "window"
+    },
+    {
+      "id": "browser-preview",
+      "title": "实时浏览器",
+      "kind": "window"
+    },
+    {
+      "id": "file-preview",
+      "title": "执行结果摘要.pdf",
+      "kind": "window"
+    },
+    {
+      "id": "screenshot",
+      "title": "项目进度截图.png",
+      "kind": "window"
+    },
+    {
+      "id": "image",
+      "title": "周报摘要.png",
+      "kind": "window"
+    },
+    {
+      "id": "video",
+      "title": "视频剪辑",
+      "kind": "window"
+    },
+    {
+      "id": "generation",
+      "title": "生成内容",
+      "kind": "dialog"
+    },
+    {
+      "id": "account",
+      "title": "编辑登录账号",
+      "kind": "dialog"
+    },
+    {
+      "id": "skill",
+      "title": "编辑技能",
+      "kind": "dialog"
+    },
+    {
+      "id": "memory",
+      "title": "编辑记忆",
+      "kind": "dialog"
+    },
+    {
+      "id": "integration",
+      "title": "编辑外部连接",
+      "kind": "dialog"
+    },
+    {
+      "id": "model-capabilities",
+      "title": "编辑模型能力",
+      "kind": "dialog"
+    },
+    {
+      "id": "delete",
+      "title": "确认删除",
+      "kind": "dialog"
+    },
+    {
+      "id": "import",
+      "title": "导入配置",
+      "kind": "dialog"
+    },
+    {
+      "id": "admin-access",
+      "title": "管理员验证",
+      "kind": "dialog"
+    },
+    {
+      "id": "automation-task",
+      "title": "编辑自动化任务",
+      "kind": "dialog"
+    },
+    {
+      "id": "schedule",
+      "title": "新建执行计划",
+      "kind": "dialog"
+    },
+    {
+      "id": "help",
+      "title": "工具使用帮助",
+      "kind": "popover"
+    },
+    {
+      "id": "context",
+      "title": "上下文",
+      "kind": "popover"
+    },
+    {
+      "id": "permissions",
+      "title": "执行权限",
+      "kind": "popover"
+    },
+    {
+      "id": "model-select",
+      "title": "选择模型",
+      "kind": "popover"
+    },
+    {
+      "id": "knowledge-import",
+      "title": "导入知识包",
+      "kind": "dialog"
+    },
+    {
+      "id": "notifications",
+      "title": "通知",
+      "kind": "popover"
+    },
+    {
+      "id": "sheet-preview",
+      "title": "本周执行记录.xlsx",
+      "kind": "window"
+    },
+    {
+      "id": "markdown-preview",
+      "title": "项目参考资料整理.md",
+      "kind": "window"
+    }
+  ],
+  "sourceMappings": [
+    [
+      "AutomationWorkspace.tsx",
+      1520,
+      [
+        "automation-task"
+      ]
+    ],
+    [
+      "AutomationWorkspace.tsx",
+      1610,
+      [
+        "schedule"
+      ]
+    ],
+    [
+      "AutomationWorkspace.tsx",
+      1712,
+      [
+        "delete"
+      ]
+    ],
+    [
+      "AutomationWorkspace.tsx",
+      1728,
+      [
+        "delete"
+      ]
+    ],
+    [
+      "BrowserChatFilesPanel.tsx",
+      58,
+      [
+        "files"
+      ]
+    ],
+    [
+      "BrowserChatLogDialog.tsx",
+      592,
+      [
+        "logs"
+      ]
+    ],
+    [
+      "BrowserChatRecoveryPanel.tsx",
+      99,
+      [
+        "recovery"
+      ]
+    ],
+    [
+      "BrowserChatToolDialog.tsx",
+      149,
+      [
+        "tool-detail"
+      ]
+    ],
+    [
+      "BrowserChatToolsHelp.tsx",
+      148,
+      [
+        "help"
+      ]
+    ],
+    [
+      "BrowserChatWorkspace.tsx",
+      2273,
+      [
+        "download"
+      ]
+    ],
+    [
+      "BrowserChatWorkspace.tsx",
+      2376,
+      [
+        "delete"
+      ]
+    ],
+    [
+      "BrowserChatWorkspace.tsx",
+      2474,
+      [
+        "tab-groups"
+      ]
+    ],
+    [
+      "BrowserChatWorkspace.tsx",
+      3164,
+      [
+        "image"
+      ]
+    ],
+    [
+      "BrowserChatWorkspace.tsx",
+      3289,
+      [
+        "screenshot"
+      ]
+    ],
+    [
+      "BrowserChatWorkspace.tsx",
+      5248,
+      [
+        "help"
+      ]
+    ],
+    [
+      "BrowserChatWorkspace.tsx",
+      6162,
+      [
+        "context"
+      ]
+    ],
+    [
+      "BrowserChatWorkspace.tsx",
+      6251,
+      [
+        "permissions"
+      ]
+    ],
+    [
+      "BrowserChatWorkspace.tsx",
+      7121,
+      [
+        "more"
+      ]
+    ],
+    [
+      "BrowserChatWorkspace.tsx",
+      7178,
+      [
+        "account",
+        "skill",
+        "memory"
+      ]
+    ],
+    [
+      "BrowserChatWorkspace.tsx",
+      8551,
+      [
+        "approval"
+      ]
+    ],
+    [
+      "BrowserChatWorkspace.tsx",
+      11317,
+      [
+        "generation"
+      ]
+    ],
+    [
+      "ConfirmDeleteModal.tsx",
+      41,
+      [
+        "delete"
+      ]
+    ],
+    [
+      "CustomSelect.tsx",
+      196,
+      [
+        "model-select",
+        "model-capabilities"
+      ]
+    ],
+    [
+      "CustomSelect.tsx",
+      220,
+      [
+        "model-select"
+      ]
+    ],
+    [
+      "DataTransferButtons.tsx",
+      199,
+      [
+        "import",
+        "export"
+      ]
+    ],
+    [
+      "EnvironmentSettings.tsx",
+      1955,
+      [
+        "memory"
+      ]
+    ],
+    [
+      "EnvironmentSettings.tsx",
+      2099,
+      [
+        "delete"
+      ]
+    ],
+    [
+      "EnvironmentSettings.tsx",
+      2116,
+      [
+        "delete"
+      ]
+    ],
+    [
+      "ExternalIntegrationSettings.tsx",
+      582,
+      [
+        "integration"
+      ]
+    ],
+    [
+      "ExternalIntegrationSettings.tsx",
+      753,
+      [
+        "delete"
+      ]
+    ],
+    [
+      "FilePreviewProvider.tsx",
+      150,
+      [
+        "video"
+      ]
+    ],
+    [
+      "FilePreviewProvider.tsx",
+      160,
+      [
+        "file-preview",
+        "sheet-preview",
+        "markdown-preview"
+      ]
+    ],
+    [
+      "HoverCard.tsx",
+      77,
+      [
+        "help",
+        "context",
+        "permissions"
+      ]
+    ],
+    [
+      "KnowledgeSettings.tsx",
+      118,
+      [
+        "delete",
+        "knowledge-import"
+      ]
+    ],
+    [
+      "LoginAccountModal.tsx",
+      117,
+      [
+        "account"
+      ]
+    ],
+    [
+      "ManagementDataTable.tsx",
+      188,
+      [
+        "delete"
+      ]
+    ],
+    [
+      "ModelCapabilitiesModal.tsx",
+      23,
+      [
+        "model-capabilities"
+      ]
+    ],
+    [
+      "SettingsWorkspace.tsx",
+      217,
+      [
+        "admin-access"
+      ]
+    ],
+    [
+      "SkillsManager.tsx",
+      442,
+      [
+        "skill"
+      ]
+    ],
+    [
+      "SkillsManager.tsx",
+      527,
+      [
+        "delete"
+      ]
+    ],
+    [
+      "WorkspaceOverflowMenu.tsx",
+      41,
+      [
+        "more"
+      ]
+    ],
+    [
+      "packages/capability-sdk/src/browser/preview/react.tsx",
+      1257,
+      [
+        "browser-preview"
+      ]
+    ],
+    [
+      "packages/capability-sdk/src/execution/terminal/react.tsx",
+      380,
+      [
+        "terminal"
+      ]
+    ]
+  ],
+  "excluded": [
+    {
+      "route": "/",
+      "reason": "redirects to browser-chat"
+    },
+    {
+      "route": "/chart-export",
+      "reason": "internal chart rendering endpoint, no standalone interaction"
+    }
+  ]
+}
