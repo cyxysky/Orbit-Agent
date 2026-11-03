@@ -1,3 +1,5 @@
+import { getErrorCode } from "../../errors.ts";
+import { terminalCommandErrorCode } from "../../errors.ts";
 import { z } from 'zod';
 import {
   createCapabilityRuntime, defineCapabilityInput, defineCapabilityTool,
@@ -8,6 +10,8 @@ import { terminalRuntimeSkill } from './runtime-skill.ts';
 import { terminalCapabilitySettings } from './settings.ts';
 import type { TerminalGeometry } from './geometry.ts';
 export type { TerminalOutputOptions } from './output.ts';
+import { ERROR_CODES } from '../../errors.ts';
+
 export * from './runtime-skill.ts';
 export * from './settings.ts';
 export * from './geometry.ts';
@@ -107,7 +111,7 @@ export function createTerminalTool(operations: TerminalOperations, configuration
     policy: { concurrency: 'parallel', permissions: terminalCapabilityManifest.permissions },
     async execute(input, context) {
       if (configuration.AGENT_TERMINAL_ENABLED !== 'true') {
-        return { ok: false, error: { code: 'terminal-disabled', message: 'Local terminal is disabled in host settings.' } };
+        return { ok: false, error: { code: ERROR_CODES.TERMINAL_DISABLED, message: 'Local terminal is disabled in host settings.' } };
       }
       try {
         const result = await operations.execute(input, context);
@@ -115,12 +119,12 @@ export function createTerminalTool(operations: TerminalOperations, configuration
         const data = input.detail ? result : compactResult(result);
         const summary = command ? `${command.status}${command.exitCode === null ? '' : ` (exit ${command.exitCode})`}` : 'Terminal operation completed.';
         if (['exec', 'run', 'read', 'wait'].includes(input.action) && command && ['failed', 'timed_out', 'interrupted'].includes(command.status)) {
-          return { ok: false, summary, data, error: { code: `terminal-${command.status}`, message: summary } };
+          return { ok: false, summary, data, error: { code: terminalCommandErrorCode(command.status), message: summary } };
         }
         return { ok: true, summary, data };
       } catch (error) {
         context.abortSignal?.throwIfAborted();
-        return { ok: false, error: { code: 'terminal-operation-failed', message: error instanceof Error ? error.message : String(error) } };
+        return { ok: false, error: { code: getErrorCode(error, ERROR_CODES.TERMINAL_OPERATION_FAILED), message: error instanceof Error ? error.message : String(error) } };
       }
     },
   });

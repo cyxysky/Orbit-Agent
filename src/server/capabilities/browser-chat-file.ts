@@ -23,6 +23,8 @@ import {
   capabilityResultToBrowserActionResult,
 } from './browser-chat-result';
 import { createWebPilotFileWorkspace } from './webpilot-file-workspace';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export type BrowserChatFileCapabilityOptions = {
   attachmentBindings?: FileAttachmentBinding[];
@@ -39,7 +41,7 @@ function progressReporter(context: CapabilityExecutionContext) {
 }
 
 function unavailable(message: string) {
-  return { ok: false as const, error: { code: 'file-action-unavailable', message } };
+  return { ok: false as const, error: { code: ERROR_CODES.FILE_ACTION_UNAVAILABLE, message } };
 }
 
 function createBrowserChatFileOperations(
@@ -51,11 +53,11 @@ function createBrowserChatFileOperations(
   const file = {
     write: async (input: FileToolInput, context: CapabilityExecutionContext) => fileOperationToCapabilityResult(
       await workspace.writeTextFileArtifact({ fileName: input.fileName, content: input.content, runId, abortSignal: context.abortSignal }),
-      'file-write-failed',
+      ERROR_CODES.FILE_WRITE_FAILED,
     ),
     list: async () => fileOperationToCapabilityResult(
       await workspace.listOfficeDrafts({ runId }),
-      'file-list-failed',
+      ERROR_CODES.FILE_LIST_FAILED,
     ),
     read: async (input: FileToolInput, context: CapabilityExecutionContext) => {
       if (input.documentId) {
@@ -67,7 +69,7 @@ function createBrowserChatFileOperations(
           endLine: input.endLine,
           includeDiagnostics: input.includeDiagnostics,
           runId,
-        }), 'file-read-failed');
+        }), ERROR_CODES.FILE_READ_FAILED);
       }
       if (!options.readFile) return unavailable('file action=read is unavailable in this runtime.');
       const includeVisuals = options.visualInputAvailable && input.includeVisuals === true;
@@ -90,7 +92,7 @@ function createBrowserChatFileOperations(
         runId,
         sourcePageUrl: options.currentPageUrl?.(),
       }, { abortSignal: context.abortSignal }),
-      'file-download-failed',
+      ERROR_CODES.FILE_DOWNLOAD_FAILED,
     ),
     convert: async (input: FileToolInput, context: CapabilityExecutionContext) => fileOperationToCapabilityResult(
       await workspace.convertFileArtifact({
@@ -99,7 +101,7 @@ function createBrowserChatFileOperations(
         fileName: input.fileName,
         includeVisualVerification: options.visualInputAvailable,
       }, { abortSignal: context.abortSignal }),
-      'file-convert-failed',
+      ERROR_CODES.FILE_CONVERT_FAILED,
     ),
     plan: async (input: FileToolInput, context: CapabilityExecutionContext) => fileOperationToCapabilityResult(
       await workspace.planFileArtifact({
@@ -108,15 +110,15 @@ function createBrowserChatFileOperations(
         runId,
         attachmentBindings: options.attachmentBindings,
       }),
-      'file-plan-failed',
+      ERROR_CODES.FILE_PLAN_FAILED,
     ),
     unoApi: async (input: FileToolInput, context: CapabilityExecutionContext) => fileOperationToCapabilityResult(
       await workspace.getUnoApi({ ...input, runId, abortSignal: context.abortSignal }),
-      'file-uno-api-failed',
+      ERROR_CODES.FILE_UNO_API_FAILED,
     ),
     jsApi: async (input: FileToolInput) => fileOperationToCapabilityResult(
       await workspace.getOfficeJsApi({ ...input, runId }),
-      'file-js-api-failed',
+      ERROR_CODES.FILE_JS_API_FAILED,
     ),
     generate: async (input: FileToolInput, context: CapabilityExecutionContext) => (
       fileOperationToCapabilityResult(await workspace.generateUnoFileArtifact({
@@ -126,7 +128,7 @@ function createBrowserChatFileOperations(
         runId,
         attachmentBindings: options.attachmentBindings,
         includeVisualVerification: false,
-      }), 'file-generate-failed')
+      }), ERROR_CODES.FILE_GENERATE_FAILED)
     ),
     edit: async (input: FileToolInput, context: CapabilityExecutionContext) => (
       fileOperationToCapabilityResult(await workspace.editUnoFileArtifact({
@@ -141,7 +143,7 @@ function createBrowserChatFileOperations(
         runId,
         attachmentBindings: options.attachmentBindings,
         includeVisualVerification: false,
-      }), 'file-edit-failed')
+      }), ERROR_CODES.FILE_EDIT_FAILED)
     ),
     render: async (input: FileToolInput, context: CapabilityExecutionContext) => (
       fileOperationToCapabilityResult(await workspace.renderFileArtifact({
@@ -151,7 +153,7 @@ function createBrowserChatFileOperations(
         runId,
         attachmentBindings: options.attachmentBindings,
         includeVisualVerification: options.visualInputAvailable,
-      }), 'file-render-failed')
+      }), ERROR_CODES.FILE_RENDER_FAILED)
     ),
   } satisfies FileCapabilityRuntimeOperations['file'];
 
@@ -203,7 +205,7 @@ function createBrowserChatFileOperations(
       runId,
       artifactId: input.artifactId,
     });
-    if (!version.ok) return fileOperationToCapabilityResult(version, 'file-visual-version-failed');
+    if (!version.ok) return fileOperationToCapabilityResult(version, ERROR_CODES.FILE_VISUAL_VERSION_FAILED);
     const result = await options.readFileVisuals?.(input)
       || { ok: false, actual: 'File visual actions are unavailable in this runtime.' };
     return fileOperationToCapabilityResult(await workspace.recordOfficeVisualQaProgress({
@@ -211,7 +213,7 @@ function createBrowserChatFileOperations(
       artifactId: input.artifactId,
       action: input.action,
       result: { ...result, actual: result.actual ?? browserOperationSummary(result) },
-    }), 'file-visual-report-failed');
+    }), ERROR_CODES.FILE_VISUAL_REPORT_FAILED);
   };
 
   return {

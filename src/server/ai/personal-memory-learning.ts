@@ -19,6 +19,8 @@ import {
 import {
   commitPersonalMemoryReview, hasPersonalMemoryReceipt, readPersonalMemoryRecords,
 } from '@/server/storage/database-record-store';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 type LearningSource = {
   userId?: unknown;
@@ -57,13 +59,13 @@ export function analyzeDurablePersonalMemoryDrafts(items: PersonalMemoryDraft[],
   const rejected: PersonalMemoryFilterRejection[] = [];
   items.forEach((input, index) => {
     const parsed = memoryCandidateSchema.safeParse(input);
-    if (!parsed.success) { rejected.push(rejection(index, input, 'invalid_candidate')); return; }
+    if (!parsed.success) { rejected.push(rejection(index, input, ERROR_CODES.INVALID_CANDIDATE)); return; }
     const item = parsed.data;
     let reason: PersonalMemoryFilterRejectionReason | undefined;
     if (item.expiresAt && Date.parse(item.expiresAt) <= Date.now()) reason = 'expired_candidate';
     const domain = normalizePersonalMemoryDomain(item.domain || context.domain);
     if ((item.scope === 'domain' && !domain)
-      || (item.durability === 'verified_procedure' && (item.scope !== 'domain' || domain !== context.domain))) reason = 'invalid_scope';
+      || (item.durability === 'verified_procedure' && (item.scope !== 'domain' || domain !== context.domain))) reason = ERROR_CODES.INVALID_SCOPE;
     if (item.durability === 'verified_procedure') {
       const supported = (item.type === 'workflow' || item.type === 'domain_fact') && item.verification.length > 0
         && item.verification.every((proof) => {
@@ -75,10 +77,10 @@ export function analyzeDurablePersonalMemoryDrafts(items: PersonalMemoryDraft[],
       if (!supported) reason = 'unverified_procedure';
     } else if (!item.evidence.length || item.verification.length
       || item.evidence.some((quote) => !userMessages.some((message) => evidenceIsInMessage(quote, message)))) {
-      reason = 'missing_new_evidence';
+      reason = ERROR_CODES.MISSING_NEW_EVIDENCE;
     }
     // Even a procedural candidate cannot smuggle invented user quotations.
-    if (item.evidence.some((quote) => !userMessages.some((message) => evidenceIsInMessage(quote, message)))) reason = 'missing_new_evidence';
+    if (item.evidence.some((quote) => !userMessages.some((message) => evidenceIsInMessage(quote, message)))) reason = ERROR_CODES.MISSING_NEW_EVIDENCE;
     if (reason) rejected.push(rejection(index, item, reason));
     else accepted.push({ ...item, domain: item.scope === 'domain' ? domain : '' });
   });
@@ -121,7 +123,7 @@ function sourceForModel(input: LearningSource) {
 
 async function askMemoryModel(schema: z.ZodType, instruction: string, data: unknown, abortSignal?: AbortSignal) {
   const serialized = JSON.stringify(data);
-  if (serialized.length > personalMemoryExtractionInputLimit()) throw new Error('Memory evidence exceeds input budget; no memory was changed.');
+  if (serialized.length > personalMemoryExtractionInputLimit()) throw new CodedError(ERROR_CODES.CONTEXT_READ_FAILED, 'Memory evidence exceeds input budget; no memory was changed.');
   const response = await generateText({
     model: getModel(), temperature: 0.1, maxRetries: 1,
     abortSignal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000),
@@ -184,7 +186,7 @@ export async function reviewPersonalMemoryCandidates(input: LearningSource & {
     const review = memoryReviewSchema.parse(answer.data);
     output.rawText = answer.rawText;
     if (review.decisions.length !== filtered.items.length || new Set(review.decisions.map((decision) => decision.index)).size !== filtered.items.length
-      || review.decisions.some((decision) => decision.index >= filtered.items.length)) throw new Error('Incomplete memory review; no memory was changed.');
+      || review.decisions.some((decision) => decision.index >= filtered.items.length)) throw new CodedError(ERROR_CODES.CONTEXT_READ_FAILED, 'Incomplete memory review; no memory was changed.');
     output.diagnostics.decisions = review.decisions.map(({ index, action, reason, targetIds }) => ({ index, action, reason, targetIds }));
     const timestamp = new Date().toISOString();
     for (const decision of review.decisions) {
@@ -196,14 +198,14 @@ export async function reviewPersonalMemoryCandidates(input: LearningSource & {
         || (decision.action !== 'create' && (!targets.length || targets.some((entry) => !entry || entry.userId !== userId || entry.status !== 'active')))
         || targets.some((entry) => entry && writes.has(entry.id))
         || (input.targetId && (decision.targetIds[0] !== input.targetId || decision.targetIds.length !== 1))
-        || (input.requestedAction === 'disable' && decision.action !== 'disable')) { reject('invalid_review'); continue; }
+        || (input.requestedAction === 'disable' && decision.action !== 'disable')) { reject(ERROR_CODES.INVALID_REVIEW); continue; }
       if (decision.action === 'disable') {
-        if (!['user_correction', 'explicit_remember'].includes(candidate.durability) || !candidate.evidence.length) { reject('invalid_review'); continue; }
+        if (!['user_correction', 'explicit_remember'].includes(candidate.durability) || !candidate.evidence.length) { reject(ERROR_CODES.INVALID_REVIEW); continue; }
         for (const target of targets) writes.set(target!.id, { ...target!, status: 'disabled', updatedAt: timestamp, reviewReason: decision.reason });
         continue;
       }
       const checked = analyzeDurablePersonalMemoryDrafts(decision.item ? [decision.item] : [], [input.userMessage], { steps: input.steps, domain });
-      if (checked.items.length !== 1) { reject('invalid_review'); continue; }
+      if (checked.items.length !== 1) { reject(ERROR_CODES.INVALID_REVIEW); continue; }
       const reviewed = checked.items[0];
       const sourceIds = reviewed.durability === 'verified_procedure'
         ? [...new Set(reviewed.verification.flatMap((proof) => {
@@ -216,7 +218,7 @@ export async function reviewPersonalMemoryCandidates(input: LearningSource & {
           && !reviewed.applicability.contextTerms.length ? 'always' : 'relevant',
         ...(reviewed.verification.length ? { verifiedAt: timestamp } : {}),
       }, { userId, sourceSessionId: input.sourceSessionId, sourceMessageIds: sourceIds.filter(Boolean), sourceUrl: input.currentUrl || input.targetUrl });
-      if (!draft) { reject('invalid_review'); continue; }
+      if (!draft) { reject(ERROR_CODES.INVALID_REVIEW); continue; }
       const previous = targets[0];
       const item: PersonalMemoryItem = {
         ...draft, id: previous?.id || `mem_${randomUUID()}`, key: previous?.key || draft.key,
@@ -229,7 +231,7 @@ export async function reviewPersonalMemoryCandidates(input: LearningSource & {
       const otherRecords = [...existing, ...writes.values()].filter((entry) => entry.id !== item.id && entry.userId === userId);
       if (otherRecords.some((entry) => entry.scope === item.scope && entry.domain === item.domain && entry.type === item.type
         && (entry.key.toLowerCase() === item.key.toLowerCase() || (entry.value === item.value && JSON.stringify(entry.applicability) === JSON.stringify(item.applicability)))
-        && !decision.targetIds.includes(entry.id))) { reject('invalid_review'); continue; }
+        && !decision.targetIds.includes(entry.id))) { reject(ERROR_CODES.INVALID_REVIEW); continue; }
       const sameClaim = previous && unchangedValue(previous, item);
       if (sameClaim) item.history = previous.history;
       if (!previous || !sameClaim || targets.length > 1 || reviewed.durability === 'verified_procedure') writes.set(item.id, item);

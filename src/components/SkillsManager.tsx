@@ -16,6 +16,8 @@ import type { SkillRecord } from '@/server/ai/schemas/runtime.schema';
 import { AppInput } from '@/components/ui/app-input';
 import { AppModal } from '@/components/ui/app-modal';
 import { ExpandableActionLabel } from '@/components/ui/expandable-action-label';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 type SkillDraft = {
   shared: boolean;
@@ -200,7 +202,7 @@ export function SkillsManager({
         body: JSON.stringify(payload),
       });
       const data = await readApiJson<SkillMutationResponse>(response, t('保存 Skill 失败'));
-      if (!data.skill) throw new Error(t('保存 Skill 失败'));
+      if (!data.skill) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, t('保存 Skill 失败'));
       const saved = data.skill as SkillRecord;
       setSkills((current) => [saved, ...current.filter((skill) => skill.id !== saved.id)]
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
@@ -217,7 +219,7 @@ export function SkillsManager({
   }
 
   async function deleteSkill(target: SkillRecord) {
-    if (target.userId !== normalizedUserId) throw new Error(t('只读'));
+    if (target.userId !== normalizedUserId) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, t('只读'));
     const response = await fetch(skillsApiUrl(`/api/skills/${encodeURIComponent(target.id)}`), { method: 'DELETE' });
     await readApiJson<unknown>(response, t('删除 Skill 失败'));
     setSkills((current) => current.filter((item) => item.id !== target.id));

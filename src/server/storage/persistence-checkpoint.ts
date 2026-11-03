@@ -1,5 +1,7 @@
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 export class PersistenceCheckpointError extends Error {
-  readonly code = 'PERSISTENCE_CHECKPOINT_FAILED';
+  readonly code = ERROR_CODES.PERSISTENCE_CHECKPOINT_FAILED;
 
   constructor(operation: string, cause: unknown) {
     const detail = cause instanceof Error ? cause.message : String(cause);

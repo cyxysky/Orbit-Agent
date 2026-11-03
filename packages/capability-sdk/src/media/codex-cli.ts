@@ -4,6 +4,8 @@ import path from 'node:path';
 import type { ImageModel } from 'ai';
 import { z } from 'zod';
 import type { MediaModelConfig } from './models.ts';
+import { CodedError, ERROR_CODES } from '../errors.ts';
+
 
 export type CodexImageOptions = { codexPath?: string };
 
@@ -26,7 +28,7 @@ function isImage(bytes: Uint8Array) {
 async function imageBytes(item: z.infer<typeof completedImage>['params']['item'], directory: string, signal: AbortSignal) {
   const base64 = item.result.replace(/^data:image\/[a-z0-9.+-]+;base64,/i, '');
   if (base64 && /^[A-Za-z0-9+/]+={0,2}$/.test(base64)) {
-    if (base64.length > Math.ceil(maxImageBytes / 3) * 4) throw new Error('Codex image exceeds 50 MB.');
+    if (base64.length > Math.ceil(maxImageBytes / 3) * 4) throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, 'Codex image exceeds 50 MB.');
     const bytes = Buffer.from(base64, 'base64');
     if (isImage(bytes)) return bytes;
   }
@@ -40,13 +42,13 @@ async function imageBytes(item: z.infer<typeof completedImage>['params']['item']
       const relative = path.relative(root, file);
       return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
     });
-    if (!inside) throw new Error('Codex image output is outside its generation directories.');
-    if ((await stat(file)).size > maxImageBytes) throw new Error('Codex image exceeds 50 MB.');
+    if (!inside) throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, 'Codex image output is outside its generation directories.');
+    if ((await stat(file)).size > maxImageBytes) throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, 'Codex image exceeds 50 MB.');
     const bytes = await readFile(file, { signal });
-    if (!isImage(bytes)) throw new Error('Codex output is not a PNG, JPEG, or WebP image.');
+    if (!isImage(bytes)) throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, 'Codex output is not a PNG, JPEG, or WebP image.');
     return bytes;
   }
-  throw new Error('Codex returned no valid image data.');
+  throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, 'Codex returned no valid image data.');
 }
 
 /** Expose Codex's native image tool through the shared AI SDK image contract. */
@@ -55,7 +57,7 @@ export function createCodexImageModel(model: MediaModelConfig, options: CodexIma
     specificationVersion: 'v4', provider: 'codex.image', modelId: model.model, maxImagesPerCall: 1,
     async doGenerate({ prompt, size, aspectRatio, files, mask, abortSignal }) {
       // Codex's native tool has reference-image editing but no mask parameter.
-      if (mask) throw new Error('Codex CLI 图片生成不支持蒙版，请选择支持蒙版的图片模型。');
+      if (mask) throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, 'Codex CLI 图片生成不支持蒙版，请选择支持蒙版的图片模型。');
       const signal = abortSignal || AbortSignal.timeout(model.timeoutMs);
       signal.throwIfAborted();
       const { createCodexAppServer } = await import('ai-sdk-provider-codex-cli');
@@ -84,7 +86,7 @@ export function createCodexImageModel(model: MediaModelConfig, options: CodexIma
           const available = await provider.listModels();
           const selected = available.defaultModel || available.models.find((item) => item.isDefault);
           modelId = selected?.model || selected?.id || '';
-          if (!modelId) throw new Error('Codex CLI 未提供默认模型。请检查本机 Codex 登录状态。');
+          if (!modelId) throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, 'Codex CLI 未提供默认模型。请检查本机 Codex 登录状态。');
         }
         signal.throwIfAborted();
         const instruction = [prompt || '', size ? `Requested image dimensions: ${size}.` : '', aspectRatio ? `Requested aspect ratio: ${aspectRatio}.` : ''].filter(Boolean).join('\n');
@@ -114,13 +116,13 @@ export function createCodexImageModel(model: MediaModelConfig, options: CodexIma
             const parsed = completedImage.safeParse(part.rawValue);
             if (!parsed.success) continue;
             const item = parsed.data.params.item;
-            if (item.status !== 'completed') throw new Error(`Codex image generation ${item.status}.`);
+            if (item.status !== 'completed') throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, `Codex image generation ${item.status}.`);
             if (!images.has(item.id)) images.set(item.id, await imageBytes(item, directory, signal));
           }
         } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
         signal.throwIfAborted();
-        if (!images.size) throw new Error(`Codex CLI 未返回生成图片。请确认本机已登录且账号支持图片生成。${explanation ? `\n${explanation}` : ''}`);
-        if (images.size !== 1) throw new Error(`Codex CLI returned ${images.size} images for a single-image request.`);
+        if (!images.size) throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, `Codex CLI 未返回生成图片。请确认本机已登录且账号支持图片生成。${explanation ? `\n${explanation}` : ''}`);
+        if (images.size !== 1) throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, `Codex CLI returned ${images.size} images for a single-image request.`);
         return { images: [...images.values()], warnings: [], response: { timestamp: new Date(), modelId, headers: undefined } };
       } catch (error) {
         failed = true;

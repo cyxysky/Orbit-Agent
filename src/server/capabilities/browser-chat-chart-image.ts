@@ -11,6 +11,8 @@ import { readBrowserChatSessionOwner } from '@/server/storage/browser-chat-histo
 import { artifactPath } from '@/server/storage/paths';
 import { normalizeWebPilotBasePath } from '@/lib/webpilot-base-path';
 import { readBrowserChatChart } from './browser-chat-chart';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 // Serialize exports across conversations to bound Chromium and canvas memory.
 const exportsState = ((globalThis as typeof globalThis & {
@@ -19,7 +21,7 @@ const exportsState = ((globalThis as typeof globalThis & {
 
 async function renderPng(chart: ChartRecord, userId: string) {
   const port = Number(process.env.WEBPILOT_REALTIME_PUBLISH_PORT || process.env.PORT || 3000);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('画布导出服务端口无效。');
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '画布导出服务端口无效。');
   const origin = `http://127.0.0.1:${port}`;
   const basePath = normalizeWebPilotBasePath(process.env.ORBIT_BASE_PATH ?? process.env.WEBPILOT_BASE_PATH);
   const url = new URL(`${basePath}/chart-export`, origin);
@@ -36,12 +38,12 @@ async function renderPng(chart: ChartRecord, userId: string) {
     await page.route('**/*', route => new URL(route.request().url()).origin === origin
       ? route.continue() : route.abort());
     const response = await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 60_000 });
-    if (!response?.ok()) throw new Error(`画布导出页面加载失败（${response?.status() || 0}）。`);
+    if (!response?.ok()) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, `画布导出页面加载失败（${response?.status() || 0}）。`);
     await page.waitForFunction(() => typeof (window as ChartExportWindow).orbitExportChartPng === 'function', undefined, { timeout: 30_000 });
     // The export function belongs to the application's main world, whereas
     // Patchright evaluates in an isolated world by default.
     const dataUrl = await page.evaluate(record => (window as ChartExportWindow).orbitExportChartPng!(record), chart, undefined, false);
-    if (!dataUrl.startsWith('data:image/png;base64,')) throw new Error('画布导出没有返回 PNG。');
+    if (!dataUrl.startsWith('data:image/png;base64,')) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '画布导出没有返回 PNG。');
     const source = Buffer.from(dataUrl.slice('data:image/png;base64,'.length), 'base64');
     // Keep image delivery small; retain PNG rather than silently changing formats.
     for (const dimension of [4096, 3072, 2048, 1536, 1024]) {
@@ -49,11 +51,11 @@ async function renderPng(chart: ChartRecord, userId: string) {
         .png({ compressionLevel: 9 }).toBuffer();
       if (png.length <= 2 * 1024 * 1024) return png;
     }
-    throw new Error('画布 PNG 超过图片发送大小限制，请简化画布后重试。');
+    throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '画布 PNG 超过图片发送大小限制，请简化画布后重试。');
   } catch (error) {
     // Navigation diagnostics can include the URL; never send its ticket to chat.
     const detail = error instanceof Error ? error.message : '画布导出失败。';
-    throw new Error(identityTicket ? detail.replaceAll(identityTicket, '[redacted]') : detail);
+    throw new CodedError(ERROR_CODES.APPLICATION_ERROR, identityTicket ? detail.replaceAll(identityTicket, '[redacted]') : detail);
   } finally {
     clearTimeout(deadline);
     await browser.close();
@@ -62,11 +64,11 @@ async function renderPng(chart: ChartRecord, userId: string) {
 
 /** Produce an owned, immutable image artifact; never upload/send from the renderer. */
 export async function exportBrowserChatChartImage(sessionId: string, chartId: string, userId: string) {
-  if (!/^chat_[a-f0-9]{12}$/i.test(sessionId) || !/^chart_\d{6}$/.test(chartId)) throw new Error('画布标识无效。');
+  if (!/^chat_[a-f0-9]{12}$/i.test(sessionId) || !/^chart_\d{6}$/.test(chartId)) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '画布标识无效。');
   const owner = await readBrowserChatSessionOwner(sessionId);
-  if (!owner || normalizeApplicationUserId(owner.userId) !== normalizeApplicationUserId(userId)) throw new Error('画布不存在。');
+  if (!owner || normalizeApplicationUserId(owner.userId) !== normalizeApplicationUserId(userId)) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '画布不存在。');
   const chart = await readBrowserChatChart(sessionId, chartId);
-  if (!chart) throw new Error('画布不存在。');
+  if (!chart) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '画布不存在。');
   const digest = createHash('sha256').update(JSON.stringify({ engine: chart.engine, option: chart.option,
     renderer: chart.renderer, height: chart.height, maps: chart.maps })).digest('hex').slice(0, 16);
   const fileName = `${chartId}.revision-${chart.revision || 0}-${digest}.png`;
@@ -77,12 +79,12 @@ export async function exportBrowserChatChartImage(sessionId: string, chartId: st
     try {
       const existing = await readFile(filename);
       if (existing.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))) return artifactId;
-      throw new Error('已保存的画布 PNG 损坏。');
+      throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '已保存的画布 PNG 损坏。');
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
     const png = await renderPng(chart, userId);
     // The conversation may have been deleted while Chromium was rendering.
     const latestOwner = await readBrowserChatSessionOwner(sessionId);
-    if (!latestOwner || normalizeApplicationUserId(latestOwner.userId) !== normalizeApplicationUserId(userId)) throw new Error('画布对话已删除。');
+    if (!latestOwner || normalizeApplicationUserId(latestOwner.userId) !== normalizeApplicationUserId(userId)) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '画布对话已删除。');
     await mkdir(directory, { recursive: true });
     const temporary = path.join(directory, `.${randomUUID()}.tmp`);
     try {

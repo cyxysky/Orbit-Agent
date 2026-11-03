@@ -1,3 +1,5 @@
+import { ERROR_CODES, withErrorCode } from '@cjfclonedeep/capability-sdk';
+
 const NO_STORE_HEADERS = {
   'Cache-Control': 'no-store, no-cache, max-age=0, must-revalidate, proxy-revalidate',
   Expires: '0',
@@ -10,5 +12,5 @@ export function noStoreJson<T>(body: T, init: ResponseInit = {}) {
   for (const [key, value] of Object.entries(NO_STORE_HEADERS)) {
     headers.set(key, value);
   }
-  return Response.json(body, { ...init, headers });
+  return Response.json(withErrorCode(body, (init.status || 200) >= 500 ? ERROR_CODES.INTERNAL_ERROR : ERROR_CODES.REQUEST_FAILED), { ...init, headers });
 }

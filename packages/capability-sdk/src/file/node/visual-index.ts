@@ -1,4 +1,6 @@
 import type { FilePreviewResult } from './office/preview.ts';
+import { CodedError, ERROR_CODES } from '../../errors.ts';
+
 
 export function fileVisualScreenshotId(pageNumber: number) {
   return `screenshot-${String(pageNumber).padStart(4, '0')}`;
@@ -16,7 +18,7 @@ export function createFileVisualIndex(input: {
 }) {
   const screenshotCount = input.preview.pageCount;
   if (typeof screenshotCount !== 'number' || !Number.isSafeInteger(screenshotCount) || screenshotCount < 1) {
-    throw new Error('A file visual index requires a valid rendered page count.');
+    throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'A file visual index requires a valid rendered page count.');
   }
   const offset = input.complete ? 0 : Math.min(Math.max(0, Math.floor(input.offset || 0)), screenshotCount);
   const limit = input.complete ? screenshotCount : Math.min(Math.max(1, Math.floor(input.limit || 100)), 200);

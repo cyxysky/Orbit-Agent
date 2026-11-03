@@ -1,4 +1,6 @@
 import JSZip from 'jszip';
+import { CodedError, ERROR_CODES } from '../../../errors.ts';
+
 
 type XmlRange = {
   start: number;
@@ -73,7 +75,7 @@ function directRangesWithin(ranges: XmlRange[], parent: XmlRange) {
 export async function inspectDocxTemplateBuffer(template: Buffer) {
   const zip = await JSZip.loadAsync(template);
   const documentEntry = zip.file(documentPart);
-  if (!documentEntry) throw new Error('The DOCX template is missing word/document.xml.');
+  if (!documentEntry) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'The DOCX template is missing word/document.xml.');
   const xml = await documentEntry.async('string');
   const packageEntries = Object.values(zip.files).filter((entry) => !entry.dir);
   const matchingEntries = (pattern: RegExp) => packageEntries.filter((entry) => pattern.test(entry.name));

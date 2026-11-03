@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { joinWebPilotUrl, WEBPILOT_BASE_PATH } from '@/lib/webpilot-base-path';
+import { ERROR_CODES, getErrorCode, withErrorCode } from '@cjfclonedeep/capability-sdk';
 
 type EmbedTokenClaims = {
   version: 1;
@@ -15,6 +16,7 @@ export type EmbedAuthContext = EmbedTokenClaims & {
 };
 
 export class EmbedAuthError extends Error {
+  readonly code = ERROR_CODES.EMBED_AUTH_FAILED;
   status: number;
 
   constructor(message: string, status = 401) {
@@ -49,7 +51,7 @@ function withEmbedHeaders(headers: Headers, cacheable = false) {
 
 export function embedJson<T>(body: T, init: ResponseInit = {}) {
   const headers = withEmbedHeaders(new Headers(init.headers));
-  return Response.json(body, { ...init, headers });
+  return Response.json(withErrorCode(body, ERROR_CODES.EMBED_AUTH_FAILED), { ...init, headers });
 }
 
 export function embedOptionsResponse() {
@@ -164,10 +166,10 @@ export function readEmbedAuth(request: Request | Request, expectedSessionId?: st
 
 export function embedErrorJson(error: unknown, fallback = 'Embed request failed') {
   if (error instanceof EmbedAuthError) {
-    return embedJson({ error: error.message }, { status: error.status });
+    return embedJson({ code: error.code, error: error.message }, { status: error.status });
   }
   return embedJson(
-    { error: error instanceof Error ? error.message : fallback },
+    { code: getErrorCode(error, ERROR_CODES.REQUEST_FAILED), error: error instanceof Error ? error.message : fallback },
     { status: 400 },
   );
 }

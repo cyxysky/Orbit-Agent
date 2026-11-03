@@ -1,6 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { normalizeBoundedInteger } from '../../index.ts';
 import ffmpegStaticPath from 'ffmpeg-static';
+import { CodedError, ERROR_CODES } from '../../errors.ts';
+
 
 export { browserPreviewVideoDimensions } from '../node/browser-preview-video-settings.ts';
 
@@ -36,11 +38,11 @@ function readMp4BoxSize(buffer: Buffer) {
   if (size32 === 1) {
     if (buffer.length < 16) return undefined;
     const size64 = buffer.readBigUInt64BE(8);
-    if (size64 > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('Fragmented MP4 box exceeds the safe buffer size.');
+    if (size64 > BigInt(Number.MAX_SAFE_INTEGER)) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Fragmented MP4 box exceeds the safe buffer size.');
     return Number(size64);
   }
-  if (size32 === 0) throw new Error('Open-ended MP4 boxes are not supported for the live preview stream.');
-  if (size32 < 8) throw new Error(`Invalid fragmented MP4 box size: ${size32}.`);
+  if (size32 === 0) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Open-ended MP4 boxes are not supported for the live preview stream.');
+  if (size32 < 8) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `Invalid fragmented MP4 box size: ${size32}.`);
   return size32;
 }
 
@@ -69,7 +71,7 @@ export class FragmentedMp4Chunker {
         if (boxSize === undefined) continue;
         // Validate the declared size before retaining/allocating the payload.
         if (boxSize < this.headerBytes || boxSize > 128 * 1024 * 1024) {
-          throw new Error(`Invalid fragmented MP4 box size: ${boxSize} bytes.`);
+          throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `Invalid fragmented MP4 box size: ${boxSize} bytes.`);
         }
         this.pendingBox = Buffer.allocUnsafe(boxSize);
         this.header.copy(this.pendingBox, 0, 0, this.headerBytes);
@@ -110,7 +112,7 @@ export class FragmentedMp4Chunker {
       }
       this.initializationSegment = Buffer.concat(this.initializationBoxes);
       this.initializationBoxes = [];
-      if (!this.initializationSegment.length) throw new Error('FFmpeg did not emit an MP4 initialization segment.');
+      if (!this.initializationSegment.length) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'FFmpeg did not emit an MP4 initialization segment.');
       this.options.onInitialization(this.initializationSegment);
       this.currentFragment.push(box);
       return;
@@ -172,7 +174,7 @@ export function browserPreviewH264Configuration(
     && bitrateKbps <= candidate.maxBitrateKbps
   ));
   if (!selected) {
-    throw new Error(`H.264 video settings exceed Level 6.2: ${width}x${height}@${framesPerSecond}, ${bitrateKbps} Kbps.`);
+    throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `H.264 video settings exceed Level 6.2: ${width}x${height}@${framesPerSecond}, ${bitrateKbps} Kbps.`);
   }
   return {
     level: selected.level,
@@ -183,7 +185,7 @@ export function browserPreviewH264Configuration(
 export function browserPreviewVideoMimeType(initialization: Buffer) {
   const avcConfigurationOffset = initialization.indexOf(Buffer.from('avcC'));
   if (avcConfigurationOffset < 0 || initialization.length < avcConfigurationOffset + 8) {
-    throw new Error('FFmpeg MP4 initialization segment does not contain a valid avcC box.');
+    throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'FFmpeg MP4 initialization segment does not contain a valid avcC box.');
   }
   const codec = initialization
     .subarray(avcConfigurationOffset + 5, avcConfigurationOffset + 8)
@@ -289,7 +291,7 @@ export class BrowserPreviewVideoEncoder {
 
   private start() {
     const executable = browserPreviewVideoFfmpegPath();
-    if (!executable) throw new Error('FFmpeg executable is unavailable. Install ffmpeg-static or configure FFMPEG_PATH.');
+    if (!executable) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'FFmpeg executable is unavailable. Install ffmpeg-static or configure FFMPEG_PATH.');
     const framesPerSecond = Math.max(1, Math.min(60, Math.floor(this.options.framesPerSecond)));
     const width = evenDimension(this.options.width, 1280);
     const height = evenDimension(this.options.height, 720);
@@ -347,7 +349,7 @@ export class BrowserPreviewVideoEncoder {
       try {
         this.chunker.push(chunk);
       } catch (error) {
-        this.reportError(error instanceof Error ? error : new Error(String(error)));
+        this.reportError(error instanceof Error ? error : new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, String(error)));
       }
     });
     child.stderr.on('data', (chunk: Buffer) => {
@@ -360,7 +362,7 @@ export class BrowserPreviewVideoEncoder {
     child.once('exit', (code, signal) => {
       this.chunker.flush();
       if (this.stopping || code === 0) return;
-      this.reportError(new Error([
+      this.reportError(new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, [
         `FFmpeg video encoder exited unexpectedly (code=${code ?? 'null'}, signal=${signal || 'none'}).`,
         this.stderr.trim(),
       ].filter(Boolean).join(' ')));

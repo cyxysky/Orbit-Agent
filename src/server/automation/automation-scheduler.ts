@@ -6,6 +6,8 @@ import {
   listDueAutomationSchedules,
   updateAutomationRunIfStatus,
 } from '@/server/storage/automation-store';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export type AutomationScheduleTiming = Pick<
   AutomationScheduleRecord,
@@ -55,7 +57,7 @@ const weekdayIndexes: Record<string, number> = {
 function dateValue(value: string | Date) {
   const result = value instanceof Date ? new Date(value.getTime()) : new Date(value);
   if (Number.isNaN(result.getTime())) {
-    throw new Error('The automation schedule reference time is invalid.');
+    throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'The automation schedule reference time is invalid.');
   }
   return result;
 }
@@ -73,7 +75,7 @@ function zonedMinuteFormatter(timezone: string) {
       hourCycle: 'h23',
     });
   } catch {
-    throw new Error(`Invalid automation schedule timezone: ${timezone}`);
+    throw new CodedError(ERROR_CODES.APPLICATION_ERROR, `Invalid automation schedule timezone: ${timezone}`);
   }
 }
 
@@ -84,7 +86,7 @@ function readZonedMinute(formatter: Intl.DateTimeFormat, instant: Date): ZonedMi
   );
   const weekday = weekdayIndexes[part('weekday')];
   if (weekday === undefined) {
-    throw new Error('Unable to resolve the automation schedule weekday.');
+    throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Unable to resolve the automation schedule weekday.');
   }
   return {
     dateKey: `${part('year')}-${part('month')}-${part('day')}`,
@@ -104,10 +106,10 @@ function findNextAutomationOccurrence(
   excludedLocalDate?: string,
 ) {
   if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(schedule.time)) {
-    throw new Error(`Invalid automation schedule time: ${schedule.time}`);
+    throw new CodedError(ERROR_CODES.APPLICATION_ERROR, `Invalid automation schedule time: ${schedule.time}`);
   }
   if (schedule.recurrence === 'weekly' && schedule.weekdays.length === 0) {
-    throw new Error('Weekly automation schedules require at least one weekday.');
+    throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Weekly automation schedules require at least one weekday.');
   }
 
   const reference = dateValue(after);
@@ -131,7 +133,7 @@ function findNextAutomationOccurrence(
     return candidate.toISOString();
   }
 
-  throw new Error(
+  throw new CodedError(ERROR_CODES.APPLICATION_ERROR,
     `No ${schedule.recurrence} automation occurrence was found within fifteen days in ${schedule.timezone}.`,
   );
 }

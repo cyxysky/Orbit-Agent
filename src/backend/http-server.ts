@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { routes } from './route-manifest';
 import { createRouter, sendWebResponse, webRequest } from './http-adapter';
@@ -82,7 +83,7 @@ export async function startBackend({ codeSandbox }: { codeSandbox?: CodeSandboxL
       console.error('[backend] Request failed', error);
       if (outgoing.headersSent) { outgoing.destroy(error); return; }
       outgoing.writeHead(500, { 'Content-Type': 'application/json' });
-      outgoing.end(JSON.stringify({ error: 'Internal Server Error' }));
+      outgoing.end(JSON.stringify({ code: ERROR_CODES.INTERNAL_ERROR, error: 'Internal Server Error' }));
     });
   });
   // SSE and downloads may remain open; bound only header/body ingress.

@@ -8,6 +8,8 @@ import {
 } from '@/server/storage/upload-artifact-lifecycle';
 
 import { storeUploadedFile, uploadMaxBytes } from '@/server/storage/upload-file';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 function decodedUploadName(value: string | null) {
   if (!value || value.length > 2_048) return 'upload.bin';
@@ -25,7 +27,7 @@ export async function GET(request: Request) {
   try {
     return apiJson(request, { usage: await userUploadUsage(requestApplicationUserId(request)) });
   } catch (error) {
-    return apiError(request, error, { code: 'upload_usage_failed', fallback: 'Unable to read upload usage', status: 500 });
+    return apiError(request, error, { code: ERROR_CODES.UPLOAD_USAGE_FAILED, fallback: 'Unable to read upload usage', status: 500 });
   }
 }
 
@@ -37,7 +39,7 @@ export async function POST(request: Request) {
     const isRawUpload = request.headers.get('x-webpilot-upload') === 'raw';
     const requestLimit = isRawUpload ? maxBytes : maxBytes + 1024 * 1024;
     if (contentLength !== undefined && Number.isFinite(contentLength) && contentLength > requestLimit) {
-      throw new ApiRequestError('Upload is too large', { code: 'payload_too_large', status: 413 });
+      throw new ApiRequestError('Upload is too large', { code: ERROR_CODES.PAYLOAD_TOO_LARGE, status: 413 });
     }
     let name: string;
     let type: string;
@@ -55,7 +57,7 @@ export async function POST(request: Request) {
       if (!(file instanceof File)) throw new ApiRequestError('File is required');
       if (file.size <= 0 || file.size > maxBytes) {
         throw new ApiRequestError(`File size must be between 1 byte and ${maxBytes} bytes`, {
-          code: 'payload_too_large',
+          code: ERROR_CODES.PAYLOAD_TOO_LARGE,
           status: 413,
         });
       }
@@ -68,7 +70,7 @@ export async function POST(request: Request) {
     return apiJson(request, upload);
   } catch (error) {
     return apiError(request, error, {
-      code: 'upload_failed',
+      code: ERROR_CODES.UPLOAD_FAILED,
       fallback: 'File upload failed',
       status: 500,
     });

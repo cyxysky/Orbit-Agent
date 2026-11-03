@@ -68,6 +68,9 @@ export function isBrowserChatAiInputOutputLog(log: BrowserChatLogRecordLike) {
 
 export function isBrowserChatAiFailureLog(log: BrowserChatLogRecordLike) {
   return isBrowserChatAiTerminalFailureLog(log)
+    || phaseMatches(log, 'ai:runtime:error')
+    || phaseMatches(log, 'ai:completion-review:recoverable-error')
+    || phaseMatches(log, 'ai:completion-review:error')
     || phaseMatches(log, 'ai:runtime:attempt-failed')
     || phaseMatches(log, 'ai:runtime:retry')
     || phaseMatches(log, 'ai:runtime:retry-exhausted')
@@ -84,6 +87,7 @@ export function isBrowserChatAiFailureLog(log: BrowserChatLogRecordLike) {
 export function isBrowserChatAiTerminalFailureLog(log: BrowserChatLogRecordLike) {
   const details = parsedLogDetails(log.details);
   const payload = asRecord(details?.event) || asRecord(details?.value) || details;
+  if (phaseMatches(log, 'ai:runtime:error')) return payload?.terminal !== false;
   if (phaseMatches(log, 'ai:context-compression:error') || phaseMatches(log, 'conversation:context:error')) {
     return payload?.terminal === true;
   }
@@ -113,6 +117,9 @@ export function isBrowserChatAiLog(log: BrowserChatLogRecordLike) {
     || phaseMatches(log, 'ai:runtime:response-headers')
     || phaseMatches(log, 'ai:runtime:receiving')
     || isBrowserChatAiAttemptLog(log)
+    || phaseMatches(log, 'ai:runtime:context')
+    || log.phase.startsWith('ai:completion-review:')
+    || log.phase.includes(':ai:completion-review:')
     || isBrowserChatDocumentVisualQaLog(log)
     || isBrowserChatTargetPlanningLog(log);
 }

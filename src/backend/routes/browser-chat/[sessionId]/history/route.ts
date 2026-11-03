@@ -3,6 +3,8 @@ import { ApiRequestError, apiError, apiJson, boundedQueryInteger } from '@/serve
 import { requestApplicationUserId } from '@/server/auth/user-context';
 import { BROWSER_CHAT_MESSAGE_PAGE_SIZE } from '@/server/storage/browser-chat-history-store';
 import type { BrowserChatSessionRouteContext } from '@/server/http/browser-chat-route';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 
 export async function GET(request: Request, context: BrowserChatSessionRouteContext) {
@@ -16,7 +18,7 @@ export async function GET(request: Request, context: BrowserChatSessionRouteCont
         max: BROWSER_CHAT_MESSAGE_PAGE_SIZE,
       }),
     });
-    if (!result) throw new ApiRequestError('Browser chat session not found', { code: 'not_found', status: 404 });
+    if (!result) throw new ApiRequestError('Browser chat session not found', { code: ERROR_CODES.NOT_FOUND, status: 404 });
     return apiJson(request, result);
   } catch (error) {
     return apiError(request, error, { fallback: 'Failed to read browser chat history' });

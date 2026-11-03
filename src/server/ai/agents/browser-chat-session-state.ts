@@ -1,3 +1,5 @@
+
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 export type BrowserChatSessionLifecycleStatus = 'idle' | 'running' | 'closed' | 'error';
 export type BrowserChatTurnState =
   | 'idle'
@@ -93,7 +95,7 @@ export function transitionBrowserChatSession<TConfirmation>(
       session.updatedAt = transition.at;
       break;
     case 'sessionRecovered':
-      if (session.busy) throw new Error('A busy browser-chat session cannot be recovered to idle.');
+      if (session.busy) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'A busy browser-chat session cannot be recovered to idle.');
       session.status = 'idle';
       session.turnState = 'idle';
       session.error = undefined;
@@ -101,7 +103,7 @@ export function transitionBrowserChatSession<TConfirmation>(
       break;
     case 'confirmationPending':
       if (!session.busy || session.status !== 'running') {
-        throw new Error('A tool confirmation can only be requested by an active browser-chat turn.');
+        throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'A tool confirmation can only be requested by an active browser-chat turn.');
       }
       session.pendingToolConfirmation = transition.confirmation;
       session.turnState = 'awaiting_confirmation';

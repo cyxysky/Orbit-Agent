@@ -17,6 +17,8 @@ import {
   type LibreOfficeRuntimeOptions,
   type OfficeFileConversionInput,
 } from './libreoffice.ts';
+import { CodedError, ERROR_CODES } from '../../errors.ts';
+
 
 const convertibleOfficeExtensions = new Set([
   '.doc', '.docx', '.odt',
@@ -110,7 +112,7 @@ export function createNodeFileConverter(
     const onAbort = () => controller.abort(
       externalSignal?.reason instanceof Error
         ? externalSignal.reason
-        : new Error('Office conversion aborted.'),
+        : new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'Office conversion aborted.'),
     );
     if (externalSignal?.aborted) onAbort();
     else externalSignal?.addEventListener('abort', onAbort, { once: true });
@@ -179,7 +181,7 @@ export function createNodeFileConverter(
         timeoutMs: options.timeoutMs,
       });
       signal.throwIfAborted();
-      if (!converted?.length) throw new Error('LibreOffice did not return converted PDF bytes.');
+      if (!converted?.length) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'LibreOffice did not return converted PDF bytes.');
 
       const directory = conversionsDirectory(input.runId);
       nodeArtifactRelativePath(
@@ -296,7 +298,7 @@ export function createNodeFileConverter(
       if (disposed) return;
       disposed = true;
       for (const controller of activeControllers) {
-        controller.abort(new Error('File converter disposed.'));
+        controller.abort(new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'File converter disposed.'));
       }
       await Promise.allSettled(activeConversions);
       activeControllers.clear();

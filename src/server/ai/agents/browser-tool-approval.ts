@@ -16,6 +16,7 @@ export function browserToolApprovalRequest(input: {
   toolName: string;
   toolInput: unknown;
 }): BrowserToolApprovalRequest | undefined {
+  if (input.toolName === 'textEditor') return undefined;
   const record = input.toolInput && typeof input.toolInput === 'object' && !Array.isArray(input.toolInput)
     ? input.toolInput as Record<string, unknown>
     : {};

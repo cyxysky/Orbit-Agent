@@ -1,5 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import sharp from 'sharp';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 function aiScreenshotMaxBytes() {
   const kb = Number(process.env.AI_SCREENSHOT_MAX_KB || '');
@@ -39,7 +41,7 @@ async function normalizeImageForAi(buffer: Buffer) {
       .toBuffer();
     return { data, mediaType: 'image/png' } as const;
   } catch (error) {
-    throw new Error(`图片格式无法解码或转换为模型可读取的 PNG：${error instanceof Error ? error.message : String(error)}`);
+    throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, `图片格式无法解码或转换为模型可读取的 PNG：${error instanceof Error ? error.message : String(error)}`);
   }
 }
 

@@ -13,6 +13,8 @@ import {
   writePersonalMemoryRecords,
   writePersonalMemoryRecordsQueued,
 } from '@/server/storage/database-record-store';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export type PersonalMemoryScope = 'global' | 'domain';
 export type PersonalMemoryType = 'alias' | 'preference' | 'workflow' | 'domain_fact';
@@ -97,8 +99,8 @@ export type PersonalMemoryExtractionResult = {
 };
 
 export type PersonalMemoryFilterRejectionReason =
-  | 'invalid_candidate' | 'missing_new_evidence' | 'unverified_procedure' | 'invalid_scope'
-  | 'expired_candidate' | 'review_rejected' | 'invalid_review';
+  | typeof ERROR_CODES.INVALID_CANDIDATE | typeof ERROR_CODES.MISSING_NEW_EVIDENCE | 'unverified_procedure' | typeof ERROR_CODES.INVALID_SCOPE
+  | 'expired_candidate' | 'review_rejected' | typeof ERROR_CODES.INVALID_REVIEW;
 
 export type PersonalMemoryFilterRejection = {
   index: number;
@@ -387,7 +389,7 @@ export async function savePersonalMemoryItem(input: PersonalMemoryDraft & {
     sourceMessageIds: input.sourceMessageIds,
     sourceUrl: textFromUnknown(input.sourceUrl),
   });
-  if (!draft) throw new Error('Personal memory item requires key and value.');
+  if (!draft) throw new CodedError(ERROR_CODES.CONTEXT_READ_FAILED, 'Personal memory item requires key and value.');
   const timestamp = now();
   const requestedId = compactText(input.id, 120);
   const requestedItem = requestedId
@@ -396,7 +398,7 @@ export async function savePersonalMemoryItem(input: PersonalMemoryDraft & {
       .find((item): item is PersonalMemoryItem => Boolean(item))
     : undefined;
   if (requestedItem && requestedItem.userId !== userId) {
-    throw new Error('Only the memory creator can edit this shared memory.');
+    throw new CodedError(ERROR_CODES.CONTEXT_READ_FAILED, 'Only the memory creator can edit this shared memory.');
   }
   const identityItem = await readPersonalMemoryRecordByIdentity<PersonalMemoryItem>({
     userId,
@@ -486,7 +488,7 @@ export async function updatePersonalMemoryItem(id: string, patch: PersonalMemory
     sourceMessageIds: source?.sourceMessageIds || previous.sourceMessageIds,
     sourceUrl: source?.sourceUrl || previous.sourceUrl,
   });
-  if (!draft) throw new Error('Personal memory item requires key and value.');
+  if (!draft) throw new CodedError(ERROR_CODES.CONTEXT_READ_FAILED, 'Personal memory item requires key and value.');
   const item: PersonalMemoryItem = {
     ...previous,
     ...draft,

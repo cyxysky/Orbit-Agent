@@ -7,6 +7,8 @@ import path from 'node:path';
 import { raceWithAbort } from '../../index.ts';
 import { sanitizeNodeArtifactFileName } from './artifacts.ts';
 import type { OfficeDocumentDraft } from '../office/types.ts';
+import { CodedError, ERROR_CODES } from '../../errors.ts';
+
 
 export const DOCUMENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/;
 
@@ -44,7 +46,7 @@ export function draftLockPath(runId: string | undefined, documentId: string) {
 export function requireDocumentId(value: string | undefined, action: 'readSource' | 'generate' | 'edit' | 'render') {
   const documentId = String(value || '').trim();
   if (!DOCUMENT_ID_PATTERN.test(documentId)) {
-    throw new Error(`file action=${action} requires the stable documentId returned by action=plan.`);
+    throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `file action=${action} requires the stable documentId returned by action=plan.`);
   }
   return documentId;
 }
@@ -54,7 +56,7 @@ export async function acquireFilesystemDraftLock(runId: string | undefined, docu
   await mkdir(path.dirname(lockPath), { recursive: true });
   const deadline = Date.now() + DRAFT_LOCK_WAIT_MS;
   while (true) {
-    if (abortSignal?.aborted) throw abortSignal.reason instanceof Error ? abortSignal.reason : new Error('Draft operation aborted.');
+    if (abortSignal?.aborted) throw abortSignal.reason instanceof Error ? abortSignal.reason : new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'Draft operation aborted.');
     try {
       const handle = await open(lockPath, 'wx');
       await handle.writeFile(JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString() }), 'utf8');
@@ -83,7 +85,7 @@ export async function acquireFilesystemDraftLock(runId: string | undefined, docu
         const lockCode = lockError && typeof lockError === 'object' && 'code' in lockError ? String((lockError as { code?: unknown }).code || '') : '';
         if (lockCode !== 'ENOENT') throw lockError;
       }
-      if (Date.now() >= deadline) throw new Error(`Timed out waiting for the workspace draft lock for ${documentId}.`);
+      if (Date.now() >= deadline) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `Timed out waiting for the workspace draft lock for ${documentId}.`);
       await raceWithAbort(new Promise((resolve) => setTimeout(resolve, 50)), abortSignal);
     }
   }
@@ -131,7 +133,7 @@ export async function recoverDraftTransaction(runId: string | undefined, documen
     throw error;
   }
   if (pending.documentId !== documentId) {
-    throw new Error('Draft transaction identity does not match the requested documentId.');
+    throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'Draft transaction identity does not match the requested documentId.');
   }
   let sourceMatches = false;
   if (pending.program) {
@@ -174,13 +176,13 @@ export async function loadDraft(runId: string | undefined, documentId: string) {
     checkpointAt: parsed.updatedAt || parsed.createdAt,
     renderedDigest: parsed.renderedDigest,
   };
-  if (parsed.documentId !== documentId) throw new Error('Document draft identity does not match the requested documentId.');
+  if (parsed.documentId !== documentId) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'Document draft identity does not match the requested documentId.');
   if (parsed.program) {
     try {
       const workspaceProgram = await readFile(draftProgramPath(runId, documentId, parsed.generator), 'utf8');
       const workspaceDigest = sourceDigest(workspaceProgram);
       if (parsed.sourceDigest && parsed.sourceDigest !== workspaceDigest) {
-        throw new Error('Workspace source file does not match its saved source metadata. Reload the workspace before editing.');
+        throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'Workspace source file does not match its saved source metadata. Reload the workspace before editing.');
       }
       // The file is the executable source of truth; JSON contains metadata only.
       parsed.program = workspaceProgram;

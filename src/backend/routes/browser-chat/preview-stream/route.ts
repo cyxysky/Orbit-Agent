@@ -4,6 +4,8 @@ import { ApiRequestError, apiError, apiJson } from '@/server/http/api-request';
 import { requestApplicationUserId } from '@/server/auth/user-context';
 import { createWebSocketTicket, requestPublicOrigin } from '@/server/auth/websocket-ticket';
 import { selectBrowserChatSessionRuntime } from '@/server/ai/agents/browser-chat.service';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 
 export async function POST(request: Request) {
@@ -11,7 +13,7 @@ export async function POST(request: Request) {
     const userId = requestApplicationUserId(request);
     const sessionId = new URL(request.url).searchParams.get('sessionId')?.trim() || '';
     if (!sessionId || !await selectBrowserChatSessionRuntime(sessionId, userId)) {
-      throw new ApiRequestError('Browser chat session not found', { code: 'not_found', status: 404 });
+      throw new ApiRequestError('Browser chat session not found', { code: ERROR_CODES.NOT_FOUND, status: 404 });
     }
     const info = await ensureBrowserPreviewWebSocketServer();
     const auth = await createWebSocketTicket({

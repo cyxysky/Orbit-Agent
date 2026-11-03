@@ -10,6 +10,8 @@ import { assertHtmlOfficeSource } from '../../office/html.ts';
 import type { OfficeDocumentKind } from '../../office/types.ts';
 import { collectHtmlDocument, serializeHtmlAsset, inspectHtmlPrintLayout, type HtmlBlock, type HtmlDocumentModel } from './html-dom.ts';
 import { convertOfficeFileToPath } from '../libreoffice.ts';
+import { CodedError, ERROR_CODES } from '../../../errors.ts';
+
 
 const queue = new CapabilityTaskQueue({ concurrency: 2, maxQueued: 16, queueTimeoutMs: 120000 });
 const alignment = (value: string) => value === 'center' ? AlignmentType.CENTER : value === 'right' || value === 'end' ? AlignmentType.RIGHT : value === 'justify' ? AlignmentType.JUSTIFIED : AlignmentType.LEFT;
@@ -89,14 +91,14 @@ function wordBlocks(blocks: HtmlBlock[], assets: Assets, maxWidth = 640, maxHeig
 }
 
 function writeSlides(model: HtmlDocumentModel, assets: Assets) {
-  if (!model.explicitSlides) throw new Error('PPTX HTML requires one <section data-slide> with explicit width/height per slide.');
-  if (model.unsupported.length) throw new Error(`PPTX cannot map these CSS features to editable objects; use img/SVG artwork: ${[...new Set(model.unsupported)].slice(0, 12).join('; ')}`);
+  if (!model.explicitSlides) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'PPTX HTML requires one <section data-slide> with explicit width/height per slide.');
+  if (model.unsupported.length) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `PPTX cannot map these CSS features to editable objects; use img/SVG artwork: ${[...new Set(model.unsupported)].slice(0, 12).join('; ')}`);
   const first = model.slides[0].rect;
-  if (first.width <= 0 || first.height <= 0 || first.width > 4096 || first.height > 4096) throw new Error('Slide dimensions must be positive and at most 4096 CSS pixels.');
+  if (first.width <= 0 || first.height <= 0 || first.width > 4096 || first.height > 4096) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'Slide dimensions must be positive and at most 4096 CSS pixels.');
   const deck = new PptxGenJS();
   deck.defineLayout({ name: 'HTML', width: first.width / 96, height: first.height / 96 }); deck.layout = 'HTML'; deck.title = model.title;
   for (const surface of model.slides) {
-    if (Math.abs(surface.rect.width - first.width) > 1 || Math.abs(surface.rect.height - first.height) > 1) throw new Error('All HTML slides must have the same dimensions.');
+    if (Math.abs(surface.rect.width - first.width) > 1 || Math.abs(surface.rect.height - first.height) > 1) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'All HTML slides must have the same dimensions.');
     const slide = deck.addSlide(); slide.background = { color: surface.style.background || 'FFFFFF' };
     const geometry = (rect: HtmlBlock['rect']) => ({ x: (rect.x - surface.rect.x) / 96, y: (rect.y - surface.rect.y) / 96, w: rect.width / 96, h: rect.height / 96 });
     for (const decoration of surface.decorations) {
@@ -114,10 +116,10 @@ function writeSlides(model: HtmlDocumentModel, assets: Assets) {
     }
     for (const block of surface.blocks) {
       const g = geometry(block.rect);
-      if (g.x < -0.02 || g.y < -0.02 || g.x + g.w > first.width / 96 + 0.02 || g.y + g.h > first.height / 96 + 0.02) throw new Error(`HTML content overflows a slide: ${block.tag}. Resize or paginate the source.`);
+      if (g.x < -0.02 || g.y < -0.02 || g.x + g.w > first.width / 96 + 0.02 || g.y + g.h > first.height / 96 + 0.02) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `HTML content overflows a slide: ${block.tag}. Resize or paginate the source.`);
       if (block.kind === 'image' && block.image) slide.addImage({ ...g, data: 'data:image/png;base64,' + assets.get(block.image.key)!.toString('base64') });
       else if (block.kind === 'table') {
-        if (block.rows?.some((row) => row.some((cell) => cell.blocks.some((b) => b.kind !== 'paragraph')))) throw new Error('PPTX tables support text cells. Place images or nested tables outside the table in the HTML slide.');
+        if (block.rows?.some((row) => row.some((cell) => cell.blocks.some((b) => b.kind !== 'paragraph')))) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'PPTX tables support text cells. Place images or nested tables outside the table in the HTML slide.');
         const rows = (block.rows || []).map((row) => row.map((cell) => {
           const borders = tableCellStyle(block, cell);
           const text: PptxGenJS.TextProps[] = cell.blocks.flatMap((paragraph, paragraphIndex) => paragraph.runs.map((run, index) => ({
@@ -172,10 +174,10 @@ export async function generateHtmlOfficeDocument(input: {
   outputPath?: string; previewPath?: string; abortSignal?: AbortSignal;
   onProgress?: (progress: { phase: string; message: string; current?: number; total?: number }) => void | Promise<void>;
 }) {
-  if (Boolean(input.sourceCode) === Boolean(input.sourcePath)) throw new Error('HTML generation requires exactly one sourceCode or sourcePath.');
+  if (Boolean(input.sourceCode) === Boolean(input.sourcePath)) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'HTML generation requires exactly one sourceCode or sourcePath.');
   const source = input.sourceCode ?? await readFile(input.sourcePath!, 'utf8'); assertHtmlOfficeSource(source);
   const extension = path.extname(input.fileName).toLowerCase();
-  if (!['.pdf', '.docx', '.pptx'].includes(extension)) throw new Error('HTML generation supports PDF, DOCX and PPTX. XLSX uses the JavaScript spreadsheet engine.');
+  if (!['.pdf', '.docx', '.pptx'].includes(extension)) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'HTML generation supports PDF, DOCX and PPTX. XLSX uses the JavaScript spreadsheet engine.');
   return queue.run(async (signal) => {
     const abortSignal = AbortSignal.any([signal, AbortSignal.timeout(180000)]);
     const temporary = await mkdtemp(path.join(os.tmpdir(), 'webpilot-html-'));
@@ -197,27 +199,27 @@ export async function generateHtmlOfficeDocument(input: {
         if (url.origin === 'https://document.local' && url.pathname === '/document.html') return route.fulfill({ body: source, contentType: 'text/html; charset=utf-8' });
         if (url.origin === 'https://document.local' && url.pathname === '/__office_asset__.html') return route.fulfill({ body: '<!doctype html><html><head></head><body></body></html>', contentType: 'text/html' });
         try {
-          if (url.origin !== 'https://document.local') throw new Error('Remote resource');
+          if (url.origin !== 'https://document.local') throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'Remote resource');
           const candidate = await realpath(path.resolve(assetsRoot, '.' + decodeURIComponent(url.pathname)));
           const relative = path.relative(assetsRoot, candidate);
-          if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Resource outside assets directory');
+          if (relative.startsWith('..') || path.isAbsolute(relative)) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'Resource outside assets directory');
           const types: Record<string,string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.svg': 'image/svg+xml', '.webp': 'image/webp', '.css': 'text/css', '.woff2': 'font/woff2', '.ttf': 'font/ttf' };
           const contentType = types[path.extname(candidate).toLowerCase()];
-          if (!contentType) throw new Error('Unsupported resource');
+          if (!contentType) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'Unsupported resource');
           await route.fulfill({ body: await readFile(candidate), contentType });
         } catch { failedResources.push(url.pathname); await route.abort(); }
       });
       const page = await context.newPage();
       await page.goto('https://document.local/document.html', { waitUntil: 'load', timeout: 30000 });
       await page.evaluate(async () => { await document.fonts.ready; await Promise.all(Array.from(document.images).map((img) => img.decode())); });
-      if (failedResources.length) throw new Error(`HTML resources unavailable; use downloaded local assets: ${failedResources.slice(0, 10).join(', ')}`);
+      if (failedResources.length) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `HTML resources unavailable; use downloaded local assets: ${failedResources.slice(0, 10).join(', ')}`);
       const assets: Assets = new Map();
       if (extension === '.pdf') {
         await page.emulateMedia({ media: 'print' });
         const print = await page.evaluate(inspectHtmlPrintLayout);
         await page.setViewportSize({ width: print.width, height: print.height });
         const { issues } = await page.evaluate(inspectHtmlPrintLayout);
-        if (issues.length) throw new Error(`HTML_PRINT_LAYOUT_INVALID: ${issues.slice(0, 8).join(' ')}`);
+        if (issues.length) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `HTML_PRINT_LAYOUT_INVALID: ${issues.slice(0, 8).join(' ')}`);
         await page.pdf({ path: outputPath, format: 'A4', printBackground: true, preferCSSPageSize: true });
         if (path.resolve(outputPath) !== path.resolve(previewPath)) await copyFile(outputPath, previewPath);
       } else {
@@ -227,11 +229,11 @@ export async function generateHtmlOfficeDocument(input: {
           await page.setViewportSize({ width: 642, height: 971 });
         }
         const model = await page.evaluate(collectHtmlDocument, { positionedText: extension === '.pptx' });
-        if (!model.blocks.length) throw new Error('HTML contains no visible document content.');
+        if (!model.blocks.length) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'HTML contains no visible document content.');
         const assetPage = await context.newPage();
         await assetPage.goto('https://document.local/__office_asset__.html', { waitUntil: 'load' });
         for (const asset of model.assets) {
-          if (asset.width > 8192 || asset.height > 8192) throw new Error('HTML image exceeds the 8192 pixel rendering limit.');
+          if (asset.width > 8192 || asset.height > 8192) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'HTML image exceeds the 8192 pixel rendering limit.');
           const paint = await page.evaluate(serializeHtmlAsset, asset.key);
           await assetPage.setViewportSize({ width: Math.max(1, Math.ceil(asset.width)), height: Math.max(1, Math.ceil(asset.height)) });
           await assetPage.setContent('<!doctype html><html><head><style>html,body{margin:0;padding:0;background:transparent}</style></head><body></body></html>');
@@ -243,14 +245,14 @@ export async function generateHtmlOfficeDocument(input: {
           assets.set(asset.key, await assetPage.locator('body > :first-child').screenshot({ type: 'png', omitBackground: true }));
         }
         await assetPage.close();
-        if (failedResources.length) throw new Error(`HTML asset resources unavailable: ${failedResources.slice(0, 10).join(', ')}`);
+        if (failedResources.length) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `HTML asset resources unavailable: ${failedResources.slice(0, 10).join(', ')}`);
         await input.onProgress?.({ phase: 'html-convert', message: `Converting HTML to ${extension}` });
         if (extension === '.docx') {
           const doc = new Document({ title: model.title, sections: [{ properties: { page: { size: { width: 11906, height: 16838 }, margin: { top: 1134, right: 1134, bottom: 1134, left: 1134 } } }, children: wordBlocks(model.blocks, assets) }] });
           await writeFile(outputPath, await Packer.toBuffer(doc), { signal: abortSignal });
         } else await writeSlides(model, assets).writeFile({ fileName: outputPath });
         await input.onProgress?.({ phase: 'reopen', message: 'Reopening the generated Office file for preview' });
-        if (!await convertOfficeFileToPath({ absolutePath: outputPath, sourceExtension: extension, targetExtension: '.pdf', targetPath: previewPath, abortSignal })) throw new Error('LibreOffice is required to reopen and preview HTML-generated Office files.');
+        if (!await convertOfficeFileToPath({ absolutePath: outputPath, sourceExtension: extension, targetExtension: '.pdf', targetPath: previewPath, abortSignal })) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'LibreOffice is required to reopen and preview HTML-generated Office files.');
       }
       abortSignal.throwIfAborted();
       return { buffer: input.outputPath ? undefined : await readFile(outputPath), outputPath,
@@ -263,4 +265,10 @@ export async function generateHtmlOfficeDocument(input: {
   }, { abortSignal: input.abortSignal });
 }
 
-export function htmlOfficeRuntimeSource() { return [assertHtmlOfficeSource, collectHtmlDocument, serializeHtmlAsset, inspectHtmlPrintLayout, alignment, tableCellStyle, wordBorders, wordBlocks, writeSlides, generateHtmlOfficeDocument].map((fn) => fn.toString()).join('\n'); }
+export function htmlOfficeRuntimeSource() {
+  return [
+    `const ERROR_CODES = ${JSON.stringify(ERROR_CODES)};`,
+    `const CodedError = ${CodedError.toString()};`,
+    ...[assertHtmlOfficeSource, collectHtmlDocument, serializeHtmlAsset, inspectHtmlPrintLayout, alignment, tableCellStyle, wordBorders, wordBlocks, writeSlides, generateHtmlOfficeDocument].map((fn) => fn.toString()),
+  ].join('\n');
+}

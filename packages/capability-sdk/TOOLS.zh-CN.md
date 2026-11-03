@@ -5,7 +5,7 @@
 全部工具能力及其 npm 依赖，通过各能力子路径导入。
 
 ```sh
-npm install @cjfclonedeep/capability-sdk@0.2.1
+npm install @cjfclonedeep/capability-sdk
 ```
 
 npm 依赖全部随包安装。根入口提供契约和执行机制，不会连带加载全部工具与框架适配。正常 npm 安装还会通过 postinstall 自动准备受支持的 Windows/Linux 执行环境。 [Runtime](RUNTIME.zh-CN.md)
@@ -43,4 +43,4 @@ serveTerminalMcpStdio({
 });
 ```
 
-这些入口对应 0.2.1 版本。此前单独发布的包仍是独立的旧版本。迁移时将原包名替换为新的子入口；安装时使用包名，不要安装子路径。
+这些入口对应当前源码，请使用匹配的发布包。统一安装器要求 0.3.1 或后续版本。此前单独发布的包仍是独立的旧版本。迁移时将原包名替换为新的子入口；安装时使用包名，不要安装子路径。

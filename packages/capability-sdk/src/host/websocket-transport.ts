@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import type http from 'node:http';
 import type { Socket } from 'node:net';
+import { CodedError, ERROR_CODES } from '../errors.ts';
+
 
 function encodeWebSocketFrame(opcode: number, payload: Buffer | readonly Buffer[]) {
   const parts = Buffer.isBuffer(payload) ? [payload] : payload;
@@ -133,7 +135,7 @@ export function listenWebSocketServer(
         return;
       }
       if (error.code === 'EADDRINUSE' && options.addressInUseMessage) {
-        reject(new Error(options.addressInUseMessage(port)));
+        reject(new CodedError(ERROR_CODES.CONFIGURATION_INVALID, options.addressInUseMessage(port)));
         return;
       }
       reject(error);

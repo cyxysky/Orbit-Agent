@@ -3,6 +3,8 @@ import type { Page } from 'patchright';
 import { raceWithAbort } from '../../index.ts';
 import type { BrowserActionResult, BrowserStateSnapshot } from './browser-session.ts';
 import type { BrowserPageObservation } from './browser-page-observation.ts';
+import { CodedError, ERROR_CODES } from '../../errors.ts';
+
 
 export type BrowserStateReadOptions = {
   abortSignal?: AbortSignal;
@@ -36,15 +38,15 @@ export class BrowserStateReader {
       if (options.cursor) {
         let token: { id?: string; offset?: number };
         try { token = JSON.parse(Buffer.from(options.cursor, 'base64url').toString('utf8')); }
-        catch { throw new Error('Invalid state cursor. Read state without cursor to start a new capture.'); }
+        catch { throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Invalid state cursor. Read state without cursor to start a new capture.'); }
         if (!capture || token.id !== capture.id || !Number.isSafeInteger(token.offset) || token.offset! < 0
           || token.offset! > capture.payload.pageState.length || Date.now() - capture.capturedAt > 120_000
           || capture.page !== this.host.page() || capture.page.isClosed() || capture.payload.activePage.url !== capture.page.url()
           || capture.revision !== this.host.revision(capture.page)) {
-          throw new Error('State cursor expired or its page navigated. Read state without cursor.');
+          throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'State cursor expired or its page navigated. Read state without cursor.');
         }
         for (const key of ['scope', 'frame', 'selector', 'query'] as const) {
-          if (options[key] !== undefined && options[key] !== capture.criteria[key]) throw new Error('State continuation must keep the original scope/frame/selector/query.');
+          if (options[key] !== undefined && options[key] !== capture.criteria[key]) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'State continuation must keep the original scope/frame/selector/query.');
         }
         offset = token.offset!;
       } else {
@@ -53,7 +55,7 @@ export class BrowserStateReader {
         const [observation, title] = await raceWithAbort(Promise.all([this.host.observation(), page.title()]), options.abortSignal);
         const allFrames = page.frames();
         const explicit = options.frame ? allFrames.find((frame) => this.host.framePath(frame) === options.frame) : undefined;
-        if (options.frame && !explicit) throw new Error('Frame not found. Use an exact frame path from the page observation.');
+        if (options.frame && !explicit) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Frame not found. Use an exact frame path from the page observation.');
         const active = allFrames.find((frame) => this.host.framePath(frame) === observation.activeSurface?.framePath) || page.mainFrame();
         const frames = explicit ? [explicit] : options.scope === 'all' ? allFrames : [active];
         const parts = [`[page-state] ${JSON.stringify(observation)}`];
@@ -83,16 +85,16 @@ export class BrowserStateReader {
           }
           const heading = `[ax-tree frame=${this.host.framePath(frame)} scope=${options.selector || options.scope || 'active'}]`;
           characterCount += heading.length + selectedTree.length + 2;
-          if (characterCount > 2_000_000) throw new Error('State capture exceeds 2 million characters. Narrow frame, selector or query.');
+          if (characterCount > 2_000_000) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'State capture exceeds 2 million characters. Narrow frame, selector or query.');
           parts.push(heading, selectedTree);
         }
-        if (page.isClosed() || page !== this.host.page() || revision !== this.host.revision(page)) throw new Error('Page changed or became unavailable during capture. Read state again.');
+        if (page.isClosed() || page !== this.host.page() || revision !== this.host.revision(page)) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Page changed or became unavailable during capture. Read state again.');
         capture = { id: randomUUID(), page, revision, capturedAt: Date.now(), criteria: {
           scope: options.scope, frame: options.frame, selector: options.selector, query: options.query,
         }, payload: { tabs: this.host.tabs(), activePage: { url: page.url(), title }, pageState: parts.join('\n') } };
         this.capture = capture;
       }
-      if (!capture) throw new Error('No state capture is available.');
+      if (!capture) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'No state capture is available.');
       const budget = Math.min(200_000, Math.max(1_000, Math.floor(options.maxOutputChars ?? 40_000)));
       const source = capture.payload;
       let length = Math.min(source.pageState.length - offset, Math.max(1, budget - 800));
@@ -121,7 +123,7 @@ export class BrowserStateReader {
       return { ok: true, data: payload, summary: `Read browser state characters ${offset}-${offset + length} of ${source.pageState.length}.` };
     } catch (error) {
       this.clear();
-      return { ok: false, actual: error instanceof Error ? error.message : String(error), failureCategory: options.abortSignal?.aborted ? 'aborted' : 'browser-state-failed' };
+      return { ok: false, actual: error instanceof Error ? error.message : String(error), failureCategory: options.abortSignal?.aborted ? ERROR_CODES.ABORTED : ERROR_CODES.BROWSER_STATE_FAILED };
     }
   }
 }

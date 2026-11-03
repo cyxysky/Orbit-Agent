@@ -3,6 +3,8 @@ import { ApiRequestError, apiError, apiJson, parseOptionalJsonRequest } from '@/
 import { requestApplicationUserId } from '@/server/auth/user-context';
 import type { BrowserChatSessionRouteContext } from '@/server/http/browser-chat-route';
 import { z } from 'zod';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 const resumeVerificationSchema = z.object({ subagentId: z.string().trim().min(1).max(160).optional() });
 
@@ -14,7 +16,7 @@ export async function POST(request: Request, context: BrowserChatSessionRouteCon
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to resume browser chat verification';
     return apiError(request, error instanceof ApiRequestError ? error : new ApiRequestError(message, {
-      code: /not found/i.test(message) ? 'not_found' : 'resume_failed',
+      code: /not found/i.test(message) ? ERROR_CODES.NOT_FOUND : ERROR_CODES.RESUME_FAILED,
       status: /not found/i.test(message) ? 404 : 400,
     }), { fallback: 'Failed to resume browser chat verification' });
   }

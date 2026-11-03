@@ -12,9 +12,9 @@ import { createNodeConnectorsCapability } from '@cjfclonedeep/capability-sdk/int
 import type { AgentConnector } from '@cjfclonedeep/capability-sdk/integrations/connectors';
 import { createNodeKnowledgeCapability } from '@cjfclonedeep/capability-sdk/knowledge/node';
 import { userKnowledgeDirectory } from './knowledge-storage';
-import { createNovelCapability, type NovelConfirmationRequest } from '@cjfclonedeep/capability-sdk/novel';
-import { createFileNovelOperations } from '@cjfclonedeep/capability-sdk/novel/node';
-import { novelUserDirectory } from './novel-storage';
+import { createTextEditorCapability } from '@cjfclonedeep/capability-sdk/text-editor';
+import { createFileTextEditorOperations } from '@cjfclonedeep/capability-sdk/text-editor/node';
+import { importLegacyTextDocuments, textUserDirectory } from './text-storage';
 import { saveCompositionProject } from './video-projects';
 import { createDataCapability, createDataSourceRegistry, type AgentDataSource } from '@cjfclonedeep/capability-sdk/data';
 import { createMediaCapability, type MediaOperations } from '@cjfclonedeep/capability-sdk/media';
@@ -37,6 +37,8 @@ import {
   createExternalDataSource,
   createExternalIntegrationConnector,
 } from '@/server/integrations/external-integration-drivers';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 function safeSegment(value: unknown, fallback: string) {
   const normalized = String(value || '').trim().replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
@@ -96,16 +98,16 @@ export async function createConfiguredMediaOperations(input: { context: Capabili
     try { pathname = new URL(sourceRef, 'http://webpilot.local').pathname; } catch { /* validate the raw path below */ }
     const marker = '/api/artifacts/';
     const markerIndex = pathname.indexOf(marker);
-    if (markerIndex < 0) throw new Error('Media sourceRef must be a registered attachment id or Artifact URL.');
+    if (markerIndex < 0) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Media sourceRef must be a registered attachment id or Artifact URL.');
     const relative = pathname.slice(markerIndex + marker.length).split('/').map(decodeURIComponent);
-    if (relative.some((segment) => !segment || segment === '.' || segment === '..' || /[\\/]/.test(segment))) throw new Error('Invalid media artifact reference.');
+    if (relative.some((segment) => !segment || segment === '.' || segment === '..' || /[\\/]/.test(segment))) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Invalid media artifact reference.');
     const inRun = relative[0] === safeSegment(input.context.runId, 'shared');
     const ownUpload = relative[0] === 'uploads' && relative[1] === input.context.userId;
     const ownVideoProject = relative[0] === 'media-projects' && relative[1] === input.context.userId;
-    if (!inRun && !ownUpload && !ownVideoProject) throw new Error('Media sourceRef must belong to this run or be a registered attachment.');
+    if (!inRun && !ownUpload && !ownVideoProject) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Media sourceRef must belong to this run or be a registered attachment.');
     const resolved = path.resolve(root, ...relative);
     const relativeCheck = path.relative(root, resolved);
-    if (relativeCheck.startsWith('..') || path.isAbsolute(relativeCheck)) throw new Error('Media artifact reference escapes the artifact root.');
+    if (relativeCheck.startsWith('..') || path.isAbsolute(relativeCheck)) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Media artifact reference escapes the artifact root.');
     return resolved;
   };
   const configuration = mediaModelsForConfig(await store.getModelConfig());
@@ -116,14 +118,14 @@ export async function createConfiguredMediaOperations(input: { context: Capabili
     async readSource(ref, context) {
       context.abortSignal?.throwIfAborted();
       const source = await resolveSource(ref);
-      if ((await stat(source)).size > 50 * 1024 * 1024) throw new Error('参考图片不能超过 50 MB。');
+      if ((await stat(source)).size > 50 * 1024 * 1024) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '参考图片不能超过 50 MB。');
       return readFile(source, { signal: context.abortSignal });
     },
     async publishArtifact(file, context) {
       context.abortSignal?.throwIfAborted();
       const format = fileFormatForMimeType(file.mediaType);
       const expectedKind = file.kind === 'speech' ? 'audio' : file.kind;
-      if (!format || format.kind !== expectedKind) throw new Error(`不支持保存此媒体格式：${file.mediaType}`);
+      if (!format || format.kind !== expectedKind) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, `不支持保存此媒体格式：${file.mediaType}`);
       const directory = artifactPath(safeSegment(input.context.runId, 'shared'), 'media');
       await mkdir(directory, { recursive: true });
       const fileName = `${file.kind}_${randomUUID()}${format.extension}`;
@@ -174,26 +176,26 @@ export async function agentMediaToolTimeoutMs() {
 
 export function createAgentInfrastructureProviders(input: {
   attachmentBindings?: readonly BrowserCodeAttachmentBinding[];
-  requestNovelConfirmation?: (request: NovelConfirmationRequest) => Promise<'confirmed' | 'cancelled'>;
 } = {}): CapabilityProvider[] {
   return [
     createAgentCodeSandboxCapability(),
     createNodeConnectorsCapability({ connectors: configuredConnectors }),
     createNodeKnowledgeCapability({ directory: (context) => userKnowledgeDirectory(context.userId) }),
-    createNovelCapability({ createOperations(context) {
-      return createFileNovelOperations({
-        directory: novelUserDirectory(context.userId),
-        requestConfirmation: input.requestNovelConfirmation,
+    createTextEditorCapability({ createOperations(context) {
+      return createFileTextEditorOperations({
+        directory: textUserDirectory(context.userId),
+        prepareStore: store => importLegacyTextDocuments(store, context.userId),
         async publishArtifact(fileName, content, execution) {
           execution.abortSignal?.throwIfAborted();
-          const directory = artifactPath(safeSegment(context.runId, 'shared'), 'novels', randomUUID());
+          const directory = artifactPath(safeSegment(context.runId, 'shared'), 'text-documents', randomUUID());
           await mkdir(directory, { recursive: true });
           const destination = path.join(directory, fileName);
           await writeFile(destination, content, { encoding: 'utf8', signal: execution.abortSignal });
           const artifactId = path.relative(artifactsRoot(), destination).split(path.sep).join('/');
           const url = artifactApiUrl(destination, { artifactsRoot: artifactsRoot() });
-          if (!url) throw new Error('Cannot create a download URL for the novel artifact.');
-          return { artifactId, fileName, mediaType: 'text/markdown', url, downloadUrl: `${url}?download=1` };
+          if (!url) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Cannot create a download URL for the text document.');
+          const mediaType = fileName.endsWith('.html') ? 'text/html' : fileName.endsWith('.md') ? 'text/markdown' : 'text/plain';
+          return { artifactId, fileName, mediaType, url, downloadUrl: `${url}?download=1` };
         },
       });
     } }),

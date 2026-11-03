@@ -2,6 +2,8 @@ import { ResponseOperationError, type ResponseHandler, type ResponseServerContex
 import { mapResponse, type MapResponseParams } from './response.ts';
 import { MapsError, mapsUrl, type MapRecord } from './core.ts';
 import type { GoogleMapPayload } from './react.tsx';
+import { ERROR_CODES } from '../errors.ts';
+
 
 export function createMapResponseHandlers(options: {
   resolve(mapId: string, context: ResponseServerContext): Promise<GoogleMapPayload | undefined>;
@@ -15,7 +17,7 @@ export function createMapResponseHandlers(options: {
         if (!payload) throw new ResponseOperationError('地图不存在。', 404);
         return payload;
       } catch (error) {
-        if (error instanceof MapsError) throw new ResponseOperationError(error.message, error.code === 'maps-monthly-limit' ? 429 : 400);
+        if (error instanceof MapsError) throw new ResponseOperationError(error.message, error.code === ERROR_CODES.MAPS_MONTHLY_LIMIT ? 429 : 400);
         throw error;
       }
     } },

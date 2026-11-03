@@ -8,6 +8,8 @@ import {
 } from '@cjfclonedeep/capability-sdk/browser/node';
 import { createWebPilotBrowserSession } from '@/server/capabilities/webpilot-browser';
 import { artifactPath, artifactsRoot } from '@/server/storage/paths';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 const DOM_EXPORT_CHUNK_CHARS = 20000;
 const DOM_EXPORT_MAX_CHUNKS = 10000;
@@ -73,10 +75,10 @@ async function collectView(session: BrowserSession, view: SnapshotExportView, re
       mode: view,
     });
     generationId ||= slice.generationId;
-    if (slice.generationId !== generationId) throw new Error('Snapshot generation changed during export.');
+    if (slice.generationId !== generationId) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Snapshot generation changed during export.');
     const content = slice.content;
     if (content.length > DOM_EXPORT_CHUNK_CHARS) {
-      throw new Error(`${view} snapshot chunk ${chunkIndex + 1} exceeded ${DOM_EXPORT_CHUNK_CHARS} characters: ${content.length}`);
+      throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `${view} snapshot chunk ${chunkIndex + 1} exceeded ${DOM_EXPORT_CHUNK_CHARS} characters: ${content.length}`);
     }
     totalChars += content.length;
     chunks.push({
@@ -97,12 +99,12 @@ async function collectView(session: BrowserSession, view: SnapshotExportView, re
       };
     }
     if (slice.nextIndex <= cursorIndex) {
-      throw new Error(`${view} snapshot cursor did not advance: ${cursorIndex} -> ${slice.nextIndex}`);
+      throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `${view} snapshot cursor did not advance: ${cursorIndex} -> ${slice.nextIndex}`);
     }
     cursorIndex = slice.nextIndex;
   }
 
-  throw new Error(`${view} snapshot export exceeded ${DOM_EXPORT_MAX_CHUNKS} chunks.`);
+  throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `${view} snapshot export exceeded ${DOM_EXPORT_MAX_CHUNKS} chunks.`);
 }
 
 function exportFileName() {

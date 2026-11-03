@@ -6,6 +6,8 @@ import { Transform, type Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { CapabilityTaskQueue, raceWithAbort } from '../../index.ts';
 import { createNodeArtifactPayload, sanitizeNodeArtifactFileName, type NodeArtifactUrlResolver } from './artifacts.ts';
+import { CodedError, ERROR_CODES } from '../../errors.ts';
+
 
 export type NodeBrowserDownloadInput = {
   runId: string;
@@ -43,11 +45,11 @@ export function createNodeFileDownloadReceiver(options: {
       const limit = options.maxBytes ?? 128 * 1024 * 1024;
       const bound = new Transform({ transform(chunk: Buffer, _encoding, done) {
         bytes += chunk.length;
-        done(bytes > limit ? new Error(`Browser download exceeds ${limit} bytes.`) : null, chunk);
+        done(bytes > limit ? new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `Browser download exceeds ${limit} bytes.`) : null, chunk);
       } });
       await pipeline(stream, bound, createWriteStream(temporary, { flags: 'wx' }), { signal });
       signal.throwIfAborted();
-      if (bytes === 0) throw new Error('Browser download completed with an empty response (0 bytes); no readable file was received.');
+      if (bytes === 0) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'Browser download completed with an empty response (0 bytes); no readable file was received.');
       await rename(temporary, target);
       return { ...createNodeArtifactPayload(options, { bytes: (await stat(target)).size, fileName, filePath: target, kind: 'download' }), sourceUrl: input.sourceUrl };
     } catch (error) {

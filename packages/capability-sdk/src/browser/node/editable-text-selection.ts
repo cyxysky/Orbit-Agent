@@ -1,3 +1,5 @@
+
+import { CodedError, ERROR_CODES } from '../../errors.ts';
 export type BrowserTextAnchor = {
   offset?: number;
   afterText?: string;
@@ -32,7 +34,7 @@ export function readEditableText(element: Element) {
     const editable = element.closest('[contenteditable=""], [contenteditable="true"]') || element;
     return editable.textContent || '';
   }
-  throw new Error('Target is not an editable input, textarea, or contenteditable element.');
+  throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Target is not an editable input, textarea, or contenteditable element.');
 }
 
 export function applyEditableTextSelection(
@@ -47,7 +49,7 @@ export function applyEditableTextSelection(
     : element instanceof HTMLElement && element.isContentEditable
       ? element.closest('[contenteditable=""], [contenteditable="true"]') || element
       : undefined;
-  if (!editable) throw new Error('Target is not an editable input, textarea, or contenteditable element.');
+  if (!editable) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Target is not an editable input, textarea, or contenteditable element.');
   if (inputElement) {
     inputElement.setSelectionRange(range.start, range.end, range.direction);
     return;
@@ -68,13 +70,13 @@ export function applyEditableTextSelection(
       }
       traversed += nodeLength;
     }
-    if (!mapped && offset !== traversed) throw new Error(`Selection offset ${offset} could not be mapped to the editable DOM.`);
+    if (!mapped && offset !== traversed) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `Selection offset ${offset} could not be mapped to the editable DOM.`);
     return { node, offset: nodeOffset };
   };
   const start = mapOffset(range.start);
   const end = mapOffset(range.end);
   const selection = editable.ownerDocument.defaultView?.getSelection();
-  if (!selection) throw new Error('The editable document does not expose a text selection.');
+  if (!selection) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'The editable document does not expose a text selection.');
   selection.removeAllRanges();
   if (range.direction === 'backward' && typeof selection.setBaseAndExtent === 'function') {
     selection.setBaseAndExtent(end.node, end.offset, start.node, start.offset);
@@ -93,12 +95,12 @@ export function resolveEditableTextSelection(
   const positiveOccurrence = (value: unknown, label: string) => {
     const occurrence = value === undefined ? 1 : Number(value);
     if (!Number.isInteger(occurrence) || occurrence < 1) {
-      throw new Error(`${label} occurrence must be a positive integer.`);
+      throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `${label} occurrence must be a positive integer.`);
     }
     return occurrence;
   };
   const textOccurrenceOffset = (needle: string, occurrenceValue: unknown, label: string) => {
-    if (!needle) throw new Error(`${label} text cannot be empty.`);
+    if (!needle) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `${label} text cannot be empty.`);
     const occurrence = positiveOccurrence(occurrenceValue, label);
     let offset = -1;
     let searchFrom = 0;
@@ -108,24 +110,24 @@ export function resolveEditableTextSelection(
       searchFrom = offset + needle.length;
     }
     if (offset < 0) {
-      throw new Error(`${label} occurrence ${occurrence} was not found in the editable text.`);
+      throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `${label} occurrence ${occurrence} was not found in the editable text.`);
     }
     return offset;
   };
   const resolveAnchor = (anchor: BrowserTextAnchor, label: string) => {
-    if (!anchor || typeof anchor !== 'object') throw new Error(`${label} anchor is required.`);
+    if (!anchor || typeof anchor !== 'object') throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `${label} anchor is required.`);
     const hasOffset = anchor.offset !== undefined;
     const hasAfterText = anchor.afterText !== undefined;
     const hasBeforeText = anchor.beforeText !== undefined;
     if (Number(hasOffset) + Number(hasAfterText) + Number(hasBeforeText) !== 1) {
-      throw new Error(`${label} requires exactly one of offset, afterText, or beforeText.`);
+      throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `${label} requires exactly one of offset, afterText, or beforeText.`);
     }
     if (hasOffset) {
       if (!Number.isInteger(anchor.offset) || Number(anchor.offset) < 0) {
-        throw new Error(`${label} offset must be a non-negative integer.`);
+        throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `${label} offset must be a non-negative integer.`);
       }
       if (anchor.occurrence !== undefined) {
-        throw new Error(`${label} occurrence is available only with afterText or beforeText.`);
+        throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `${label} occurrence is available only with afterText or beforeText.`);
       }
       return Number(anchor.offset);
     }
@@ -145,9 +147,9 @@ export function resolveEditableTextSelection(
     end = spec.end ? resolveAnchor(spec.end, 'Selection end') : start;
   }
   if (start > before.length || end > before.length) {
-    throw new Error(`Selection range ${start}-${end} exceeds editable text length ${before.length}.`);
+    throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `Selection range ${start}-${end} exceeds editable text length ${before.length}.`);
   }
-  if (end < start) throw new Error(`Selection end ${end} cannot precede start ${start}.`);
+  if (end < start) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `Selection end ${end} cannot precede start ${start}.`);
   const direction = spec.direction === 'backward' ? 'backward' : 'forward';
   return {
     before,

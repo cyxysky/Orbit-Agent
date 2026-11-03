@@ -12,6 +12,8 @@ import { useFilePreview } from '@/components/file-preview-context';
 import { WorkspaceHistoryList } from '@/components/WorkspaceSidebarArchive';
 import { browserChatArtifactKey, browserChatArtifactOpenUrl, type BrowserChatMessageFileGroup } from '@/lib/browser-chat-artifacts';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export function BrowserChatFilesPanel({ sessionId, busy }: {
   sessionId: string; busy: boolean;
@@ -33,7 +35,7 @@ export function BrowserChatFilesPanel({ sessionId, busy }: {
       try {
         const response = await fetch(withWebPilotBasePath(`/api/browser-chat/${encodeURIComponent(sessionId)}/files`), { cache: 'no-store', signal: controller.signal });
         const data = await response.json();
-        if (!response.ok) throw new Error(data.error?.message || t('读取对话文件失败'));
+        if (!response.ok) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, data.error?.message || t('读取对话文件失败'));
         if (!controller.signal.aborted) setGroups(data.groups);
       } catch (error) { if (!controller.signal.aborted) setError(error instanceof Error ? error.message : t('读取对话文件失败')); }
       finally { if (!controller.signal.aborted) setLoading(false); }

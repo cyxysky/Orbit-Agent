@@ -79,13 +79,13 @@ Linux/macOS 的同类命令：
 codex mcp add capability-sdk -- node "$PWD/node_modules/@cjfclonedeep/capability-sdk/scripts/mcp.mjs" --project "$PWD"
 ```
 
-也可直接编辑 `~/.codex/config.toml`，或受信任项目的 `.codex/config.toml`。下面以当前 Windows 测试项目为例，换项目时替换路径：
+也可直接编辑 `~/.codex/config.toml`，或受信任项目的 `.codex/config.toml`。下面以 Windows 工具目录 `D:\AgentTools` 为例，换项目时替换路径：
 
 ```toml
 [mcp_servers.capability-sdk]
 command = "node"
-args = ['C:\Users\18367\Desktop\test\capability-sdk-consumer-test\node_modules\@cjfclonedeep\capability-sdk\scripts\mcp.mjs', '--project', 'C:\Users\18367\Desktop\test\capability-sdk-consumer-test']
-cwd = 'C:\Users\18367\Desktop\test\capability-sdk-consumer-test'
+args = ['D:\AgentTools\node_modules\@cjfclonedeep\capability-sdk\scripts\mcp.mjs', '--project', 'D:\AgentTools']
+cwd = 'D:\AgentTools'
 startup_timeout_sec = 30
 tool_timeout_sec = 300
 ```
@@ -122,9 +122,9 @@ CLI 自身的选项位于 `--` 之前，Node 和服务参数在其后。`--scope
       "type": "stdio",
       "command": "node",
       "args": [
-        "C:/Users/18367/Desktop/test/capability-sdk-consumer-test/node_modules/@cjfclonedeep/capability-sdk/scripts/mcp.mjs",
+        "D:/AgentTools/node_modules/@cjfclonedeep/capability-sdk/scripts/mcp.mjs",
         "--project",
-        "C:/Users/18367/Desktop/test/capability-sdk-consumer-test"
+        "D:/AgentTools"
       ]
     }
   }

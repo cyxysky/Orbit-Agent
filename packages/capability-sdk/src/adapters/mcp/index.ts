@@ -1,3 +1,4 @@
+import { errorMessage, errorText, getErrorCode } from '../../errors.ts';
 import { randomUUID } from 'node:crypto';
 import {
   createMcpHandler,
@@ -24,6 +25,8 @@ import {
   type CapabilityConfigStore,
   type CapabilitySkillInstructionMode,
 } from '../../host/index.ts';
+import { CodedAggregateError, CodedError, ERROR_CODES } from '../../errors.ts';
+
 
 export type CapabilityMcpServerOptions = {
   /** Override a tool's text projection, e.g. full for clients without structured-result support. */
@@ -87,7 +90,7 @@ export function capabilityResultToMcpResult(result: CapabilityResult, textMode: 
   return {
     ...(!result.ok ? { isError: true } : {}),
     content: [{ type: 'text', text: textMode === 'full' ? JSON.stringify(structuredContent)
-      : result.ok ? result.summary : `${result.error.code}: ${result.error.message}` }, ...(result.content?.map(mcpContent) || [])],
+      : result.ok ? result.summary : errorText(result.error) }, ...(result.content?.map(mcpContent) || [])],
     structuredContent,
   };
 }
@@ -120,7 +123,7 @@ export async function createCapabilityMcpServer(
     visualization = await createMcpVisualization({ tools: snapshot.tools, options: options.visualization,
       invoke: async (name, input) => {
         const resolved = snapshot.tools[name];
-        if (!resolved) throw new Error('Visualization tool is unavailable.');
+        if (!resolved) throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, 'Visualization tool is unavailable.');
         const parsed = resolved.tool.input.parse(input);
         return executeCapability(resolved, { invocationId: randomUUID(), abortSignal: snapshot.abortSignal,
           metadata: { transport: 'visualization' } }, context => resolved.tool.execute(parsed, context));
@@ -130,7 +133,7 @@ export async function createCapabilityMcpServer(
 
     if (skillMode === 'lazy' && snapshot.skills.length) {
       if (snapshot.tools[skillToolName]) {
-        throw new Error(`Capability Skill tool name collides with an existing tool: ${skillToolName}.`);
+        throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, `Capability Skill tool name collides with an existing tool: ${skillToolName}.`);
       }
       server.registerTool(skillToolName, {
         title: 'Read Capability Skill',
@@ -147,7 +150,8 @@ export async function createCapabilityMcpServer(
         const skill = value.action === 'read' ? snapshot.skillCatalog.get(skillId) : undefined;
         if (!skill) {
           return capabilityResultToMcpResult({ ok: false, error: {
-            code: 'capability-skill-not-found', message: `Unknown Capability Skill: ${skillId || '(empty)'}.`,
+            code: ERROR_CODES.SKILL_UNAVAILABLE,
+            message: `Unknown Capability Skill: ${skillId || '(empty)'}.`,
           } });
         }
         return {
@@ -230,13 +234,14 @@ export async function createCapabilityMcpServer(
             } catch (error) {
               // Presentation failure must not turn an already-saved chart into
               // a failed tool call that the model might repeat.
-              response.content.push({ type: 'text', text: `Visualization unavailable: ${error instanceof Error ? error.message : String(error)}` });
+              response.content.push({ type: 'text', text: `Visualization unavailable: ${errorText(error, ERROR_CODES.CAPABILITY_EXECUTION_FAILED)}` });
             }
           }
           return response;
         } catch (error) {
           return capabilityResultToMcpResult({ ok: false, error: {
-            code: 'mcp-tool-failed', message: error instanceof Error ? error.message : String(error),
+            code: getErrorCode(error, ERROR_CODES.CAPABILITY_EXECUTION_FAILED),
+            message: errorMessage(error),
           } });
         }
       });
@@ -246,13 +251,13 @@ export async function createCapabilityMcpServer(
     server.close = disposeOnce(async () => {
       const settled = await Promise.allSettled([visualization?.close(), snapshot.dispose(), close()]);
       const errors = settled.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
-      if (errors.length) throw new AggregateError(errors, 'MCP server cleanup failed.');
+      if (errors.length) throw new CodedAggregateError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, errors, 'MCP server cleanup failed.');
     });
     return server;
   } catch (error) {
     await visualization?.close();
     try { await snapshot.dispose(); }
-    catch (cleanupError) { throw new AggregateError([error, cleanupError], 'MCP mount and cleanup failed.', { cause: error }); }
+    catch (cleanupError) { throw new CodedAggregateError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, [error, cleanupError], 'MCP mount and cleanup failed.', { cause: error }); }
     throw error;
   }
 }

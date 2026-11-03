@@ -41,7 +41,7 @@ function toolReasonFromInput(input: unknown) {
     || stringFromUnknown(record?.action);
 }
 
-function toolErrorFromUnknown(value: unknown) {
+function toolErrorFromUnknown(value: unknown, invalidInput = false) {
   const details: string[] = [];
   const seen = new WeakSet<object>();
   const visit = (current: unknown, depth = 0) => {
@@ -65,9 +65,14 @@ function toolErrorFromUnknown(value: unknown) {
     }
     visit(record.cause, depth + 1);
     visit(record.error, depth + 1);
+    visit(asRecord(record.data)?.error, depth + 1);
+    if (!details.length) visit(record.actual, depth + 1);
+    if (!details.length) visit(record.summary, depth + 1);
   };
   visit(value);
-  return [...new Set(details)].join('；') || '工具参数解析失败：运行时未返回可识别的错误详情';
+  return [...new Set(details)].join('；') || (invalidInput
+    ? '工具参数解析失败：运行时未返回可识别的错误详情'
+    : '工具执行失败：运行时未返回可识别的错误详情');
 }
 
 function normalizeAiContentPart(part: unknown): BrowserChatAiOutputView {
@@ -97,7 +102,7 @@ function normalizeAiContentPart(part: unknown): BrowserChatAiOutputView {
         name,
         reason: toolReasonFromInput(input),
         invalid,
-        error: invalid ? toolErrorFromUnknown(record.error) : undefined,
+        error: invalid ? toolErrorFromUnknown(record.error, true) : undefined,
       }],
     };
   }
@@ -117,10 +122,12 @@ function applyToolResultToOutput(output: BrowserChatAiOutputView, part: unknown)
     : (record.error ?? record.output ?? record.result);
   const businessResult = asRecord(rawResult);
   const succeeded = transportSucceeded && (typeof businessResult?.ok !== 'boolean' || businessResult.ok);
-  const result = stringFromUnknown(businessResult?.actual)
-    || stringFromUnknown(businessResult?.error)
-    || stringFromUnknown(rawResult)
-    || (succeeded ? 'Tool completed.' : toolErrorFromUnknown(rawResult));
+  const result = succeeded
+    ? stringFromUnknown(businessResult?.actual)
+      || stringFromUnknown(businessResult?.summary)
+      || stringFromUnknown(rawResult)
+      || 'Tool completed.'
+    : toolErrorFromUnknown(rawResult);
   const tool = [...output.tools].reverse().find((item) => item.id === id);
   if (!tool) return true;
   tool.ok = succeeded;
@@ -229,8 +236,51 @@ export function hasAiOutputView(output: BrowserChatAiOutputView) {
   return Boolean(output.reasoning.length || output.texts.length || output.tools.length);
 }
 
+/** Lifecycle snapshots update one provider call; different call IDs remain separate. */
+export function mergeBrowserChatAiOutputCycles<TCycle extends BrowserChatAiOutputCycle>(
+  current: TCycle[],
+  incoming: TCycle[] = [],
+): TCycle[] {
+  const merged: TCycle[] = [];
+  const indexes = new Map<string, number>();
+  for (const cycle of [...current, ...incoming]) {
+    const index = indexes.get(cycle.id);
+    if (index === undefined) {
+      indexes.set(cycle.id, merged.length);
+      merged.push(cycle);
+      continue;
+    }
+    const previous = merged[index];
+    if (previous === cycle) continue;
+    if (previous.revision !== undefined && cycle.revision !== undefined
+      && cycle.revision < previous.revision) continue;
+    const previousTools = new Map(previous.output.tools.map((tool) => [tool.id, tool]));
+    merged[index] = {
+      ...previous,
+      ...Object.fromEntries(Object.entries(cycle).filter(([, value]) => value !== undefined)),
+      createdAt: previous.createdAt ?? cycle.createdAt,
+      sequence: previous.sequence ?? cycle.sequence,
+      output: {
+        ...cycle.output,
+        tools: cycle.output.tools.map((tool) => {
+          const before = previousTools.get(tool.id);
+          if (!before) return tool;
+          const updated = {
+            ...before,
+            ...Object.fromEntries(Object.entries(tool).filter(([, value]) => value !== undefined)),
+          };
+          if (updated.ok === true) updated.error = undefined;
+          return updated;
+        }),
+      },
+    };
+  }
+  return merged.length === current.length && merged.every((cycle, index) => cycle === current[index])
+    ? current : merged;
+}
+
 export function sortBrowserChatAiOutputCycles<TCycle extends BrowserChatAiOutputCycle>(cycles: TCycle[]) {
-  return cycles
+  return mergeBrowserChatAiOutputCycles(cycles)
     .map((cycle, insertionIndex) => ({ cycle, insertionIndex }))
     .sort((left, right) => {
       const leftStep = Number.isFinite(left.cycle.stepIndex) ? Number(left.cycle.stepIndex) : undefined;
@@ -299,7 +349,8 @@ export function browserChatAiOutputCycleFromDebugEvent(input: {
         }],
       },
       stepIndex: input.stepIndex,
-      sequence: input.sequence,
+      sequence: event?.engine === 'codex-app-server' && Number.isFinite(Number(event.agentStepIndex))
+        ? Number(event.agentStepIndex) : input.sequence,
       createdAt: input.createdAt,
       subagentId: input.subagentId,
       batchId: input.batchId,
@@ -320,13 +371,14 @@ export function browserChatAiOutputCycleFromDebugEvent(input: {
   const compacted = compactBrowserChatAiOutputView(output);
   if (!hasAiOutputView(compacted)) return undefined;
   return {
-    id: input.id,
+    id: aiOutput.engine === 'codex-app-server' && typeof aiOutput.itemId === 'string'
+      ? `cycle_codex_${input.messageId}_${input.stepIndex}_${aiOutput.itemId}` : input.id,
     messageId: input.messageId,
     output: compacted,
     performance: browserChatOutputPerformanceFromUnknown(aiOutput.performance),
     stepIndex: input.stepIndex,
     agentStepIndex: Number.isFinite(rawAgentStepIndex) ? rawAgentStepIndex : undefined,
-    sequence: input.sequence,
+    sequence: aiOutput.engine === 'codex-app-server' && Number.isFinite(rawAgentStepIndex) ? rawAgentStepIndex : input.sequence,
     createdAt: input.createdAt,
     subagentId: input.subagentId,
     batchId: input.batchId,

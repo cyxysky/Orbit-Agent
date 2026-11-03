@@ -1,4 +1,6 @@
 import { defaultChartTranslate, type ChartTranslate } from './i18n.ts';
+import { CodedError, ERROR_CODES } from '../errors.ts';
+
 
 export type DataTable = { id: string; label: string; path: Array<string | number>; rows: unknown[]; rowLabels?: string[]; columnLabels?: string[] };
 export type DataColumn = { key: string | number | null; label: string };
@@ -54,7 +56,7 @@ export function cellText(value: unknown): string { return typeof value === 'stri
 export function parseCell(text: string, previous: unknown) {
   if (typeof previous === 'string') return text;
   if (text === '' && previous === undefined) return undefined;
-  try { return JSON.parse(text); } catch { throw new Error('数字、数组和对象必须使用有效 JSON；文本单元格可直接输入文字。'); }
+  try { return JSON.parse(text); } catch { throw new CodedError(ERROR_CODES.CHART_OPERATION_FAILED, '数字、数组和对象必须使用有效 JSON；文本单元格可直接输入文字。'); }
 }
 
 /** Update one data array without discarding unrelated series, styles or metadata. */

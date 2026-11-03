@@ -1,15 +1,17 @@
 import { createHmac } from 'node:crypto';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 function identitySecret() {
   const secret = String(process.env.WEBPILOT_IDENTITY_SECRET || '');
-  if (!secret) throw new Error('Orbit identity runtime is unavailable');
+  if (!secret) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Orbit identity runtime is unavailable');
   return secret;
 }
 
 function normalizeMountedUserId(value: unknown) {
   const userId = typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(userId)) {
-    throw new Error('A valid mounted user ID is required');
+    throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'A valid mounted user ID is required');
   }
   return userId;
 }

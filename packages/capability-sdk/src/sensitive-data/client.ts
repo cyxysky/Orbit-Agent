@@ -1,4 +1,6 @@
 import type { SensitiveDataFilterConfig } from './config.ts';
+import { CodedError, ERROR_CODES } from '../errors.ts';
+
 
 type GlinerRedactResponse = {
   texts: string[];
@@ -58,12 +60,12 @@ function validReplacement(
 
 export function createSensitiveDataRedactor(options: SensitiveDataRedactorOptions): SensitiveDataRedactor {
   const request = options.fetch || globalThis.fetch;
-  if (!request) throw new Error('Sensitive-data filtering requires a Fetch API implementation.');
+  if (!request) throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, 'Sensitive-data filtering requires a Fetch API implementation.');
 
   return async (texts, abortSignal) => {
     const config = options.getConfig();
     if (!config.serviceUrl) {
-      throw new Error('A sensitive-data filtering service URL is required.');
+      throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, 'A sensitive-data filtering service URL is required.');
     }
     const endpoint = options.prepareEndpoint
       ? await options.prepareEndpoint(config.serviceUrl)
@@ -81,7 +83,7 @@ export function createSensitiveDataRedactor(options: SensitiveDataRedactorOption
       }),
       signal: requestSignal(abortSignal, config.timeoutMs),
     });
-    if (!response.ok) throw new Error(`Sensitive-data service returned HTTP ${response.status}.`);
+    if (!response.ok) throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, `Sensitive-data service returned HTTP ${response.status}.`);
 
     const payload = await response.json() as Partial<GlinerRedactResponse>;
     if (
@@ -89,7 +91,7 @@ export function createSensitiveDataRedactor(options: SensitiveDataRedactorOption
       || payload.texts.length !== texts.length
       || payload.texts.some((text) => typeof text !== 'string')
     ) {
-      throw new Error('Sensitive-data service returned an invalid response.');
+      throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, 'Sensitive-data service returned an invalid response.');
     }
     const replacements = Array.isArray(payload.replacements)
       ? payload.replacements.filter((replacement) => validReplacement(replacement, texts))

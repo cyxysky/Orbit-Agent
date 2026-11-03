@@ -6,6 +6,7 @@ import ffmpegStatic from 'ffmpeg-static';
 import { runCapabilityProcess } from '../node.ts';
 import { createMediaCapability, mediaToolInput, type MediaArtifact, type MediaOperations } from './index.ts';
 import type { CapabilityExecutionContext, CapabilityRunContext } from '../index.ts';
+import { CodedError, ERROR_CODES } from '../errors.ts';
 
 function run(executable: string, args: string[], timeoutMs: number, context: CapabilityExecutionContext) {
   return runCapabilityProcess({ executable, args, timeoutMs, signal: context.abortSignal, maxOutputChars: 100_000 });
@@ -31,7 +32,7 @@ export function createFfmpegMediaOperations(input: {
       // Validate direct SDK calls as well as tool invocations before allocating work.
       mediaToolInput.parse({ action: 'composeVideo', reason: 'Compose image scenes', ...request });
       if (request.scenes.some(scene => scene.caption || scene.motion && scene.motion !== 'none')) {
-        throw new Error('The FFmpeg composer does not support captions or camera motion. Use a provider advertising those features, such as createRemotionMediaOperations; no video was rendered.');
+        throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, 'The FFmpeg composer does not support captions or camera motion. Use a provider advertising those features, such as createRemotionMediaOperations; no video was rendered.');
       }
       context.abortSignal?.throwIfAborted();
       const { default: sharp } = await import('sharp');
@@ -41,7 +42,7 @@ export function createFfmpegMediaOperations(input: {
       const remaining = () => {
         context.abortSignal?.throwIfAborted();
         const milliseconds = deadline - Date.now();
-        if (milliseconds <= 0) throw new Error('Video composition timed out. Use fewer scenes, shorter durations or a smaller size.');
+        if (milliseconds <= 0) throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, 'Video composition timed out. Use fewer scenes, shorter durations or a smaller size.');
         return milliseconds;
       };
       try {
@@ -58,10 +59,10 @@ export function createFfmpegMediaOperations(input: {
             hasAudio = /Audio:/.test(headers.stderr) && scene.muted !== true;
             const match = headers.stderr.match(/Duration:\s*(\d+):(\d+):([\d.]+)/);
             const sourceDuration = match ? Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]) : undefined;
-            if (sourceDuration !== undefined && (scene.trimStart || 0) + scene.duration > sourceDuration + 0.05) throw new Error(`Scene ${index + 1} extends beyond its source video. Reduce the trim start or duration.`);
+            if (sourceDuration !== undefined && (scene.trimStart || 0) + scene.duration > sourceDuration + 0.05) throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, `Scene ${index + 1} extends beyond its source video. Reduce the trim start or duration.`);
             sceneArgs.push('-ss', String(scene.trimStart || 0), '-i', source);
           } else {
-            if ((await stat(source)).size > 50 * 1024 * 1024) throw new Error('A scene image must not exceed 50 MB.');
+            if ((await stat(source)).size > 50 * 1024 * 1024) throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, 'A scene image must not exceed 50 MB.');
             const image = path.join(directory, `image-${index}.png`);
             await sharp(source, { limitInputPixels: 40_000_000, animated: false }).rotate()
               .resize(width, height, { fit: 'contain', background: '#000000' }).flatten({ background: '#000000' }).png().toFile(image);
@@ -126,7 +127,7 @@ export function createFfmpegMediaOperations(input: {
       const remaining = () => {
         execution.abortSignal.throwIfAborted();
         const milliseconds = deadline - Date.now();
-        if (milliseconds <= 0) throw new Error('Frame extraction timed out.');
+        if (milliseconds <= 0) throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, 'Frame extraction timed out.');
         return milliseconds;
       };
       const source = await input.resolveSource(request.sourceRef, execution);
@@ -137,13 +138,13 @@ export function createFfmpegMediaOperations(input: {
       const streams = (inspection.probe as { streams?: Array<{ codec_type?: string }> } | undefined)?.streams;
       const hasVideo = typeof inspection.probe === 'string' ? /Stream[^\r\n]*Video:/.test(inspection.probe)
         : Array.isArray(streams) ? streams.some(stream => stream.codec_type === 'video') : undefined;
-      if (!stillImage && hasVideo === false) throw new Error('The source has no video stream. Frame extraction requires a video or a still image.');
+      if (!stillImage && hasVideo === false) throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, 'The source has no video stream. Frame extraction requires a video or a still image.');
       const duration = probeDurationSeconds(inspection.probe);
       const start = request.startSeconds || 0;
-      if (stillImage && (start > 0 || request.endSeconds !== undefined)) throw new Error('Time ranges require a video source.');
-      if (duration !== undefined && start >= duration) throw new Error('Frame extraction starts beyond the source duration.');
+      if (stillImage && (start > 0 || request.endSeconds !== undefined)) throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, 'Time ranges require a video source.');
+      if (duration !== undefined && start >= duration) throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, 'Frame extraction starts beyond the source duration.');
       if (duration !== undefined && request.endSeconds !== undefined && request.endSeconds > duration + 0.05) {
-        throw new Error('Frame extraction ends beyond the source duration.');
+        throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, 'Frame extraction ends beyond the source duration.');
       }
       const end = request.endSeconds ?? duration;
       const interval = request.intervalSeconds ?? (end !== undefined ? (end - start) / request.maxFrames : undefined);
@@ -170,9 +171,9 @@ export function createFfmpegMediaOperations(input: {
         }
         remaining();
         const files = (await readdir(directory)).filter((name) => name.endsWith('.jpg')).sort().slice(0, request.maxFrames);
-        if (!files.length) throw new Error('No video frames were found in the requested source range.');
+        if (!files.length) throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, 'No video frames were found in the requested source range.');
         if (timestamps.length < files.length || timestamps.slice(0, files.length).some(time => !Number.isFinite(time))) {
-          throw new Error('Frame timestamps could not be verified.');
+          throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, 'Frame timestamps could not be verified.');
         }
         const artifacts: MediaArtifact[] = [];
         for (const [index, name] of files.entries()) {

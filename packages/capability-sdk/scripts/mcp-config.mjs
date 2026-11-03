@@ -88,8 +88,11 @@ export const configSchema = {
         chunkChars: integer(1800, 400, 8000, '全文索引每个分块的目标字符数。'),
         searchLimit: integer(8, 1, 30, '知识检索默认返回条数。'),
       }),
-      media: object('默认实现本地媒体检查和视频抽帧；OCR/转写/生成需业务 Provider，不会自动接入模型。', {
+      media: object('本地媒体检查、抽帧、视频合成和生成适配器；默认图片生成复用本机 Codex 登录。', {
         enabled,
+        codexImage: boolean(true, '提供内置 Codex 图片模型，要求已登录的 Codex CLI >=0.142。不会读取或迁移登录凭据。'),
+        codexPath: string('', '图片生成使用的 Codex 程序；空字符串优先使用 Windows Codex 应用内置新版，再使用 PATH。支持 CAPABILITY_CODEX_PATH 环境变量。'),
+        modelsFile: string('', '可选图片/视频/语音模型 JSON 文件，路径相对于项目。格式为 {models: [...], defaults: {...}}，每个模型可用 apiKeyEnv 引用环境变量。'),
         timeoutMs: integer(120000, 1000, 900000, 'FFmpeg 处理超时（毫秒）；媒体头检查最长 15 秒。'),
         maxFrames: integer(12, 1, 60, '每次抽帧最多生成的帧数。'),
       }),

@@ -4,6 +4,8 @@ import { BrowserPreviewWindow, type BrowserPreviewClient } from '@cjfclonedeep/c
 import { useI18n } from '@/i18n/I18nProvider';
 import { readApiJson } from '@/lib/api-client';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 export function BrowserChatWebPreviewModal({ onClose, sessionId, userId }: { onClose: () => void; sessionId: string; userId: string }) {
   const { t } = useI18n();
   const client = useMemo<BrowserPreviewClient>(() => {
@@ -27,7 +29,7 @@ export function BrowserChatWebPreviewModal({ onClose, sessionId, userId }: { onC
     resolveDownloadUrl: withWebPilotBasePath,
     download: bridge ? async ({ fileName, url }) => {
       const result = await bridge({ fileName, url });
-      if (!result.ok && !result.canceled) throw new Error(result.error || '文件下载失败');
+      if (!result.ok && !result.canceled) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, result.error || '文件下载失败');
     } : undefined,
   }; }, [sessionId]);
   return <BrowserPreviewWindow key={userId + ':' + sessionId} client={client} translate={t} onClose={onClose} />;

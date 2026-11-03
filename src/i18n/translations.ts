@@ -1302,7 +1302,7 @@ const en: Record<string, string> = {
   'AI 推理强度': 'AI reasoning effort',
   '模型通用配置': 'Shared model settings',
   '最高': 'Maximum',
-  '主对话、子 Agent 和小说 AI 共用，保存后新请求生效。最高档在 MiniMax 使用 max，其他模型映射为 xhigh，实际支持以模型为准。MiniMax M3.1 Flash 默认 max，无法关闭思考；无和极低映射为 low。模型专用参数优先。': 'Shared by the main chat, subagents and novel AI; applies to new requests after saving. Maximum uses max for MiniMax and xhigh for other models, subject to model support. MiniMax M3.1 Flash defaults to max and cannot disable thinking; none and minimal use low. Model-specific parameters take precedence.',
+  '主对话、子 Agent 和文本编辑 AI 共用，保存后新请求生效。最高档在 MiniMax 使用 max，其他模型映射为 xhigh，实际支持以模型为准。MiniMax M3.1 Flash 默认 max，无法关闭思考；无和极低映射为 low。模型专用参数优先。': 'Shared by the main chat, subagents and text editing AI; applies to new requests after saving. Maximum uses max for MiniMax and xhigh for other models, subject to model support. MiniMax M3.1 Flash defaults to max and cannot disable thinking; none and minimal use low. Model-specific parameters take precedence.',
   '统一控制支持该能力的模型推理强度；默认由提供商决定。': 'Control reasoning effort for supported models. By default, the provider decides.',
   '提供商默认': 'Provider default',
   'AI 运行指标': 'AI runtime metrics',

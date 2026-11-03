@@ -2,6 +2,8 @@ import type { LanguageModelCallOptions, TelemetryOptions } from 'ai';
 import type { LanguageModelV4CallOptions } from '@ai-sdk/provider';
 import { currentReasoningEffort } from './reasoning-scope';
 import type { ReasoningEffortSetting } from '@/lib/reasoning-effort';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export type AiReasoningEffort = NonNullable<LanguageModelCallOptions['reasoning']>;
 
@@ -56,6 +58,8 @@ export function aiRuntimeRequestTimeoutMs() {
  * runtime can record a terminal failure and apply its normal retry policy.
  */
 export class AiRequestWatchdogTimeoutError extends Error {
+  readonly code: import("@cjfclonedeep/capability-sdk").ErrorCode = ERROR_CODES.AI_REQUEST_TIMEOUT;
+
   readonly timeoutMs: number;
 
   constructor(timeoutMs: number) {
@@ -66,6 +70,7 @@ export class AiRequestWatchdogTimeoutError extends Error {
 }
 
 export class AiFirstChunkTimeoutError extends AiRequestWatchdogTimeoutError {
+  override readonly code: import('@cjfclonedeep/capability-sdk').ErrorCode = ERROR_CODES.AI_FIRST_CHUNK_TIMEOUT;
   constructor(timeoutMs: number) {
     super(timeoutMs);
     this.name = 'AiFirstChunkTimeoutError';
@@ -82,7 +87,7 @@ export function createAiRequestWatchdog(parentSignal?: AbortSignal, timeoutMs = 
   let timeoutReject: ((reason: unknown) => void) | undefined;
   const abortFromParent = () => {
     controller.abort(parentSignal?.reason);
-    timeoutReject?.(parentSignal?.reason instanceof Error ? parentSignal.reason : new Error('AI request aborted.'));
+    timeoutReject?.(parentSignal?.reason instanceof Error ? parentSignal.reason : new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'AI request aborted.'));
   };
   if (parentSignal) {
     if (parentSignal.aborted) abortFromParent();
@@ -112,7 +117,10 @@ export function createAiRequestWatchdog(parentSignal?: AbortSignal, timeoutMs = 
       firstChunkDeadline = Date.now() + ms;
       arm();
     },
-    firstChunkReceived() {
+    firstChunkReceived(chunk?: { type: string }) {
+      // SDK 7 calls onChunk for local start/step/error events too. They do not
+      // prove the provider sent any model output or even response headers.
+      if (chunk && !['text-delta', 'reasoning-delta', 'tool-input-start', 'tool-input-delta', 'tool-call'].includes(chunk.type)) return;
       if (firstChunkDeadline === undefined) return;
       firstChunkDeadline = undefined;
       firstChunkTimeoutMs = undefined;
@@ -130,7 +138,7 @@ export function createAiRequestWatchdog(parentSignal?: AbortSignal, timeoutMs = 
       if (controller.signal.aborted) {
         throw controller.signal.reason instanceof Error
           ? controller.signal.reason
-          : new Error('AI request was aborted before it started.');
+          : new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'AI request was aborted before it started.');
       }
       arm();
       try {

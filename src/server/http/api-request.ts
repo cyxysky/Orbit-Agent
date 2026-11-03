@@ -2,15 +2,18 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { noStoreJson } from './no-store-response';
 import { incrementMetric, structuredLog } from '@/server/observability/runtime-observability';
+import { getErrorCode, normalizeErrorCode, type ErrorCode } from '@cjfclonedeep/capability-sdk';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export class ApiRequestError extends Error {
-  code: string;
+  code: ErrorCode;
   status: number;
 
-  constructor(message: string, input: { code?: string; status?: number } = {}) {
+  constructor(message: string, input: { code?: ErrorCode; status?: number } = {}) {
     super(message);
     this.name = 'ApiRequestError';
-    this.code = input.code || 'invalid_request';
+    this.code = normalizeErrorCode(input.code, ERROR_CODES.INVALID_REQUEST);
     this.status = input.status || 400;
   }
 }
@@ -23,11 +26,11 @@ export function apiRequestId(request: Pick<Request, 'headers'>) {
 async function readJsonRequestValue(request: Request, maxBytes: number, optional: boolean) {
   const contentLength = Number(request.headers.get('content-length'));
   if (Number.isFinite(contentLength) && contentLength > maxBytes) {
-    throw new ApiRequestError('Request body is too large', { code: 'payload_too_large', status: 413 });
+    throw new ApiRequestError('Request body is too large', { code: ERROR_CODES.PAYLOAD_TOO_LARGE, status: 413 });
   }
   const raw = await request.text();
   if (Buffer.byteLength(raw, 'utf8') > maxBytes) {
-    throw new ApiRequestError('Request body is too large', { code: 'payload_too_large', status: 413 });
+    throw new ApiRequestError('Request body is too large', { code: ERROR_CODES.PAYLOAD_TOO_LARGE, status: 413 });
   }
   if (!raw.trim()) {
     if (optional) return {};
@@ -50,7 +53,7 @@ async function parseRequestBody<T extends z.ZodType>(
   const maxBytes = input.maxBytes === null ? Infinity : Math.max(1024, Math.floor(input.maxBytes || 1024 * 1024));
   const parsed = schema.safeParse(await readJsonRequestValue(request, maxBytes, optional));
   if (!parsed.success) {
-    throw new ApiRequestError('Request body is invalid', { code: 'validation_failed' });
+    throw new ApiRequestError('Request body is invalid', { code: ERROR_CODES.VALIDATION_FAILED });
   }
   return parsed.data;
 }
@@ -82,12 +85,13 @@ export function apiJson<T>(request: Pick<Request, 'headers'>, body: T, init: Res
 export function apiError(
   request: Pick<Request, 'headers'>,
   error: unknown,
-  input: { code?: string; fallback: string; status?: number },
+  input: { code?: ErrorCode; fallback: string; status?: number },
 ) {
   const requestId = apiRequestId(request);
   const known = error instanceof ApiRequestError;
   const status = known ? error.status : input.status || 400;
-  const code = known ? error.code : input.code || (status >= 500 ? 'internal_error' : 'request_failed');
+  const fallbackCode = normalizeErrorCode(input.code, status >= 500 ? ERROR_CODES.INTERNAL_ERROR : ERROR_CODES.REQUEST_FAILED);
+  const code = getErrorCode(error, fallbackCode);
   const message = known ? error.message : input.fallback;
   incrementMetric('api_errors_total', { code, status });
   if (!known || status >= 500) {

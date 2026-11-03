@@ -34,6 +34,8 @@ import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 import { useTheme } from '@/theme/ThemeProvider';
 import { AppInput } from '@/components/ui/app-input';
 import { AppModal } from '@/components/ui/app-modal';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 function SettingsTabIcon({ tab }: { tab: SettingsTab }) {
   if (tab === 'general') return <Palette size={15} />;
@@ -134,7 +136,7 @@ export function SettingsWorkspace({
         body: JSON.stringify({ password: adminSettingsPassword }),
       });
       const data = await readApiJson<{ token?: string }>(response, t('管理员设置密码验证失败'));
-      if (!data.token) throw new Error(t('管理员设置访问令牌无效'));
+      if (!data.token) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, t('管理员设置访问令牌无效'));
       const nextTab = pendingAdminSettingsTab;
       setAdminSettingsAccessToken(data.token);
       setActiveTab(nextTab);

@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { readManagedRuntime } from '../../runtime.ts';
+import { CodedError, ERROR_CODES } from '../../errors.ts';
+
 
 const pythonUnoProbeCache = new Map<string, Promise<boolean>>();
 
@@ -181,7 +183,7 @@ async function convertStagedOfficeFile(input: {
   input.abortSignal?.throwIfAborted();
   const outputName = (await readdir(outputDirectory))
     .find((name) => path.extname(name).toLowerCase() === input.targetExtension.toLowerCase());
-  if (!outputName) throw new Error(`LibreOffice did not produce a ${input.targetExtension} file.`);
+  if (!outputName) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `LibreOffice did not produce a ${input.targetExtension} file.`);
   return path.join(outputDirectory, outputName);
 }
 

@@ -3,6 +3,8 @@ import { store } from '@/server/db/store';
 import { ApiRequestError, apiError, apiJson, parseJsonRequest } from '@/server/http/api-request';
 import { skillRequestSchema } from '@/server/http/skill-request.schema';
 import { idempotencyFingerprint, runIdempotentJson } from '@/server/http/idempotency';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 type RouteContext = {
   params: Promise<{ skillId: string }>;
@@ -16,7 +18,7 @@ function requestUserId(request: Request) {
 export async function GET(request: Request, context: RouteContext) {
   const { skillId } = await context.params;
   const skill = await store.getSkill(skillId, requestUserId(request));
-  if (!skill) return apiError(request, new ApiRequestError('Skill not found', { code: 'not_found', status: 404 }), { fallback: 'Skill not found' });
+  if (!skill) return apiError(request, new ApiRequestError('Skill not found', { code: ERROR_CODES.NOT_FOUND, status: 404 }), { fallback: 'Skill not found' });
   return apiJson(request, { skill });
 }
 
@@ -31,8 +33,8 @@ export async function PUT(request: Request, context: RouteContext) {
       userId,
     }, async () => {
       const current = await store.getSkill(skillId, userId);
-      if (!current) throw new ApiRequestError('Skill not found', { code: 'not_found', status: 404 });
-      if (current.userId !== userId) throw new ApiRequestError('Only the Skill creator can edit this shared Skill', { code: 'forbidden', status: 403 });
+      if (!current) throw new ApiRequestError('Skill not found', { code: ERROR_CODES.NOT_FOUND, status: 404 });
+      if (current.userId !== userId) throw new ApiRequestError('Only the Skill creator can edit this shared Skill', { code: ERROR_CODES.FORBIDDEN, status: 403 });
       const skill = await store.upsertSkill({ id: skillId, ...body, userId });
       return apiJson(request, { skill });
     });
@@ -51,8 +53,8 @@ export async function DELETE(request: Request, context: RouteContext) {
       userId,
     }, async () => {
       const current = await store.getSkill(skillId, userId);
-      if (current && current.userId !== userId) throw new ApiRequestError('Only the Skill creator can delete this shared Skill', { code: 'forbidden', status: 403 });
-      if (!await store.deleteSkill(skillId, userId)) throw new ApiRequestError('Skill not found', { code: 'not_found', status: 404 });
+      if (current && current.userId !== userId) throw new ApiRequestError('Only the Skill creator can delete this shared Skill', { code: ERROR_CODES.FORBIDDEN, status: 403 });
+      if (!await store.deleteSkill(skillId, userId)) throw new ApiRequestError('Skill not found', { code: ERROR_CODES.NOT_FOUND, status: 404 });
       return apiJson(request, { ok: true });
     });
   } catch (error) {

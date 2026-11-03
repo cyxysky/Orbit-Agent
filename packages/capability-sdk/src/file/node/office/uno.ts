@@ -8,6 +8,8 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { OfficeDocumentKind } from '../../office/types.ts';
 import { resolveLibreOfficeExecutable, resolveLibreOfficePythonExecutable } from '../libreoffice.ts';
+import { CodedError, ERROR_CODES } from '../../../errors.ts';
+
 
 const WORKER_IDLE_TIMEOUT_MS = Math.max(60_000, Number(process.env.OFFICE_WORKER_IDLE_TIMEOUT_MS) || 120_000);
 const WORKER_HARD_TIMEOUT_MS = Math.max(WORKER_IDLE_TIMEOUT_MS, Number(process.env.OFFICE_WORKER_HARD_TIMEOUT_MS) || 30 * 60_000);
@@ -44,7 +46,7 @@ export type UnoGeneratedDocument = {
  */
 export function assertControlledUnoProgram(sourceCode: string) {
   if (!PROGRAM_ENTRYPOINT.test(sourceCode)) {
-    throw new Error('UNO source must define def create_document(job): with exactly one job parameter.');
+    throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'UNO source must define def create_document(job): with exactly one job parameter.');
   }
 }
 
@@ -97,14 +99,14 @@ export async function resolveUnoProgramWorker(options: {
 
 /** Release the persistent LibreOffice host owned by this process. */
 export async function disposeUnoRuntime() {
-  persistentUnoQueue.cancel(new Error('UNO runtime disposed.'));
+  persistentUnoQueue.cancel(new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'UNO runtime disposed.'));
   await persistentUnoQueue.idle();
   await stopPersistentUnoHost();
   UNO_FACADE_CATALOG_CACHE.clear();
 }
 
 function abortReason(signal?: AbortSignal) {
-  return signal?.reason instanceof Error ? signal.reason : new Error('LibreOffice UNO generation was aborted.');
+  return signal?.reason instanceof Error ? signal.reason : new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'LibreOffice UNO generation was aborted.');
 }
 
 async function terminateWorkerProcessTree(child: ChildProcess) {
@@ -192,7 +194,7 @@ function runWorker(input: {
       if (settled) return;
       outputBytes += chunk.byteLength;
       if (outputBytes > 2 * 1024 * 1024) {
-        failAndTerminate(new Error('LibreOffice UNO program worker exceeded the 2MB diagnostics limit.'));
+        failAndTerminate(new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'LibreOffice UNO program worker exceeded the 2MB diagnostics limit.'));
         return;
       }
       chunks.push(chunk);
@@ -202,7 +204,7 @@ function runWorker(input: {
     const resetIdleTimeout = () => {
       if (idleTimeout) clearTimeout(idleTimeout);
       idleTimeout = setTimeout(() => {
-        failAndTerminate(new Error(`LibreOffice UNO program worker made no progress for ${WORKER_IDLE_TIMEOUT_MS}ms. The saved draft remains editable.`));
+        failAndTerminate(new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `LibreOffice UNO program worker made no progress for ${WORKER_IDLE_TIMEOUT_MS}ms. The saved draft remains editable.`));
       }, WORKER_IDLE_TIMEOUT_MS);
       idleTimeout.unref?.();
     };
@@ -226,20 +228,20 @@ function runWorker(input: {
       const stdout = Buffer.concat(stdoutChunks).toString('utf8');
       const stderr = Buffer.concat(stderrChunks).toString('utf8');
       if (code !== 0) {
-        reject(new Error(String(stderr || stdout || `Worker exited with code ${code ?? 'unknown'}${signal ? ` (${signal})` : ''}.`).trim()));
+        reject(new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, String(stderr || stdout || `Worker exited with code ${code ?? 'unknown'}${signal ? ` (${signal})` : ''}.`).trim()));
         return;
       }
       try {
         const report = JSON.parse(String(stdout || '').trim()) as Record<string, unknown>;
-        if (input.requireBytes !== false && !Number.isFinite(Number(report.bytes))) throw new Error('missing bytes');
+        if (input.requireBytes !== false && !Number.isFinite(Number(report.bytes))) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'missing bytes');
         resolve(report);
       } catch (parseError) {
-        reject(new Error(`LibreOffice UNO program worker returned unreadable diagnostics: ${parseError instanceof Error ? parseError.message : String(parseError)}`));
+        reject(new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `LibreOffice UNO program worker returned unreadable diagnostics: ${parseError instanceof Error ? parseError.message : String(parseError)}`));
       }
     });
     resetIdleTimeout();
     hardTimeout = setTimeout(() => {
-      failAndTerminate(new Error(`LibreOffice UNO program worker exceeded the ${WORKER_HARD_TIMEOUT_MS}ms hard limit. The saved draft remains editable.`));
+      failAndTerminate(new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `LibreOffice UNO program worker exceeded the ${WORKER_HARD_TIMEOUT_MS}ms hard limit. The saved draft remains editable.`));
     }, WORKER_HARD_TIMEOUT_MS);
     hardTimeout.unref?.();
     input.abortSignal?.addEventListener('abort', onAbort, { once: true });
@@ -255,11 +257,11 @@ async function inspectUnoApiUncached(input: {
   limit?: number;
 }) {
   const soffice = await resolveLibreOfficeExecutable();
-  if (!soffice) throw new Error('UNO API inspection requires LibreOffice, but no LibreOffice executable is available.');
+  if (!soffice) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'UNO API inspection requires LibreOffice, but no LibreOffice executable is available.');
   const python = await resolveLibreOfficePythonExecutable(soffice);
-  if (!python) throw new Error('UNO API inspection requires a Python interpreter with PyUNO support.');
+  if (!python) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'UNO API inspection requires a Python interpreter with PyUNO support.');
   const worker = await resolveUnoProgramWorker();
-  if (!worker) throw new Error('LibreOffice UNO program worker is missing from the application runtime.');
+  if (!worker) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'LibreOffice UNO program worker is missing from the application runtime.');
   const directory = await mkdtemp(path.join(os.tmpdir(), 'webpilot-uno-api-'));
   try {
     const inspect = (host?: PersistentUnoHost, signal?: AbortSignal) => runWorker({
@@ -391,7 +393,7 @@ export async function inspectUnoApi(input: {
   // is free, while unrelated modules stay out of the model context.
   const normalizedQuery = String(input.query || '').trim().toLowerCase();
   const workerPath = await resolveUnoProgramWorker();
-  const workerDigest = workerPath ? createHash('sha256').update(await readFile(workerPath)).digest('hex') : 'missing-worker';
+  const workerDigest = workerPath ? createHash('sha256').update(await readFile(workerPath)).digest('hex') : ERROR_CODES.MISSING_WORKER;
   const cacheKey = `${workerDigest}:${input.documentType}:${normalizedQuery || '__index__'}`;
   let pending = UNO_FACADE_CATALOG_CACHE.get(cacheKey);
   if (!pending) {
@@ -431,12 +433,12 @@ export async function readUnoDocument(input: {
 }): Promise<UnoContentReport> {
   input.abortSignal?.throwIfAborted();
   const soffice = await resolveLibreOfficeExecutable();
-  if (!soffice) throw new Error('Office content reading requires LibreOffice. Configure LIBREOFFICE_PATH.');
+  if (!soffice) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'Office content reading requires LibreOffice. Configure LIBREOFFICE_PATH.');
   const python = await resolveLibreOfficePythonExecutable(soffice);
-  if (!python) throw new Error('Office content reading requires PyUNO. Configure LIBREOFFICE_PYTHON_PATH.');
+  if (!python) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'Office content reading requires PyUNO. Configure LIBREOFFICE_PYTHON_PATH.');
   const worker = await resolveUnoProgramWorker();
-  if (!worker) throw new Error('LibreOffice UNO worker is missing from the runtime.');
-  if (!/^\.[a-z0-9]+$/i.test(input.extension)) throw new Error('Invalid Office file extension.');
+  if (!worker) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'LibreOffice UNO worker is missing from the runtime.');
+  if (!/^\.[a-z0-9]+$/i.test(input.extension)) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'Invalid Office file extension.');
   const directory = await mkdtemp(path.join(os.tmpdir(), 'webpilot-uno-read-'));
   try {
     const source = path.join(directory, `source${input.extension}`);
@@ -455,8 +457,8 @@ export async function readUnoDocument(input: {
               '--profile', path.join(directory, 'profile'), '--soffice', soffice, '--uno-pipe', host.pipeName],
             libreOfficeProgramDirectory: path.dirname(soffice), abortSignal: signal, requireBytes: false,
           });
-          if (workerReceipt.error && isTransientUnoBridgeError(new Error(String(workerReceipt.error)))) {
-            throw new Error(String(workerReceipt.error));
+          if (workerReceipt.error && isTransientUnoBridgeError(new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, String(workerReceipt.error)))) {
+            throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, String(workerReceipt.error));
           }
           return workerReceipt;
         } catch (error) {
@@ -467,11 +469,11 @@ export async function readUnoDocument(input: {
         }
       }
     }, input.abortSignal);
-    if (receipt?.error) throw new Error(`Office content reading failed: ${String(receipt.error)}`);
+    if (receipt?.error) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `Office content reading failed: ${String(receipt.error)}`);
     const report = JSON.parse(await readFile(result, { encoding: 'utf8', signal: input.abortSignal })) as UnoContentReport;
     if (report.schemaVersion !== 1 || report.parser !== 'libreoffice-uno' || !Array.isArray(report.blocks)
       || !Array.isArray(report.warnings) || typeof report.truncated !== 'boolean' || !report.scope) {
-      throw new Error('UNO content worker returned an invalid report.');
+      throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'UNO content worker returned an invalid report.');
     }
     return report;
   } finally {
@@ -492,18 +494,18 @@ export async function generateUnoProgramDocument(input: {
   onProgress?: (progress: { phase: string; message: string; current?: number; total?: number }) => void | Promise<void>;
 }): Promise<UnoGeneratedDocument> {
   if (input.abortSignal?.aborted) throw abortReason(input.abortSignal);
-  if (Boolean(input.sourceCode) === Boolean(input.sourcePath)) throw new Error('UNO generation requires exactly one of sourceCode or sourcePath.');
+  if (Boolean(input.sourceCode) === Boolean(input.sourcePath)) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'UNO generation requires exactly one of sourceCode or sourcePath.');
   const sourceCode = input.sourceCode ?? await readFile(input.sourcePath!, 'utf8');
   assertControlledUnoProgram(sourceCode);
   const expectedSourceDigest = createHash('sha256').update(sourceCode, 'utf8').digest('hex');
   const extension = path.extname(input.fileName).toLowerCase();
-  if (!OUTPUT_EXTENSIONS.has(extension)) throw new Error(`UNO worker does not support ${extension || 'an extension'} as an Office artifact.`);
+  if (!OUTPUT_EXTENSIONS.has(extension)) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `UNO worker does not support ${extension || 'an extension'} as an Office artifact.`);
   const soffice = await resolveLibreOfficeExecutable();
-  if (!soffice) throw new Error('UNO document generation requires LibreOffice, but no LibreOffice executable is available.');
+  if (!soffice) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'UNO document generation requires LibreOffice, but no LibreOffice executable is available.');
   const python = await resolveLibreOfficePythonExecutable(soffice);
-  if (!python) throw new Error('UNO document generation requires a Python interpreter with PyUNO support. Set LIBREOFFICE_PYTHON_PATH when it is not bundled with LibreOffice.');
+  if (!python) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'UNO document generation requires a Python interpreter with PyUNO support. Set LIBREOFFICE_PYTHON_PATH when it is not bundled with LibreOffice.');
   const worker = await resolveUnoProgramWorker();
-  if (!worker) throw new Error('LibreOffice UNO program worker is missing from the application runtime.');
+  if (!worker) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'LibreOffice UNO program worker is missing from the application runtime.');
 
   const directory = await mkdtemp(path.join(os.tmpdir(), 'webpilot-uno-program-'));
   try {
@@ -553,9 +555,9 @@ export async function generateUnoProgramDocument(input: {
           host = await ensurePersistentUnoHost(soffice);
         }
       }
-      throw new Error('LibreOffice UNO program worker completed without a report.');
+      throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'LibreOffice UNO program worker completed without a report.');
     }, input.abortSignal);
-    if (!report) throw new Error('LibreOffice UNO program worker completed without a report.');
+    if (!report) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'LibreOffice UNO program worker completed without a report.');
     return {
       buffer: input.outputPath ? Buffer.alloc(0) : await readFile(outputPath),
       outputPath,

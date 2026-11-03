@@ -3,6 +3,8 @@ import { sourceDigest } from './workspace-source-editor.ts';
 import type { FileArtifactOperationResult } from '../types.ts';
 import type { OfficeVisualQaDeckChecks, OfficeVisualQaPageChecks } from '../office/types.ts';
 import { officeDesignGuidance, missingDesignReviewChecks } from '../design-guidance.ts';
+import { ERROR_CODES } from '../../errors.ts';
+
 
 export const VISUAL_QA_PAGE_CHECKS = [
   'overlap', 'clipping', 'alignment', 'spacing', 'typography', 'contrast',
@@ -214,7 +216,7 @@ export async function recordOfficeVisualQaProgress(input: {
           const checkResult = failedDeckVisualChecks(payload.deckReview.checks);
           const missingDesignChecks = missingDesignReviewChecks(draft.design, payload.deckReview.checks);
           if (missingDesignChecks.length) return { ok: false, actual: JSON.stringify({
-            kind: 'file-design-review-incomplete', code: 'DESIGN_REVIEW_REQUIRED',
+            kind: ERROR_CODES.FILE_DESIGN_REVIEW_INCOMPLETE, code: ERROR_CODES.DESIGN_REVIEW_REQUIRED,
             documentId: draft.documentId, artifactId: identity.artifactId,
             missingChecks: missingDesignChecks, selectedDirection: draft.design?.selectedDirection,
             instruction: 'Include designIntent, compositionRhythm, contentConsistency and sourceTraceability in deckReview.checks. In observation cite page-specific layout comparisons, recomputed chart/callout arithmetic and actually accessed source rows/periods. Pixel checks alone cannot verify facts. Preserve failed checks and explain missing evidence. No re-render is needed unless a real source defect is found.',

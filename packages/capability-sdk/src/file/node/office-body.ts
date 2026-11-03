@@ -1,6 +1,8 @@
 import type { OfficeDocumentDraft } from '../office/types.ts';
 import { runCapabilityProcess } from '../../node.ts';
 import { resolveLibreOfficePythonExecutable } from './libreoffice.ts';
+import { CodedError, ERROR_CODES } from '../../errors.ts';
+
 
 export const officeBodyVariables = { presentation: 'deck', word: 'document', spreadsheet: 'workbook' } as const;
 
@@ -8,19 +10,19 @@ export const officeBodyVariables = { presentation: 'deck', word: 'document', spr
 export async function compileOfficeBody(body: string, draft: OfficeDocumentDraft, signal?: AbortSignal) {
   const generator = draft.generator || 'uno';
   if (generator === 'html') {
-    if (/<(?:!doctype|html|head|body)\b/i.test(body)) throw new Error('body accepts an HTML fragment; use program for a complete HTML document.');
+    if (/<(?:!doctype|html|head|body)\b/i.test(body)) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'body accepts an HTML fragment; use program for a complete HTML document.');
     const style = draft.documentType === 'presentation'
       ? 'body{margin:0;font-family:Arial,sans-serif}section[data-slide]{width:1280px;height:720px;box-sizing:border-box;padding:48px}h1{font-size:48px}p,li{font-size:28px}'
       : '@page{size:A4;margin:18mm}body{font:12pt Arial,sans-serif;line-height:1.5}h1,h2{break-after:avoid}img,svg{max-width:100%}table{border-collapse:collapse}';
     return `<!doctype html><html><head><meta charset="utf-8"><style>${style}</style></head><body>\n${body}\n</body></html>`;
   }
   if (generator === 'javascript') {
-    if (draft.documentType !== 'spreadsheet') throw new Error('JavaScript body mode supports ExcelJS spreadsheets only.');
+    if (draft.documentType !== 'spreadsheet') throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'JavaScript body mode supports ExcelJS spreadsheets only.');
     // No indentation rewrite: multiline template strings must retain their bytes.
     return `export async function createDocument(job) {\nconst workbook = new job.ExcelJS.Workbook();\n${body}\nawait workbook.xlsx.writeFile(job.outputPath);\n}\n`;
   }
   const python = await resolveLibreOfficePythonExecutable();
-  if (!python) throw new Error('UNO body compilation requires the project Python runtime.');
+  if (!python) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'UNO body compilation requires the project Python runtime.');
   const script = [
     'import ast, json, sys',
     'data = json.loads(sys.stdin.buffer.read().decode("utf-8"))',

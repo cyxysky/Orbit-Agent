@@ -1,3 +1,4 @@
+import { getErrorCode } from '../../errors.ts';
 import { z } from 'zod';
 import {
   defineCapabilityInput,
@@ -10,6 +11,8 @@ import {
 } from '../../index.ts';
 import { communicationRuntimeSkill } from './runtime-skill.ts';
 import { communicationCapabilitySettings } from './settings.ts';
+import { CodedAggregateError, CodedError, ERROR_CODES } from '../../errors.ts';
+
 
 export * from './runtime-skill.ts';
 export * from './settings.ts';
@@ -46,8 +49,10 @@ export type CommunicationContent = CommunicationTextContent | CommunicationMedia
 // Drivers distinguish a confirmed non-delivery from a lost/ambiguous receipt.
 // Only the former can safely release the draft for another send attempt.
 export class CommunicationDeliveryError extends Error {
+  readonly code: import('../../errors.ts').ErrorCode;
   constructor(message: string, readonly outcome: 'not-sent' | 'unknown', options?: ErrorOptions) {
     super(message, options);
+    this.code = outcome === 'not-sent' ? ERROR_CODES.COMMUNICATION_NOT_SENT : ERROR_CODES.COMMUNICATION_OPERATION_FAILED;
     this.name = 'CommunicationDeliveryError';
   }
 }
@@ -121,14 +126,14 @@ export function createMemoryCommunicationDraftStore(): CommunicationDraftStore {
     },
     async claimDelivery(id) {
       const draft = drafts.get(id);
-      if (!draft) throw new Error(`Unknown draft: ${id}.`);
+      if (!draft) throw new CodedError(ERROR_CODES.COMMUNICATION_OPERATION_FAILED, `Unknown draft: ${id}.`);
       const claimed = !draft.delivery || draft.delivery.status === 'failed';
       if (claimed) draft.delivery = { status: 'sending', updatedAt: new Date().toISOString() };
       return { claimed, draft: structuredClone(draft) };
     },
     async finishDelivery(id, delivery) {
       const draft = drafts.get(id);
-      if (!draft) throw new Error(`Unknown draft: ${id}.`);
+      if (!draft) throw new CodedError(ERROR_CODES.COMMUNICATION_OPERATION_FAILED, `Unknown draft: ${id}.`);
       draft.delivery = structuredClone(delivery);
     },
   };
@@ -246,11 +251,11 @@ export function createCommunicationTool(
         if (input.action === 'draft') {
           const channel = byId.get(input.channelId!);
           if (!channel) {
-            return { ok: false, error: { code: 'communication-channel-not-found', message: `Unknown channel: ${input.channelId}.` } };
+            return { ok: false, error: { code: ERROR_CODES.COMMUNICATION_CHANNEL_NOT_FOUND, message: `Unknown channel: ${input.channelId}.` } };
           }
           const validationError = channelDraftError(channel, input);
           if (validationError) {
-            return { ok: false, error: { code: 'communication-draft-invalid', message: validationError } };
+            return { ok: false, error: { code: ERROR_CODES.COMMUNICATION_DRAFT_INVALID, message: validationError } };
           }
           const draft = await drafts.create({
             channelId: input.channelId!,
@@ -262,28 +267,28 @@ export function createCommunicationTool(
         }
         const draft = await drafts.get(input.draftId!);
         if (!draft) {
-          return { ok: false, error: { code: 'communication-draft-not-found', message: `Unknown draft: ${input.draftId}.` } };
+          return { ok: false, error: { code: ERROR_CODES.COMMUNICATION_DRAFT_NOT_FOUND, message: `Unknown draft: ${input.draftId}.` } };
         }
         if (input.action === 'readDraft') {
           return { ok: true, summary: `Communication draft ${draft.id}.`, data: draft };
         }
         if (configuration.AGENT_COMMUNICATION_ALLOW_SEND !== 'true') {
-          return { ok: false, error: { code: 'communication-send-disabled', message: 'Outbound communication is disabled by host configuration.' } };
+          return { ok: false, error: { code: ERROR_CODES.COMMUNICATION_SEND_DISABLED, message: 'Outbound communication is disabled by host configuration.' } };
         }
         const channel = byId.get(draft.channelId);
         if (!channel) {
-          return { ok: false, error: { code: 'communication-channel-not-found', message: `Unknown channel: ${draft.channelId}.` } };
+          return { ok: false, error: { code: ERROR_CODES.COMMUNICATION_CHANNEL_NOT_FOUND, message: `Unknown channel: ${draft.channelId}.` } };
         }
         const validationError = channelDraftError(channel, { ...input, targets: draft.targets, content: draft.content });
-        if (validationError) return { ok: false, error: { code: 'communication-draft-invalid', message: validationError } };
+        if (validationError) return { ok: false, error: { code: ERROR_CODES.COMMUNICATION_DRAFT_INVALID, message: validationError } };
         context.abortSignal?.throwIfAborted();
-        if (!drafts.claimDelivery || !drafts.finishDelivery) throw new Error('The draft store must support atomic delivery tracking before sending.');
+        if (!drafts.claimDelivery || !drafts.finishDelivery) throw new CodedError(ERROR_CODES.COMMUNICATION_OPERATION_FAILED, 'The draft store must support atomic delivery tracking before sending.');
         const claim = await drafts.claimDelivery(draft.id);
         if (!claim.claimed) {
           if (claim.draft.delivery?.status === 'sent' && claim.draft.delivery.receipt) {
             return { ok: true, summary: 'This draft was already sent; returning its original receipt.', data: claim.draft.delivery.receipt };
           }
-          return { ok: false, error: { code: 'communication-delivery-pending', retryable: false,
+          return { ok: false, error: { code: ERROR_CODES.COMMUNICATION_DELIVERY_PENDING, retryable: false,
             message: 'This draft is sending or its delivery is uncertain. Verify the channel receipt before creating a replacement draft.' } };
         }
         let receipt: CommunicationReceipt;
@@ -300,7 +305,7 @@ export function createCommunicationTool(
         return {
           ok: false,
           error: {
-            code: error instanceof CommunicationDeliveryError && error.outcome === 'not-sent' ? 'communication-not-sent' : 'communication-operation-failed',
+            code: getErrorCode(error, error instanceof CommunicationDeliveryError && error.outcome === 'not-sent' ? ERROR_CODES.COMMUNICATION_NOT_SENT : ERROR_CODES.COMMUNICATION_OPERATION_FAILED),
             message: error instanceof Error ? error.message : String(error),
             retryable: error instanceof CommunicationDeliveryError && error.outcome === 'not-sent',
           },
@@ -330,7 +335,7 @@ export function createCommunicationCapability(options: {
         dispose: async () => {
           const results = await Promise.allSettled([...channels.map((channel) => channel.dispose?.()), drafts.dispose?.()]);
           const errors = results.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
-          if (errors.length) throw new AggregateError(errors, 'Communication cleanup failed.');
+          if (errors.length) throw new CodedAggregateError(ERROR_CODES.COMMUNICATION_OPERATION_FAILED, errors, 'Communication cleanup failed.');
         },
       };
     },

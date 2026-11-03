@@ -30,6 +30,10 @@ export function compactBrowserChatLogForClient<TLog extends BrowserChatClientLog
       const compactedDetails = JSON.stringify({
         aiInput,
         aiInputTokens: details?.aiInputTokens,
+        engine: details.engine,
+        threadId: details.threadId,
+        codexTurnId: details.codexTurnId,
+        modelRequestId: details.modelRequestId,
         execution: details?.execution,
       });
       return { ...log, details: compactedDetails };
@@ -57,11 +61,16 @@ export function compactBrowserChatLogForClient<TLog extends BrowserChatClientLog
           text: responseRecord.text,
           toolCalls: responseRecord.toolCalls,
           usage: responseRecord.usage,
+          phase: responseRecord.phase,
         }
       : rawResponse;
     const compactedDetails = JSON.stringify({
       aiOutput: {
         responseType: aiOutput.responseType,
+        engine: aiOutput.engine,
+        itemId: aiOutput.itemId,
+        agentStepIndex: aiOutput.agentStepIndex,
+        finished: aiOutput.finished,
         text: aiOutput.text,
         response,
         timings: aiOutput.timings,
@@ -69,6 +78,10 @@ export function compactBrowserChatLogForClient<TLog extends BrowserChatClientLog
         usage: aiOutput.usage,
       },
       execution: details?.execution,
+      engine: details?.engine,
+      threadId: details?.threadId,
+      codexTurnId: details?.codexTurnId,
+      modelRequestId: details?.modelRequestId,
       ...(details?.truncated === true ? {
         truncated: true,
         originalCharacters: details.originalCharacters,
@@ -86,11 +99,11 @@ export function compactBrowserChatLogsForClient<TLog extends BrowserChatClientLo
   const compacted = logs.map(compactBrowserChatLogForClient);
   const finalToolLogIndex = new Map<string, number>();
   const finalToolLogKey = (log: TLog) => {
-    const isFinalToolLog = log.phase === 'ai:tool'
+    const isFinalToolLog = (log.phase === 'ai:tool' || log.phase.endsWith(':ai:tool'))
       && Boolean(log.toolCallId)
-      && /\s->\s(?:ok|failed)$/i.test(log.message || '');
+      && /\s->\s(?:ok|failed|completed)$/i.test(log.message || '');
     return isFinalToolLog
-      ? [log.toolCallId, log.stepIndex ?? '', log.message].join('|')
+      ? [log.phase, log.toolCallId, log.stepIndex ?? '', log.message].join('|')
       : undefined;
   };
   compacted.forEach((log, index) => {

@@ -6,6 +6,8 @@ import { ApiRequestError, apiError, apiJson, parseJsonRequest } from '@/server/h
 import { idempotencyFingerprint, runIdempotentJson } from '@/server/http/idempotency';
 import { requestHasAdminSettingsAccess } from '@/server/settings/admin-settings-access';
 import { readRuntimeSettingsItems } from '@/server/settings/settings-snapshot';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 const allowedKeys = new Set(runtimeEnvDefinitions.map((item) => item.key));
 const envSchema = z.object({
@@ -17,7 +19,7 @@ const envSchema = z.object({
 
 function requireAdmin(request: Request) {
   if (!requestHasAdminSettingsAccess(request)) {
-    throw new ApiRequestError('请先输入管理员设置密码。', { code: 'admin_access_required', status: 401 });
+    throw new ApiRequestError('请先输入管理员设置密码。', { code: ERROR_CODES.ADMIN_ACCESS_REQUIRED, status: 401 });
   }
 }
 

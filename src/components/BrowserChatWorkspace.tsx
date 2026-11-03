@@ -321,6 +321,8 @@ import type {
   SkillRecord,
   StepExecutionResult,
 } from '@/server/ai/schemas/runtime.schema';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export { aiOutputViewFromResponse, buildAiCycleToolDetailMap } from '@/components/browser-chat-ai-output';
 
@@ -407,6 +409,7 @@ type BrowserChatToolConfirmation = {
   subagentId?: string;
   stepIndex?: number;
   toolName: string;
+  action?: string;
   inputSignature: string;
   reason?: string;
   prompt: string;
@@ -439,6 +442,8 @@ type BrowserChatSession = {
     maxTokens: number;
     textTokens: number;
     toolTokens: number;
+    breakdownAvailable?: boolean;
+    method?: string;
   };
   createdAt: string;
   updatedAt: string;
@@ -948,12 +953,12 @@ function isRuntimeSkillReadRequired(value: unknown): boolean {
     try {
       return isRuntimeSkillReadRequired(JSON.parse(value));
     } catch {
-      return value.includes('RUNTIME_SKILL_CONTENT_RETURNED') || value.includes('RUNTIME_SKILL_READ_REQUIRED');
+      return value.includes('RUNTIME_SKILL_CONTENT_RETURNED') || value.includes(ERROR_CODES.RUNTIME_SKILL_READ_REQUIRED);
     }
   }
   if (typeof value !== 'object' || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
-  if (record.failureCategory === 'skill-read-required' || record.code === 'RUNTIME_SKILL_CONTENT_RETURNED' || record.code === 'RUNTIME_SKILL_READ_REQUIRED') {
+  if (record.failureCategory === ERROR_CODES.SKILL_READ_REQUIRED || record.code === 'RUNTIME_SKILL_CONTENT_RETURNED' || record.code === ERROR_CODES.RUNTIME_SKILL_READ_REQUIRED) {
     return true;
   }
   return isRuntimeSkillReadRequired(record.actual) || isRuntimeSkillReadRequired(record.error) || isRuntimeSkillReadRequired(record.value);
@@ -1032,10 +1037,10 @@ function browserChatToolLabel(name: string, input: unknown, t: (value: string) =
     if (action === 'composeVideo') return t('合成分镜视频');
     if (action === 'generateSpeech') return t('生成语音');
   }
-  if (name === 'novel') {
+  if (name === 'textEditor') {
     const action = toolInputValue(asRecord(input), ['action']);
-    const labels: Record<string, string> = { plan: '保存小说草稿', edit: '修改小说草稿', validate: '校验小说内容', review: '校订小说大纲', confirmPlan: '确认小说方案', writeChapter: '编写小说章节', read: '读取小说', list: '小说项目', export: '导出小说' };
-    return t(labels[action] || '小说创作');
+    const labels: Record<string, string> = { create: '新建文本', write: '保存文本', edit: '修改文本', append: '追加文本', delete: '删除文本', read: '读取文本', list: '文本列表', export: '导出文本' };
+    return t(labels[action] || '文本编辑');
   }
   const filePresentation = browserChatFileToolPresentation(name, input);
   if (filePresentation) return t(filePresentation.label);
@@ -1161,7 +1166,8 @@ function BrowserChatToolIcon({ input, name }: { input?: unknown; name: string })
   if (name === 'contextRead') return <FileSearch size={14} />;
   if (name === 'codeSandbox') return <SquareTerminal size={13} />;
   if (name === 'connectors') return <Cable size={13} />;
-  if (name === 'knowledge' || name === 'novel') return <BookOpen size={13} />;
+  if (name === 'textEditor') return <FileText size={13} />;
+  if (name === 'knowledge') return <BookOpen size={13} />;
   if (name === 'data') return <Database size={13} />;
   if (name === 'media') {
     if (action === 'transcribe') return <Volume2 size={13} />;
@@ -1834,8 +1840,9 @@ function normalizeToolConfirmation(value?: BrowserChatToolConfirmation): Browser
     stepIndex: typeof value.stepIndex === 'number' && Number.isFinite(value.stepIndex) ? Math.floor(value.stepIndex) : undefined,
     toolName,
     inputSignature,
+    action: typeof value.action === 'string' ? value.action : undefined,
     reason: typeof value.reason === 'string' && value.reason.trim() ? compactText(value.reason, 300) : undefined,
-    prompt: toolName === 'novel' ? prompt : compactText(prompt, 500),
+    prompt: compactText(prompt, 500),
     screenshotUrl: typeof value.screenshotUrl === 'string' && value.screenshotUrl.trim()
       ? value.screenshotUrl.trim()
       : undefined,
@@ -2422,7 +2429,7 @@ const BrowserChatGroupBindingCenter = memo(function BrowserChatGroupBindingCente
       return;
     }
     const state = await bridge.getState();
-    if (!state.ok) throw new Error(state.error || '无法读取浏览器标签组');
+    if (!state.ok) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, state.error || '无法读取浏览器标签组');
     setGroups(Array.isArray(state.groups) ? state.groups : []);
   }, []);
 
@@ -2859,6 +2866,10 @@ function BrowserChatToolScreenshotButton({ tool }: { tool: BrowserChatToolCall }
   );
 }
 
+function BrowserChatTextEditorButton() {
+  const { openFilePreview } = useFilePreview();
+  return <button className="browser-chat-conversation-direct-action" type="button" aria-label="打开文本编辑器" onClick={() => openFilePreview({ fileName: '文本编辑器', source: '', mode: 'editText' })}><FileText size={17} /><ExpandableActionLabel>文本编辑</ExpandableActionLabel></button>;
+}
 
 function BrowserChatToolContextTokenInfo({ tool }: { tool: BrowserChatToolCall }) {
   const recovery = (tool.input && typeof tool.input === 'object' && 'recoveryReview' in tool.input && typeof tool.input.recoveryReview === 'string' ? tool.input.recoveryReview : '');
@@ -2893,7 +2904,10 @@ function BrowserChatToolContextTokenInfo({ tool }: { tool: BrowserChatToolCall }
   const afterText = after === undefined
     ? browserChatToolHasLegacyContextAfter(tool)
       ? t('暂无可核对的调用后统计')
-      : before === undefined ? undefined : t('等待下一次模型请求统计')
+      : before === undefined ? undefined
+        : tool.name === 'finalResponse' && tool.ok === true
+          ? t('本次调用后没有新的模型请求')
+          : t('等待下一次模型请求统计')
     : t('调用后：{count} Token', { count: formatTokens(after) });
   const toolElapsedText = toolElapsedMs === undefined
     ? undefined
@@ -2963,7 +2977,7 @@ function BrowserChatToolContextTokenInfo({ tool }: { tool: BrowserChatToolCall }
       {beforeText ? <span>{beforeText}</span> : null}
       {afterText ? <span>{afterText}</span> : null}
       {!deltaText && !beforeText && !afterText ? <span>{t('暂无上下文 Token 统计')}</span> : null}
-      <small>{t('估算包含文本、工具定义、截图等全部模型输入。同批工具共享请求间增量，不是该工具独占的返回量，也不能逐项相加。')}</small>
+      <small>{t('统计包含文本、工具定义、截图等全部模型输入，未收到实际用量时采用估算。同批工具共享请求间增量，不能逐项相加。')}</small>
       <span className="browser-chat-tool-context-divider" aria-hidden="true" />
       <strong>{t('耗时')}</strong>
       {toolElapsedText ? <span>{toolElapsedText}</span> : null}
@@ -3250,10 +3264,8 @@ const BrowserChatToolConfirmationActions = memo(function BrowserChatToolConfirma
   return (
     <>
       <BrowserChatConfirmationPanel
-        title={t(pending.toolName === 'novel' ? '确认小说创作方案' : '需要你的确认')}
-        description={pending.toolName === 'novel'
-          ? <div className="browser-chat-novel-plan-review"><BrowserChatMarkdown markdown={pending.prompt} /></div>
-          : pending.reason || pending.prompt}
+        title={t('需要你的确认')}
+        description={pending.reason || pending.prompt}
       >
           {pending.screenshotUrl ? (
             <button
@@ -3282,7 +3294,7 @@ const BrowserChatToolConfirmationActions = memo(function BrowserChatToolConfirma
             size="default"
           >
             {resolvingConfirm ? <Loader2 className="spin" size={13} /> : <BadgeCheck size={13} />}
-            {resolvingConfirm ? t('确认中') : t(pending.toolName === 'novel' ? '确认方案，开始写作' : '确认执行')}
+            {resolvingConfirm ? t('确认中') : t('确认执行')}
           </RainbowButton>
       </BrowserChatConfirmationPanel>
       {screenshotOpen && pending.screenshotUrl ? (
@@ -3529,7 +3541,7 @@ const BrowserChatStepToolCards = memo(function BrowserChatStepToolCards({
         const failureMeta = browserChatToolFailureSummary(tool.rawResult ?? tool.error ?? tool.result);
         const meta = tool.invalid
           ? browserChatToolValidationSummary(tool.error || tool.result)
-          : compactText(failureMeta || tool.reason || browserChatToolMeta(source?.toolName || tool.name, source ? { action: source.action } : tool.input, t), 150);
+          : compactText(failureMeta || (tool.ok === false ? tool.error || tool.result : undefined) || tool.reason || browserChatToolMeta(source?.toolName || tool.name, source ? { action: source.action } : tool.input, t), 150);
         const displayText = `${label}${meta ? `: ${meta}` : ''}`;
         const requestCreatedAt = tool.contextBefore?.requestCreatedAt;
         const supersededByLaterRequest = tool.ok === undefined && Boolean(requestCreatedAt) && allToolCalls
@@ -3720,7 +3732,7 @@ const BrowserChatAiCycleLine = memo(function BrowserChatAiCycleLine({
         const failureMeta = browserChatToolFailureSummary(executedTool.rawResult ?? executedTool.error ?? executedTool.result);
         const meta = executedTool.invalid
           ? browserChatToolValidationSummary(executedTool.error || executedTool.result)
-          : failureMeta || executedTool.reason || tool.reason || browserChatToolMeta(source?.toolName || executedTool.name, source ? { action: source.action } : executedTool.input, t);
+          : failureMeta || (executedTool.ok === false ? executedTool.error || executedTool.result : undefined) || executedTool.reason || tool.reason || browserChatToolMeta(source?.toolName || executedTool.name, source ? { action: source.action } : executedTool.input, t);
         const presentation = browserChatToolPresentation(executedTool, toolDetail.step, running);
         const { isActive, stateClass, status } = presentation;
         const pendingConfirmation = pendingConfirmationForTool({
@@ -6157,6 +6169,7 @@ function BrowserChatContextUsage({ contextUsage }: {
   const textDisplay = compactContextTokens(textTokens);
   const toolDisplay = compactContextTokens(toolTokens);
   const imageDisplay = compactContextTokens(imageTokens);
+  const breakdownAvailable = contextUsage?.breakdownAvailable !== false;
 
   return (
     <HoverCard
@@ -6175,17 +6188,20 @@ function BrowserChatContextUsage({ contextUsage }: {
           <div className="browser-chat-context-breakdown">
             <div className="is-text">
               <span>{t('消息与系统')}</span>
-              <strong><NumberTicker {...textDisplay} value={textDisplay.value} /></strong>
+              <strong>{breakdownAvailable ? <NumberTicker {...textDisplay} value={textDisplay.value} /> : t('未知')}</strong>
             </div>
             <div className="is-tools">
               <span>{t('工具')}</span>
-              <strong><NumberTicker {...toolDisplay} value={toolDisplay.value} /></strong>
+              <strong>{breakdownAvailable ? <NumberTicker {...toolDisplay} value={toolDisplay.value} /> : t('未知')}</strong>
             </div>
             <div className="is-images">
               <span>{t('图片')}</span>
-              <strong><NumberTicker {...imageDisplay} value={imageDisplay.value} /></strong>
+              <strong>{breakdownAvailable ? <NumberTicker {...imageDisplay} value={imageDisplay.value} /> : t('未知')}</strong>
             </div>
           </div>
+          {contextUsage?.method ? <small>{t(breakdownAvailable
+            ? contextUsage.method === 'request-estimate' ? '总量与分项均为估算' : '分项为估算'
+            : '当前连接未提供分项统计')}</small> : null}
           <footer className="browser-chat-context-card-total">
             <span>{t('总计')}</span>
             <strong>
@@ -6250,20 +6266,19 @@ function BrowserChatSafetySelector({
     <div className="browser-chat-mode-selector" data-i18n-skip>
       <HoverCard align="center" title={t('执行权限：{mode}', { mode: safetyLabel })} width={200}>
         {(hoverProps) => (
-          <Button
+          <button
             {...hoverProps}
             aria-pressed={safetyMode === 'full'}
             aria-label={t('执行权限：{mode}', { mode: safetyLabel })}
             className="browser-chat-mode-selector-trigger glass chip strict"
-            isDisabled={disabled}
-            isIconOnly
-            onPress={() => onSafetyModeChange(safetyMode === 'full' ? 'strict' : 'full')}
-            variant="ghost"
+            disabled={disabled}
+            onClick={() => onSafetyModeChange(safetyMode === 'full' ? 'strict' : 'full')}
+            type="button"
           >
             {safetyMode === 'full'
               ? <ShieldOff aria-hidden="true" size={20} />
               : <ShieldCheck aria-hidden="true" size={20} />}
-          </Button>
+          </button>
         )}
       </HoverCard>
 
@@ -8842,7 +8857,7 @@ export function BrowserChatWorkspace({
     prepareSendMessagesRequest: ({ body, messages: requestMessages }) => {
       const latest = [...requestMessages].reverse().find((message) => message.role === 'user');
       const metadata = latest?.metadata as BrowserChatUIMessageMetadata | undefined;
-      if (!latest || !metadata?.sessionId) throw new Error('Browser chat session is not ready');
+      if (!latest || !metadata?.sessionId) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Browser chat session is not ready');
       return {
         api: browserChatApiUrl(`/api/browser-chat/${encodeURIComponent(metadata.sessionId)}/message`),
         body: {
@@ -9224,7 +9239,7 @@ export function BrowserChatWorkspace({
     openFilePreview({
       fileName: attachment.name || t('文件'),
       mimeType: attachment.type || undefined,
-      source: source || (async () => { throw new Error(t('文件地址不可用')); }),
+      source: source || (async () => { throw new CodedError(ERROR_CODES.APPLICATION_ERROR, t('文件地址不可用')); }),
     });
   }, [openFilePreview, t]);
 
@@ -9236,10 +9251,10 @@ export function BrowserChatWorkspace({
         if (download.path && bridge?.readDownload) {
           const result = await bridge.readDownload({ id: download.id });
           if (result.ok && result.data) return result.data;
-          if (!download.url) throw new Error(result.error || t('文件预览加载失败'));
+          if (!download.url) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, result.error || t('文件预览加载失败'));
         }
         if (download.url) return download.url;
-        throw new Error(t('文件地址不可用'));
+        throw new CodedError(ERROR_CODES.APPLICATION_ERROR, t('文件地址不可用'));
       },
     });
   }, [openFilePreview, t]);
@@ -9279,7 +9294,7 @@ export function BrowserChatWorkspace({
   }, [addReferenceAttachments]);
   const loadMessageRecords = useCallback<BrowserChatMessageRecordLoader>(async (messageId, options = {}) => {
     const sessionId = activeSessionIdRef.current;
-    if (!sessionId) throw new Error('No active browser chat session');
+    if (!sessionId) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'No active browser chat session');
     const params = new URLSearchParams({ limit: '200', messageId });
     if (options.cursor) params.set('cursor', options.cursor);
     if (options.subagentsOnly) params.set('subagentsOnly', 'true');
@@ -9322,12 +9337,12 @@ export function BrowserChatWorkspace({
         const ownerSteps = detail.subagentId
           ? records.subagents.find((child) => child.id === detail.subagentId)?.steps || [] : records.steps;
         const step = ownerSteps.find((item) => item.index === detail.stepIndex);
-        if (!step) throw new Error('Tool step is not yet available in persisted records.');
+        if (!step) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Tool step is not yet available in persisted records.');
         const toolIndex = detail.tool.id
           ? (step.tools || []).findIndex((tool) => tool.id === detail.tool.id)
           : detail.toolIndex;
         const tool = step.tools?.[toolIndex];
-        if (!tool) throw new Error('Tool call is not yet available in persisted records.');
+        if (!tool) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Tool call is not yet available in persisted records.');
         const confirmation = toolUserActionForTool(records.logs, step.index, tool.name, tool.input);
         setToolDialog((current) => {
           if (!current || current.subagentId !== detail.subagentId || current.stepIndex !== detail.stepIndex || current.tool.id !== detail.tool.id) return current;
@@ -9864,13 +9879,27 @@ export function BrowserChatWorkspace({
     });
   }, []);
 
-  const resyncRealtimeSessions = useCallback(async () => {
+  const resyncRealtimeSessions = useCallback(async (sessionIds?: readonly string[]) => {
+    if (sessionIds) {
+      // Oversized realtime packets only invalidate their own session. Merge
+      // fresh records in the background without restarting list/viewport loading.
+      await Promise.all(sessionIds.map(async sessionId => {
+        const data = await readBrowserChatInitialRequest(
+          browserChatApiUrl(`/api/browser-chat/${sessionId}`),
+          '更新对话失败',
+        );
+        upsertSession(data.session as BrowserChatSession, {
+          activate: activeSessionIdRef.current === sessionId,
+        });
+      }));
+      return;
+    }
     const activeSessionId = activeSessionIdRef.current;
     await Promise.all([loadSessions({ showLoading: false }), loadToolConfirmations()]);
     if (activeSessionId) await refreshSession(activeSessionId, {
       activateIf: () => activeSessionIdRef.current === activeSessionId,
     });
-  }, [loadSessions, refreshSession, loadToolConfirmations]);
+  }, [browserChatApiUrl, loadSessions, refreshSession, loadToolConfirmations, upsertSession]);
 
   useBrowserChatRealtime({
     onRefresh: handleRealtimeRefresh,
@@ -10010,7 +10039,7 @@ export function BrowserChatWorkspace({
         ? active.subagents.find((record) => record.id === selectedReplySubagent.id
           && record.status === 'blocked' && record.resumable) : undefined;
       if (intendedReplyTarget && (!replySubagent || activeSessionIdRef.current !== intendedReplyTarget.sessionId)) {
-        throw new Error(t('该子 Agent 已不再等待回复，请重新选择任务后发送。'));
+        throw new CodedError(ERROR_CODES.APPLICATION_ERROR, t('该子 Agent 已不再等待回复，请重新选择任务后发送。'));
       }
       const resumingParentMessageId = active.turnState === 'awaiting_human'
         && active.subagents.some((record) => record.status === 'blocked' && record.resumable)
@@ -10940,6 +10969,7 @@ export function BrowserChatWorkspace({
       <div className="browser-chat-conversation-header-actions">
         <div className="browser-chat-conversation-tools" role="group" aria-label={t('对话工具')}>
           <BrowserChatRecoveryPanel key={`recovery-${session.id}`} sessionId={session.id} busy={currentBusy} />
+          <BrowserChatTextEditorButton />
           <BrowserChatFilesPanel key={`files-${session.id}`} sessionId={session.id} busy={currentBusy} />
           <BrowserChatTerminalPanel key={`terminals-${session.id}`} sessionId={session.id} closed={session.status === 'closed'} />
           <BrowserChatExportButton key={`export-${session.id}`} sessionId={session.id} onError={setError} />

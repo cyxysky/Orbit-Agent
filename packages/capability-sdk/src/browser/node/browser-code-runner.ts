@@ -14,6 +14,8 @@ import {
 } from './editable-text-selection.ts';
 import type { BrowserPageObservation } from './browser-page-observation.ts';
 import { AI_DOM_RUNTIME_VERSION, installAiBrowserPageRuntime } from './browser-page-runtime.ts';
+import { CodedError, ERROR_CODES } from '../../errors.ts';
+
 
 export type BrowserCodeConnection = {
   protocol: 'playwright' | 'cdp';
@@ -83,13 +85,13 @@ export type BrowserCodeRunResult = {
   aborted?: boolean;
   executionState?: BrowserCodeExecutionState;
   kernelReset?: {
-    reason: 'age-limit' | 'execution-limit' | 'heap-limit' | 'rss-limit' | 'timeout' | 'aborted' | 'crashed' | 'out-of-memory';
+    reason: 'age-limit' | 'execution-limit' | 'heap-limit' | 'rss-limit' | typeof ERROR_CODES.TIMEOUT | typeof ERROR_CODES.ABORTED | 'crashed' | 'out-of-memory';
     memoryUsage?: BrowserCodeKernelMemoryUsage;
   };
 };
 
 export type BrowserCodeExecutionState = {
-  status: 'completed' | 'failed' | 'timeout' | 'aborted' | 'crashed';
+  status: 'completed' | 'failed' | typeof ERROR_CODES.TIMEOUT | typeof ERROR_CODES.ABORTED | 'crashed';
   phase: 'startup' | 'running' | 'finished';
   attemptedActions: string[];
   /** Playwright calls that returned successfully; does not assert business success. */
@@ -225,6 +227,41 @@ function walkBrowserCodeAst(node: BrowserCodeAstNode, visit: (node: BrowserCodeA
     }
   }
   return true;
+}
+
+function browserCodeWithCellReturns(code: string) {
+  const ast = parseBrowserCodeAst(code);
+  if (!ast) return code;
+  const returns: BrowserCodeAstNode[] = [];
+  const visit = (node: BrowserCodeAstNode) => {
+    // Function returns belong to the function, not to the enclosing cell.
+    if (['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node.type)) return;
+    if (node.type === 'ReturnStatement') {
+      returns.push(node);
+      return;
+    }
+    for (const value of Object.values(node)) {
+      for (const child of Array.isArray(value) ? value : [value]) {
+        if (child && typeof child === 'object' && typeof (child as BrowserCodeAstNode).type === 'string') {
+          visit(child as BrowserCodeAstNode);
+        }
+      }
+    }
+  };
+  visit(ast);
+  if (!returns.length) return code;
+  const label = `__browserCodeCell_${randomUUID().replace(/-/g, '')}`;
+  let transformed = code;
+  for (const node of returns.sort((left, right) => Number(right.start) - Number(left.start))) {
+    const argument = node.argument as BrowserCodeAstNode | null;
+    const value = argument ? code.slice(Number(argument.start), Number(argument.end)) : 'null';
+    transformed = transformed.slice(0, Number(node.start))
+      + `{ nodeRepl.write(${value}); break ${label}; }`
+      + transformed.slice(Number(node.end));
+  }
+  // A labelled block preserves var bindings and finally clauses while allowing
+  // Node's REPL to handle top-level await without an async-function wrapper.
+  return `${label}: {\n${transformed}\n}`;
 }
 
 function browserCodeMemberPath(node: BrowserCodeAstNode | undefined): string[] | undefined {
@@ -583,7 +620,7 @@ function browserCodeKernelMain() {
     input: unknown,
   ) => new Promise<unknown>((resolve, reject) => {
     if (!activeExecution) {
-      reject(new Error('agent.state is only available while browserCode is executing.'));
+      reject(new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'agent.state is only available while browserCode is executing.'));
       return;
     }
     const operationId = childRandomUUID();
@@ -591,7 +628,7 @@ function browserCodeKernelMain() {
       const pendingOperation = pendingRuntimeStateOperations.get(operationId);
       if (!pendingOperation) return;
       pendingRuntimeStateOperations.delete(operationId);
-      pendingOperation.reject(new Error('agent.state operation timed out after 10000ms.'));
+      pendingOperation.reject(new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'agent.state operation timed out after 10000ms.'));
     }, 10_000);
     pendingRuntimeStateOperations.set(operationId, { reject, resolve, timer });
     send({
@@ -647,31 +684,31 @@ function browserCodeKernelMain() {
 
   const nodeRepl = Object.freeze({
     write(value: unknown) {
-      if (!activeExecution) throw new Error('nodeRepl.write() is only available while browserCode is executing.');
+      if (!activeExecution) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'nodeRepl.write() is only available while browserCode is executing.');
       activeExecution.outputs.push(value);
     },
     async emitImage(value: unknown, options: { mimeType?: BrowserCodeImage['mimeType'] } = {}) {
-      if (!activeExecution) throw new Error('nodeRepl.emitImage() is only available while browserCode is executing.');
+      if (!activeExecution) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'nodeRepl.emitImage() is only available while browserCode is executing.');
       let mimeType = options.mimeType || 'image/png';
       let buffer: Buffer;
       if (typeof value === 'string') {
         const dataUrl = /^data:(image\/(?:png|jpeg|webp));base64,([\s\S]+)$/i.exec(value.trim());
-        if (!dataUrl) throw new Error('nodeRepl.emitImage() string input must be a base64 image data URL.');
+        if (!dataUrl) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'nodeRepl.emitImage() string input must be a base64 image data URL.');
         mimeType = dataUrl[1].toLowerCase() as BrowserCodeImage['mimeType'];
         buffer = ChildBuffer.from(dataUrl[2], 'base64');
       } else if (ChildBuffer.isBuffer(value) || value instanceof Uint8Array) {
         buffer = ChildBuffer.from(value);
       } else {
-        throw new Error('nodeRepl.emitImage() expects a Buffer, Uint8Array, or base64 image data URL.');
+        throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'nodeRepl.emitImage() expects a Buffer, Uint8Array, or base64 image data URL.');
       }
       if (!['image/jpeg', 'image/png', 'image/webp'].includes(mimeType)) {
-        throw new Error(`nodeRepl.emitImage() does not support ${mimeType}.`);
+        throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `nodeRepl.emitImage() does not support ${mimeType}.`);
       }
       if (!buffer.length || buffer.length > maxBrowserCodeImageBytes) {
-        throw new Error(`browserCode image must contain 1-${maxBrowserCodeImageBytes} bytes.`);
+        throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `browserCode image must contain 1-${maxBrowserCodeImageBytes} bytes.`);
       }
       if (activeExecution.imageBytes + buffer.length > maxBrowserCodeImageBytesTotal) {
-        throw new Error(`browserCode emitted images exceed ${maxBrowserCodeImageBytesTotal} total bytes.`);
+        throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `browserCode emitted images exceed ${maxBrowserCodeImageBytesTotal} total bytes.`);
       }
       activeExecution.imageBytes += buffer.length;
       activeExecution.images.push({ data: buffer.toString('base64'), mimeType });
@@ -710,7 +747,7 @@ function browserCodeKernelMain() {
   const actionArgsWithMinimumTimeout = (args: unknown[], optionsIndex: number) => {
     const options = args[optionsIndex];
     if (!options || typeof options !== 'object' || Array.isArray(options)) return args;
-    const timeout = Number(Reflect.get(options, 'timeout'));
+    const timeout = Number(Reflect.get(options, ERROR_CODES.TIMEOUT));
     if (!Number.isFinite(timeout) || timeout <= 0 || timeout >= browserCodeActionTimeoutMs) return args;
     const normalized = [...args];
     normalized[optionsIndex] = { ...options, timeout: browserCodeActionTimeoutMs };
@@ -720,7 +757,7 @@ function browserCodeKernelMain() {
   const screenshotArgsWithDefaultTimeout = (args: unknown[]) => {
     const options = args[0];
     if (options && typeof options === 'object' && !Array.isArray(options)) {
-      const timeout = Number(Reflect.get(options, 'timeout'));
+      const timeout = Number(Reflect.get(options, ERROR_CODES.TIMEOUT));
       if (Number.isFinite(timeout) && timeout > 0) return args;
       return [{ ...options, timeout: browserCodeScreenshotTimeoutMs }, ...args.slice(1)];
     }
@@ -737,7 +774,7 @@ function browserCodeKernelMain() {
         timeout: browserCodeNavigationTimeoutMs,
       }),
       openerPage.evaluate(() => {
-        if (!window.open('about:blank', '_blank')) throw new Error('The browser blocked the new tab.');
+        if (!window.open('about:blank', '_blank')) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'The browser blocked the new tab.');
       }),
     ]);
     return popupPage;
@@ -1057,7 +1094,7 @@ function browserCodeKernelMain() {
   };
 
   const markPageObserved = async (page: import('patchright').Page) => {
-    if (!activeExecution) throw new Error('Page observation is only available while browserCode is executing.');
+    if (!activeExecution) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Page observation is only available while browserCode is executing.');
     const observation = await readUnifiedPageObservation(page);
     activeExecution.observationsBeforeAction.set(page, observation);
     return observation;
@@ -1284,7 +1321,7 @@ function browserCodeKernelMain() {
 
   const ownerDisabled = (element: Element) => {
     const runtime = (window as Window & { __aiDomRuntime?: { isDisabledElement?: (target: Element) => boolean } }).__aiDomRuntime;
-    if (!runtime?.isDisabledElement) throw new Error('BROWSER_INPUT_PREFLIGHT_FAILED: containing frame state is not ready.');
+    if (!runtime?.isDisabledElement) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'BROWSER_INPUT_PREFLIGHT_FAILED: containing frame state is not ready.');
     return runtime.isDisabledElement(element);
   };
 
@@ -1292,7 +1329,7 @@ function browserCodeKernelMain() {
     for (let currentFrame = frame; currentFrame?.parentFrame(); currentFrame = currentFrame.parentFrame() || undefined) {
       const owner = await currentFrame.frameElement();
       try {
-        if (await owner.evaluate(ownerDisabled)) throw new Error('BROWSER_INPUT_PREFLIGHT_FAILED: containing frame belongs to a disabled control.');
+        if (await owner.evaluate(ownerDisabled)) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'BROWSER_INPUT_PREFLIGHT_FAILED: containing frame belongs to a disabled control.');
       } finally { await owner.dispose(); }
     }
   };
@@ -1309,7 +1346,7 @@ function browserCodeKernelMain() {
       || typeof Reflect.get(locator, 'evaluateAll') !== 'function'
       || typeof Reflect.get(locator, 'filter') !== 'function'
     ) {
-      throw new Error(
+      throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED,
         `ACTIONABILITY_FAILED: ${action} requires a real Playwright Locator from the active browser session.`,
       );
     }
@@ -1329,7 +1366,7 @@ function browserCodeKernelMain() {
       const marker = ' >> internal:control=enter-frame >> ';
       for (let index = selector.indexOf(marker); rootFrame && index >= 0; index = selector.indexOf(marker, index + marker.length)) {
         if (await rootFrame.locator(selector.slice(0, index)).evaluate(ownerDisabled)) {
-          throw new Error('BROWSER_INPUT_PREFLIGHT_FAILED: containing frame belongs to a disabled control.');
+          throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'BROWSER_INPUT_PREFLIGHT_FAILED: containing frame belongs to a disabled control.');
         }
       }
     }
@@ -1340,7 +1377,7 @@ function browserCodeKernelMain() {
         epoch: Number((window as Window & { __aiDomMutationState?: { epoch?: number } }).__aiDomMutationState?.epoch || 0),
       })));
       if (!states.length || states.some(state => ![...(bindings?.values() || [])].some(binding => state.tokens.includes(binding.token) && binding.boundEpoch === state.epoch))) {
-        throw new Error('STALE_DOM_EVIDENCE: the UID observation changed. Read current DOM or resolve a semantic locator before acting.');
+        throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'STALE_DOM_EVIDENCE: the UID observation changed. Read current DOM or resolve a semantic locator before acting.');
       }
     }
     const skipVisibleFilter = action.toLowerCase() === 'setinputfiles';
@@ -1387,7 +1424,7 @@ function browserCodeKernelMain() {
       ) => { ok: boolean; reason: string; descriptor: string; coveredBy?: string;
         coveredBySurfaceId?: string; activeSurfaceId?: string; failureKind?: 'occluded'; preserveScroll?: boolean } } }).__aiDomRuntime;
       if (!runtime?.actionability) {
-        throw new Error('BROWSER_INPUT_PREFLIGHT_FAILED: actionability runtime is not ready; refresh state before input.');
+        throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'BROWSER_INPUT_PREFLIGHT_FAILED: actionability runtime is not ready; refresh state before input.');
       }
       return elements.map(element => runtime.actionability!(element, { action: operation }));
     }, action);
@@ -1591,7 +1628,7 @@ function browserCodeKernelMain() {
           + (result.coveredBySurfaceId ? `; coveredBySurfaceId=${result.coveredBySurfaceId}` : '')
           + (result.activeSurfaceId ? `; activeSurfaceId=${result.activeSurfaceId}` : '')
         )).join(' | ');
-      throw new Error(
+      throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED,
         `ACTIONABILITY_FAILED: ${action} matched ${originalCount} elements; ${visibilityStage}; `
         + `${actionableIndices.length} passed full actionability. Exactly one candidate must pass both stages.`
         + (diagnostics ? ` ${diagnostics}` : '')
@@ -1704,10 +1741,10 @@ function browserCodeKernelMain() {
   ) => {
     const current = await captureCoordinateClickState(page);
     if (!current || !Number.isFinite(x) || !Number.isFinite(y)) {
-      throw new Error('BROWSER_INPUT_PREFLIGHT_FAILED: Coordinate clicking requires finite viewport coordinates and current page evidence.');
+      throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Coordinate clicking requires finite viewport coordinates and current page evidence.');
     }
     if (x < 0 || y < 0 || x > current.width || y > current.height) {
-      throw new Error(`BROWSER_INPUT_PREFLIGHT_FAILED: Coordinate (${x}, ${y}) is outside the current ${current.width}x${current.height} viewport.`);
+      throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `Coordinate (${x}, ${y}) is outside the current ${current.width}x${current.height} viewport.`);
     }
 
     const screenshotEvidence = current
@@ -1734,7 +1771,7 @@ function browserCodeKernelMain() {
       await resolveActionableLocator(evidence.locator, 'click');
       const afterTrial = await captureCoordinateClickState(page);
       if (!sameCoordinateClickState(evidence, afterTrial)) {
-        throw new Error('BROWSER_INPUT_PREFLIGHT_FAILED: Coordinate evidence changed during actionability checking. Read a fresh boundingBox before clicking.');
+        throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Coordinate evidence changed during actionability checking. Read a fresh boundingBox before clicking.');
       }
       return;
     }
@@ -1743,9 +1780,10 @@ function browserCodeKernelMain() {
       else coordinateRectEvidenceByDocument.delete(current.documentId);
     }
 
-    throw new Error(
-      'BROWSER_INPUT_PREFLIGHT_FAILED: Coordinate clicking requires either a recent automatic or emitted viewport screenshot visible to the model, '
+    throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED,
+      'Coordinate clicking requires either a recent automatic or emitted viewport screenshot visible to the model, '
       + 'or a point inside the current rect returned by boundingBox() for one exact visible actionable Locator. '
+      + 'For screenshot-based coordinates, inspect a viewport screenshot returned by a previous browserCode cell before clicking. '
       + 'Viewport evidence expires after document, URL, viewport, browser zoom, scroll change, or five minutes. Reobserve before another coordinate action; semantic locators can be resolved live.',
     );
   };
@@ -1798,15 +1836,15 @@ function browserCodeKernelMain() {
   const credentialVault = Object.freeze({
     async fill(locator: unknown, credentialRef: unknown) {
       if (!activeExecution) {
-        throw new Error('credentialVault.fill() is only available while browserCode is executing.');
+        throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'credentialVault.fill() is only available while browserCode is executing.');
       }
       const ref = typeof credentialRef === 'string' ? credentialRef.trim() : '';
       const credential = ref ? activeExecution.credentials.get(ref) : undefined;
       if (!credential) {
-        throw new Error('The requested credential reference is unavailable for this browserCode execution.');
+        throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'The requested credential reference is unavailable for this browserCode execution.');
       }
       if (!locator || typeof locator !== 'object') {
-        throw new Error('credentialVault.fill() requires a real Playwright Locator as its first argument.');
+        throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'credentialVault.fill() requires a real Playwright Locator as its first argument.');
       }
       const locatorPrototype = Object.getPrototypeOf(locator) as object | null;
       const targetFrame = Reflect.get(locator, '_frame') as import('patchright').Frame | undefined;
@@ -1822,21 +1860,21 @@ function browserCodeKernelMain() {
         || !targetPage
         || targetPage.isClosed()
       ) {
-        throw new Error('credentialVault.fill() requires a Locator from the active browser session.');
+        throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'credentialVault.fill() requires a Locator from the active browser session.');
       }
       let origin = '';
       try {
         const currentUrl = new URL(targetPage.url());
-        if (!['http:', 'https:'].includes(currentUrl.protocol)) throw new Error('unsupported protocol');
+        if (!['http:', 'https:'].includes(currentUrl.protocol)) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'unsupported protocol');
         origin = currentUrl.origin;
       } catch {
-        throw new Error('credentialVault.fill() requires the target page to have an http(s) origin.');
+        throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'credentialVault.fill() requires the target page to have an http(s) origin.');
       }
       if (credential.allowedOrigins.length > 0 && !credential.allowedOrigins.includes(origin)) {
-        throw new Error(`The requested credential reference is not allowed for ${origin}.`);
+        throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `The requested credential reference is not allowed for ${origin}.`);
       }
       if (!nativeFrameLocator || !nativeLocatorFill) {
-        throw new Error('credentialVault.fill() could not access the trusted Playwright locator implementation.');
+        throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'credentialVault.fill() could not access the trusted Playwright locator implementation.');
       }
       const trustedLocator = Reflect.apply(nativeFrameLocator, targetFrame, [selector]);
       const actionableLocator = await resolveActionableLocator(trustedLocator, 'fill');
@@ -1851,15 +1889,15 @@ function browserCodeKernelMain() {
   const attachmentVault = Object.freeze({
     async setInputFiles(locator: unknown, attachmentRef: unknown) {
       if (!activeExecution) {
-        throw new Error('attachmentVault.setInputFiles() is only available while browserCode is executing.');
+        throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'attachmentVault.setInputFiles() is only available while browserCode is executing.');
       }
       const ref = typeof attachmentRef === 'string' ? attachmentRef.trim() : '';
       const attachment = ref ? activeExecution.attachments.get(ref) : undefined;
       if (!attachment) {
-        throw new Error('The requested user attachment is unavailable for this browserCode execution.');
+        throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'The requested user attachment is unavailable for this browserCode execution.');
       }
       if (!locator || typeof locator !== 'object') {
-        throw new Error('attachmentVault.setInputFiles() requires a real Playwright Locator.');
+        throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'attachmentVault.setInputFiles() requires a real Playwright Locator.');
       }
       const sourceLocator = locator;
       const locatorPrototype = Object.getPrototypeOf(sourceLocator) as object | null;
@@ -1876,11 +1914,11 @@ function browserCodeKernelMain() {
         || !targetPage
         || targetPage.isClosed()
       ) {
-        throw new Error('attachmentVault.setInputFiles() requires a Locator from the active browser session.');
+        throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'attachmentVault.setInputFiles() requires a Locator from the active browser session.');
       }
       const nativeSetInputFiles = nativeLocatorActions.get('setInputFiles');
       if (!nativeFrameLocator || !nativeSetInputFiles) {
-        throw new Error('attachmentVault.setInputFiles() could not access the trusted Playwright file-input implementation.');
+        throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'attachmentVault.setInputFiles() could not access the trusted Playwright file-input implementation.');
       }
       const trustedLocator = Reflect.apply(nativeFrameLocator, targetFrame, [selector]);
       const fileInput = await resolveActionableLocator(trustedLocator, 'setInputFiles');
@@ -2069,7 +2107,7 @@ function browserCodeKernelMain() {
           configurable: true,
           value: async function observedLocatorAction(this: object, ...args: unknown[]) {
             if (name === 'setInputFiles' && activeExecution) {
-              throw new Error('Use attachmentVault.setInputFiles(locator, attachmentId); direct file paths and reconstructed payloads are unavailable to browserCode.');
+              throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Use attachmentVault.setInputFiles(locator, attachmentId); direct file paths and reconstructed payloads are unavailable to browserCode.');
             }
             const targetPage = locatorPage(this);
             let actionableLocator = this as import('patchright').Locator;
@@ -2118,7 +2156,7 @@ function browserCodeKernelMain() {
                 if (stack) error.stack = redactRequestErrorHeaders(stack);
                 throw error;
               }
-              throw new Error(redactRequestErrorHeaders(String(error)));
+              throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, redactRequestErrorHeaders(String(error)));
             }
           },
         });
@@ -2174,12 +2212,12 @@ function browserCodeKernelMain() {
               const locatorMethod = name === 'dragAndDrop' ? 'dragTo' : name;
               const nativeLocatorAction = nativeLocatorActions.get(locatorMethod);
               if (!nativeLocatorAction) {
-                throw new Error(`browserCode could not access the native Locator.${locatorMethod} implementation.`);
+                throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `browserCode could not access the native Locator.${locatorMethod} implementation.`);
               }
               if (name === 'dragAndDrop') {
                 const targetLocator = targetLocators.get(1);
                 if (!targetLocator) {
-                  throw new Error('page.dragAndDrop() requires one resolved source and target locator.');
+                  throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'page.dragAndDrop() requires one resolved source and target locator.');
                 }
                 const rawOptions = normalizedArgs[2];
                 const locatorOptions = rawOptions && typeof rawOptions === 'object' && !Array.isArray(rawOptions)
@@ -2234,7 +2272,7 @@ function browserCodeKernelMain() {
               // document. Reject before changing it; preserve the source tab.
               const contentType = await page.evaluate(() => document.contentType);
               if (contentType !== 'text/html') {
-                throw new Error(`UNSUPPORTED_DOCUMENT: page.setContent requires an HTML document; the current document is ${contentType}. Open a new about:blank tab with browser action=tabs, tabOperation=open, then build the preview there using absolute asset URLs. The source page was not modified.`);
+                throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `UNSUPPORTED_DOCUMENT: page.setContent requires an HTML document; the current document is ${contentType}. Open a new about:blank tab with browser action=tabs, tabOperation=open, then build the preview there using absolute asset URLs. The source page was not modified.`);
               }
             }
             const selectorAction = ['fill', 'type', 'press', 'selectOption', 'setInputFiles'].includes(name);
@@ -2249,7 +2287,7 @@ function browserCodeKernelMain() {
             if (activeExecution && actionableLocator) {
               const nativeLocatorAction = nativeLocatorActions.get(name);
               if (!nativeLocatorAction) {
-                throw new Error(`browserCode could not access the native Locator.${name} implementation.`);
+                throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `browserCode could not access the native Locator.${name} implementation.`);
               }
               const locatorArgs = args.slice(1).map((arg) => {
                 if (!arg || typeof arg !== 'object' || Array.isArray(arg) || !Reflect.has(arg, 'strict')) return arg;
@@ -2343,7 +2381,7 @@ function browserCodeKernelMain() {
         }
         await handle.dispose();
       }
-      throw new Error('BROWSER_INPUT_PREFLIGHT_FAILED: TEXT_INPUT_NOT_EDITABLE: No focused editable text control. Inspect data.diagnostics and focus the actual editor before typing; a picker trigger or decorative caret is not an editable input.');
+      throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'TEXT_INPUT_NOT_EDITABLE: No focused editable text control. Inspect data.diagnostics and focus the actual editor before typing; a picker trigger or decorative caret is not an editable input.');
     };
     const patchInputDevice = (
       device: Record<string, unknown>,
@@ -2373,7 +2411,7 @@ function browserCodeKernelMain() {
                   beforeLength: state.before.length, afterLength: state.value().length,
                 }));
                 if (observed && !observed.events.input && !observed.valueChanged) {
-                  throw new Error(`TEXT_INPUT_NOT_DELIVERED: Native typing produced no input event or value change at the focused editor. Event counts: ${JSON.stringify(observed)}. Inspect the control instead of retrying with another delay.`);
+                  throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `TEXT_INPUT_NOT_DELIVERED: Native typing produced no input event or value change at the focused editor. Event counts: ${JSON.stringify(observed)}. Inspect the control instead of retrying with another delay.`);
                 }
               }
             } finally {
@@ -2422,8 +2460,8 @@ function browserCodeKernelMain() {
   };
 
   const selectPage = (page: import('patchright').Page) => {
-    if (!replServer) throw new Error('browserCode JavaScript kernel is not initialized.');
-    if (page.isClosed()) throw new Error('Cannot select a closed browser tab.');
+    if (!replServer) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'browserCode JavaScript kernel is not initialized.');
+    if (page.isClosed()) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Cannot select a closed browser tab.');
     decoratePage(page);
     selectedRuntimePage = page;
     replServer.context.page = page;
@@ -2462,14 +2500,14 @@ function browserCodeKernelMain() {
     locatorInput: import('patchright').Locator,
     input: BrowserTextSelectionSpec,
   ) => {
-    if (!activeExecution) throw new Error('page.setTextSelection() is only available while browserCode is executing.');
+    if (!activeExecution) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'page.setTextSelection() is only available while browserCode is executing.');
     if (
       !locatorInput
       || typeof locatorInput !== 'object'
       || typeof Reflect.get(locatorInput, 'evaluate') !== 'function'
       || locatorPage(locatorInput) !== page
     ) {
-      throw new Error('page.setTextSelection() requires a real Playwright Locator from the same Page, including a locator inside one of its frames. Call the method on the locator owner Page.');
+      throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'page.setTextSelection() requires a real Playwright Locator from the same Page, including a locator inside one of its frames. Call the method on the locator owner Page.');
     }
     const actionableLocator = await resolveActionableLocator(locatorInput, 'focus');
     await actionableLocator.focus();
@@ -2508,18 +2546,18 @@ function browserCodeKernelMain() {
         enumerable: false,
         value: (uidInput: string) => {
           const uid = String(uidInput || '').trim();
-          if (!activeExecution) throw new Error('page.getByUid() is only available while browserCode is executing.');
+          if (!activeExecution) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'page.getByUid() is only available while browserCode is executing.');
           const binding = activeExecution.uidBindings.get(uid);
           if (!binding) {
             const knownError = activeExecution.uidBindingErrors.get(uid);
-            if (knownError) throw new Error(knownError);
-            throw new Error(
+            if (knownError) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, knownError);
+            throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED,
               `STALE_DOM_EVIDENCE: UID ${uid || '[empty]'} is not an exposed current DOM UID `
               + `(${activeExecution.uidBindings.size} live UIDs are available). Use an exact uid from the latest DOM evidence.`,
             );
           }
           if (binding.page !== page || binding.frame.isDetached()) {
-            throw new Error(`STALE_DOM_EVIDENCE: UID ${uid} belongs to another page or a detached iframe. Capture fresh DOM evidence.`);
+            throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `STALE_DOM_EVIDENCE: UID ${uid} belongs to another page or a detached iframe. Capture fresh DOM evidence.`);
           }
           return binding.frame.locator(`[${browserCodeUidAttribute}~="${binding.token}"]`);
         },
@@ -2550,16 +2588,16 @@ function browserCodeKernelMain() {
           const scope = options.scope || 'active';
           const targetFrame = frameFromUidPath(page, observation.activeSurface?.framePath);
           if (!targetFrame || targetFrame.isDetached()) {
-            throw new Error('STALE_FRAME_EVIDENCE: the observed surface frame is unavailable; read fresh state.');
+            throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'STALE_FRAME_EVIDENCE: the observed surface frame is unavailable; read fresh state.');
           }
           const axResult = await settleKernelTask((async () => {
             if (scope === 'active' && observation.activeSurface) {
               if (!observation.activeSurface.selector) {
-                throw new Error('STALE_SURFACE_EVIDENCE: the active surface has no live selector; read fresh state.');
+                throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'STALE_SURFACE_EVIDENCE: the active surface has no live selector; read fresh state.');
               }
               const selectedSurface = targetFrame.locator(observation.activeSurface.selector).filter({ visible: true });
               if (await selectedSurface.count() !== 1) {
-                throw new Error('STALE_SURFACE_EVIDENCE: the observed surface is no longer uniquely visible; read fresh state.');
+                throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'STALE_SURFACE_EVIDENCE: the observed surface is no longer uniquely visible; read fresh state.');
               }
               return selectedSurface.ariaSnapshot({ timeout: browserCodeActionTimeoutMs });
             }
@@ -2718,16 +2756,16 @@ function browserCodeKernelMain() {
       new: async (input: string | { url?: string } = {}) => {
         recordAction('tabs.new');
         if (typeof input !== 'string' && (!input || typeof input !== 'object' || Array.isArray(input))) {
-          throw new Error('browser.tabs.new expects a URL string or an options object such as { url: "https://example.com/" }.');
+          throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'browser.tabs.new expects a URL string or an options object such as { url: "https://example.com/" }.');
         }
         const options = typeof input === 'string' ? { url: input } : input;
         const requestedUrl = options.url?.trim();
         if (options.url !== undefined && !requestedUrl) {
-          throw new Error('browser.tabs.new received an empty URL. Omit the argument for a blank tab or provide a non-empty URL.');
+          throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'browser.tabs.new received an empty URL. Omit the argument for a blank tab or provide a non-empty URL.');
         }
         const selected = selectedRuntimePage?.context();
         const targetContext = selected || browser?.contexts()[0];
-        if (!targetContext) throw new Error('No browser context is available.');
+        if (!targetContext) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'No browser context is available.');
         const newPage = await createSessionPage(targetContext);
         agentCreatedPages.add(newPage);
         await activatePage(newPage);
@@ -2736,11 +2774,11 @@ function browserCodeKernelMain() {
       },
       use: async (value: unknown) => {
         const selectedPage = pageFromTab(value);
-        if (!selectedPage) throw new Error('The requested browser tab is no longer available.');
+        if (!selectedPage) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'The requested browser tab is no longer available.');
         if (sessionGroupId) {
           const selectedTabInfo = await tabInfo(selectedPage);
           if (selectedTabInfo.groupId !== sessionGroupId) {
-            throw new Error('The requested browser tab does not belong to the current conversation tab group.');
+            throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'The requested browser tab does not belong to the current conversation tab group.');
           }
         }
         await activatePage(selectedPage);
@@ -2754,11 +2792,11 @@ function browserCodeKernelMain() {
         const claimedPage = value === undefined || value === null
           ? currentPage && !currentPage.isClosed() ? currentPage : currentPages().at(-1)
           : pageFromTab(value);
-        if (!claimedPage) throw new Error('The requested browser tab is no longer available.');
+        if (!claimedPage) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'The requested browser tab is no longer available.');
         if (sessionGroupId) {
           const claimedTabInfo = await tabInfo(claimedPage);
           if (claimedTabInfo.groupId !== sessionGroupId) {
-            throw new Error('The requested browser tab does not belong to the current conversation tab group.');
+            throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'The requested browser tab does not belong to the current conversation tab group.');
           }
         }
         await activatePage(claimedPage);
@@ -2794,7 +2832,7 @@ function browserCodeKernelMain() {
     state: conversationStateRuntime,
     browsers: Object.freeze({
       get: async (id: string) => {
-        if (id !== browserRuntime.id && id !== 'default') throw new Error(`Unknown browser runtime: ${id}`);
+        if (id !== browserRuntime.id && id !== 'default') throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `Unknown browser runtime: ${id}`);
         return browserRuntime;
       },
       getDefault: async () => browserRuntime,
@@ -2804,7 +2842,7 @@ function browserCodeKernelMain() {
 
   const evaluateCell = (code: string) => new Promise<unknown>((resolve, reject) => {
     if (!replServer) {
-      reject(new Error('browserCode JavaScript kernel is not initialized.'));
+      reject(new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'browserCode JavaScript kernel is not initialized.'));
       return;
     }
     const errorKey = `__browserCodeCellError_${childRandomUUID().replace(/-/g, '')}`;
@@ -2864,7 +2902,7 @@ function browserCodeKernelMain() {
         configurable: false,
         enumerable: false,
         get: () => undefined,
-        set: () => { throw new Error(`BROWSER_RUNTIME_BINDING_RESERVED: ${name} is a reserved runtime name. Use a task-specific variable name; the assignment was not applied.`); },
+        set: () => { throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `BROWSER_RUNTIME_BINDING_RESERVED: ${name} is a reserved runtime name. Use a task-specific variable name; the assignment was not applied.`); },
       }]),
     );
     Object.defineProperties(replServer.context, {
@@ -2893,7 +2931,7 @@ function browserCodeKernelMain() {
     return id;
   };
   const findExecutionPage = async (executionId: string, targetId?: string) => {
-    if (!browser) throw new Error('browserCode browser connection is not initialized.');
+    if (!browser) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'browserCode browser connection is not initialized.');
     if (targetId) {
       // Newly attached host-created tabs initialize asynchronously in Playwright.
       // Wait for the exact target, never fall back to the previously selected tab.
@@ -2905,7 +2943,7 @@ function browserCodeKernelMain() {
         }
         await new Promise((resolve) => setTimeout(resolve, 25));
       } while (Date.now() < deadline);
-      throw new Error('browserCode could not initialize the selected session page.');
+      throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'browserCode could not initialize the selected session page.');
     }
     const candidates = browser.contexts()
       .flatMap((browserContext) => browserContext.pages())
@@ -2923,7 +2961,7 @@ function browserCodeKernelMain() {
     // live page. A single live page is also unambiguous for a fresh kernel.
     if (selectedRuntimePage && candidates.includes(selectedRuntimePage)) return selectedRuntimePage;
     if (candidates.length === 1) return candidates[0];
-    throw new Error('browserCode could not find the active Playwright page.');
+    throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'browserCode could not find the active Playwright page.');
   };
 
   const execute = async (input: {
@@ -2938,7 +2976,7 @@ function browserCodeKernelMain() {
     maxOutputChars?: number;
     requestId: string;
   }) => {
-    if (!replServer) throw new Error('browserCode JavaScript kernel is not initialized.');
+    if (!replServer) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'browserCode JavaScript kernel is not initialized.');
     if (cdpScope && input.targetIds) await cdpScope.updateTargets(input.targetIds);
     const page = await findExecutionPage(input.executionId, input.executionTargetId);
     const browserContext = page.context();
@@ -3014,7 +3052,7 @@ function browserCodeKernelMain() {
         }
       }
       await bindExecutionUidReferences(page, input.uidReferences || []);
-      await evaluateCell(String(input.code));
+      const returnedValue = await evaluateCell(String(input.code));
       await publishPendingCoordinateClickEvidence();
       const outputs = activeExecution.outputs;
       const images = activeExecution.images;
@@ -3033,7 +3071,7 @@ function browserCodeKernelMain() {
       const selectedTargetId = finalPage ? await targetIdForPage(finalPage) : undefined;
       const ownedTargetIds = cdpScope?.targetIds()
         || await Promise.all(browserContext.pages().filter((candidate) => !candidate.isClosed()).map(targetIdForPage));
-      const value = outputs.length === 0 ? null : outputs.length === 1 ? outputs[0] : outputs;
+      const value = outputs.length === 0 ? returnedValue ?? null : outputs.length === 1 ? outputs[0] : outputs;
       send({
         type: 'result',
         requestId: input.requestId,
@@ -3148,7 +3186,7 @@ function browserCodeKernelMain() {
       pendingRuntimeStateOperations.delete(operationId);
       clearTimeout(pendingOperation.timer);
       if (input.ok === true) pendingOperation.resolve(input.value);
-      else pendingOperation.reject(new Error(typeof input.error === 'string' ? input.error : 'agent.state operation failed.'));
+      else pendingOperation.reject(new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, typeof input.error === 'string' ? input.error : 'agent.state operation failed.'));
       return;
     }
     chain = chain.then(async () => {
@@ -3174,7 +3212,7 @@ function browserCodeKernelMain() {
           ? error as Error & { code?: string; permission?: string; resource?: string }
           : undefined;
         send({
-          type: 'init-error',
+          type: ERROR_CODES.INIT_ERROR,
           error: [
             diagnostic?.stack || String(error),
             diagnostic?.code ? `code=${diagnostic.code}` : '',
@@ -3205,6 +3243,8 @@ function childSource() {
   // page.setTextSelection() from failing with a late ReferenceError.
   return [
     'const __name = (target) => target;',
+    `const ERROR_CODES = ${JSON.stringify(ERROR_CODES)};`,
+    `const CodedError = ${CodedError.toString()};`,
     `const readEditableText = ${readEditableText.toString()};`,
     `const applyEditableTextSelection = ${applyEditableTextSelection.toString()};`,
     `const resolveEditableTextSelection = ${resolveEditableTextSelection.toString()};`,
@@ -3341,9 +3381,9 @@ export class BrowserCodeKernel {
 
   async close() {
     this.closed = true;
-    this.rejectReady(new Error('browserCode JavaScript kernel was closed.'));
+    this.rejectReady(new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'browserCode JavaScript kernel was closed.'));
     if (this.pending) {
-      this.finishPending(this.interrupted('aborted', 'browserCode execution was aborted.'));
+      this.finishPending(this.interrupted(ERROR_CODES.ABORTED, 'browserCode execution was aborted.'));
     }
     this.stopChild();
     await this.tail.catch(() => undefined);
@@ -3352,22 +3392,22 @@ export class BrowserCodeKernel {
   private async executeNow(input: BrowserCodeExecutionInput): Promise<BrowserCodeRunResult> {
     const startedAt = Date.now();
     if (input.abortSignal?.aborted) {
-      return { ...this.interrupted('aborted', 'browserCode execution was aborted.', 'startup'), kernelReset: undefined, elapsedMs: 0 };
+      return { ...this.interrupted(ERROR_CODES.ABORTED, 'browserCode execution was aborted.', 'startup'), kernelReset: undefined, elapsedMs: 0 };
     }
 
     try {
       await raceWithAbort(this.ensureReady(input.targetIds), input.abortSignal);
     } catch (error) {
-      const normalized = error instanceof Error ? error : new Error(String(error));
+      const normalized = error instanceof Error ? error : new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, String(error));
       this.rejectReady(normalized);
       this.stopChild();
       return {
-        ...this.interrupted(input.abortSignal?.aborted ? 'aborted' : normalized.name === 'TimeoutError' ? 'timeout' : 'crashed', normalized.message, 'startup'),
+        ...this.interrupted(input.abortSignal?.aborted ? ERROR_CODES.ABORTED : normalized.name === 'TimeoutError' ? ERROR_CODES.TIMEOUT : 'crashed', normalized.message, 'startup'),
         elapsedMs: Date.now() - startedAt,
       };
     }
     if (input.abortSignal?.aborted) {
-      return { ...this.interrupted('aborted', 'browserCode execution was aborted.', 'startup'), kernelReset: undefined, elapsedMs: Date.now() - startedAt };
+      return { ...this.interrupted(ERROR_CODES.ABORTED, 'browserCode execution was aborted.', 'startup'), kernelReset: undefined, elapsedMs: Date.now() - startedAt };
     }
     if (!this.child?.connected) {
       this.stopChild();
@@ -3382,7 +3422,7 @@ export class BrowserCodeKernel {
     let attachmentBindings: BrowserCodeAttachmentBinding[] = [];
     if (/\battachmentVault\s*\.\s*setInputFiles\s*\(/i.test(browserCodeWithoutComments(input.code))) {
       try {
-        if (!this.tempDir) throw new Error('browserCode attachment staging directory is unavailable.');
+        if (!this.tempDir) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'browserCode attachment staging directory is unavailable.');
         attachmentBindings = (input.attachments || []).map((attachment, index) => {
           const fileName = path.basename(String(attachment.name || '').trim()) || 'attachment';
           const stagingDir = path.join(this.tempDir!, 'attachments', `${index}-${randomUUID()}`);
@@ -3405,7 +3445,7 @@ export class BrowserCodeKernel {
     const requestId = randomUUID();
     return new Promise<BrowserCodeRunResult>((resolve) => {
       const onAbort = () => {
-        this.finishPending(this.interrupted('aborted', 'browserCode execution was aborted.'));
+        this.finishPending(this.interrupted(ERROR_CODES.ABORTED, 'browserCode execution was aborted.'));
         this.stopChild();
       };
       this.pending = {
@@ -3426,7 +3466,7 @@ export class BrowserCodeKernel {
       );
       this.executionTimer = setTimeout(() => {
         if (this.pending?.requestId !== requestId) return;
-        this.finishPending(this.interrupted('timeout', `browserCode execution timed out after ${executionTimeoutMs}ms; the JavaScript kernel was stopped and will restart on the next cell.`));
+        this.finishPending(this.interrupted(ERROR_CODES.TIMEOUT, `browserCode execution timed out after ${executionTimeoutMs}ms; the JavaScript kernel was stopped and will restart on the next cell.`));
         this.stopChild();
       }, executionTimeoutMs);
       this.child?.send({
@@ -3436,7 +3476,7 @@ export class BrowserCodeKernel {
           path: String(attachment.path || ''),
           ref: String(attachment.ref || ''),
         })),
-        code: input.code,
+        code: browserCodeWithCellReturns(input.code),
         viewportEvidence: input.viewportEvidence,
         credentials: (input.credentials || []).map((credential) => ({
           ref: String(credential.ref || ''),
@@ -3470,7 +3510,7 @@ export class BrowserCodeKernel {
   }
 
   private ensureReady(targetIds?: string[]) {
-    if (this.closed) return Promise.reject(new Error('browserCode JavaScript kernel is closed.'));
+    if (this.closed) return Promise.reject(new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'browserCode JavaScript kernel is closed.'));
     if (this.readyPromise) return this.readyPromise;
 
     const kernelId = randomUUID();
@@ -3504,7 +3544,7 @@ export class BrowserCodeKernel {
         windowsHide: true,
       });
     } catch (error) {
-      const normalized = error instanceof Error ? error : new Error(String(error));
+      const normalized = error instanceof Error ? error : new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, String(error));
       this.rejectReady(normalized);
       this.tempDir = undefined;
       removeBrowserCodeTempDir(tempDir);
@@ -3527,7 +3567,7 @@ export class BrowserCodeKernel {
       removeBrowserCodeTempDir(tempDir);
       if (this.child !== child) return;
       const diagnostic = this.stderr.trim() ? ` ${this.stderr.trim()}` : '';
-      const error = new Error(`browserCode JavaScript kernel exited (code ${code ?? 'none'}, signal ${signal || 'none'}).${diagnostic}`);
+      const error = new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `browserCode JavaScript kernel exited (code ${code ?? 'none'}, signal ${signal || 'none'}).${diagnostic}`);
       this.child = undefined;
       this.readyPromise = undefined;
       this.rejectReady(error);
@@ -3545,7 +3585,7 @@ export class BrowserCodeKernel {
     );
     this.readyTimer = setTimeout(() => {
       if (this.child !== child) return;
-      const error = new Error(`browserCode JavaScript kernel startup timed out after ${readyTimeoutMs}ms (stage: ${this.startupStage}).${this.stderr.trim() ? ` ${this.stderr.trim()}` : ''}`);
+      const error = new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `browserCode JavaScript kernel startup timed out after ${readyTimeoutMs}ms (stage: ${this.startupStage}).${this.stderr.trim() ? ` ${this.stderr.trim()}` : ''}`);
       error.name = 'TimeoutError';
       this.rejectReady(error);
       this.stopChild();
@@ -3613,8 +3653,8 @@ export class BrowserCodeKernel {
       this.resolveReady();
       return;
     }
-    if (record.type === 'init-error') {
-      const error = new Error(typeof record.error === 'string' ? record.error : 'browserCode JavaScript kernel failed to initialize.');
+    if (record.type === ERROR_CODES.INIT_ERROR) {
+      const error = new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, typeof record.error === 'string' ? record.error : 'browserCode JavaScript kernel failed to initialize.');
       this.rejectReady(error);
       this.stopChild();
       return;
@@ -3726,13 +3766,13 @@ export class BrowserCodeKernel {
     };
   }
 
-  private interrupted(reason: 'timeout' | 'aborted' | 'crashed', error: string, phase: 'startup' | 'running' = 'running'): Omit<BrowserCodeRunResult, 'elapsedMs'> {
+  private interrupted(reason: typeof ERROR_CODES.TIMEOUT | typeof ERROR_CODES.ABORTED | 'crashed', error: string, phase: 'startup' | 'running' = 'running'): Omit<BrowserCodeRunResult, 'elapsedMs'> {
     const attemptedActions = this.pending?.attemptedActions || [];
     const completedActions = this.pending?.completedActions || [];
-    return { ok: false, error, logs: [], aborted: reason === 'aborted', kernelReset: { reason },
+    return { ok: false, error, logs: [], aborted: reason === ERROR_CODES.ABORTED, kernelReset: { reason },
       activity: { actions: attemptedActions, navigationChanged: false, tabChanged: false },
       executionState: { status: reason, phase, attemptedActions, completedActions,
-        outcome: phase === 'startup' ? 'not-started' : 'unknown', requiresStateRefresh: phase !== 'startup', safeToRetry: phase === 'startup' && reason !== 'aborted' },
+        outcome: phase === 'startup' ? 'not-started' : 'unknown', requiresStateRefresh: phase !== 'startup', safeToRetry: phase === 'startup' && reason !== ERROR_CODES.ABORTED },
     };
   }
 

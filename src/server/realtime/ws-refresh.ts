@@ -1,4 +1,6 @@
 import http from 'node:http';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export type RefreshEntityType =
   | 'automationCase'
@@ -31,6 +33,9 @@ const runtimeState = ((globalThis as typeof globalThis & {
   versions: new Map<string, number>(),
 });
 
+// Leave headroom below the main server's 8 MiB publish body limit.
+const maxBrowserChatPublishBytes = 6 * 1024 * 1024;
+
 function publishToMainServer(event: RefreshWebSocketEvent) {
   return new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -40,7 +45,13 @@ function publishToMainServer(event: RefreshWebSocketEvent) {
       if (error) reject(error);
       else resolve();
     };
-    const body = JSON.stringify(event);
+    let body = JSON.stringify(event);
+    if (event.entityType === 'browserChatSession' && event.patch !== undefined
+      && Buffer.byteLength(body) > maxBrowserChatPublishBytes) {
+      // The complete records remain in storage. A small invalidation event
+      // tells the chat client to fetch them without disconnecting this socket.
+      body = JSON.stringify({ ...event, patch: undefined });
+    }
     const request = http.request({
       host: '127.0.0.1',
       port: Math.max(1, Math.floor(Number(
@@ -62,9 +73,9 @@ function publishToMainServer(event: RefreshWebSocketEvent) {
         finish();
         return;
       }
-      finish(new Error(`Realtime publish returned ${response.statusCode || 0}`));
+      finish(new CodedError(ERROR_CODES.APPLICATION_ERROR, `Realtime publish returned ${response.statusCode || 0}`));
     });
-    request.setTimeout(3_000, () => request.destroy(new Error('Realtime publish timed out')));
+    request.setTimeout(3_000, () => request.destroy(new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Realtime publish timed out')));
     request.once('error', (error) => finish(error));
     request.end(body);
   });

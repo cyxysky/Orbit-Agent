@@ -2,6 +2,7 @@ import type {
   BrowserChatAiOutputCycle,
   BrowserChatSubagentRecord,
 } from '@/server/ai/schemas/runtime.schema';
+import { mergeBrowserChatAiOutputCycles } from '@/lib/browser-chat-output-cycles';
 
 type BrowserChatClientMessage = {
   id: string;
@@ -62,11 +63,14 @@ export function browserChatClientRecordsForMessage(
       : record.stepIndex !== undefined && stepIndexes.has(record.stepIndex)
   );
   return {
-    outputCycles: (source.outputCycles || []).filter((cycle) => (
+    outputCycles: mergeBrowserChatAiOutputCycles((source.outputCycles || []).filter((cycle) => (
       !cycle.subagentId && belongsToMessage(cycle)
-    )),
+    ))),
     subagents: options.includeSubagents
-      ? (source.subagents || []).filter((subagent) => subagent.messageId === messageId)
+      ? (source.subagents || []).filter((subagent) => subagent.messageId === messageId).map((subagent) => {
+        const outputCycles = mergeBrowserChatAiOutputCycles(subagent.outputCycles || []);
+        return outputCycles === subagent.outputCycles ? subagent : { ...subagent, outputCycles };
+      })
       : [],
   };
 }

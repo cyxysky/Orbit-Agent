@@ -3,6 +3,8 @@ import path from 'node:path';
 import { databaseDriver, getDatabase, queryDatabase } from '@/server/db/database';
 import { structuredLog } from '@/server/observability/runtime-observability';
 import { appDataRoot } from './paths';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 const runtimeState = ((globalThis as typeof globalThis & {
   __databaseMaintenanceState?: { running?: Promise<void>; timer?: ReturnType<typeof setInterval> };
@@ -55,7 +57,7 @@ export async function verifyDatabaseIntegrity() {
   const rows = await queryDatabase<{ quick_check?: string }>('PRAGMA quick_check');
   const results = rows.map((row) => row.quick_check || '').filter(Boolean);
   if (results.length !== 1 || results[0].toLowerCase() !== 'ok') {
-    throw new Error(`SQLite quick_check failed: ${results.join('; ') || 'unknown result'}`);
+    throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED, `SQLite quick_check failed: ${results.join('; ') || 'unknown result'}`);
   }
   return true;
 }
@@ -70,7 +72,7 @@ export async function createDatabaseBackup() {
   const temporary = `${target}.partial`;
   const dataSource = await getDatabase();
   const connection = (dataSource.driver as unknown as { databaseConnection?: { backup?: (target: string) => Promise<void> } }).databaseConnection;
-  if (!connection?.backup) throw new Error('The active SQLite driver does not expose backup().');
+  if (!connection?.backup) throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED, 'The active SQLite driver does not expose backup().');
   try {
     await connection.backup(temporary);
     await rename(temporary, target);

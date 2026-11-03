@@ -9,6 +9,8 @@ import { sendBrowserChatMessageRequestSchema } from '@/server/http/browser-chat-
 import { ApiRequestError, apiError, parseJsonRequest } from '@/server/http/api-request';
 import { requestApplicationUserId } from '@/server/auth/user-context';
 import type { BrowserChatSessionRouteContext } from '@/server/http/browser-chat-route';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 
 export async function POST(request: Request, context: BrowserChatSessionRouteContext) {
@@ -19,7 +21,7 @@ export async function POST(request: Request, context: BrowserChatSessionRouteCon
     const clientMessageId = body.clientMessageId?.trim();
     if (!clientMessageId) {
       throw new ApiRequestError('clientMessageId is required for UI message streaming', {
-        code: 'invalid_request',
+        code: ERROR_CODES.INVALID_REQUEST,
         status: 400,
       });
     }
@@ -181,7 +183,7 @@ export async function POST(request: Request, context: BrowserChatSessionRouteCon
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to send browser chat message';
     const normalizedError = /Browser chat session not found/i.test(message)
-      ? new ApiRequestError('Browser chat session not found', { code: 'not_found', status: 404 })
+      ? new ApiRequestError('Browser chat session not found', { code: ERROR_CODES.NOT_FOUND, status: 404 })
       : error;
     return apiError(request, normalizedError, { fallback: 'Failed to send browser chat message' });
   }

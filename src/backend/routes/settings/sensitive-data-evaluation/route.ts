@@ -11,6 +11,8 @@ import { redactSensitiveTexts } from '@/server/capabilities/sensitive-data';
 import { store } from '@/server/db/store';
 import { ApiRequestError, apiError, apiJson, parseJsonRequest } from '@/server/http/api-request';
 import { requestHasAdminSettingsAccess } from '@/server/settings/admin-settings-access';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 const evaluationCaseSchema = z.object({
   id: z.string().min(1).max(120),
@@ -28,7 +30,7 @@ const evaluationRequestSchema = z.object({
 
 function requireAdmin(request: Request) {
   if (!requestHasAdminSettingsAccess(request)) {
-    throw new ApiRequestError('请先输入管理员设置密码。', { code: 'admin_access_required', status: 401 });
+    throw new ApiRequestError('请先输入管理员设置密码。', { code: ERROR_CODES.ADMIN_ACCESS_REQUIRED, status: 401 });
   }
 }
 
@@ -58,7 +60,7 @@ export async function POST(request: Request) {
     const body = await parseJsonRequest(request, evaluationRequestSchema, { maxBytes: 4 * 1024 * 1024 });
     const cases = normalizeSensitiveDataEvaluationCases(body.cases);
     if (!cases.length) {
-      throw new ApiRequestError('请至少添加一个有效评测用例。', { code: 'evaluation_set_empty', status: 400 });
+      throw new ApiRequestError('请至少添加一个有效评测用例。', { code: ERROR_CODES.EVALUATION_SET_EMPTY, status: 400 });
     }
 
     await store.applyRuntimeEnv();

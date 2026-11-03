@@ -2,17 +2,19 @@ import { randomUUID } from 'node:crypto';
 import { readBoundedResponseText } from '../../index.ts';
 import { createConnectorRegistry, createConnectorsCapability, type AgentConnector, type ConnectorOperation } from './index.ts';
 import type { CapabilityExecutionContext, CapabilityRunContext } from '../../index.ts';
+import { CodedError, ERROR_CODES } from '../../errors.ts';
+
 
 type JsonRpcResponse = { id?: string | number; method?: string; result?: unknown; error?: { code?: number; message?: string; data?: unknown } };
 
 async function rpcResponse(response: Response, id: string, changed: () => void): Promise<JsonRpcResponse> {
   if (!response.headers.get('content-type')?.includes('text/event-stream')) {
     const payload = JSON.parse(await readBoundedResponseText(response)) as JsonRpcResponse;
-    if (payload.id !== id) throw new Error('MCP response id did not match the request.');
+    if (payload.id !== id) throw new CodedError(ERROR_CODES.CONNECTOR_OPERATION_FAILED, 'MCP response id did not match the request.');
     return payload;
   }
   const reader = response.body?.getReader();
-  if (!reader) throw new Error('MCP response has no body.');
+  if (!reader) throw new CodedError(ERROR_CODES.CONNECTOR_OPERATION_FAILED, 'MCP response has no body.');
   let buffer = '', bytes = 0;
   const decoder = new TextDecoder();
   function event(text: string) {
@@ -29,10 +31,10 @@ async function rpcResponse(response: Response, id: string, changed: () => void):
         buffer += decoder.decode();
         const payload = event(buffer);
         if (payload) return payload;
-        throw new Error('MCP stream ended before its matching response.');
+        throw new CodedError(ERROR_CODES.CONNECTOR_OPERATION_FAILED, 'MCP stream ended before its matching response.');
       }
       bytes += chunk.value.byteLength;
-      if (bytes > 8_000_000) throw new Error('MCP response exceeds 8 MB.');
+      if (bytes > 8_000_000) throw new CodedError(ERROR_CODES.CONNECTOR_OPERATION_FAILED, 'MCP response exceeds 8 MB.');
       buffer = (buffer + decoder.decode(chunk.value, { stream: true })).replace(/\r\n/g, '\n');
       let end: number;
       while ((end = buffer.indexOf('\n\n')) >= 0) {
@@ -61,12 +63,12 @@ export function createMcpStreamableHttpConnector(input: { id: string; name?: str
     if (!response.ok) {
       await response.body?.cancel().catch(() => undefined);
       if (response.status === 404) { initialization = undefined; sessionId = ''; cachedOperations = undefined; }
-      throw Object.assign(new Error(`MCP connector returned HTTP ${response.status}.`), { retryable: response.status === 429 || response.status >= 500 });
+      throw Object.assign(new CodedError(ERROR_CODES.CONNECTOR_OPERATION_FAILED, `MCP connector returned HTTP ${response.status}.`), { retryable: response.status === 429 || response.status >= 500 });
     }
     sessionId ||= response.headers.get('mcp-session-id') || '';
     if (notification) { await response.body?.cancel().catch(() => undefined); return; }
     const payload = await rpcResponse(response, id, () => { cachedOperations = undefined; });
-    if (payload.error) throw new Error(`MCP ${payload.error.code || 'error'}: ${payload.error.message || 'Unknown error'}`);
+    if (payload.error) throw new CodedError(ERROR_CODES.CONNECTOR_OPERATION_FAILED, `MCP ${payload.error.code || 'error'}: ${payload.error.message || 'Unknown error'}`);
     return payload.result;
   };
   const ensureInitialized = (context: CapabilityExecutionContext) => initialization ||= (async () => {
@@ -87,10 +89,10 @@ export function createMcpStreamableHttpConnector(input: { id: string; name?: str
         do {
           const result = await request('tools/list', cursor ? { cursor } : {}, context) as { nextCursor?: string; tools?: Array<{ name?: string; title?: string; description?: string; inputSchema?: Record<string, unknown>; annotations?: { readOnlyHint?: boolean } }> };
           operations.push(...(result?.tools || []).flatMap((tool) => tool.name ? [{ id: tool.name, title: tool.title, description: tool.description, inputSchema: tool.inputSchema, readOnly: tool.annotations?.readOnlyHint }] : []));
-          if (operations.length > 10_000) throw new Error('MCP tool listing exceeded 10,000 tools.');
+          if (operations.length > 10_000) throw new CodedError(ERROR_CODES.CONNECTOR_OPERATION_FAILED, 'MCP tool listing exceeded 10,000 tools.');
           cursor = result.nextCursor;
           if (cursor) {
-            if (seen.has(cursor) || seen.size >= 100 || operations.length > 10_000) throw new Error('MCP tool pagination exceeded its limit or repeated a cursor.');
+            if (seen.has(cursor) || seen.size >= 100 || operations.length > 10_000) throw new CodedError(ERROR_CODES.CONNECTOR_OPERATION_FAILED, 'MCP tool pagination exceeded its limit or repeated a cursor.');
             seen.add(cursor);
           }
         } while (cursor);
@@ -109,7 +111,7 @@ export function createMcpStreamableHttpConnector(input: { id: string; name?: str
         const response = await fetchImpl(input.url, { method: 'DELETE', signal: AbortSignal.timeout(3000),
           headers: { ...input.headers, 'mcp-session-id': activeSession, 'mcp-protocol-version': protocolVersion } });
         await response.body?.cancel();
-        if (!response.ok && response.status !== 404 && response.status !== 405) throw new Error(`MCP session cleanup returned HTTP ${response.status}.`);
+        if (!response.ok && response.status !== 404 && response.status !== 405) throw new CodedError(ERROR_CODES.CONNECTOR_OPERATION_FAILED, `MCP session cleanup returned HTTP ${response.status}.`);
       }
     },
   };
@@ -130,9 +132,9 @@ export function createOpenApiConnector(input: { id: string; name?: string; docum
     id: input.id, name: input.name || input.id, kind: 'openapi',
     async listOperations() { return [...operations].map(([id, item]) => ({ id, title: typeof item.definition.summary === 'string' ? item.definition.summary : undefined, description: typeof item.definition.description === 'string' ? item.definition.description : undefined, inputSchema: { type: 'object', additionalProperties: true }, readOnly: item.method === 'GET' || item.method === 'HEAD' })); },
     async call(operationId, args, context) {
-      const operation = operations.get(operationId); if (!operation) throw new Error(`Unknown OpenAPI operation: ${operationId}.`); if (!baseUrl) throw new Error('OpenAPI connector has no base URL.');
+      const operation = operations.get(operationId); if (!operation) throw new CodedError(ERROR_CODES.CONNECTOR_OPERATION_FAILED, `Unknown OpenAPI operation: ${operationId}.`); if (!baseUrl) throw new CodedError(ERROR_CODES.CONNECTOR_OPERATION_FAILED, 'OpenAPI connector has no base URL.');
       const pathArgs = args.path && typeof args.path === 'object' && !Array.isArray(args.path) ? args.path as Record<string, unknown> : {};
-      const requestPath = operation.path.replace(/\{([^}]+)\}/g, (_, key: string) => { if (pathArgs[key] === undefined) throw new Error(`Missing path parameter: ${key}.`); return encodeURIComponent(String(pathArgs[key])); });
+      const requestPath = operation.path.replace(/\{([^}]+)\}/g, (_, key: string) => { if (pathArgs[key] === undefined) throw new CodedError(ERROR_CODES.CONNECTOR_OPERATION_FAILED, `Missing path parameter: ${key}.`); return encodeURIComponent(String(pathArgs[key])); });
       const url = new URL(baseUrl);
       url.pathname = url.pathname.replace(/\/$/, '') + '/' + requestPath.replace(/^\/+/, '');
       const query = args.query && typeof args.query === 'object' && !Array.isArray(args.query) ? args.query as Record<string, unknown> : {};
@@ -140,7 +142,7 @@ export function createOpenApiConnector(input: { id: string; name?: string; docum
       const timeout = AbortSignal.timeout(input.timeoutMs || 30_000); const signal = context.abortSignal ? AbortSignal.any([context.abortSignal, timeout]) : timeout;
       const response = await (input.fetchImpl || fetch)(url, { method: operation.method, signal, headers: { accept: 'application/json', ...(args.body === undefined ? {} : { 'content-type': 'application/json' }), ...input.headers }, body: args.body === undefined || operation.method === 'GET' || operation.method === 'HEAD' ? undefined : JSON.stringify(args.body) });
       const text = await readBoundedResponseText(response); let body: unknown = text; try { body = text ? JSON.parse(text) : undefined; } catch { /* preserve text */ }
-      if (!response.ok) throw new Error(`OpenAPI operation returned HTTP ${response.status}: ${text.slice(0, 1000)}`);
+      if (!response.ok) throw new CodedError(ERROR_CODES.CONNECTOR_OPERATION_FAILED, `OpenAPI operation returned HTTP ${response.status}: ${text.slice(0, 1000)}`);
       return { status: response.status, headers: Object.fromEntries(response.headers), body };
     },
   };

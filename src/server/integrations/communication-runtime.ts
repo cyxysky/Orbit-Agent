@@ -24,6 +24,8 @@ import { closeUnusedWeComConnections, getWeComConnection } from './wecom-connect
 import { communicationReplyContents, splitCommunicationText } from './communication-reply';
 import { communicationReplyWithResponseExports } from './communication-response-exports';
 import { importCommunicationAttachments } from './communication-attachments';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 type Watcher = { item: CommunicationInbound; stop: () => void };
 type Receiver = { integration: ResolvedExternalIntegration; bot: WeComBotConnection; stop: () => void };
@@ -196,7 +198,7 @@ function receiverFor(conversation: CommunicationConversation) {
 /** Only the first text closes the stream; later chunks and media remain separate messages. */
 async function sendReplyText(conversation: CommunicationConversation, item: CommunicationInbound, text: string) {
   const receiver = receiverFor(conversation);
-  if (!receiver) throw new Error('企微接收渠道已停用或连接配置已变更。');
+  if (!receiver) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '企微接收渠道已停用或连接配置已变更。');
   const stream = item.replyStream;
   clearStreamTimer(item.id);
   if (stream && hasUnfinishedStream(item)) {
@@ -463,7 +465,7 @@ async function processReceived(conversation: CommunicationConversation, item: Co
   if (sessionId) {
     const session = await getBrowserChatSession(sessionId, conversation.userId);
     if (!session || session.status === 'closed') {
-      if (item.sessionId) throw new Error('这条消息所属的对话已关闭或删除，请在当前对话重新发送。');
+      if (item.sessionId) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '这条消息所属的对话已关闭或删除，请在当前对话重新发送。');
       sessionId = undefined;
     }
   }
@@ -477,7 +479,7 @@ async function processReceived(conversation: CommunicationConversation, item: Co
   const attachments = [...new Map([...waiting.flatMap(entry => entry.attachments || []), ...(item.attachments || [])]
     .map(attachment => [attachment.id, attachment])).values()];
   if (attachments.length > browserChatAttachmentLimit) {
-    throw new Error(`同一轮最多处理 ${browserChatAttachmentLimit} 个附件。已暂存的附件仍保留，请先发送文字处理上一批附件。`);
+    throw new CodedError(ERROR_CODES.APPLICATION_ERROR, `同一轮最多处理 ${browserChatAttachmentLimit} 个附件。已暂存的附件仍保留，请先发送文字处理上一批附件。`);
   }
   if (!item.text.trim()) {
     item.status = 'waiting';

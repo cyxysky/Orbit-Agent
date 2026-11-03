@@ -12,6 +12,8 @@ import {
   type DatabaseExecutor,
 } from '@/server/db/database';
 import { queueDatabaseWrite, type DatabaseWriteStatement } from './database-write-queue';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 type ConfigRecord = {
   runtimeEnv: unknown[];
@@ -304,7 +306,7 @@ export async function commitPersonalMemoryReview<T extends PersonalMemoryRecordF
       .filter((item): item is T => Boolean(item));
     if (memoryContentSignature(current) !== memoryContentSignature(input.expectedItems)) return 'conflict' as const;
     for (const item of input.items) {
-      if (item.userId !== input.userId) throw new Error('Cannot change another user\'s memory.');
+      if (item.userId !== input.userId) throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED, 'Cannot change another user\'s memory.');
       const latest = current.find((previous) => previous.id === item.id) as (T & { useCount?: number; lastUsedAt?: string }) | undefined;
       await upsertPersonalMemoryRecord(manager, { ...item,
         ...(latest ? { useCount: latest.useCount, lastUsedAt: latest.lastUsedAt } : {}),

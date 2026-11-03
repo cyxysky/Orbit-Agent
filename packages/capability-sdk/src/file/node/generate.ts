@@ -5,6 +5,8 @@ import { fileFormatForExtension, generatedFileExtensions, normalizedFileExtensio
 import type { OfficeCellValue, OfficeDocumentKind } from '../office/types.ts';
 import { generateOfficeJsProgramDocument } from './office/javascript.ts';
 import { generateUnoProgramDocument } from './office/uno.ts';
+import { CodedError, ERROR_CODES } from '../../errors.ts';
+
 
 export type GeneratedFileCell = OfficeCellValue;
 /** Text-only block extraction; Office output requires executable source. */
@@ -70,15 +72,15 @@ function quotedDelimitedCell(value: GeneratedFileCell, delimiter: string) {
 
 function generateDelimitedText(input: GeneratedFileInput, extension: '.csv' | '.tsv') {
   const rows = firstTableRows(input);
-  if (!rows?.length) throw new Error(`${extension.toUpperCase()} generation requires a non-empty table block.`);
+  if (!rows?.length) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `${extension.toUpperCase()} generation requires a non-empty table block.`);
   const delimiter = extension === '.tsv' ? '\t' : ',';
   return Buffer.from(`${rows.map((row) => row.map((cell) => quotedDelimitedCell(cell, delimiter)).join(delimiter)).join('\n')}\n`, 'utf8');
 }
 
 function validateOfficeTarget(input: Pick<GeneratedFileInput, 'documentType'>, extension: string) {
-  if (wordExtensions.has(extension) && input.documentType !== 'word') throw new Error(`${extension} requires documentType=word.`);
-  if (spreadsheetExtensions.has(extension) && input.documentType !== 'spreadsheet') throw new Error(`${extension} requires documentType=spreadsheet.`);
-  if (presentationExtensions.has(extension) && input.documentType !== 'presentation') throw new Error(`${extension} requires documentType=presentation.`);
+  if (wordExtensions.has(extension) && input.documentType !== 'word') throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `${extension} requires documentType=word.`);
+  if (spreadsheetExtensions.has(extension) && input.documentType !== 'spreadsheet') throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `${extension} requires documentType=spreadsheet.`);
+  if (presentationExtensions.has(extension) && input.documentType !== 'presentation') throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `${extension} requires documentType=presentation.`);
 }
 
 export function supportedGeneratedFileExtension(fileName: string) {
@@ -95,18 +97,18 @@ export async function generateFileBuffer(input: GeneratedFileInput & {
   requiredSourceAssetName?: string;
   abortSignal?: AbortSignal;
 }): Promise<GeneratedFileOutput> {
-  if ('spec' in input) throw new Error('spec generation has been removed. Use executable source.');
+  if ('spec' in input) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'spec generation has been removed. Use executable source.');
   const extension = supportedGeneratedFileExtension(input.fileName);
-  if (!extension) throw new Error('Unsupported output extension. Use a supported text/data format, PDF, Word, Excel, PowerPoint, or OpenDocument extension.');
+  if (!extension) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'Unsupported output extension. Use a supported text/data format, PDF, Word, Excel, PowerPoint, or OpenDocument extension.');
   if (generatedTextExtensions.has(extension)) {
-    if (!input.blocks) throw new Error('Text file generation requires text blocks.');
+    if (!input.blocks) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'Text file generation requires text blocks.');
     if (extension === '.csv' || extension === '.tsv') return { buffer: generateDelimitedText(input, extension), extension };
     const content = documentText(input);
-    if (!content) throw new Error('Text file generation requires at least one textual block.');
+    if (!content) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'Text file generation requires at least one textual block.');
     return { buffer: Buffer.from(`${content}\n`, 'utf8'), extension };
   }
-  if ('blocks' in input) throw new Error('Structured Office generation has been removed. Use body or program through the file workspace, or program/programPath here.');
-  if (!input.program?.trim() && !input.programPath) throw new Error('Office document generation requires program or programPath.');
+  if ('blocks' in input) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'Structured Office generation has been removed. Use body or program through the file workspace, or program/programPath here.');
+  if (!input.program?.trim() && !input.programPath) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'Office document generation requires program or programPath.');
   validateOfficeTarget(input, extension);
   const configured = input.generator || 'javascript';
   const generator = configured === 'javascript' && extension !== '.xlsx' ? 'html' : configured;
@@ -126,7 +128,7 @@ export async function generateFileBuffer(input: GeneratedFileInput & {
     abortSignal: input.abortSignal,
   });
   return {
-    buffer: generated.buffer || (() => { throw new Error('Office generator did not return an in-memory artifact.'); })(),
+    buffer: generated.buffer || (() => { throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'Office generator did not return an in-memory artifact.'); })(),
     diagnostics: generated.report,
     extension,
     previewPdf: generated.previewPdf,
@@ -143,11 +145,11 @@ export async function generateFileToPaths(input: Pick<GeneratedFileInput, 'docum
   abortSignal?: AbortSignal;
   onProgress?: (progress: { phase: string; message: string; current?: number; total?: number }) => void | Promise<void>;
 }) {
-  if ('spec' in input || 'blocks' in input) throw new Error('Structured Office generation has been removed. Use programPath.');
+  if ('spec' in input || 'blocks' in input) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'Structured Office generation has been removed. Use programPath.');
   const extension = supportedGeneratedFileExtension(input.fileName);
-  if (!extension || generatedTextExtensions.has(extension)) throw new Error('Path-based generation requires an Office or PDF target.');
+  if (!extension || generatedTextExtensions.has(extension)) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'Path-based generation requires an Office or PDF target.');
   validateOfficeTarget(input, extension);
-  if (!input.programPath?.trim()) throw new Error('Path-based generation requires programPath.');
+  if (!input.programPath?.trim()) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'Path-based generation requires programPath.');
   const configured = input.generator || 'javascript';
   const generator = configured === 'javascript' && extension !== '.xlsx' ? 'html' : configured;
   const source = { sourcePath: input.programPath };

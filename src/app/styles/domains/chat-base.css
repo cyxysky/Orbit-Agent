@@ -2779,14 +2779,6 @@ button.browser-chat-output-file-main {
   font-weight: 680;
 }
 
-.browser-chat-novel-plan-review {
-  max-height: min(60vh, 640px);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding-right: 12px;
-}
-
-
 .browser-chat-tool-confirmation-message .browser-chat-agent-markdown {
   font-size: inherit;
   line-height: 1.7;

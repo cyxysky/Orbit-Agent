@@ -3,6 +3,8 @@ import { queryDatabase, queryDatabaseOne, executeDatabase } from '@/server/db/da
 import { commitPersonalMemoryReview } from '@/server/storage/database-record-store';
 import { personalMemoryExtractionEnabled, type PersonalMemoryItem, type PersonalMemoryExtractionResult } from './personal-memory';
 import { withModelSettings, type ModelSettingsOverride } from './model';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 type Candidate = { userId: string; sourceKey: string; expectedItems: PersonalMemoryItem[]; items: PersonalMemoryItem[]; report: unknown };
 export async function proposeReviewedMemory(sessionId: string, candidate: Candidate) {
@@ -16,15 +18,15 @@ export async function listMemoryCandidates(sessionId: string, userId: string) {
 }
 export async function reviewMemoryProposal(sessionId: string, userId: string, id: string, approved: boolean) {
   const row = await queryDatabaseOne<{ record_json: string; status: string }>('SELECT record_json, status FROM agent_memory_candidate WHERE id = ? AND session_id = ? AND user_id = ?', [id, sessionId, userId]);
-  if (!row || row.status !== 'candidate') throw new Error('Memory proposal is unavailable or already reviewed.');
+  if (!row || row.status !== 'candidate') throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Memory proposal is unavailable or already reviewed.');
   if (!approved) { await executeDatabase("UPDATE agent_memory_candidate SET status = 'deleted' WHERE id = ? AND status = 'candidate'", [id]); return; }
   const candidate = JSON.parse(row.record_json) as Candidate;
-  if (candidate.items.some(item => item.expiresAt && Date.parse(item.expiresAt) <= Date.now())) throw new Error('Proposal has expired.');
+  if (candidate.items.some(item => item.expiresAt && Date.parse(item.expiresAt) <= Date.now())) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Proposal has expired.');
   const result = await commitPersonalMemoryReview({ ...candidate, afterCommit: async executor => {
     const changed = await queryDatabase("UPDATE agent_memory_candidate SET status = 'approved' WHERE id = ? AND status = 'candidate' RETURNING id", [id], executor);
-    if (!changed.length) throw new Error('Proposal changed during approval.');
+    if (!changed.length) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Proposal changed during approval.');
   } });
-  if (result === 'conflict') throw new Error('Memory changed since this proposal. Request a new proposal.');
+  if (result === 'conflict') throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Memory changed since this proposal. Request a new proposal.');
 }
 export type MemoryJobPayload = Omit<Parameters<typeof import('./personal-memory-learning').extractPersonalMemoryFromTurn>[0], 'abortSignal'> & {
   modelSettings?: ModelSettingsOverride;

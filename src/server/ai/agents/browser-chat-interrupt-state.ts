@@ -33,7 +33,7 @@ export function registerBrowserChatTurn<TSession>(
     registered.hardTimeoutAt = new Date(Date.now() + timeoutMs).toISOString();
     registered.hardTimeout = setTimeout(() => {
       if (registry.get(sessionId) !== registered || registered.abortController.signal.aborted) return;
-      registered.abortController.abort(new Error(
+      registered.abortController.abort(new CodedError(ERROR_CODES.AI_RUNTIME_FAILED,
         options.timeoutMessage || `Browser chat turn exceeded its ${Math.round(timeoutMs / 60_000)} minute hard limit.`,
       ));
     }, timeoutMs);
@@ -134,3 +134,4 @@ export function runtimeSnapshotIsNewer(runtimeUpdatedAt: string, persistedUpdate
   return Number.isFinite(runtimeTime) && Number.isFinite(persistedTime) && runtimeTime > persistedTime;
 }
 import { raceWithAbort } from '@cjfclonedeep/capability-sdk';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';

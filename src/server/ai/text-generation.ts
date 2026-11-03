@@ -2,13 +2,15 @@ import { streamText } from 'ai';
 import { raceWithAbort, type CapabilityExecutionContext } from '@cjfclonedeep/capability-sdk';
 import { getModel } from './model';
 import { aiReasoningEffort, aiTelemetry } from './ai-sdk-runtime';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 
-export async function generateNovelText(input: {
+
+export async function generateEditorText(input: {
   instructions: string; prompt: string; functionId: string; label: string; temperature?: number;
 }, context: CapabilityExecutionContext) {
   context.abortSignal?.throwIfAborted();
   const controller = new AbortController();
-  // Novel AI operations have no local deadline; the caller can still cancel.
+  // Editor AI operations can be cancelled by the caller.
   const signal = context.abortSignal ? AbortSignal.any([controller.signal, context.abortSignal]) : controller.signal;
   let lastProgress = Date.now(), chunks = 0, textCharacters = 0, reasoningCharacters = 0;
   let streamAbortReason: unknown;
@@ -21,7 +23,7 @@ export async function generateNovelText(input: {
         onAbort: (event) => { if ('reason' in event) streamAbortReason = event.reason; } });
       for await (const part of result.fullStream) {
         if (part.type === 'error') throw part.error;
-        if (part.type === 'abort') throw streamAbortReason ?? new Error(part.reason || 'Novel request aborted.');
+        if (part.type === 'abort') throw streamAbortReason ?? new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, part.reason || 'Text rewrite request aborted.');
         if (part.type !== 'text-delta' && part.type !== 'reasoning-delta') continue;
         chunks++;
         if (part.type === 'text-delta') textCharacters += part.text.length;

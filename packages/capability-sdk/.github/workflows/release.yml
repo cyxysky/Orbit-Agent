@@ -1,0 +1,49 @@
+name: Publish GitHub release and optionally npm
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Also publish to npm (requires configured trusted publisher)'
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      CAPABILITY_SKIP_RUNTIME_INSTALL: '1'
+      FFMPEG_SKIP_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - name: Prepare the distributable on the release runner
+        run: npm pack
+      - name: Verify prepared exports
+        run: |
+          node scripts/check-release.mjs --publish
+          sha256sum ./*.tgz > "$(find . -maxdepth 1 -name '*.tgz' -printf '%f').sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: capability-sdk-package
+          path: |
+            *.tgz
+            *.tgz.sha256
+      - name: Publish npm
+        if: inputs.publish
+        run: |
+          npm publish ./*.tgz --access public --provenance
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          gh release create "v$version" ./*.tgz ./*.tgz.sha256 --target "$GITHUB_SHA" --title "Capability SDK $version" --generate-notes

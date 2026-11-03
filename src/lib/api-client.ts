@@ -1,3 +1,5 @@
+
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 export function apiErrorMessage(data: unknown, fallback: string) {
   if (data && typeof data === 'object' && !Array.isArray(data)) {
     const error = (data as Record<string, unknown>).error;
@@ -10,10 +12,10 @@ export function apiErrorMessage(data: unknown, fallback: string) {
 
 export async function readApiJson<T = Record<string, unknown>>(response: Response, fallback: string): Promise<T> {
   const data = await response.json().catch(() => {
-    if (response.ok) throw new Error(`${fallback}：服务器返回了无效的 JSON`);
+    if (response.ok) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, `${fallback}：服务器返回了无效的 JSON`);
     return {};
   });
-  if (!response.ok) throw new Error(apiErrorMessage(data, fallback));
+  if (!response.ok) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, apiErrorMessage(data, fallback));
   return data as T;
 }
 
@@ -30,7 +32,7 @@ export async function readApiGet<T = Record<string, unknown>>(
     const response = await fetch(url, { cache: 'no-store', signal });
     return await readApiJson<T>(response, fallback);
   } catch (error) {
-    if (controller.signal.aborted && !options.signal?.aborted) throw new Error(`${fallback}：请求超时，请重试`);
+    if (controller.signal.aborted && !options.signal?.aborted) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, `${fallback}：请求超时，请重试`);
     throw error;
   } finally {
     clearTimeout(timeout);

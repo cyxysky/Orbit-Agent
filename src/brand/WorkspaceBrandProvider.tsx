@@ -10,6 +10,8 @@ import {
   type ReactNode,
 } from 'react';
 import { resolveWorkspaceBrand } from './product';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 const PREFIX_STORAGE_KEY = 'orbit.brandPrefix';
 const TEXT_STORAGE_KEY = 'orbit.brandText';
@@ -89,6 +91,6 @@ export function WorkspaceBrandProvider({ children }: { children: ReactNode }) {
 
 export function useWorkspaceBrand() {
   const context = useContext(WorkspaceBrandContext);
-  if (!context) throw new Error('useWorkspaceBrand must be used inside WorkspaceBrandProvider');
+  if (!context) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'useWorkspaceBrand must be used inside WorkspaceBrandProvider');
   return context;
 }

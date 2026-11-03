@@ -1,6 +1,7 @@
 'use client';
 
 import { createContext, useContext } from 'react';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 import type { PreviewSource } from '@open-file-viewer/core';
 
 const FILE_EXTENSIONS = new Set([
@@ -9,7 +10,7 @@ const FILE_EXTENSIONS = new Set([
   'ppt', 'pptx', 'pptm', 'pps', 'ppsx', 'odp', 'ofd', 'epub', 'xps', 'oxps',
   'jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'jxl', 'svg', 'bmp', 'ico', 'tif', 'tiff', 'heic', 'heif',
   'mp4', 'webm', 'mov', 'mkv', 'avi', 'm3u8', 'flv', 'm2ts', 'mp3', 'wav', 'flac', 'aac', 'ogg', 'm4a', 'midi', 'mid',
-  'txt', 'md', 'markdown', 'json', 'jsonc', 'json5', 'ipynb', 'yaml', 'yml', 'toml', 'ini', 'xml', 'lrc',
+  'txt', 'md', 'markdown', 'html', 'htm', 'json', 'jsonc', 'json5', 'ipynb', 'yaml', 'yml', 'toml', 'ini', 'xml', 'lrc',
   'js', 'jsx', 'ts', 'tsx', 'vue', 'svelte', 'css', 'scss', 'less', 'py', 'go', 'rs', 'rb', 'swift', 'kt', 'java', 'c', 'h', 'cpp', 'hpp', 'cs', 'php', 'sh', 'sql', 'proto', 'hcl', 'tex', 'gv', 'http',
   'zip', 'rar', '7z', 'tar', 'gz', 'tgz', 'bz2', 'xz', 'eml', 'msg', 'mbox',
   'apk', 'bin', 'deb', 'dmg', 'exe', 'ipa', 'msi', 'pkg', 'rpm',
@@ -23,7 +24,8 @@ export type FilePreviewRequest = {
   fileName: string;
   mimeType?: string;
   source: PreviewSource | (() => Promise<PreviewSource>);
-  mode?: 'preview' | 'editVideo';
+  mode?: 'preview' | 'editVideo' | 'editText';
+  textDocumentId?: string;
 };
 
 export type FilePreviewContextValue = {
@@ -60,6 +62,6 @@ export function isFilePreviewHref(href?: string, fileName?: string) {
 
 export function useFilePreview() {
   const context = useContext(FilePreviewContext);
-  if (!context) throw new Error('useFilePreview must be used inside FilePreviewProvider');
+  if (!context) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'useFilePreview must be used inside FilePreviewProvider');
   return context;
 }

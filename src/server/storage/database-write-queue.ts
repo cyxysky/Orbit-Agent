@@ -1,5 +1,7 @@
 import { executeDatabase, runDatabaseTransaction } from '@/server/db/database';
 import { incrementMetric, recordMetricTiming, setMetricGauge } from '@/server/observability/runtime-observability';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export type DatabaseWriteStatement = {
   params?: unknown[];
@@ -65,7 +67,7 @@ export function queueDatabaseWrite(statements: DatabaseWriteStatement[]) {
     : 2_000;
   if (state.pending.length >= maximumPending) {
     incrementMetric('database_write_queue_rejected_total');
-    return Promise.reject(new Error('Database write queue is full'));
+    return Promise.reject(new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED, 'Database write queue is full'));
   }
   const promise = new Promise<void>((resolve, reject) => {
     state.pending.push({ statements, reject, resolve, startedAt: performance.now() });

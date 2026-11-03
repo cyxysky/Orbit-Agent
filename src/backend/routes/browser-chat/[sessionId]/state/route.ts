@@ -2,13 +2,15 @@ import { readBrowserChatRuntimeState } from '@/server/ai/agents/browser-chat-rea
 import { requestApplicationUserId } from '@/server/auth/user-context';
 import { ApiRequestError, apiError, apiJson } from '@/server/http/api-request';
 import type { BrowserChatSessionRouteContext } from '@/server/http/browser-chat-route';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 
 export async function GET(request: Request, context: BrowserChatSessionRouteContext) {
   try {
     const { sessionId } = await context.params;
     const result = await readBrowserChatRuntimeState(sessionId, requestApplicationUserId(request));
-    if (!result) throw new ApiRequestError('Browser chat session not found', { code: 'not_found', status: 404 });
+    if (!result) throw new ApiRequestError('Browser chat session not found', { code: ERROR_CODES.NOT_FOUND, status: 404 });
     return apiJson(request, result);
   } catch (error) {
     return apiError(request, error, { fallback: 'Failed to read browser chat runtime state' });

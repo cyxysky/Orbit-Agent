@@ -11,10 +11,12 @@ import { appDataRoot, artifactPath } from '@/server/storage/paths';
 import { normalizeApplicationUserId } from '@/server/auth/user-context';
 import { artifactApiUrlFromRelative } from '@/lib/artifacts';
 import { ApiRequestError } from '@/server/http/api-request';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 function owner(value?: string) {
   const id = normalizeApplicationUserId(value);
-  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(id)) throw new Error('Invalid media project owner.');
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(id)) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Invalid media project owner.');
   return id;
 }
 export function videoArtifactRef(ref: string) {
@@ -29,7 +31,7 @@ export function videoArtifactRef(ref: string) {
 function openStore(userId: string) {
   const store = createCapabilityDocumentDatabase<VideoProject>({
     directory: path.join(appDataRoot(), 'video-projects', createHash('sha256').update(userId).digest('hex')),
-    filename: 'projects.db', legacyFilename: 'projects.json', readLegacy() { throw new Error('Unsupported video project import.'); },
+    filename: 'projects.db', legacyFilename: 'projects.json', readLegacy() { throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Unsupported video project import.'); },
   });
   store.database().exec('CREATE TABLE IF NOT EXISTS video_outputs (ref TEXT PRIMARY KEY, project_id TEXT NOT NULL)');
   return store;
@@ -38,7 +40,7 @@ function readProject(store: ReturnType<typeof openStore>, id: string, revision?:
   if (!/^video_[a-f0-9-]{36}$/.test(id)) throw new ApiRequestError('视频工程不存在。', { status: 404 });
   const project = store.get(id);
   if (!project) throw new ApiRequestError('视频工程不存在。', { status: 404 });
-  if (revision !== undefined && project.revision !== revision) throw new ApiRequestError('视频工程已在其他窗口修改。请重新打开工程后编辑，当前修改未覆盖。', { status: 409, code: 'revision_conflict' });
+  if (revision !== undefined && project.revision !== revision) throw new ApiRequestError('视频工程已在其他窗口修改。请重新打开工程后编辑，当前修改未覆盖。', { status: 409, code: ERROR_CODES.REVISION_CONFLICT });
   return project;
 }
 async function ownedSource(ref: string, userId: string) {
@@ -110,7 +112,7 @@ export async function openVideoProject(sourceRef: string, userIdValue?: string, 
   } finally { await store.dispose(); }
   if (!/\.(mp4|webm|mov|mkv|avi)$/i.test(source)) throw new ApiRequestError('请选择视频文件。');
   const execution = { invocationId: randomUUID(), abortSignal: signal };
-  const probe = await createFfmpegMediaOperations({ resolveSource: async () => source, publishArtifact: async () => { throw new Error('Unused publisher'); } }).inspect(sourceRef, execution) as { probe: string };
+  const probe = await createFfmpegMediaOperations({ resolveSource: async () => source, publishArtifact: async () => { throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Unused publisher'); } }).inspect(sourceRef, execution) as { probe: string };
   const match = String(probe.probe).match(/Duration:\s*(\d+):(\d+):([\d.]+)/);
   const duration = match ? Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]) : 0;
   if (!duration || duration > 600) throw new ApiRequestError('当前剪辑支持 0 至 600 秒的视频，无法识别该文件时长或文件过长。');

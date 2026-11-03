@@ -6,6 +6,8 @@ import { readApiJson } from '@/lib/api-client';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 import { useI18n } from '@/i18n/I18nProvider';
 import type { BackendRuntimeStatus } from '@/server/observability/backend-runtime-status';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export function BackendRuntimePanel() {
   const { t } = useI18n();

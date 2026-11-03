@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 import { createKnowledgePackageTemplate, parseKnowledgePackageArchive, knowledgePackageUploadLimit } from '@cjfclonedeep/capability-sdk/knowledge/node';
 import { requestApplicationUserId } from '@/server/auth/user-context';
 import { withUserKnowledgeStore } from '@/server/capabilities/knowledge-storage';
@@ -48,7 +49,7 @@ export async function POST(request: Request) {
     if (!(file instanceof File)) throw new ApiRequestError('请选择 ZIP 或 RAR 知识包。');
     let candidate;
     try { candidate = await parseKnowledgePackageArchive(new Uint8Array(await file.arrayBuffer()), file.name); }
-    catch (error) { throw new ApiRequestError(error instanceof Error ? error.message : '知识包校验失败。', { code: 'invalid_knowledge_package' }); }
+    catch (error) { throw new ApiRequestError(error instanceof Error ? error.message : '知识包校验失败。', { code: ERROR_CODES.INVALID_KNOWLEDGE_PACKAGE }); }
     return await withUserKnowledgeStore(userId, async store => {
       const pack = await store.importPackage(candidate);
       return apiJson(request, { package: pack });

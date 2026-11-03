@@ -17,6 +17,8 @@ import {
   type CreateChartRecordInput,
 } from './core.ts';
 import type { CapabilityRunContext } from '../index.ts';
+import { CodedError, ERROR_CODES } from '../errors.ts';
+
 
 /** Hosts may expose this as a static font endpoint for offline deployments. */
 export async function readExcalidrawFont(segments: string[]): Promise<Uint8Array | undefined> {
@@ -46,7 +48,7 @@ export async function validateEChartsOption(input: ChartOptionValidationInput) {
   try {
     await renderECharts({ option: normalizeChartOption(input.option), maps: input.maps, height: input.height });
   } catch (error) {
-    throw new Error('ECharts rejected option: ' + (error instanceof Error ? error.message : String(error)));
+    throw new CodedError(ERROR_CODES.CHART_OPERATION_FAILED, 'ECharts rejected option: ' + (error instanceof Error ? error.message : String(error)));
   }
 }
 
@@ -85,7 +87,7 @@ export function createFileSystemChartStore(input: {
       const latest = (await directoryIndex()).revisions.get(chartId)?.at(-1) ?? -1;
       const filename = latest < 0 ? `${chartId}.json` : `${chartId}.revision-${latest}.json`;
       const record = parseChartRecord(JSON.parse(await readFile(path.join(directory, filename), 'utf8')), chartId);
-      if (latest >= 0 && record.revision !== latest) throw new Error('Chart revision identity mismatch.');
+      if (latest >= 0 && record.revision !== latest) throw new CodedError(ERROR_CODES.CHART_OPERATION_FAILED, 'Chart revision identity mismatch.');
       return record;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -93,7 +95,7 @@ export function createFileSystemChartStore(input: {
         index = undefined;
         return readLatest(chartId, true);
       }
-      throw new Error(`Unable to read chart artifact ${chartId}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+      throw new CodedError(ERROR_CODES.CHART_OPERATION_FAILED, `Unable to read chart artifact ${chartId}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
     }
   }
   return {
@@ -117,11 +119,11 @@ export function createFileSystemChartStore(input: {
           number += 1;
         }
       }
-      throw new Error('This chart store has reached its identifier limit.');
+      throw new CodedError(ERROR_CODES.CHART_OPERATION_FAILED, 'This chart store has reached its identifier limit.');
     },
     read: readLatest,
     async update(chartId, candidate, expectedRevision) {
-      if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0 || expectedRevision >= Number.MAX_SAFE_INTEGER) throw new Error('Invalid expectedRevision.');
+      if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0 || expectedRevision >= Number.MAX_SAFE_INTEGER) throw new CodedError(ERROR_CODES.CHART_OPERATION_FAILED, 'Invalid expectedRevision.');
       const previous = await readLatest(chartId);
       if (!previous) return undefined;
       if ((previous.revision || 0) !== expectedRevision) throw new ChartRevisionConflict();

@@ -5,6 +5,8 @@ import type { MediaArtifact } from './index.ts';
 import type { MediaGenerationInput, MediaGenerationOperations } from './generation.ts';
 import { mediaModelDriver, resolveMediaModel, type MediaModelConfig, type MediaModelConfiguration, type MediaModelKind } from './models.ts';
 import type { CodexImageOptions } from './codex-cli.ts';
+import { CodedError, ERROR_CODES } from '../errors.ts';
+
 
 export type MediaGenerationFile = { data: Uint8Array; mediaType: string };
 export type AiSdkMediaOperationsOptions = {
@@ -49,10 +51,10 @@ function routeUrl(url: URL, model: MediaModelConfig, method: string) {
 }
 
 async function boundedBytes(response: Response, signal: AbortSignal, maxBytes = 50 * 1024 * 1024) {
-  if (!response.ok) throw new Error(`Media download failed (HTTP ${response.status}).`);
-  if (Number(response.headers.get('content-length')) > maxBytes) { await response.body?.cancel(); throw new Error('Media response exceeds the download limit.'); }
+  if (!response.ok) throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, `Media download failed (HTTP ${response.status}).`);
+  if (Number(response.headers.get('content-length')) > maxBytes) { await response.body?.cancel(); throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, 'Media response exceeds the download limit.'); }
   const reader = response.body?.getReader();
-  if (!reader) throw new Error('Media response is empty.');
+  if (!reader) throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, 'Media response is empty.');
   const chunks: Uint8Array[] = [];
   let length = 0;
   try {
@@ -61,7 +63,7 @@ async function boundedBytes(response: Response, signal: AbortSignal, maxBytes = 
       const next = await reader.read();
       if (next.done) break;
       length += next.value.byteLength;
-      if (length > maxBytes) throw new Error('Media response exceeds the download limit.');
+      if (length > maxBytes) throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, 'Media response exceeds the download limit.');
       chunks.push(next.value);
     }
   } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
@@ -86,7 +88,7 @@ function modelFetch(model: MediaModelConfig, fetcher: typeof globalThis.fetch, s
     for (const item of payload.data) {
       if (item.b64_json || !item.url) continue;
       const url = new URL(item.url);
-      if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) throw new Error('Invalid generated image URL.');
+      if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, 'Invalid generated image URL.');
       // Never forward the model API key to a provider's CDN.
       const bytes = await boundedBytes(await fetcher(url, { signal }), signal);
       item.b64_json = Buffer.from(bytes).toString('base64');
@@ -109,7 +111,7 @@ function minimaxImageModel(model: MediaModelConfig, fetcher: typeof globalThis.f
   return {
     specificationVersion: 'v4', provider: 'minimax.image', modelId: model.model, maxImagesPerCall: 9,
     async doGenerate({ prompt, n, size, aspectRatio, seed, files, mask, abortSignal, providerOptions }) {
-      if (mask) throw new Error('MiniMax image generation does not support masks.');
+      if (mask) throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, 'MiniMax image generation does not support masks.');
       const signal = abortSignal || AbortSignal.timeout(model.timeoutMs);
       const [width, height] = size ? size.split('x').map(Number) : [];
       const route = files?.length ? model.paths.edit : model.paths.generate;
@@ -134,13 +136,13 @@ function minimaxImageModel(model: MediaModelConfig, fetcher: typeof globalThis.f
         data: z.object({ image_base64: z.array(z.string()).optional(), image_urls: z.array(z.string()).optional() }).nullish(),
       }).parse(JSON.parse(new TextDecoder().decode(await boundedBytes(response, signal, 100 * 1024 * 1024))));
       if (payload.base_resp && payload.base_resp.status_code !== 0) {
-        throw new Error(`MiniMax image generation failed (${payload.base_resp.status_code}): ${payload.base_resp.status_msg || 'Unknown error'}`);
+        throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, `MiniMax image generation failed (${payload.base_resp.status_code}): ${payload.base_resp.status_msg || 'Unknown error'}`);
       }
       const images: Uint8Array[] = (payload.data?.image_base64 || []).filter(Boolean).map((data) => Buffer.from(data, 'base64'));
       if (!images.length) {
         for (const ref of payload.data?.image_urls || []) {
           const imageUrl = new URL(ref);
-          if (!['https:', 'http:'].includes(imageUrl.protocol) || imageUrl.username || imageUrl.password) throw new Error('Invalid generated image URL.');
+          if (!['https:', 'http:'].includes(imageUrl.protocol) || imageUrl.username || imageUrl.password) throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, 'Invalid generated image URL.');
           // CDN downloads must never receive the model API key.
           images.push(await boundedBytes(await fetcher(imageUrl, { signal }), signal));
         }
@@ -228,7 +230,7 @@ export function createAiSdkMediaGenerationOperations(options: AiSdkMediaOperatio
         providerOptions, abortSignal: signal, maxRetries: 0,
       });
       files = [{ data: result.audio.uint8Array, mediaType: result.audio.mediaType }];
-    } else { throw new Error(`Driver ${model.driver} does not support ${kind} generation.`); }
+    } else { throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, `Driver ${model.driver} does not support ${kind} generation.`); }
     const artifacts: MediaArtifact[] = [];
     await context.reportProgress?.({ phase: 'publishing', message: `Saving ${files.length} generated media artifact(s).` });
     for (const file of files) {

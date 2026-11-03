@@ -15,6 +15,8 @@ import { convertOfficeFile } from '../libreoffice.ts';
 import { sha256NodeFile } from '../artifacts.ts';
 import { inspectRenderedPage, type OfficeArtifactIssue } from './validation.ts';
 import { officeRenderEnvironmentFingerprint } from './runtime-fingerprint.ts';
+import { CodedError, ERROR_CODES } from '../../../errors.ts';
+
 
 export type FilePreviewResult = {
   imagePaths: string[];
@@ -78,7 +80,7 @@ function previewDirectory(input: {
   extension: string;
   root?: string;
 }) {
-  if (!input.buffer && !input.cacheKey) throw new Error('Attachment preview requires a source buffer or stable cache key.');
+  if (!input.buffer && !input.cacheKey) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'Attachment preview requires a source buffer or stable cache key.');
   const digest = createHash('sha256')
     .update('attachment-visual-v3-1400px\0')
     .update(input.extension)
@@ -161,14 +163,14 @@ async function renderPdfPages(buffer: Buffer, directory: string, requestedPages:
         partial: [pageNumber],
       });
       const page = screenshots.pages.find((item) => item.pageNumber === pageNumber);
-      if (!page) throw new Error(`PDF renderer did not produce page ${pageNumber}.`);
+      if (!page) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `PDF renderer did not produce page ${pageNumber}.`);
       const target = pageImagePath(directory, pageNumber);
       await writeCacheFile(target, Buffer.from(page.data.buffer, page.data.byteOffset, page.data.byteLength));
       automaticChecks.push({ pageNumber, ...await inspectRenderedPage(target) });
     }
     await writeManifest(directory, { automaticChecks, pageCount: info.total, renderer: 'pdf' });
     const complete = await existingCache(directory, renderedPages);
-    if (!complete) throw new Error('PDF renderer did not produce all requested pages.');
+    if (!complete) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'PDF renderer did not produce all requested pages.');
     return { ...complete, renderer };
   } finally {
     await parser.destroy();
@@ -317,7 +319,7 @@ export async function registerOfficePreview(input: {
       try {
         // Copy on disk instead of holding the artifact and two PDFs in JS memory.
         await copyFile(input.previewPath, temporary);
-        if (await sha256NodeFile(temporary) !== pdfDigest) throw new Error('Office preview changed during cache registration.');
+        if (await sha256NodeFile(temporary) !== pdfDigest) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'Office preview changed during cache registration.');
         await rename(temporary, cachedPath);
       } finally {
         await unlink(temporary).catch(() => undefined);

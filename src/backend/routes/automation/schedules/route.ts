@@ -9,6 +9,8 @@ import { requestApplicationUserId } from '@/server/auth/user-context';
 import { ApiRequestError, apiError, apiJson, boundedQueryInteger, parseJsonRequest, parseOptionalJsonRequest } from '@/server/http/api-request';
 import { idempotencyFingerprint, runIdempotentJson } from '@/server/http/idempotency';
 import { createAutomationSchedule, deleteAutomationSchedule, listAutomationSchedules } from '@/server/storage/automation-store';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 
 const scheduleSchema = z.object({
@@ -42,11 +44,11 @@ function ensureDevelopmentScheduler() {
 
 function normalizedTimezone(value: unknown) {
   const timezone = text(value);
-  if (!timezone) throw new ApiRequestError('计划时区不能为空', { code: 'timezone_required' });
+  if (!timezone) throw new ApiRequestError('计划时区不能为空', { code: ERROR_CODES.TIMEZONE_REQUIRED });
   try {
     return new Intl.DateTimeFormat('en-US', { timeZone: timezone }).resolvedOptions().timeZone;
   } catch {
-    throw new ApiRequestError(`无效的 IANA 时区：${timezone}`, { code: 'invalid_timezone' });
+    throw new ApiRequestError(`无效的 IANA 时区：${timezone}`, { code: ERROR_CODES.INVALID_TIMEZONE });
   }
 }
 
@@ -71,7 +73,7 @@ export async function POST(request: Request) {
     const recurrence = automationScheduleRecurrenceSchema.parse(body.recurrence ?? body.frequency);
     const time = text(body.time);
     if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(time)) {
-      throw new ApiRequestError('计划时间必须使用 24 小时制 HH:mm 格式', { code: 'invalid_time' });
+      throw new ApiRequestError('计划时间必须使用 24 小时制 HH:mm 格式', { code: ERROR_CODES.INVALID_TIME });
     }
     const weekdays = (body.weekdays ?? (body.weekday === undefined ? [] : [body.weekday]))
       .map(Number).filter((item) => Number.isInteger(item));
@@ -99,7 +101,7 @@ export async function POST(request: Request) {
   } catch (error) {
     const message = error instanceof Error ? error.message : '';
     return apiError(request, error instanceof ApiRequestError ? error : new ApiRequestError(message || '计划参数无效', {
-      code: /not found/i.test(message) ? 'not_found' : 'validation_failed',
+      code: /not found/i.test(message) ? ERROR_CODES.NOT_FOUND : ERROR_CODES.VALIDATION_FAILED,
       status: /not found/i.test(message) ? 404 : 400,
     }), { fallback: '创建自动化计划失败' });
   }
@@ -110,7 +112,7 @@ export async function DELETE(request: Request) {
   try {
     const body = await parseOptionalJsonRequest(request, deleteSchema, { maxBytes: 8 * 1024 });
     const scheduleId = text(body.id ?? body.scheduleId ?? new URL(request.url).searchParams.get('id') ?? new URL(request.url).searchParams.get('scheduleId'));
-    if (!scheduleId) throw new ApiRequestError('计划 ID 不能为空', { code: 'schedule_id_required' });
+    if (!scheduleId) throw new ApiRequestError('计划 ID 不能为空', { code: ERROR_CODES.SCHEDULE_ID_REQUIRED });
     const userId = requestApplicationUserId(request);
     return runIdempotentJson(request, {
       fingerprint: idempotencyFingerprint({ scheduleId }),
@@ -118,7 +120,7 @@ export async function DELETE(request: Request) {
       userId,
     }, async () => {
       if (!await deleteAutomationSchedule(scheduleId, userId)) {
-        throw new ApiRequestError('自动化计划不存在', { code: 'not_found', status: 404 });
+        throw new ApiRequestError('自动化计划不存在', { code: ERROR_CODES.NOT_FOUND, status: 404 });
       }
       return apiJson(request, { ok: true, deleted: { id: scheduleId }, schedules: await listAutomationSchedules({ userId }) });
     });

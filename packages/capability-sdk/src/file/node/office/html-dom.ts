@@ -1,3 +1,5 @@
+
+import { CodedError, ERROR_CODES } from '../../../errors.ts';
 /** Public recursive shape so declaration emit can describe the browser result. */
 export type HtmlDocumentBlock<Style, Run> = {
   kind: 'paragraph' | 'image' | 'table';
@@ -161,7 +163,7 @@ export function collectHtmlDocument(options: { positionedText?: boolean } = {}) 
 /** Capture an asset's own paint, independently of overlapping page content. */
 export function serializeHtmlAsset(key: string) {
   const original = document.querySelector(`[data-office-asset="${key}"]`);
-  if (!original) throw new Error(`HTML asset is missing: ${key}`);
+  if (!original) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `HTML asset is missing: ${key}`);
   const clone = original.cloneNode(true) as HTMLElement | SVGElement;
   const originals = [original, ...original.querySelectorAll('*')];
   const clones = [clone, ...clone.querySelectorAll('*')];

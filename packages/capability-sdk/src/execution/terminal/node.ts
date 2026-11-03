@@ -12,6 +12,7 @@ import { terminalShellInvocation, terminalCommandInvocation, type TerminalShell 
 import { retainTerminalOutput, terminalGeometryAt, terminalGeometrySequence, type TerminalGeometry } from './geometry.ts';
 import { plainTerminalOutput, terminalOutputPage, type TerminalOutputOptions } from './output.ts';
 import { spawnPipeTerminal } from './pipe.ts';
+import { CodedError, ERROR_CODES } from '../../errors.ts';
 export type { TerminalShell } from './shell-integration.ts';
 
 const plainOutput = plainTerminalOutput;
@@ -59,7 +60,7 @@ export function createNodeTerminalOperations(initialOptions: NodeTerminalOptions
   const state = (s: TerminalSession) => emit({ type: 'state', terminal: copy(s) });
   const get = (id: string) => {
     const s = sessions.get(id);
-    if (!s) throw new Error('Terminal not found in this workspace. Use list to discover current terminals.');
+    if (!s) throw new CodedError(ERROR_CODES.TERMINAL_OPERATION_FAILED, 'Terminal not found in this workspace. Use list to discover current terminals.');
     return s;
   };
   const cleanupCommand = (s: TerminalSession) => {
@@ -158,7 +159,7 @@ export function createNodeTerminalOperations(initialOptions: NodeTerminalOptions
     let lastReport = 0;
     await new Promise<void>((resolve, reject) => {
       const finish = () => { clearTimeout(timer); events.off('update', update); context.abortSignal?.removeEventListener('abort', abort); resolve(); };
-      const abort = () => { finish(); reject(context.abortSignal?.reason || new Error('Terminal wait cancelled.')); };
+      const abort = () => { finish(); reject(context.abortSignal?.reason || new CodedError(ERROR_CODES.TERMINAL_OPERATION_FAILED, 'Terminal wait cancelled.')); };
       const update = (event: TerminalEvent) => {
         if (event.type === 'reset') { finish(); return; }
         if (event.type === 'deleted' || (event.type === 'state' ? event.terminal.terminalId : event.terminalId) !== s.summary.terminalId) return;
@@ -193,8 +194,8 @@ export function createNodeTerminalOperations(initialOptions: NodeTerminalOptions
   };
   const checkCapacity = () => {
     const max = normalizeBoundedInteger(options.maxProcesses, 4, 1, 16);
-    if (creating + [...sessions.values()].filter(s => s.summary.status !== 'closed').length >= max) throw new Error(`At most ${max} terminals may be open. Close one first.`);
-    if (sessions.size + creating >= 64) throw new Error('Delete a closed terminal before creating more terminals.');
+    if (creating + [...sessions.values()].filter(s => s.summary.status !== 'closed').length >= max) throw new CodedError(ERROR_CODES.TERMINAL_OPERATION_FAILED, `At most ${max} terminals may be open. Close one first.`);
+    if (sessions.size + creating >= 64) throw new CodedError(ERROR_CODES.TERMINAL_OPERATION_FAILED, 'Delete a closed terminal before creating more terminals.');
   };
   const reserveCreation = () => {
     checkCapacity(); creating++;
@@ -204,8 +205,8 @@ export function createNodeTerminalOperations(initialOptions: NodeTerminalOptions
   const resolveShell = (requested?: TerminalShell): Exclude<TerminalShell, 'auto'> => {
     const configured = requested || options.shell || 'auto';
     const shell = configured === 'auto' ? (process.platform === 'win32' ? 'powershell' : 'bash') : configured;
-    if (!['powershell', 'pwsh', 'bash'].includes(shell)) throw new Error('Unsupported terminal shell.');
-    if (process.platform === 'win32' && shell === 'bash') throw new Error('Windows terminals require PowerShell or pwsh for process-tree ownership.');
+    if (!['powershell', 'pwsh', 'bash'].includes(shell)) throw new CodedError(ERROR_CODES.TERMINAL_OPERATION_FAILED, 'Unsupported terminal shell.');
+    if (process.platform === 'win32' && shell === 'bash') throw new CodedError(ERROR_CODES.TERMINAL_OPERATION_FAILED, 'Windows terminals require PowerShell or pwsh for process-tree ownership.');
     return shell;
   };
 
@@ -223,7 +224,7 @@ export function createNodeTerminalOperations(initialOptions: NodeTerminalOptions
         cursor: s.summary.cursor, truncated: cursor < s.summary.startCursor };
     },
     async execute(request, context) {
-      if (disposed) throw new Error('Terminal manager is closed.');
+      if (disposed) throw new CodedError(ERROR_CODES.TERMINAL_OPERATION_FAILED, 'Terminal manager is closed.');
       context.abortSignal?.throwIfAborted();
       if (request.action === 'list') return { terminals: operations.list() };
       if (request.action === 'exec') {
@@ -232,11 +233,11 @@ export function createNodeTerminalOperations(initialOptions: NodeTerminalOptions
         let session: TerminalSession | undefined;
         try {
           const cwd = await realpath(path.resolve(options.cwd, request.cwd || '.'));
-          if (!(await stat(cwd)).isDirectory()) throw new Error('Terminal cwd must be a directory.');
+          if (!(await stat(cwd)).isDirectory()) throw new CodedError(ERROR_CODES.TERMINAL_OPERATION_FAILED, 'Terminal cwd must be a directory.');
           const shell = resolveShell(request.shell);
           directory = await mkdtemp(path.join(tmpdir(), 'orbit-terminal-'));
           context.abortSignal?.throwIfAborted();
-          if (disposed) throw new Error('Terminal manager is closed.');
+          if (disposed) throw new CodedError(ERROR_CODES.TERMINAL_OPERATION_FAILED, 'Terminal manager is closed.');
           const child = await spawnPipeTerminal(shell, request.command, directory, cwd, managedProcessEnvironment(options.env || process.env), context.abortSignal);
           let closed!: () => void;
           const s: TerminalSession = session = {
@@ -256,7 +257,7 @@ export function createNodeTerminalOperations(initialOptions: NodeTerminalOptions
           try {
             if (s.summary.command!.timeoutMs > 0) s.timer = setTimeout(() => interrupt(s, 'timed_out'), s.summary.command!.timeoutMs);
             context.abortSignal?.addEventListener('abort', abort, { once: true });
-            if (context.abortSignal?.aborted || disposed) { abort(); context.abortSignal?.throwIfAborted(); throw new Error('Terminal manager is closed.'); }
+            if (context.abortSignal?.aborted || disposed) { abort(); context.abortSignal?.throwIfAborted(); throw new CodedError(ERROR_CODES.TERMINAL_OPERATION_FAILED, 'Terminal manager is closed.'); }
             await wait(s, request.yieldMs ?? 1000, context);
             return await reply(s, 0, request);
           } finally { context.abortSignal?.removeEventListener('abort', abort); }
@@ -272,13 +273,13 @@ export function createNodeTerminalOperations(initialOptions: NodeTerminalOptions
         let s: TerminalSession | undefined;
         try {
           const cwd = await realpath(path.resolve(options.cwd, request.cwd || '.'));
-          if (!(await stat(cwd)).isDirectory()) throw new Error('Terminal cwd must be a directory.');
+          if (!(await stat(cwd)).isDirectory()) throw new CodedError(ERROR_CODES.TERMINAL_OPERATION_FAILED, 'Terminal cwd must be a directory.');
           const shell = resolveShell(request.shell);
           directory = await mkdtemp(path.join(tmpdir(), 'orbit-terminal-'));
           const nonce = randomUUID();
           const invocation = await terminalShellInvocation(shell, directory, nonce);
           context.abortSignal?.throwIfAborted();
-          if (disposed) throw new Error('Terminal manager is closed.');
+          if (disposed) throw new CodedError(ERROR_CODES.TERMINAL_OPERATION_FAILED, 'Terminal manager is closed.');
           const cols = request.cols || 100, rows = request.rows || 30;
           const child = await spawnTerminal(invocation.executable, invocation.args, {
             cwd, cols, rows, name: 'xterm-256color',
@@ -315,9 +316,9 @@ export function createNodeTerminalOperations(initialOptions: NodeTerminalOptions
           state(current);
           append(current, terminalGeometrySequence({ cols, rows }), true);
           releaseCreation();
-          if (disposed) throw new Error('Terminal manager is closed.');
+          if (disposed) throw new CodedError(ERROR_CODES.TERMINAL_OPERATION_FAILED, 'Terminal manager is closed.');
           await wait(current, 15000, context);
-          if (current.summary.status !== 'ready') throw new Error(`Terminal could not initialize: ${stripVTControlCharacters(current.output).slice(-2000)}`);
+          if (current.summary.status !== 'ready') throw new CodedError(ERROR_CODES.TERMINAL_OPERATION_FAILED, `Terminal could not initialize: ${stripVTControlCharacters(current.output).slice(-2000)}`);
           return reply(current);
         } catch (error) {
           if (s) { await close(s); sessions.delete(s.summary.terminalId); emit({ type: 'deleted', terminalId: s.summary.terminalId }); }
@@ -327,7 +328,7 @@ export function createNodeTerminalOperations(initialOptions: NodeTerminalOptions
       }
       const s = get(request.terminalId);
       if ((request.action === 'read' || request.action === 'wait') && request.commandId && request.commandId !== s.summary.command?.id) {
-        throw new Error('Terminal command changed. Read the current terminal state before continuing.');
+        throw new CodedError(ERROR_CODES.TERMINAL_OPERATION_FAILED, 'Terminal command changed. Read the current terminal state before continuing.');
       }
       if (request.action === 'delete') {
         await close(s); await rm(s.directory, { recursive: true, force: true });
@@ -339,10 +340,10 @@ export function createNodeTerminalOperations(initialOptions: NodeTerminalOptions
       if (request.action === 'rename') { s.summary.name = request.name; state(s); return { terminal: copy(s) }; }
       if (request.action === 'wait') {
         await wait(s, request.yieldMs ?? 30000, context);
-        if (request.commandId && request.commandId !== s.summary.command?.id) throw new Error('Terminal command changed while waiting.');
+        if (request.commandId && request.commandId !== s.summary.command?.id) throw new CodedError(ERROR_CODES.TERMINAL_OPERATION_FAILED, 'Terminal command changed while waiting.');
         return reply(s, request.cursor, request);
       }
-      if (s.summary.status === 'closed') throw new Error('Terminal is closed. Create a new terminal.');
+      if (s.summary.status === 'closed') throw new CodedError(ERROR_CODES.TERMINAL_OPERATION_FAILED, 'Terminal is closed. Create a new terminal.');
       if (request.action === 'resize') {
         await s.process.resize(request.cols, request.rows);
       } else if (request.action === 'interrupt') interrupt(s);
@@ -357,8 +358,8 @@ export function createNodeTerminalOperations(initialOptions: NodeTerminalOptions
         }
         s.process.write(request.input);
       } else if (request.action === 'run') {
-        if (s.summary.transport === 'pipe') throw new Error('exec uses a fresh shell. Use exec again, or create a reusable PTY.');
-        if (s.summary.status !== 'ready') throw new Error('Terminal is busy. Wait, send interactive input, interrupt it, or create another terminal.');
+        if (s.summary.transport === 'pipe') throw new CodedError(ERROR_CODES.TERMINAL_OPERATION_FAILED, 'exec uses a fresh shell. Use exec again, or create a reusable PTY.');
+        if (s.summary.status !== 'ready') throw new CodedError(ERROR_CODES.TERMINAL_OPERATION_FAILED, 'Terminal is busy. Wait, send interactive input, interrupt it, or create another terminal.');
         let cursor = s.summary.cursor;
         const command: TerminalCommand = { id: randomUUID(), command: request.command, startedAt: new Date().toISOString(),
           status: 'running', exitCode: null, timeoutMs: request.timeoutMs ?? normalizeBoundedInteger(options.timeoutMs, 0, 0, 3600000) };
@@ -368,7 +369,7 @@ export function createNodeTerminalOperations(initialOptions: NodeTerminalOptions
           const invocation = await terminalCommandInvocation(s.summary.shell, s.directory, s.nonce, command.id, request.command);
           s.files = invocation.files;
           context.abortSignal?.throwIfAborted();
-          if (isClosed(s)) throw new Error('Terminal was closed before the command started.');
+          if (isClosed(s)) throw new CodedError(ERROR_CODES.TERMINAL_OPERATION_FAILED, 'Terminal was closed before the command started.');
           if (s.interruption) { complete(s, 130); s.summary.status = 'ready'; state(s); return reply(s, cursor, request); }
           append(s, request.command + '\r\n'); s.suppressEcho = true;
           cursor = s.summary.cursor;

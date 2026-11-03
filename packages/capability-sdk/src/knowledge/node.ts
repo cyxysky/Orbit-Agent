@@ -4,6 +4,8 @@ import { createKnowledgeCapability, type KnowledgeStore } from './index.ts';
 import type { CapabilityRunContext } from '../index.ts';
 import type { KnowledgeDocument, KnowledgeDocumentSummary, KnowledgeSearchHit, KnowledgeFilter, KnowledgePackage, KnowledgePackageSummary } from './types.ts';
 import { parseKnowledgePackageArchive } from './package.ts';
+import { CodedError, ERROR_CODES } from '../errors.ts';
+
 
 function normalized(value: string) { return value.normalize('NFKC').toLowerCase(); }
 function aliases(document: KnowledgeDocument, chapterOnly = false): string[] {
@@ -68,7 +70,7 @@ export function createFileKnowledgeStore(input: { directory: string }): Knowledg
     directory: input.directory, filename: 'knowledge.db', legacyFilename: 'knowledge.json',
     readLegacy(value) {
       const file = value as { version?: number; documents?: KnowledgeDocument[] };
-      if (file.version !== 1 || !Array.isArray(file.documents)) throw new Error('Invalid knowledge store.');
+      if (file.version !== 1 || !Array.isArray(file.documents)) throw new CodedError(ERROR_CODES.KNOWLEDGE_OPERATION_FAILED, 'Invalid legacy knowledge store.');
       return file.documents;
     },
   });
@@ -160,7 +162,7 @@ export function createFileKnowledgeStore(input: { directory: string }): Knowledg
       database();
       return store.transaction(() => {
         const id = candidate.id?.trim() || 'knowledge_' + createHash('sha256').update((candidate.source || '') + '\0' + candidate.title).digest('hex').slice(0, 20);
-        if (store.get(id)?.packageId || candidate.packageId) throw new Error('Package records are managed through package imports.');
+        if (store.get(id)?.packageId || candidate.packageId) throw new CodedError(ERROR_CODES.KNOWLEDGE_OPERATION_FAILED, 'Package records are managed through package imports.');
         const previous = store.get(id), now = new Date().toISOString();
         const document: KnowledgeDocument = { ...candidate, id, createdAt: previous?.createdAt || now, updatedAt: now };
         store.save(document); index(document); return document;
@@ -262,7 +264,7 @@ export function createFileKnowledgeStore(input: { directory: string }): Knowledg
     async delete(id) {
       database();
       return store.transaction(db => {
-        if (store.get(id)?.packageId) throw new Error('Delete the package in settings to preserve its reference relationships.');
+        if (store.get(id)?.packageId) throw new CodedError(ERROR_CODES.KNOWLEDGE_OPERATION_FAILED, 'Delete the package in settings to preserve its reference relationships.');
         db.prepare('DELETE FROM knowledge_records WHERE document_id=?').run(id);
         db.prepare('DELETE FROM knowledge_substrings WHERE document_id=?').run(id);
         return Number(db.prepare('DELETE FROM records WHERE id=?').run(id).changes) > 0;

@@ -1,6 +1,7 @@
 import { cookies, headers } from 'next/headers';
 import { SIDEBAR_COLLAPSED_COOKIE_NAME, sidebarCollapsedFromCookie } from '@/lib/sidebar-collapse';
 import { readBackendJson } from './backend-http';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 
 function retryableBackendConnection(error: unknown) {
   const failure = error as { code?: string; cause?: { code?: string } } | undefined;
@@ -11,7 +12,7 @@ function retryableBackendConnection(error: unknown) {
 export async function readBackendPageData<T>(pathname: string): Promise<T> {
   const incoming = await headers();
   const origin = process.env.WEBPILOT_API_ORIGIN;
-  if (!origin) throw new Error('The Node API origin is not configured. Start the application with its public launcher.');
+  if (!origin) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'The Node API origin is not configured. Start the application with its public launcher.');
   const forwarded = new Headers();
   for (const name of ['x-webpilot-identity-user-id', 'x-webpilot-identity-username', 'x-webpilot-identity-roles', 'x-webpilot-identity-proof', 'cookie']) {
     const value = incoming.get(name);
@@ -35,7 +36,7 @@ export async function readBackendPageData<T>(pathname: string): Promise<T> {
       // These are read-only initialization requests. Never replay mutations or
       // conceal authorization/application errors while the API recovers.
       if (!retryableBackendConnection(error) || Date.now() + delay >= deadline) {
-        throw new Error(`Unable to read backend page data: ${pathname}`, { cause: error });
+        throw new CodedError(ERROR_CODES.APPLICATION_ERROR, `Unable to read backend page data: ${pathname}`, { cause: error });
       }
       await new Promise(resolve => setTimeout(resolve, delay));
       delay = Math.min(delay * 2, 1000);

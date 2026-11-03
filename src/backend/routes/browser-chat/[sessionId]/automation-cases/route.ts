@@ -5,6 +5,8 @@ import { requestApplicationUserId } from '@/server/auth/user-context';
 import { ApiRequestError, apiError, apiJson, parseJsonRequest } from '@/server/http/api-request';
 import { idempotencyFingerprint, runIdempotentJson } from '@/server/http/idempotency';
 import { createAutomationCase, listAutomationCases } from '@/server/storage/automation-store';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 
 type RouteContext = { params: Promise<{ sessionId: string }> };
@@ -25,7 +27,7 @@ export async function GET(request: Request, context: RouteContext) {
     const { sessionId } = await context.params;
     const userId = requestApplicationUserId(request);
     if (!await getBrowserChatSession(sessionId, userId)) {
-      throw new ApiRequestError('Browser chat session not found', { code: 'not_found', status: 404 });
+      throw new ApiRequestError('Browser chat session not found', { code: ERROR_CODES.NOT_FOUND, status: 404 });
     }
     return apiJson(request, { cases: await listAutomationCases({ userId, sourceSessionId: sessionId }) });
   } catch (error) {
@@ -44,7 +46,7 @@ export async function POST(request: Request, context: RouteContext) {
       userId,
     }, async () => {
       const session = await getBrowserChatSession(sessionId, userId);
-      if (!session) throw new ApiRequestError('Browser chat session not found', { code: 'not_found', status: 404 });
+      if (!session) throw new ApiRequestError('Browser chat session not found', { code: ERROR_CODES.NOT_FOUND, status: 404 });
       const compiled = compileConversationMessagesCase({
         session,
         assistantMessageIds: body.messageIds,

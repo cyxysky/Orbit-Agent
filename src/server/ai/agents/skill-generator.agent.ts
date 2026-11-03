@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { aiReasoningEffort, aiRequestTimeoutMs, aiTelemetry } from '@/server/ai/ai-sdk-runtime';
 import { getModel } from '@/server/ai/model';
 import { skillContentSchema, type SkillRecord, type StepExecutionResult } from '@/server/ai/schemas/runtime.schema';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 const generatedSkillSchema = z.object({
   title: z.string().min(2).max(80),
@@ -20,7 +22,7 @@ export function parseGeneratedSkillOutput(value: unknown) {
       .slice(0, 4)
       .map((issue) => `${issue.path.join('.') || 'root'}: ${issue.message}`)
       .join('; ');
-    throw new Error(`Skill model response is invalid: ${detail}`);
+    throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, `Skill model response is invalid: ${detail}`);
   }
   return parsed.data;
 }
@@ -109,7 +111,7 @@ export async function generateSkillFromBrowserHistory(input: {
   title: string;
 }): Promise<Omit<SkillRecord, 'id' | 'userId' | 'shared' | 'createdAt' | 'updatedAt' | 'version' | 'status'>> {
   const { steps } = input;
-  if (!steps.length) throw new Error('Run has no executable steps to convert into a skill.');
+  if (!steps.length) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Run has no executable steps to convert into a skill.');
   const diagnostics = input.status === 'passed'
     ? []
     : distinctText([

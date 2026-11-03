@@ -8,6 +8,8 @@ import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 import { AppInput } from '@/components/ui/app-input';
 import { AppModal } from '@/components/ui/app-modal';
 import { ExpandableActionLabel } from '@/components/ui/expandable-action-label';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 type DataTransferKind = 'credentials' | 'skills' | 'memory' | 'model';
 
@@ -124,7 +126,7 @@ export function DataTransferButtons({
   async function handleImportFile(file?: File) {
     if (!file) return;
     try {
-      if (file.size > maxImportBytes) throw new Error(t('导入文件不能超过 20 MB'));
+      if (file.size > maxImportBytes) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, t('导入文件不能超过 20 MB'));
       const bundle = JSON.parse(await file.text()) as unknown;
       if (encryptedTransfer) {
         setPassphrase('');

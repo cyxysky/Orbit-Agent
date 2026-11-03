@@ -6,6 +6,8 @@ import {
   type PersonalMemoryItem,
 } from './personal-memory';
 import { memoryCandidateSchema } from './personal-memory-policy';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export type PersonalMemoryToolContext = {
   userId?: unknown;
@@ -45,7 +47,7 @@ export function createPersonalMemoryTools(context: PersonalMemoryToolContext): T
     inputSchema,
     execute: async (input) => {
       if (input.action === 'search') {
-        if (!input.query) throw new Error('Memory search requires query.');
+        if (!input.query) throw new CodedError(ERROR_CODES.CONTEXT_READ_FAILED, 'Memory search requires query.');
         const results = await searchPersonalMemory({ userId, query: input.query,
           domain: normalizePersonalMemoryDomain(currentUrl()), limit: input.limit });
         const unused = results.map(({ item }) => item.id).filter((id) => !usedMemoryIds.has(id));
@@ -55,13 +57,13 @@ export function createPersonalMemoryTools(context: PersonalMemoryToolContext): T
         }
         return { items: results.map(({ item, score, reasons }) => ({ ...toolMemoryItem(item), score, reasons })) };
       }
-      if (context.readOnly) throw new Error('Personal memory tools are read-only in this agent.');
+      if (context.readOnly) throw new CodedError(ERROR_CODES.CONTEXT_READ_FAILED, 'Personal memory tools are read-only in this agent.');
       if (!context.sourceSessionId || !context.sourceMessageIds?.[0] || !context.userMessages?.length) {
-        throw new Error('Memory write requires an identified current user message.');
+        throw new CodedError(ERROR_CODES.CONTEXT_READ_FAILED, 'Memory write requires an identified current user message.');
       }
       const previous = input.id ? await getPersonalMemoryItem(input.id, userId) : undefined;
       if (input.action !== 'save' && (!previous || previous.userId !== userId)) {
-        throw new Error('Memory update/disable requires an existing memory owned by the current user.');
+        throw new CodedError(ERROR_CODES.CONTEXT_READ_FAILED, 'Memory update/disable requires an existing memory owned by the current user.');
       }
       const { action, query: _query, limit: _limit, id: _id, ...fields } = input;
       void _query; void _limit; void _id;
@@ -76,7 +78,7 @@ export function createPersonalMemoryTools(context: PersonalMemoryToolContext): T
           durability: 'user_correction', verification: [],
         } : {}),
       });
-      if (candidate.durability === 'verified_procedure') throw new Error('Procedural verification is collected from actual tool results after the turn.');
+      if (candidate.durability === 'verified_procedure') throw new CodedError(ERROR_CODES.CONTEXT_READ_FAILED, 'Procedural verification is collected from actual tool results after the turn.');
       const reviewed = await reviewPersonalMemoryCandidates({
         userId, currentUrl: currentUrl(), userMessage: context.userMessages[context.userMessages.length - 1],
         userMessageId: context.sourceMessageIds[0], sourceMessageIds: [context.sourceMessageIds[0]],

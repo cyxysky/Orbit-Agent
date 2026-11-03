@@ -8,6 +8,8 @@ import {
   defaultLiquidPiiModel,
   normalizedGlinerModelName,
 } from './config.ts';
+import { CodedError, ERROR_CODES } from '../errors.ts';
+
 
 export type GlinerRuntimeMode = 'auto' | 'local' | 'external';
 
@@ -166,12 +168,12 @@ async function waitForService(endpoint: string, child: ChildProcess, expectedRev
   const deadline = Date.now() + startupTimeoutMs();
   while (Date.now() < deadline) {
     if (child.exitCode !== null || child.killed) {
-      throw new Error('Local GLiNER process exited before becoming ready. Download the local components from Settings and check the startup output.');
+      throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, 'Local GLiNER process exited before becoming ready. Download the local components from Settings and check the startup output.');
     }
     if (await serviceHealthy(endpoint, 1_000, expectedRevision)) return endpoint;
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  throw new Error('Local GLiNER startup timed out. Loading local models can take several minutes; check the GLiNER startup output.');
+  throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, 'Local GLiNER startup timed out. Loading local models can take several minutes; check the GLiNER startup output.');
 }
 
 async function startManagedSidecar(
@@ -183,7 +185,7 @@ async function startManagedSidecar(
   if (await serviceHealthy(endpoint, 800, serviceRevision)) return endpoint;
   const url = new URL(endpoint);
   if (url.protocol !== 'http:' || !isLoopbackHost(url.hostname)) {
-    throw new Error('Managed local GLiNER requires a loopback HTTP GLINER_SERVICE_URL.');
+    throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, 'Managed local GLiNER requires a loopback HTTP GLINER_SERVICE_URL.');
   }
   const port = Number(url.port || 80);
   const pythonCommand = resolvePythonCommand(projectRoot, String(process.env.GLINER_PYTHON_PATH || '').trim());
@@ -206,7 +208,7 @@ async function startManagedSidecar(
     relativePath: ['models', 'liquid-pii'],
   });
   if (!modelBundleDirectory || !chineseNerModelBundleDirectory || !piiModelBundleDirectory) {
-    throw new Error('Local sensitive-data models are not installed. Open Settings → Security & privacy → Local sensitive-data runtime and click Download.');
+    throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, 'Local sensitive-data models are not installed. Open Settings → Security & privacy → Local sensitive-data runtime and click Download.');
   }
   const modelCacheDirectory = String(process.env.GLINER_MODEL_CACHE_DIR || '').trim()
     || path.join(runtimeDirectory(), 'sensitive-data', 'huggingface');
@@ -278,7 +280,7 @@ export async function prepareGlinerService(endpoint: string) {
     return endpoint;
   }
   if (!serviceDirectory) {
-    throw new Error('Local GLiNER service files were not found. Set GLINER_SERVICE_DIR or use GLINER_RUNTIME_MODE=external.');
+    throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, 'Local GLiNER service files were not found. Set GLINER_SERVICE_DIR or use GLINER_RUNTIME_MODE=external.');
   }
   const serviceRevision = localGlinerServiceRevision(serviceDirectory);
   if (runtimeState.child && (runtimeState.endpoint !== endpoint || runtimeState.revision !== serviceRevision)) {

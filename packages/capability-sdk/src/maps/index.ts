@@ -4,6 +4,8 @@ import { defineCapabilityInput, defineCapabilityTool, type CapabilityManifest, t
 import { mapIdSchema, mapRequestSchema, MapsError, type MapStore, type MapRecord, type MapView } from './core.ts';
 import { createGoogleMapsClient, type GoogleMapsOptions } from './google.ts';
 import { mapsCapabilitySettings } from './settings.ts';
+import { ERROR_CODES } from '../errors.ts';
+
 export * from './core.ts';
 export * from './google.ts';
 export * from './settings.ts';
@@ -42,7 +44,7 @@ export function createMapsTool(store: MapStore, options: GoogleMapsOptions, onVi
         context.abortSignal?.throwIfAborted();
         if (input.mapId) {
           const record = await store.read(input.mapId);
-          return record ? { ok: true, summary: 'Saved map request.', data: record, content: [{ type: 'response', block: mapResponseBlock(record) }] } : { ok: false, error: { code: 'maps-not-found', message: '地图不存在。' } };
+          return record ? { ok: true, summary: 'Saved map request.', data: record, content: [{ type: 'response', block: mapResponseBlock(record) }] } : { ok: false, error: { code: ERROR_CODES.MAPS_NOT_FOUND, message: '地图不存在。' } };
         }
         const request = mapRequestSchema.parse(input.request);
         const view = await client.resolve(request, context.abortSignal);
@@ -56,7 +58,7 @@ export function createMapsTool(store: MapStore, options: GoogleMapsOptions, onVi
           content: [{ type: 'response', block: mapResponseBlock(record) }] };
       } catch (error) {
         context.abortSignal?.throwIfAborted();
-        return { ok: false, error: { code: error instanceof MapsError ? error.code : 'maps-operation-failed', message: error instanceof MapsError ? error.message : '地图操作失败，请检查输入或存储服务。', retryable: false } };
+        return { ok: false, error: { code: error instanceof MapsError ? error.code : ERROR_CODES.MAPS_OPERATION_FAILED, message: error instanceof MapsError ? error.message : '地图操作失败，请检查输入或存储服务。', retryable: false } };
       }
     },
   });

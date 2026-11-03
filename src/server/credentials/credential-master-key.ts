@@ -2,6 +2,8 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { appDataRoot } from '@/server/storage/paths';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 const credentialMasterKeyFileName = 'credential-master.key';
 let cachedCredentialMasterKey: Buffer | undefined;
@@ -31,7 +33,7 @@ function configuredCredentialMasterKey(value: string) {
 
 function readGeneratedCredentialMasterKey(filePath: string) {
   const decoded = Buffer.from(readFileSync(filePath, 'utf8').trim(), 'base64');
-  if (decoded.length !== 32) throw new Error('本地凭据主密钥文件无效');
+  if (decoded.length !== 32) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '本地凭据主密钥文件无效');
   return decoded;
 }
 
@@ -108,10 +110,10 @@ export function decryptCredentialSecret(input: {
   try {
     parsed = JSON.parse(input.envelope);
   } catch {
-    throw new Error(input.formatError);
+    throw new CodedError(ERROR_CODES.APPLICATION_ERROR, input.formatError);
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error(input.formatError);
+    throw new CodedError(ERROR_CODES.APPLICATION_ERROR, input.formatError);
   }
   const envelope = parsed as Partial<CredentialEnvelope>;
   if (envelope.v !== 1
@@ -120,11 +122,11 @@ export function decryptCredentialSecret(input: {
     || typeof envelope.iv !== 'string'
     || typeof envelope.tag !== 'string'
     || typeof envelope.ciphertext !== 'string') {
-    throw new Error(input.formatError);
+    throw new CodedError(ERROR_CODES.APPLICATION_ERROR, input.formatError);
   }
   const key = credentialMasterKey();
   if (envelope.kid !== credentialMasterKeyId(key)) {
-    throw new Error(input.keyMismatchError || input.formatError);
+    throw new CodedError(ERROR_CODES.APPLICATION_ERROR, input.keyMismatchError || input.formatError);
   }
   try {
     const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(envelope.iv, 'base64'));
@@ -135,6 +137,6 @@ export function decryptCredentialSecret(input: {
       decipher.final(),
     ]).toString('utf8');
   } catch {
-    throw new Error(input.decryptionError);
+    throw new CodedError(ERROR_CODES.APPLICATION_ERROR, input.decryptionError);
   }
 }

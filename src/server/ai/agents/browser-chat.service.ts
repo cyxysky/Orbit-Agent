@@ -1,4 +1,5 @@
 import { normalizeReasoningEffort, type ReasoningEffortSetting } from '@/lib/reasoning-effort';
+import { recoverCodexBrowserChatOutputCycles } from './browser-chat-codex-output-recovery';
 import { normalizeBrowserChatInteractionMode, type BrowserChatInteractionMode } from '@/lib/browser-chat-interaction-mode';
 import { enqueueMemoryJob } from '../runtime-memory-lifecycle';
 import { browserChatHasPendingHumanInput } from '@/lib/browser-chat-tools';
@@ -145,6 +146,7 @@ import {
 } from '@/server/ai/agents/browser-chat-client-window';
 import {
   browserChatAiOutputCycleFromDebugEvent,
+  mergeBrowserChatAiOutputCycles,
   mergeBrowserChatStreamPart,
   sortBrowserChatAiOutputCycles,
   stringFromUnknown as textFromUnknown,
@@ -198,6 +200,8 @@ import {
   listLoginAccounts,
   resolveLoginAccountCredentialById,
 } from '@/server/credentials/login-account-vault';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export type { BrowserChatAttachment } from '@/server/ai/agents/browser-chat-attachments';
 
@@ -252,6 +256,7 @@ export type BrowserChatToolConfirmation = {
   subagentId?: string;
   stepIndex?: number;
   toolName: string;
+  action?: string;
   inputSignature: string;
   reason?: string;
   prompt: string;
@@ -300,6 +305,8 @@ export type BrowserChatContextUsage = {
   maxTokens: number;
   textTokens: number;
   toolTokens: number;
+  breakdownAvailable?: boolean;
+  method?: string;
 };
 
 type BrowserChatPersistedSessionSnapshot = BrowserChatSessionSnapshot & {
@@ -964,7 +971,7 @@ async function browserChatModelSettings(providerInput?: unknown, modelInput?: un
   await store.applyRuntimeEnv();
   const config = await store.getModelConfig();
   if (!enabledModelProviders(config).length) {
-    throw new Error('尚未启用模型服务商，请先在模型配置中开启至少一个服务商。');
+    throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, '尚未启用模型服务商，请先在模型配置中开启至少一个服务商。');
   }
   const selection = resolveRuntimeModelSelection(config, {
     fallbackProvider: config?.provider,
@@ -993,8 +1000,9 @@ function normalizeToolConfirmation(value: unknown): BrowserChatToolConfirmation 
     stepIndex: typeof record.stepIndex === 'number' && Number.isFinite(record.stepIndex) ? Math.floor(record.stepIndex) : undefined,
     toolName,
     inputSignature,
+    action: typeof record.action === 'string' ? record.action : undefined,
     reason: typeof record.reason === 'string' && record.reason.trim() ? compactText(record.reason, 300) : undefined,
-    prompt: toolName === 'novel' ? prompt : compactText(prompt, 500),
+    prompt: compactText(prompt, 500),
     screenshotUrl: typeof record.screenshotUrl === 'string' && record.screenshotUrl.trim()
       ? record.screenshotUrl.trim()
       : undefined,
@@ -1218,7 +1226,7 @@ function normalizeSkillIds(value: unknown) {
   const ids = Array.from(new Set(value
     .map((item) => typeof item === 'string' ? item.trim() : '')
     .filter(Boolean)));
-  if (ids.length > 200) throw new Error('A message can select at most 200 Skills.');
+  if (ids.length > 200) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'A message can select at most 200 Skills.');
   return ids;
 }
 
@@ -1365,7 +1373,7 @@ async function createBrowserChatRuntimeOperationalContext(input: {
         },
       } };
     } else input.session.modelContext = { ...input.session.modelContext, knowledge };
-    if (!(await persistBrowserChatCheckpoint(input.session.id))) throw new Error('Failed to persist active Skill versions.');
+    if (!(await persistBrowserChatCheckpoint(input.session.id))) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Failed to persist active Skill versions.');
   };
   const resolver = createRuntimeKnowledgeResolver({
     scopeId, query, selectedSkillIds: input.explicitlySelectedSkillIds || (input.explicitlySelectedSkills || []).map((skill) => skill.id),
@@ -1705,7 +1713,7 @@ function compactBrowserChatSubagentRecord(record: BrowserChatSubagentRecord): Br
   return {
     ...record,
     steps: compactBrowserChatSubagentSteps(record.steps).map(compactStepForRealtime),
-    outputCycles: trimBrowserChatOutputCycles(record.outputCycles || []).map(compactOutputCycleForRealtime),
+    outputCycles: trimBrowserChatOutputCycles(mergeBrowserChatAiOutputCycles(record.outputCycles || [])).map(compactOutputCycleForRealtime),
     messages: record.messages.map((message) => ({
       ...message,
       content: compactRealtimeValue(message.content),
@@ -1800,24 +1808,13 @@ function browserChatContextUsage(session: BrowserChatSessionRecord): BrowserChat
     return activeBrowserChatContextUsage(session, fallbackMax);
   }
   if (session.contextUsage && session.contextUsage.currentTokens > 0) {
-    return { ...session.contextUsage, maxTokens: fallbackMax };
+    return session.contextUsage;
   }
   for (let index = session.steps.length - 1; index >= 0; index -= 1) {
     const rawStats = session.steps[index]?.aiRequest?.options?.modelContextStats;
     if (!rawStats || typeof rawStats !== 'object' || Array.isArray(rawStats)) continue;
-    const stats = rawStats as Record<string, unknown>;
-    const currentTokens = Number(stats.estimatedTotalTokens);
-    if (!Number.isFinite(currentTokens) || currentTokens < 0) continue;
-    const textTokens = Number(stats.estimatedTextTokens);
-    const imageTokens = Number(stats.estimatedImageTokens);
-    const toolTokens = Number(stats.estimatedToolSchemaTokens);
-    return {
-      currentTokens: Math.round(currentTokens),
-      imageTokens: Number.isFinite(imageTokens) && imageTokens > 0 ? Math.round(imageTokens) : 0,
-      maxTokens: fallbackMax,
-      textTokens: Number.isFinite(textTokens) && textTokens > 0 ? Math.round(textTokens) : 0,
-      toolTokens: Number.isFinite(toolTokens) && toolTokens > 0 ? Math.round(toolTokens) : 0,
-    };
+    const usage = browserChatContextUsageFromDebugRecord({ modelContextStats: rawStats }, fallbackMax);
+    if (usage) return usage;
   }
   const activeMessages = browserChatActiveMessages(session.modelContext).length
     ? browserChatActiveMessages(session.modelContext)
@@ -2456,7 +2453,10 @@ function recordFromSnapshot(
     reasoningEffort: normalizeReasoningEffort(session.reasoningEffort),
     messages,
     steps: compactBrowserChatStepsForRuntime(steps),
-    outputCycles: trimBrowserChatOutputCycles(session.outputCycles || []),
+    outputCycles: trimBrowserChatOutputCycles(recoverCodexBrowserChatOutputCycles(
+      (session.modelContext?.history || []).flatMap(ref => session.modelContext?.records[ref] ? [session.modelContext.records[ref]] : []),
+      steps, session.outputCycles || [],
+    )),
     subagents: (session.subagents || []).map((record) => browserChatRecoveredSubagentRecord(session.id, record)),
     queuedTurns: session.queuedTurns || [],
     modelContext: normalizeBrowserChatModelContext(session.modelContext),
@@ -2684,7 +2684,10 @@ function writeSessionSnapshot(item: BrowserChatPersistedSessionSnapshot): Browse
     persistenceChanges,
   );
   trackSessionDatabaseWrite(item.id, databaseWrite);
-  void publishRealtimeRefreshEvent(realtimeEvent).catch(() => undefined);
+  // A refresh may make the client read the database. Publish only after commit,
+  // and keep delivery failures separate from durable checkpoint failures.
+  void databaseWrite.then(() => publishRealtimeRefreshEvent(realtimeEvent), () => undefined)
+    .catch(error => warnPersistFailure(error));
   if (dirtyRecords.has(item.id)) {
     advancePersistenceCursor(persistedItem, persistenceChanges);
     dirtyRecords.delete(item.id);
@@ -3472,9 +3475,9 @@ export async function createBrowserChatSession(input: {
   if (input.selectRuntime !== false && previouslySelectedSessionId && previouslySelectedSessionId !== session.id) {
     scheduleBrowserChatSessionEviction(previouslySelectedSessionId);
   }
-  if (!(await persistAndNotify(session.id))) throw new Error('Failed to persist the new browser chat session.');
+  if (!(await persistAndNotify(session.id))) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Failed to persist the new browser chat session.');
   const pendingWrite = pendingDatabaseWrites.get(session.id);
-  if (pendingWrite && !(await pendingWrite)) throw new Error('Failed to persist the new browser chat session.');
+  if (pendingWrite && !(await pendingWrite)) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Failed to persist the new browser chat session.');
   return clientSnapshot(session);
 }
 
@@ -3545,7 +3548,7 @@ export async function setBrowserChatSessionGroup(sessionId: string, groupId: str
   const session = await hydrateSession(sessionId);
   if (!session || !sessionBelongsToUser(session, userId)) return undefined;
   const normalized = groupId.trim();
-  if (!/^[a-zA-Z0-9:_-]{1,160}$/.test(normalized)) throw new Error('Invalid browser group id');
+  if (!/^[a-zA-Z0-9:_-]{1,160}$/.test(normalized)) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Invalid browser group id');
   session.browserGroupId = normalized;
   session.updatedAt = now();
   persistAndNotify(session.id);
@@ -3556,7 +3559,7 @@ export async function updateBrowserChatSessionTitle(sessionId: string, title: st
   const session = await hydrateSession(sessionId);
   if (!session || !sessionBelongsToUser(session, userId)) return undefined;
   const normalized = title.trim();
-  if (!normalized || normalized.length > 240) throw new Error('Invalid browser chat session title');
+  if (!normalized || normalized.length > 240) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Invalid browser chat session title');
   session.title = normalized;
   session.titleFileName = undefined;
   session.updatedAt = now();
@@ -3567,22 +3570,22 @@ export async function updateBrowserChatSessionTitle(sessionId: string, title: st
 export async function updateBrowserChatSessionReasoning(sessionId: string, reasoningEffort: ReasoningEffortSetting, userId?: string | number) {
   const session = await hydrateSession(sessionId);
   if (!session || !sessionBelongsToUser(session, userId)) return undefined;
-  if (browserChatSessionHasActiveRuntimeWork(session)) throw new ApiRequestError('请等待当前执行结束后调整思考强度。', { status: 409, code: 'session_busy' });
+  if (browserChatSessionHasActiveRuntimeWork(session)) throw new ApiRequestError('请等待当前执行结束后调整思考强度。', { status: 409, code: ERROR_CODES.SESSION_BUSY });
   session.reasoningEffort = normalizeReasoningEffort(reasoningEffort);
   session.updatedAt = now();
   persistAndNotify(session.id);
-  if (!await persistBrowserChatCheckpoint(session.id)) throw new Error('无法保存思考强度。');
+  if (!await persistBrowserChatCheckpoint(session.id)) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, '无法保存思考强度。');
   return clientSnapshot(session);
 }
 
 export async function updateBrowserChatSessionTools(sessionId: string, disabledTools: string[], userId?: string | number) {
   const session = await hydrateSession(sessionId);
   if (!session || !sessionBelongsToUser(session, userId)) return undefined;
-  if (browserChatSessionHasActiveRuntimeWork(session)) throw new ApiRequestError('请等待当前执行结束后调整工具。', { status: 409, code: 'session_busy' });
+  if (browserChatSessionHasActiveRuntimeWork(session)) throw new ApiRequestError('请等待当前执行结束后调整工具。', { status: 409, code: ERROR_CODES.SESSION_BUSY });
   session.disabledTools = normalizeDisabledCapabilityTools(disabledTools);
   session.updatedAt = now();
   persistAndNotify(session.id);
-  if (!await persistBrowserChatCheckpoint(session.id)) throw new Error('无法保存工具设置。');
+  if (!await persistBrowserChatCheckpoint(session.id)) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, '无法保存工具设置。');
   return session.disabledTools;
 }
 
@@ -3644,7 +3647,7 @@ export async function selectBrowserChatSubagentPreview(sessionId: string, subage
     if (!binding || blockedSubagents.get(normalizedId) !== binding || binding.sessionId !== session.id
       || record?.status !== 'blocked' || !binding.browser.isUsable()
       || !browserChatHasPendingHumanInput(binding.steps.flatMap((step) => step.tools || []))) {
-      throw new ApiRequestError('该子 Agent 当前没有可打开的人工验证页面。', { status: 409, code: 'subagent_preview_unavailable' });
+      throw new ApiRequestError('该子 Agent 当前没有可打开的人工验证页面。', { status: 409, code: ERROR_CODES.SUBAGENT_PREVIEW_UNAVAILABLE });
     }
   };
   assertBinding();
@@ -3743,7 +3746,7 @@ export async function closeBrowserChatSession(sessionId: string, userId?: string
   const session = await hydrateSession(sessionId);
   if (!session) return undefined;
   if (!sessionBelongsToUser(session, userId)) return undefined;
-  await stopBrowserChatRuntime(session, new Error('Browser chat session closed by user.'));
+  await stopBrowserChatRuntime(session, new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Browser chat session closed by user.'));
   session.closedAt = now();
   session.updatedAt = session.closedAt;
   persistAndNotify(session.id);
@@ -3772,7 +3775,7 @@ export async function closeBrowserChatRuntimeBrowser(browserId: string) {
   const session = sessions.get(id);
   if (!session?.browser) return false;
   if (browserChatSessionHasActiveRuntimeWork(session)) {
-    await stopBrowserChatRuntime(session, new Error('Test browser closed by administrator.'), { forceBrowser: true });
+    await stopBrowserChatRuntime(session, new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Test browser closed by administrator.'), { forceBrowser: true });
     transitionBrowserChatSession(session, { type: 'sessionRecovered', at: now() });
   } else {
     const browser = restoreBrowserSessionPrototype(session.browser);
@@ -3804,7 +3807,7 @@ export async function deleteBrowserChatSession(sessionId: string, userId?: strin
   const pendingWrite = pendingDatabaseWrites.get(sessionId);
   if (!persisted || (pendingWrite && !(await pendingWrite))) {
     sessions.set(sessionId, removed.session);
-    throw new Error('Browser chat session was removed from memory, but the database could not be updated.');
+    throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Browser chat session was removed from memory, but the database could not be updated.');
   }
   await deleteBrowserChatArtifacts(sessionId).catch((error) => warnPersistFailure(error));
   return removed.deleted;
@@ -3815,15 +3818,15 @@ export async function switchBrowserChatTab(sessionId: string, tabId: string, use
   if (!session || session.status === 'closed') return undefined;
   if (!sessionBelongsToUser(session, userId)) return undefined;
   const normalizedTabId = String(tabId || '').trim();
-  if (!normalizedTabId) throw new Error('Invalid tab id');
+  if (!normalizedTabId) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Invalid tab id');
 
   const browser = browserChatPreviewBrowser(session);
   if (!browser || !browser.isUsable()) {
-    throw new Error('当前会话还没有运行中的浏览器，无法切换标签页。');
+    throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, '当前会话还没有运行中的浏览器，无法切换标签页。');
   }
   const result = await browser.switchLivePreviewTab(normalizedTabId);
   if (!result?.ok) {
-    throw new Error(`Switch tab failed: ${result?.actual || 'Unknown error'}`);
+    throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, `Switch tab failed: ${result?.actual || 'Unknown error'}`);
   }
 
   if (browser === session.browser) {
@@ -3855,7 +3858,7 @@ export async function startBrowserChatScreencast(
 
   const browser = browserChatPreviewBrowser(session);
   if (!browser || !browser.isUsable()) {
-    throw new Error('浏览器未运行。输入网址或点击“新增标签页”启动浏览器。');
+    throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, '浏览器未运行。输入网址或点击“新增标签页”启动浏览器。');
   }
   const userKey = browserChatUserRuntimeKey(session.userId);
   cancelBrowserChatUserIdleClose(userKey);
@@ -3919,11 +3922,11 @@ export async function dispatchBrowserChatPreviewInput(
     && input.kind === 'browserControl'
     && (input.action === 'navigate' || input.action === 'open')) {
     browser = await ensureStarted(session, () => {
-      if (session.status === 'closed') throw new Error('Browser chat session is closed');
+      if (session.status === 'closed') throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Browser chat session is closed');
     }, { preferExistingPage: true });
   }
   if (!browser || !browser.isUsable()) {
-    throw new Error('当前会话还没有运行中的浏览器，无法操作实时界面。');
+    throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, '当前会话还没有运行中的浏览器，无法操作实时界面。');
   }
 
   let resolvedInput = input;
@@ -3968,7 +3971,7 @@ export async function dispatchBrowserChatPreviewInput(
 async function deleteBrowserChatSessionFromMemory(sessionId: string) {
   const session = sessions.get(sessionId);
   if (!session) return undefined;
-  await stopBrowserChatRuntime(session, new Error('Browser chat session deleted by user.'));
+  await stopBrowserChatRuntime(session, new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Browser chat session deleted by user.'));
   cancelBrowserChatSessionEviction(sessionId);
   const userKey = browserChatUserRuntimeKey(session.userId);
   if (selectedSessionIds.get(userKey) === sessionId) selectedSessionIds.delete(userKey);
@@ -4026,7 +4029,7 @@ export async function deleteBrowserChatSessions(sessionIds: string[], userId?: s
     const writesSucceeded = persisted && (await Promise.all(pendingWrites)).every(Boolean);
     if (!writesSucceeded) {
       for (const item of removed) sessions.set(item.deleted.id, item.session);
-      throw new Error('Browser chat sessions were removed from memory, but the database could not be updated.');
+      throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Browser chat sessions were removed from memory, but the database could not be updated.');
     }
     await Promise.all(removed.map((item) => deleteBrowserChatArtifacts(item.deleted.id).catch((error) => warnPersistFailure(error))));
   }
@@ -4044,16 +4047,16 @@ export async function generateBrowserChatMessagesSkill(
     ? await durableBrowserChatSnapshot(runtimeSession)
     : await readSessionSnapshot(sessionId);
   const session = persistedSession ? recordFromSnapshot(persistedSession) : undefined;
-  if (!session || !sessionBelongsToUser(session, userId)) throw new Error('Browser chat session not found');
+  if (!session || !sessionBelongsToUser(session, userId)) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Browser chat session not found');
   const uniqueMessageIds = Array.from(new Set(messageIds.map((item) => item.trim()).filter(Boolean)));
-  if (!uniqueMessageIds.length) throw new Error('请选择要生成 Skill 的对话轮次');
+  if (!uniqueMessageIds.length) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, '请选择要生成 Skill 的对话轮次');
 
   const selectedIdSet = new Set(uniqueMessageIds);
   const selectedMessages = session.messages
     .map((message, index) => ({ message, index }))
     .filter((item) => selectedIdSet.has(item.message.id) && item.message.role === 'assistant');
-  if (!selectedMessages.length) throw new Error('请选择可生成 Skill 的 AI 回复消息');
-  if (selectedMessages.some((item) => item.message.status === 'running')) throw new Error('请等待所选对话轮次执行完成后再生成 Skill');
+  if (!selectedMessages.length) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, '请选择可生成 Skill 的 AI 回复消息');
+  if (selectedMessages.some((item) => item.message.status === 'running')) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, '请等待所选对话轮次执行完成后再生成 Skill');
 
   const selectedStepIndexSet = new Set<number>();
   for (const { message } of selectedMessages) {
@@ -4068,7 +4071,7 @@ export async function generateBrowserChatMessagesSkill(
       index: index + 1,
       status: step.status === 'running' ? 'passed' : step.status,
     }));
-  if (!selectedSteps.length) throw new Error('选中的对话轮次没有可生成 Skill 的执行步骤');
+  if (!selectedSteps.length) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, '选中的对话轮次没有可生成 Skill 的执行步骤');
 
   const targetUrl = exportedTargetUrl(session, selectedSteps);
   const turnDescriptions = selectedMessages.map(({ message, index }, turnIndex) => {
@@ -4246,15 +4249,15 @@ export async function sendBrowserChatMessage(
   reasoningEffort?: ReasoningEffortSetting,
 ) {
   const session = await hydrateSession(sessionId);
-  if (!session) throw new Error('Browser chat session not found');
-  if (!sessionBelongsToUser(session, userId)) throw new Error('Browser chat session not found');
-  if (session.status === 'closed') throw new Error('Browser chat session is closed');
+  if (!session) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Browser chat session not found');
+  if (!sessionBelongsToUser(session, userId)) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Browser chat session not found');
+  if (session.status === 'closed') throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Browser chat session is closed');
   const text = textFromUnknown(content).trim();
   const attachments = normalizeAttachments(attachmentsInput, session.userId);
   const skillIds = normalizeSkillIds(skillIdsInput);
   const selectedSkills = (await store.getSkills(skillIds, session.userId)).filter((skill) => skill.status === 'ready');
   if (selectedSkills.length !== skillIds.length) throw new ApiRequestError('选择的 Skill 已停用、已删除或无权访问，请重新选择。');
-  if (!text && !attachments.length && !selectedSkills.length) throw new Error('Message is empty');
+  if (!text && !attachments.length && !selectedSkills.length) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Message is empty');
   const messageText = text || (selectedSkills.length ? '请结合已选择的 Skills 继续处理当前任务。' : '请结合我提供的引用继续处理当前任务。');
   const firstMessageTitleText = text || (attachments.length ? '' : messageText);
   const skillReferences = formatSkillReferencesForUser(selectedSkills);
@@ -4274,7 +4277,7 @@ export async function sendBrowserChatMessage(
   if (attachments.some(isBrowserChatImageAttachment) && !requestedModelSettings.supportsImageInput) {
     throw new ApiRequestError(
       `模型 ${requestedModelSettings.model} 未配置图片输入能力，请在“模型配置”中启用后再上传图片。`,
-      { code: 'model_image_input_unsupported', status: 400 },
+      { code: ERROR_CODES.MODEL_IMAGE_INPUT_UNSUPPORTED, status: 400 },
     );
   }
   let paused = !session.busy && session.turnState === 'awaiting_human'
@@ -4283,7 +4286,7 @@ export async function sendBrowserChatMessage(
     const selected = blockedSubagents.get(subagentId.trim());
     if (!paused || !selected || selected.sessionId !== session.id || selected.assistantMessageId !== paused.message.id
       || !browserChatHasPendingHumanInput(selected.steps.flatMap((step) => step.tools || []))) {
-      throw new ApiRequestError('该子 Agent 当前没有等待用户回复的任务。', { status: 409, code: 'subagent_not_waiting' });
+      throw new ApiRequestError('该子 Agent 当前没有等待用户回复的任务。', { status: 409, code: ERROR_CODES.SUBAGENT_NOT_WAITING });
     }
     paused = { ...paused, subagent: selected };
   }
@@ -4372,7 +4375,7 @@ export async function sendBrowserChatMessage(
     || startingQueuedBrowserChatTurns.has(session.id)
   ) {
     if (session.queuedTurns.length >= browserChatQueuedTurnLimit) {
-      throw new Error(`Browser chat message queue is full (${browserChatQueuedTurnLimit})`);
+      throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, `Browser chat message queue is full (${browserChatQueuedTurnLimit})`);
     }
     const queuedAt = nextBrowserChatMessageTimestamp(session);
     const firstUserMessage = !session.messages.some((message) => message.role === 'user');
@@ -4505,7 +4508,7 @@ export async function deleteQueuedBrowserChatMessage(
   ));
   if (queuedTurnIndex < 0 || messageIndex < 0) {
     throw new ApiRequestError('Only messages that are still queued can be deleted', {
-      code: 'queued_message_not_deletable',
+      code: ERROR_CODES.QUEUED_MESSAGE_NOT_DELETABLE,
       status: 409,
     });
   }
@@ -4545,16 +4548,16 @@ function latestManualVerificationAssistant(session: BrowserChatSessionRecord) {
 
 export async function resumeBrowserChatHumanVerification(sessionId: string, userId?: string | number, subagentId?: string) {
   const session = await hydrateSession(sessionId);
-  if (!session || !sessionBelongsToUser(session, userId)) throw new Error('Browser chat session not found');
-  if (session.status === 'closed') throw new Error('Browser chat session is closed');
-  if (session.busy) throw new Error('Browser chat session is already running');
+  if (!session || !sessionBelongsToUser(session, userId)) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Browser chat session not found');
+  if (session.status === 'closed') throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Browser chat session is closed');
+  if (session.busy) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Browser chat session is already running');
   const paused = latestManualVerificationAssistant(session);
-  if (!paused) throw new Error('当前对话没有等待人工校验的 AI 回合');
+  if (!paused) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, '当前对话没有等待人工校验的 AI 回合');
   const selectedSubagent = subagentId?.trim() ? blockedSubagents.get(subagentId.trim()) : paused.subagent;
   if (subagentId?.trim() && (!selectedSubagent || selectedSubagent.sessionId !== session.id
     || selectedSubagent.assistantMessageId !== paused.message.id
     || !browserChatHasPendingHumanInput(selectedSubagent.steps.flatMap((step) => step.tools || [])))) {
-    throw new Error('该子 Agent 当前没有等待人工校验的任务');
+    throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, '该子 Agent 当前没有等待人工校验的任务');
   }
   let userMessage: BrowserChatMessage | undefined;
   for (let index = paused.messageIndex - 1; index >= 0; index -= 1) {
@@ -4563,7 +4566,7 @@ export async function resumeBrowserChatHumanVerification(sessionId: string, user
       break;
     }
   }
-  if (!userMessage) throw new Error('无法找到当前 AI 回合对应的用户请求');
+  if (!userMessage) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, '无法找到当前 AI 回合对应的用户请求');
 
   const timestamp = now();
   const abortController = new AbortController();
@@ -4660,7 +4663,10 @@ function upsertBrowserChatOutputCycle(session: BrowserChatSessionRecord, cycle: 
       ? Math.max(highest, item.sequence)
       : highest
   ), 0);
-  const existingIndex = outputCycles.findIndex((item) => item.id === cycle.id);
+  const existingIndex = outputCycles.findIndex((item) => item.id === cycle.id
+    || (cycle.id.startsWith('cycle_codex_') && item.messageId === cycle.messageId
+      && item.stepIndex === cycle.stepIndex && item.agentStepIndex === cycle.agentStepIndex
+      && item.subagentId === cycle.subagentId && item.batchId === cycle.batchId));
   const existing = existingIndex >= 0 ? outputCycles[existingIndex] : undefined;
   const updated = {
     ...existing,
@@ -4851,8 +4857,6 @@ function browserChatToolConfirmationScope(
   request: BrowserToolConfirmationRequest,
   browser?: BrowserSession,
 ) {
-  // Novel approval is bound to an exact project revision, never to an origin or keyword.
-  if (request.toolName === 'novel') return undefined;
   let inputText = '';
   try {
     inputText = JSON.stringify(request.input) || '';
@@ -4898,7 +4902,7 @@ function createBrowserChatTurnToolConfirmation(
     subagentId?: string,
   ): Promise<BrowserToolConfirmationDecision> => {
     abortSignal.throwIfAborted();
-    if (session.safetyMode !== 'strict' && request.toolName !== 'novel') return 'confirmed';
+    if (request.toolName === 'textEditor' || session.safetyMode !== 'strict') return 'confirmed';
     const inputSignature = toolConfirmationInputSignature(request.input);
     const inputKey = `${request.toolName}:${inputSignature}`;
     const scope = browserChatToolConfirmationScope(session, request, browser);
@@ -4932,7 +4936,7 @@ function createBrowserChatTurnToolConfirmation(
     onDecision?: (interaction: BrowserChatSubagentConfirmationInteraction) => void,
     subagentId?: string,
   ): Promise<BrowserToolConfirmationDecision> => {
-    if (!options.serialize) return requestWithReuse(request, browser, onDecision, subagentId);
+    if (!options.serialize || request.toolName === 'textEditor') return requestWithReuse(request, browser, onDecision, subagentId);
     const previous = confirmationQueues.get(queueKey) || Promise.resolve();
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
@@ -4976,7 +4980,7 @@ async function captureBrowserChatToolConfirmationScreenshot(
   browser: BrowserSession | undefined = session.browser,
   recordErrors = true,
 ) {
-  if (!browser || request.toolName === 'novel') return undefined;
+  if (!browser) return undefined;
   try {
     const stepIndex = request.stepIndex || Math.max(1, ...session.steps.map((step) => step.index));
     const phase = `tool-${Date.now()}` as `tool-${number}`;
@@ -5038,15 +5042,17 @@ async function requestBrowserChatToolConfirmation(
     options.recordLogs !== false,
   );
   if (abortSignal?.aborted) return 'cancelled';
+  const requestInput = request.input && typeof request.input === 'object' && !Array.isArray(request.input) ? request.input as Record<string, unknown> : {};
   const pending: BrowserChatToolConfirmation = {
     id: confirmationId,
     messageId: assistantMessageId,
     subagentId: options.subagentId?.trim() || undefined,
     stepIndex: request.stepIndex,
     toolName: request.toolName,
+    action: typeof requestInput.action === 'string' ? requestInput.action : undefined,
     inputSignature,
     reason: request.reason ? compactText(request.reason, 300) : undefined,
-    prompt: request.toolName === 'novel' ? request.prompt : compactText(request.prompt || `请确认是否执行工具 ${request.toolName}`, 500),
+    prompt: compactText(request.prompt || `请确认是否执行工具 ${request.toolName}`, 500),
     screenshotUrl,
     requestedAt,
   };
@@ -5119,26 +5125,26 @@ export async function resolveBrowserChatToolConfirmation(
   userId?: string | number,
 ) {
   const session = await hydrateSession(sessionId);
-  if (!session) throw new Error('Browser chat session not found');
-  if (!sessionBelongsToUser(session, userId)) throw new Error('Browser chat session not found');
+  if (!session) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Browser chat session not found');
+  if (!sessionBelongsToUser(session, userId)) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Browser chat session not found');
   const normalizedConfirmationId = confirmationId.trim();
   const pending = session.pendingToolConfirmation;
   if (!pending || pending.id !== normalizedConfirmationId) {
-    throw new Error('Tool confirmation is not pending');
+    throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Tool confirmation is not pending');
   }
   const resolver = toolConfirmations.get(normalizedConfirmationId);
   if (!resolver || resolver.sessionId !== sessionId) {
     transitionBrowserChatSession(session, { type: 'confirmationCleared', at: now() });
     const abortController = session.activeAbortController;
     if (abortController && !abortController.signal.aborted) {
-      abortController.abort(new Error('Tool confirmation resolver was not available when the user responded.'));
+      abortController.abort(new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Tool confirmation resolver was not available when the user responded.'));
     }
     appendLog(session, 'tool:confirmation:stale', '工具确认已失效，已清理。', {
       stepIndex: pending.stepIndex,
       messageId: pending.messageId,
       details: { confirmationId: normalizedConfirmationId, toolName: pending.toolName },
     });
-    throw new Error('Tool confirmation is no longer active');
+    throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Tool confirmation is no longer active');
   }
   resolver.resolve(action === 'confirm' ? 'confirmed' : 'cancelled');
   return clientSnapshot(session);
@@ -5150,7 +5156,7 @@ export async function interruptBrowserChatSession(
   userId?: string | number,
 ) {
   const normalizedTargetClientMessageId = targetClientMessageId.trim();
-  if (!normalizedTargetClientMessageId) throw new Error('Browser chat turn id is required');
+  if (!normalizedTargetClientMessageId) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Browser chat turn id is required');
   // Prefer the live runtime record. Interrupt must not wait for persistence
   // rehydration while an AI request is actively running.
   const registeredCandidate = activeTurns.get(sessionId);
@@ -5163,7 +5169,7 @@ export async function interruptBrowserChatSession(
     normalizedTargetClientMessageId,
   ) ? registeredCandidate : undefined;
   const timestamp = now();
-  const reason = new Error('Browser chat operation interrupted by user.');
+  const reason = new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Browser chat operation interrupted by user.');
   const runtimeRecords = new Set<BrowserChatSessionRecord>([
     session,
     ...(registeredTurn?.session ? [registeredTurn.session] : []),
@@ -5270,7 +5276,7 @@ async function runBrowserChatSubagents(input: {
   const key = [
     input.session.id,
     input.assistantMessageId,
-    input.toolCallId || 'missing-tool-call-id',
+    input.toolCallId || ERROR_CODES.MISSING_TOOL_CALL_ID,
     JSON.stringify(normalizedTasks),
   ].join(':');
   const existing = subagentBatches.get(key);
@@ -5561,7 +5567,7 @@ async function readBrowserChatSubagentResult(session: BrowserChatSessionRecord, 
   };
   const child = current();
   if (!child) return { ok: false, actual: JSON.stringify({ action: 'read', collection: 'manual', uuid: input.uuid,
-    status: 'not_found', error: 'No child Agent with this uuid exists in the current conversation.' }) };
+    status: ERROR_CODES.NOT_FOUND, error: 'No child Agent with this uuid exists in the current conversation.' }) };
   return subagentReadResult(child, input);
 }
 
@@ -5621,7 +5627,7 @@ function clearBrowserChatSubagentBatches(sessionId: string) {
 function stopBrowserChatSubagentsForReleasedTurn(sessionId: string, assistantMessageId: string) {
   for (const [uuid, runtime] of activeSubagents) {
     if (runtime.sessionId !== sessionId || runtime.assistantMessageId !== assistantMessageId) continue;
-    const error = new Error('父 Agent 本轮执行已经结束，该子 Agent 已停止，已有结果已保留。');
+    const error = new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, '父 Agent 本轮执行已经结束，该子 Agent 已停止，已有结果已保留。');
     if (!runtime.abortController.signal.aborted) runtime.abortController.abort(error);
     const record = subagentResults.get(sessionId)?.get(uuid);
     if (record?.status === 'running' || record?.status === 'queued') updateBrowserChatStoredSubagent(sessionId, uuid, {
@@ -5652,7 +5658,7 @@ function updateBrowserChatStoredSubagent(
     ...update,
     ...(update.toolCount !== undefined ? { toolCount: Math.max(record.toolCount, update.toolCount) } : {}),
     ...(update.steps !== undefined ? { steps: compactBrowserChatSubagentSteps(update.steps) } : {}),
-    ...(update.outputCycles !== undefined ? { outputCycles: trimBrowserChatOutputCycles(update.outputCycles) } : {}),
+    ...(update.outputCycles !== undefined ? { outputCycles: trimBrowserChatOutputCycles(mergeBrowserChatAiOutputCycles(update.outputCycles)) } : {}),
   };
   Object.assign(record, boundedUpdate, { updatedAt: now() });
   const session = sessions.get(sessionId);
@@ -5741,7 +5747,7 @@ export async function stopBrowserChatSubagent(
   }
   const runtime = activeSubagents.get(normalizedSubagentId);
   if (runtime?.sessionId === sessionId && !runtime.abortController.signal.aborted) {
-    runtime.abortController.abort(new Error(browserChatSubagentStoppedMessage));
+    runtime.abortController.abort(new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, browserChatSubagentStoppedMessage));
   }
   if (blockedBinding) {
     void blockedBinding.browser.close().catch(() => undefined);
@@ -5898,7 +5904,7 @@ function browserChatBranchContextOptions(session: BrowserChatSessionRecord, bran
         lastRequest: context.lastRequest, backgroundRef: context.backgroundRef, continuationSummary: context.continuationSummary,
       } },
     };
-    if (!(await persistBrowserChatCheckpoint(session.id))) throw new Error('Failed to persist subagent context checkpoint.');
+    if (!(await persistBrowserChatCheckpoint(session.id))) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Failed to persist subagent context checkpoint.');
   };
   const options: Pick<Parameters<typeof executeInteractiveBrowserTurn>[0],
     'conversation' | 'contextRecords' | 'contextScope' | 'continuationSummary' | 'onContextCheckpoint' | 'onActiveModelCheckpoint' | 'onModelMessages' | 'onContextCompression'> = {
@@ -5947,7 +5953,7 @@ async function executeBrowserChatSubagentBatch(input: {
   tasks.forEach((task, index) => {
     const childAbortController = new AbortController();
     const abortFromParent = () => childAbortController.abort(
-      batchSignal.reason || new Error('父级对话已中止'),
+      batchSignal.reason || new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, '父级对话已中止'),
     );
     if (batchSignal.aborted) abortFromParent();
     else batchSignal.addEventListener('abort', abortFromParent, { once: true });
@@ -6020,7 +6026,7 @@ async function executeBrowserChatSubagentBatch(input: {
     );
     let child: BrowserSession | undefined;
     const childSteps = new Map<number, StepExecutionResult>();
-    const childOutputCycles: BrowserChatAiOutputCycle[] = [];
+    let childOutputCycles: BrowserChatAiOutputCycle[] = [];
     let streamedSubagentText = '';
     const liveSubagentMessages = () => {
       const confirmationMessages = (registry.get(task.id)?.messages || [])
@@ -6045,21 +6051,21 @@ async function executeBrowserChatSubagentBatch(input: {
           content: registry.get(task.id)?.content || '',
         };
       }
-      if (!ownsTask()) throw childAbortController.signal.reason || new Error('对话已中断');
+      if (!ownsTask()) throw childAbortController.signal.reason || new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, '对话已中断');
       updateBrowserChatStoredSubagent(session.id, task.id, {
         status: 'running',
         currentAction: '正在启动',
       });
       persistAndNotify(session.id);
       const childBrowser = createBrowserChatSubagentBrowser(session, task.id, () => {
-        if (!ownsTask()) throw childAbortController.signal.reason || new Error('对话已中断');
+        if (!ownsTask()) throw childAbortController.signal.reason || new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, '对话已中断');
       });
       const activeChild = childBrowser.browser;
       child = activeChild;
-      if (!ownsTask()) throw childAbortController.signal.reason || new Error('对话已中断');
+      if (!ownsTask()) throw childAbortController.signal.reason || new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, '对话已中断');
       let initialPageOpened = false;
       const ensureChildBrowserStarted = async (signal?: AbortSignal) => {
-        if (!ownsTask()) throw childAbortController.signal.reason || new Error('对话已中断');
+        if (!ownsTask()) throw childAbortController.signal.reason || new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, '对话已中断');
         signal?.throwIfAborted();
         await childBrowser.ensureStarted(signal);
         signal?.throwIfAborted();
@@ -6067,7 +6073,7 @@ async function executeBrowserChatSubagentBatch(input: {
           initialPageOpened = true;
           if (task.url) await activeChild.open(task.url);
         }
-        if (!ownsTask()) throw childAbortController.signal.reason || new Error('对话已中断');
+        if (!ownsTask()) throw childAbortController.signal.reason || new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, '对话已中断');
         signal?.throwIfAborted();
       };
       const requestChildToolConfirmation = createBrowserChatTurnToolConfirmation(
@@ -6164,7 +6170,7 @@ async function executeBrowserChatSubagentBatch(input: {
             batchId,
           });
           if (!outputCycle) return;
-          childOutputCycles.push(outputCycle);
+          childOutputCycles = mergeBrowserChatAiOutputCycles(childOutputCycles, [outputCycle]);
           if (childOutputCycles.length > browserChatOutputCycleLimit()) {
             childOutputCycles.splice(0, childOutputCycles.length - browserChatOutputCycleLimit());
           }
@@ -6188,7 +6194,7 @@ async function executeBrowserChatSubagentBatch(input: {
         },
       });
 
-      if (!ownsTask()) throw childAbortController.signal.reason || new Error('对话已中断');
+      if (!ownsTask()) throw childAbortController.signal.reason || new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, '对话已中断');
       const summaryResult = preserveBrowserChatSubagentSummary(
         textFromUnknown(result.reply || result.newSteps.at(-1)?.actual || '子 Agent 已完成，但没有返回额外文本。'),
       );
@@ -6282,7 +6288,7 @@ async function executeBrowserChatSubagentBatch(input: {
     if (ownsTurn()) updateBrowserChatStoredSubagent(session.id, task.id, { status, currentAction: undefined, error });
     return { id: task.id, title: task.title, task, status, error };
   });
-  if (!ownsTurn()) throw abortController.signal.reason || new Error('对话已中断');
+  if (!ownsTurn()) throw abortController.signal.reason || new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, '对话已中断');
   persistAndNotify(session.id);
   const completedCount = results.filter((item) => item.status === 'passed').length;
   const blockedCount = results.filter((item) => item.status === 'blocked').length;
@@ -6316,7 +6322,7 @@ async function resumeBlockedBrowserChatSubagent(input: {
   const { session, binding, userMessage, assistantMessageId, fromStepIndex, abortController } = input;
   const ownsTurn = () => isActiveBrowserChatTurn(session, assistantMessageId, abortController);
   const childAbortController = new AbortController();
-  const abortFromParent = () => childAbortController.abort(abortController.signal.reason || new Error('父级对话已中止'));
+  const abortFromParent = () => childAbortController.abort(abortController.signal.reason || new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, '父级对话已中止'));
   if (abortController.signal.aborted) abortFromParent();
   else abortController.signal.addEventListener('abort', abortFromParent, { once: true });
   const taskRuntime: BrowserChatActiveSubagentRuntime = {
@@ -6337,7 +6343,7 @@ async function resumeBlockedBrowserChatSubagent(input: {
     childAbortController.signal,
     { recordLogs: false, serialize: true },
   );
-  const childOutputCycles = [...binding.outputCycles];
+  let childOutputCycles = mergeBrowserChatAiOutputCycles([...binding.outputCycles]);
   let streamedSubagentText = '';
   const liveSubagentMessages = (steps: readonly StepExecutionResult[]) => browserChatSubagentMessagesFromProgress({
     subagentId: binding.id,
@@ -6347,8 +6353,8 @@ async function resumeBlockedBrowserChatSubagent(input: {
     preservedMessages: subagentResults.get(session.id)?.get(binding.id)?.messages || [],
   });
   try {
-    if (!ownsTask()) throw childAbortController.signal.reason || new Error('对话已中断');
-    if (subagentResults.get(session.id)?.get(binding.id)?.status === 'stopped') throw new Error(browserChatSubagentStoppedMessage);
+    if (!ownsTask()) throw childAbortController.signal.reason || new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, '对话已中断');
+    if (subagentResults.get(session.id)?.get(binding.id)?.status === 'stopped') throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, browserChatSubagentStoppedMessage);
     updateBrowserChatStoredSubagent(session.id, binding.id, { status: 'running', currentAction: '正在继续', error: undefined });
     persistAndNotify(session.id);
     const modelSettings = { ...await browserChatModelSettings(session.modelProvider, session.model), sessionId: session.id, reasoningEffort: normalizeReasoningEffort(session.reasoningEffort) };
@@ -6366,7 +6372,7 @@ async function resumeBlockedBrowserChatSubagent(input: {
       historicalMessages, usedMemoryIds: browserChatTurnUsedMemoryIds(session, assistantMessageId),
     }));
     const initialRuntimeContext = await withModelSettings(modelSettings, () => getRuntimeOperationalContext());
-    if (!ownsTask()) throw childAbortController.signal.reason || new Error('对话已中断');
+    if (!ownsTask()) throw childAbortController.signal.reason || new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, '对话已中断');
     const referenceImagePaths = [...(userMessage.attachments || []), ...(input.responseMessage?.attachments || [])]
       .filter(isBrowserChatImageAttachment).map((attachment) => uploadedBrowserChatAttachmentPath(attachment, session.userId))
       .filter((item): item is string => Boolean(item));
@@ -6397,7 +6403,7 @@ async function resumeBlockedBrowserChatSubagent(input: {
       readFileVisuals: (fileInput) => readFileVisualsForSession(session, fileInput),
       ensureBrowserStarted: async (signal) => {
         signal?.throwIfAborted();
-        if (!ownsTask()) throw childAbortController.signal.reason || new Error('对话已中断');
+        if (!ownsTask()) throw childAbortController.signal.reason || new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, '对话已中断');
         await binding.browser.ensureStarted();
         signal?.throwIfAborted();
       },
@@ -6445,7 +6451,7 @@ async function resumeBlockedBrowserChatSubagent(input: {
           batchId: stored?.batchId,
         });
         if (!outputCycle) return;
-        childOutputCycles.push(outputCycle);
+        childOutputCycles = mergeBrowserChatAiOutputCycles(childOutputCycles, [outputCycle]);
         if (childOutputCycles.length > browserChatOutputCycleLimit()) {
           childOutputCycles.splice(0, childOutputCycles.length - browserChatOutputCycleLimit());
         }
@@ -6469,7 +6475,7 @@ async function resumeBlockedBrowserChatSubagent(input: {
         persistAndNotify(session.id, { defer: true });
       },
     }));
-    if (!ownsTask()) throw childAbortController.signal.reason || new Error('对话已中断');
+    if (!ownsTask()) throw childAbortController.signal.reason || new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, '对话已中断');
     const summaryResult = preserveBrowserChatSubagentSummary(
       textFromUnknown(result.reply || result.newSteps.at(-1)?.actual || '子 Agent 续跑完成。'),
     );
@@ -6584,7 +6590,7 @@ async function runBrowserChatMessage(
   return withModelSettings({ ...modelSettings, sessionId: session.id, reasoningEffort: normalizeReasoningEffort(session.reasoningEffort) }, async () => {
     const assertTurnActive = () => {
       if (isActiveBrowserChatTurn(session, assistantMessageId, abortController)) return;
-      throw abortController.signal.reason || new Error('Browser chat operation interrupted by user.');
+      throw abortController.signal.reason || new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Browser chat operation interrupted by user.');
     };
     try {
       assertTurnActive();
@@ -6631,7 +6637,7 @@ async function runBrowserChatMessage(
           assertTurnActive();
           if (manifest) manifest.sessionId = session.id;
           session.modelContext = { ...session.modelContext, records: { ...session.modelContext.records, ...records }, backgroundRef: manifest ? manifest.backgroundRef : session.modelContext.backgroundRef, lastRequest: manifest || session.modelContext.lastRequest };
-          if (!(await persistBrowserChatCheckpoint(session.id))) throw new Error('Failed to persist context records before model request.');
+          if (!(await persistBrowserChatCheckpoint(session.id))) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Failed to persist context records before model request.');
           assertTurnActive();
         },
         continuationSummary: session.modelContext.continuationSummary,
@@ -6663,7 +6669,7 @@ async function runBrowserChatMessage(
           assertBrowserOperationActive();
           const startedBrowser = await ensureStarted(session, assertBrowserOperationActive, { abortSignal: signal });
           assertBrowserOperationActive();
-          if (startedBrowser !== browser) throw new Error('The active browser session was replaced after this turn started.');
+          if (startedBrowser !== browser) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'The active browser session was replaced after this turn started.');
         },
         runSubagents: (tasks, abortSignal, toolCallId) => runBrowserChatSubagents({ session, userMessageId, assistantMessageId, abortController, abortSignal, tasks, toolCallId }),
         readSubagentResult: (input, signal) => readBrowserChatSubagentResult(session, input, signal || abortController.signal),
@@ -6728,7 +6734,7 @@ async function runBrowserChatMessage(
             ...session.modelContext,
             activeMessages: serializableBrowserChatModelMessages(activeMessages),
           });
-          if (!(await persistBrowserChatCheckpoint(session.id))) throw new Error('Failed to persist active context checkpoint.');
+          if (!(await persistBrowserChatCheckpoint(session.id))) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Failed to persist active context checkpoint.');
           assertTurnActive();
         },
         onModelMessages: ({ activeMessages, turnMessages }) => {
@@ -6756,7 +6762,7 @@ async function runBrowserChatMessage(
             continuationSummary: contextCompression.continuationSummary,
           });
           if (!(await persistBrowserChatCheckpoint(session.id))) {
-            throw new Error('Failed to persist the browser-chat context compression checkpoint.');
+            throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Failed to persist the browser-chat context compression checkpoint.');
           }
           assertTurnActive();
         },
@@ -6835,6 +6841,7 @@ async function runBrowserChatMessage(
           if (event.phase === 'ai:runtime:request'
             || event.phase === 'ai:runtime:dispatch'
             || event.phase === 'ai:context-compression:start'
+            || event.phase === 'ai:runtime:context'
             || event.phase === 'ai:context-compression:progress'
             || event.phase === 'ai:context-compression:partial'
             || event.phase === 'ai:context-compression:limited'
@@ -6867,6 +6874,7 @@ async function runBrowserChatMessage(
               : outputCycle);
           }
           const persistImmediately = event.phase === 'ai:runtime:attempt-failed'
+            || event.phase === 'ai:runtime:error'
             || event.phase === 'ai:runtime:retry'
             || event.phase === 'ai:runtime:retry-exhausted'
             || event.phase === 'ai:runtime:retry-skipped'
@@ -7059,18 +7067,18 @@ async function runBrowserChatMessage(
 
 /** Explicit host action; extraction never runs from the context assembler. */
 export async function requestBrowserChatMemoryExtraction(sessionId: string, userId: string) {
-  if (!personalMemoryExtractionEnabled()) throw new ApiRequestError('个性化记忆提炼已关闭，请在运行设置中开启。', { status: 409, code: 'memory_extraction_disabled' });
+  if (!personalMemoryExtractionEnabled()) throw new ApiRequestError('个性化记忆提炼已关闭，请在运行设置中开启。', { status: 409, code: ERROR_CODES.MEMORY_EXTRACTION_DISABLED });
   // Completed conversations may have been compacted or evicted from the runtime.
   // Read durable evidence without hydrating a browser or resuming queued turns.
   const runtimeSession = sessions.get(sessionId);
   const session = runtimeSession ? await durableBrowserChatSnapshot(runtimeSession) : await readSessionSnapshot(sessionId);
-  if (!session || !sessionBelongsToUser(session, userId)) throw new ApiRequestError('会话不存在。', { status: 404, code: 'not_found' });
-  if (session.busy) throw new ApiRequestError('请等待当前操作停止后提炼记忆。', { status: 409, code: 'busy' });
+  if (!session || !sessionBelongsToUser(session, userId)) throw new ApiRequestError('会话不存在。', { status: 404, code: ERROR_CODES.NOT_FOUND });
+  if (session.busy) throw new ApiRequestError('请等待当前操作停止后提炼记忆。', { status: 409, code: ERROR_CODES.BUSY });
   const userIndex = session.messages.findLastIndex(message => message.role === 'user' && message.status !== 'queued');
   const user = session.messages[userIndex];
   const assistant = session.messages.slice(userIndex + 1).findLast(message => message.role === 'assistant'
     && message.status !== 'running' && message.status !== 'queued');
-  if (!user || !assistant) throw new ApiRequestError('本轮尚无已结束的回复，请在对话结束后提炼记忆。', { status: 409, code: 'no_completed_turn' });
+  if (!user || !assistant) throw new ApiRequestError('本轮尚无已结束的回复，请在对话结束后提炼记忆。', { status: 409, code: ERROR_CODES.NO_COMPLETED_TURN });
   const jobId = await enqueueMemoryJob({ userId: normalizeUserId(userId), currentUrl: session.targetUrl, targetUrl: session.targetUrl,
     userMessage: user.content, userMessageId: user.id, assistantReply: assistant.content,
     steps: session.steps.filter(step => step.messageId === assistant.id || assistant.stepIndexes?.includes(step.index)),

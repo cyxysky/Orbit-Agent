@@ -5,6 +5,8 @@ import { readBrowserChatRuntimeState } from '@/server/ai/agents/browser-chat-rea
 import { getAutomationRun } from '@/server/storage/automation-store';
 import { requestApplicationUserId, normalizeApplicationUserId } from '@/server/auth/user-context';
 import { ApiRequestError, apiError, apiJson } from '@/server/http/api-request';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export async function responseOperation(request: Request, scopeId: string, automation = false) {
   try {
@@ -12,7 +14,7 @@ export async function responseOperation(request: Request, scopeId: string, autom
     if (request.headers.get('sec-fetch-site') === 'cross-site') throw new ApiRequestError('Invalid request origin', { status: 403 });
     const userId = normalizeApplicationUserId(requestApplicationUserId(request));
     const owner = automation ? await getAutomationRun(scopeId, userId) : await readBrowserChatRuntimeState(scopeId, userId);
-    if (!owner) throw new ApiRequestError('Session not found', { status: 404, code: 'not_found' });
+    if (!owner) throw new ApiRequestError('Session not found', { status: 404, code: ERROR_CODES.NOT_FOUND });
     const reader = request.body?.getReader();
     const chunks: Uint8Array[] = [];
     let size = 0;
@@ -28,7 +30,7 @@ export async function responseOperation(request: Request, scopeId: string, autom
     let body: { block: ReturnType<typeof responseRegistry.parse>; operation: string; input?: unknown };
     try {
       const value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-      if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !['block', 'operation', 'input'].includes(key)) || typeof value.operation !== 'string') throw new Error('Invalid operation.');
+      if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !['block', 'operation', 'input'].includes(key)) || typeof value.operation !== 'string') throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Invalid operation.');
       body = { ...value, block: responseRegistry.parse(value.block) };
     } catch { throw new ApiRequestError('内容请求参数无效。', { status: 400 }); }
     const data = await responseHandlers.execute(body.block, body.operation, body.input, { scopeId, userId, readOnly: automation, signal: request.signal });

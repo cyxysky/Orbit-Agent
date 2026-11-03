@@ -8,6 +8,8 @@ import { skillBodyKeysForPreservation } from './hidden-runtime-skills';
 import { hasSourceFileReceipt, prepareRuntimeSourceFiles } from './runtime-source-files';
 import { subagentModelMessages } from './browser-chat-subagent-delivery';
 import { estimateRuntimeMessageContext } from './runtime-context-budget';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 type Checkpoint = { system: string; messages: ModelMessage[]; activeMessages: ModelMessage[]; continuationSummary: string; removedIndexes: number[]; compressedMessages: number; segmentRecords: ModelMessage[] };
 
@@ -39,7 +41,7 @@ function separateRuntimeSkillReceipts(messages: ModelMessage[], protectedToolCal
       skillId: receipt.skillId, content: receipt.content,
     }) }).slice(-32)}`;
     // Preserve the exact manual independently of the tool's business payload.
-    // Otherwise a Skill attached to a novel result pins the entire outline,
+    // Otherwise a Skill attached to a text result pins the entire document,
     // tool arguments and reasoning forever, even after subsequent revisions.
     const exchange: ModelMessage[] = [
       { role: 'assistant', content: [{ type: 'tool-call', toolName: 'skill', toolCallId,
@@ -250,7 +252,7 @@ export async function prepareRuntimeContext(input: RuntimeContextInput & {
           summaryRequestMade: false, candidateCount: eligible.length };
       }
       compactionStopReason = batches.length === 0
-        ? { code: oversizedBlocks ? 'source-input-limit' : incompleteBlocks ? 'incomplete-tool-exchange' : 'protected-content-retained',
+        ? { code: oversizedBlocks ? ERROR_CODES.SOURCE_INPUT_LIMIT : incompleteBlocks ? ERROR_CODES.INCOMPLETE_TOOL_EXCHANGE : 'protected-content-retained',
           message: 'No complete historical batch can be summarized while retaining exact user instructions, Skill bodies and recent interactions.' }
         : { code: eligible.length ? 'candidate-failures' : 'no-beneficial-batch',
           message: eligible.length ? 'Every eligible historical batch failed in this turn; their original messages were preserved.'
@@ -298,7 +300,7 @@ export async function prepareRuntimeContext(input: RuntimeContextInput & {
           : new ContextSummaryError(error instanceof Error ? error.message : String(error), { cause: error });
         // A provider error or invalid generated handoff can succeed on a later
         // step. Only cache a deterministic input-size rejection across steps.
-        if (failure.details?.code === 'input-limit') input.failedCompactions?.set(batch.key, failure);
+        if (failure.details?.code === ERROR_CODES.INPUT_LIMIT) input.failedCompactions?.set(batch.key, failure);
         rejectedBatchKeys.add(batch.key);
         lastCompactionError = failure;
         compactionFailure = failure.message;
@@ -316,7 +318,7 @@ export async function prepareRuntimeContext(input: RuntimeContextInput & {
       const nextPacket = projection.packet;
       if (nextPacket.manifest.estimatedTokensAfter >= packet.manifest.estimatedTokensAfter) {
         const failure = new ContextSummaryError('Handoff did not reduce the current context window. Original batch preserved.', {
-          details: { code: 'invalid-handoff', reason: 'parallel-commit' },
+          details: { code: ERROR_CODES.INVALID_HANDOFF, reason: 'parallel-commit' },
         });
         rejectedBatchKeys.add(batch.key);
         lastCompactionError = failure;
@@ -360,7 +362,7 @@ export async function prepareRuntimeContext(input: RuntimeContextInput & {
   }
   if (compressedMessages && !compactionFailure) {
     if (packet.manifest.estimatedTokensAfter <= input.compressionTargetTokens) compactionStopReason = undefined;
-    else compactionStopReason ??= { code: 'refreshed-context', message: 'Refreshed request context remains above the compression target.' };
+    else compactionStopReason ??= { code: ERROR_CODES.REFRESHED_CONTEXT, message: 'Refreshed request context remains above the compression target.' };
   }
   if (packet.manifest.estimatedTokensAfter <= input.compressionTargetTokens) {
     compactionFailure = undefined;
@@ -368,7 +370,7 @@ export async function prepareRuntimeContext(input: RuntimeContextInput & {
     compactionStopReason = undefined;
   }
   if (packet.manifest.estimatedTokensAfter > input.inputBudgetTokens) throw new ContextSummaryError('Context capacity exceeded. Original user instructions, loaded Skills and latest image were preserved; no model request was sent.', {
-    details: { code: 'input-capacity-exceeded', compactionStopReason, estimatedTokens: packet.manifest.estimatedTokensAfter,
+    details: { code: ERROR_CODES.INPUT_CAPACITY_EXCEEDED, compactionStopReason, estimatedTokens: packet.manifest.estimatedTokensAfter,
       inputBudgetTokens: input.inputBudgetTokens, lastCompactionFailure: lastCompactionError?.message,
       lastCompactionFailureDetails: lastCompactionError?.details },
   });

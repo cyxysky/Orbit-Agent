@@ -1,20 +1,22 @@
 import type { BrowserActionResult } from '@cjfclonedeep/capability-sdk/browser/node';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export type RuntimeToolFailureCategory =
   | 'actionability'
-  | 'browser-unavailable'
+  | typeof ERROR_CODES.BROWSER_UNAVAILABLE
   | 'execution-context'
-  | 'invalid-input'
+  | typeof ERROR_CODES.INVALID_INPUT
   | 'javascript'
   | 'network'
   | 'policy'
   | 'reported-failure'
-  | 'screenshot-timeout'
+  | typeof ERROR_CODES.SCREENSHOT_TIMEOUT
   | 'serialization'
   | 'skill-gate'
-  | 'state-conflict'
+  | typeof ERROR_CODES.STATE_CONFLICT
   | 'subagent-workflow'
-  | 'timeout'
+  | typeof ERROR_CODES.TIMEOUT
   | 'verification'
   | 'unknown';
 
@@ -39,13 +41,13 @@ export function classifyRuntimeToolFailure(
   }
   if (name === 'subagent') return 'subagent-workflow';
   if (/browser session has not started|browser unavailable|page has been closed|target page, context or browser has been closed/i.test(actual)) {
-    return 'browser-unavailable';
+    return ERROR_CODES.BROWSER_UNAVAILABLE;
   }
   if (/ACTIONABILITY_FAILED|coveredBySurfaceId|activeSurfaceId|covered by|viewport-blocking|strict mode violation|(?:resolved to|matched) \d+ (?:rendered )?elements|element is not visible|element is outside|zero (?:matches|actionable)|no actionable/i.test(actual)) {
     return 'actionability';
   }
   if (/(?:page\.)?screenshot[^\n]*(?:timed out|timeout)|TimeoutError[^\n]*screenshot|waiting for fonts[^\n]*(?:timed out|timeout)/i.test(actual)) {
-    return 'screenshot-timeout';
+    return ERROR_CODES.SCREENSHOT_TIMEOUT;
   }
   if (/execution context was destroyed|cannot find context with specified id|most likely because of a navigation|frame was detached|target closed during navigation/i.test(actual)) {
     return 'execution-context';
@@ -62,17 +64,17 @@ export function classifyRuntimeToolFailure(
   if (/circular|serialize|serialization|JSON-safe|cannot stringify|output.*truncat|heap limit|rss limit|object graph/i.test(actual)) {
     return 'serialization';
   }
-  if (/HTTP (?:408|429|5\d\d)|net::ERR_|request failed|ECONN|ENOTFOUND/i.test(actual)) {
+  if (/HTTP (?:408|429|5\d\d)|net::ERR_|request failed|ECONN|ENOTFOUND|UND_ERR_SOCKET|EPIPE|socket hang up|connection (?:reset|closed)|other side closed|cannot connect to API|network error|fetch failed/i.test(actual)) {
     return 'network';
   }
   if (/browserCode returned a top-level \{ ok: false \}|"result"\s*:\s*\{\s*"ok"\s*:\s*false/i.test(actual)) {
     return 'reported-failure';
   }
-  if (/agent\.state revision conflict/i.test(actual)) return 'state-conflict';
+  if (/agent\.state revision conflict/i.test(actual)) return ERROR_CODES.STATE_CONFLICT;
   if (/contains unsupported fields?|has unsupported field|Allowed fields:|must be (?:an? )?(?:non-empty )?(?:string|object|array|number|boolean)|must be \d+-\d+ printable characters|requires (?:a|an) |received invalid .* format|Unsupported agent\.state action/i.test(actual)) {
-    return 'invalid-input';
+    return ERROR_CODES.INVALID_INPUT;
   }
-  if (/timed out|timeout|TimeoutError/i.test(actual)) return 'timeout';
+  if (/timed out|timeout|TimeoutError/i.test(actual)) return ERROR_CODES.TIMEOUT;
   if (/ReferenceError|TypeError|SyntaxError|EvalError|RangeError|is not a function|is not defined/i.test(actual)) {
     return 'javascript';
   }

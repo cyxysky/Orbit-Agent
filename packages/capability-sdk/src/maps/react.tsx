@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { Coordinate, MapRecord, MapView } from './core.ts';
+import { CodedError, ERROR_CODES } from '../errors.ts';
+
 
 type GoogleMap = { fitBounds(bounds: unknown, padding?: number): void; setCenter(point: Coordinate): void; setZoom(zoom: number): void };
 type Overlay = { setMap(map: GoogleMap | null): void };
@@ -18,14 +20,14 @@ const authListeners = new Set<() => void>();
 function loadGoogleMaps(key: string, language: string) {
   const target = window as MapsWindow;
   if (scriptLoad) {
-    if (scriptLoad.key !== key || scriptLoad.language !== language) return Promise.reject(new Error('地图配置已变更，请刷新页面后重新打开。'));
+    if (scriptLoad.key !== key || scriptLoad.language !== language) return Promise.reject(new CodedError(ERROR_CODES.MAPS_OPERATION_FAILED, '地图配置已变更，请刷新页面后重新打开。'));
     return scriptLoad.promise;
   }
   if (target.google?.maps?.Map) return Promise.resolve(target.google.maps);
   const promise = new Promise<GoogleMapsApi>((resolve, reject) => {
     const script = document.createElement('script');
     const previousAuthFailure = target.gm_authFailure;
-    const fail = (message: string) => { clearTimeout(timer); script.remove(); delete target.__orbitGoogleMapsReady; scriptLoad = undefined; reject(new Error(message)); };
+    const fail = (message: string) => { clearTimeout(timer); script.remove(); delete target.__orbitGoogleMapsReady; scriptLoad = undefined; reject(new CodedError(ERROR_CODES.MAPS_OPERATION_FAILED, message)); };
     const timer = setTimeout(() => fail('Google 地图加载超时，请检查浏览器网络后手动重试。'), 20000);
     target.gm_authFailure = () => { previousAuthFailure?.(); authListeners.forEach(listener => listener()); fail('Google 地图授权失败，请检查浏览器 Key、来源限制和结算配置。'); };
     target.__orbitGoogleMapsReady = () => {

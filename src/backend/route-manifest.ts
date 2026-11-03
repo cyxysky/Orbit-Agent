@@ -1,6 +1,7 @@
 // Explicit lazy imports keep Node route loading independent of Next.
 export const routes = [
   { path: '/api/settings/knowledge', load: () => import('./routes/settings/knowledge/route') },
+  { path: '/api/text-documents/workspace', load: () => import('./routes/text-documents/workspace/route') },
   { path: '/api/media/video-projects', load: () => import('./routes/media/video-projects/route') },
   { path: '/embed/orbit.js', load: () => import('./routes/embed-scripts/orbit.js/route') },
   { path: '/embed/webpilot.js', load: () => import('./routes/embed-scripts/webpilot.js/route') },

@@ -1,3 +1,5 @@
+
+import { ERROR_CODES } from '../../errors.ts';
 export type TerminalGeometry = { cols: number; rows: number };
 
 const geometryPayload = /^orbit;resize;([1-9]\d{0,2});([1-9]\d{0,2})$/;
@@ -13,7 +15,7 @@ export function parseTerminalGeometry(payload: string): TerminalGeometry | undef
 
 export function terminalGeometrySequence(geometry: TerminalGeometry): string {
   const payload = `orbit;resize;${geometry.cols};${geometry.rows}`;
-  if (!parseTerminalGeometry(payload)) throw new RangeError('Invalid terminal geometry.');
+  if (!parseTerminalGeometry(payload)) throw Object.assign(new RangeError('Invalid terminal geometry.'), { code: ERROR_CODES.TERMINAL_OPERATION_FAILED });
   return `\x1b]777;${payload}\x07`;
 }
 
@@ -47,7 +49,7 @@ export function terminalGeometryAt(output: string, geometry: TerminalGeometry, o
 export function retainTerminalOutput(
   retained: { output: string; geometry: TerminalGeometry }, chunk: string, limit: number,
 ): { output: string; geometry: TerminalGeometry } {
-  if (!Number.isFinite(limit) || limit < 0) throw new RangeError('Invalid terminal output limit.');
+  if (!Number.isFinite(limit) || limit < 0) throw Object.assign(new RangeError('Invalid terminal output limit.'), { code: ERROR_CODES.TERMINAL_OPERATION_FAILED });
   const output = retained.output + chunk;
   let cut = Math.max(0, output.length - Math.floor(limit));
   let geometry = retained.geometry;

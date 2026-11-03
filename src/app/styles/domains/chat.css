@@ -1156,13 +1156,6 @@
   width: 100% !important;
 }
 
-.browser-chat-chart.capability-excalidraw {
-  display: block;
-  padding: 0;
-  background: var(--panel);
-  border-radius: 18px;
-}
-
 .browser-chat-tools-help-trigger { display:inline-flex;align-items:center;justify-content:center;width:26px;height:28px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--muted);cursor:pointer; }
 .browser-chat-tools-help-trigger:hover { color:var(--foreground);background:var(--panel-soft); }
 .ui-hover-card.browser-chat-tools-card {

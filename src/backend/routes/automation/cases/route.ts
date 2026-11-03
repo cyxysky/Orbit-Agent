@@ -3,6 +3,8 @@ import { requestApplicationUserId } from '@/server/auth/user-context';
 import { ApiRequestError, apiError, apiJson, boundedQueryInteger, parseJsonRequest } from '@/server/http/api-request';
 import { idempotencyFingerprint, runIdempotentJson } from '@/server/http/idempotency';
 import { createAutomationCase, listAutomationCases } from '@/server/storage/automation-store';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 
 const createCaseSchema = z.object({
@@ -49,8 +51,8 @@ export async function POST(request: Request) {
     const body = await parseJsonRequest(request, createCaseSchema, { maxBytes: 1024 * 1024 });
     const title = text(body.title ?? body.name);
     const instruction = text(body.instruction ?? body.prompt);
-    if (!title) throw new ApiRequestError('自动化用例标题不能为空', { code: 'title_required' });
-    if (!instruction) throw new ApiRequestError('自动化用例指令不能为空', { code: 'instruction_required' });
+    if (!title) throw new ApiRequestError('自动化用例标题不能为空', { code: ERROR_CODES.TITLE_REQUIRED });
+    if (!instruction) throw new ApiRequestError('自动化用例指令不能为空', { code: ERROR_CODES.INSTRUCTION_REQUIRED });
     const userId = requestApplicationUserId(request);
     return runIdempotentJson(request, {
       fingerprint: idempotencyFingerprint(body),

@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import type { ModelMessage } from 'ai';
 import { queryDatabaseOne, queryDatabase, executeDatabase, runDatabaseTransaction, type DatabaseExecutor } from '@/server/db/database';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 type Pending = { id: string; phase: 'planned' | 'awaiting-approval' | 'executing' | 'uncertain' | 'completed'; messages: ModelMessage[]; calls: Array<{ toolCallId: string; toolName: string; input: unknown }>; results: ModelMessage[]; startedCallIds?: string[] };
 export type RuntimeJournalState = { revision: number; pending?: Pending; observations?: unknown };
@@ -19,7 +21,7 @@ export class RuntimeExecutionJournal {
       if (!previous) await executeDatabase('INSERT INTO agent_runtime_state (session_id, scope_id, revision, record_json) VALUES (?, ?, ?, ?)', [this.sessionId, this.scopeId, next.revision, JSON.stringify(next)], executor);
       else {
         const rows = await queryDatabase('UPDATE agent_runtime_state SET revision = ?, record_json = ? WHERE session_id = ? AND scope_id = ? AND revision = ? RETURNING session_id', [next.revision, JSON.stringify(next), this.sessionId, this.scopeId, previous], executor);
-        if (!rows.length) throw new Error('Agent runtime revision conflict; another writer owns this state.');
+        if (!rows.length) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Agent runtime revision conflict; another writer owns this state.');
       }
       await effect?.(executor);
       await executeDatabase('INSERT INTO agent_runtime_event (session_id, scope_id, revision, event_json) VALUES (?, ?, ?, ?)', [this.sessionId, this.scopeId, next.revision, JSON.stringify({ event, at: new Date().toISOString(), pending: next.pending, observations: event === 'observation' ? next.observations : undefined })], executor);
@@ -47,7 +49,7 @@ export class RuntimeExecutionJournal {
           ? !pending.startedCallIds.includes(call.toolCallId)
           : pending.phase === 'planned' || pending.phase === 'awaiting-approval';
         n.pending!.results.push({ role: 'tool', content: [{ type: 'tool-result', toolCallId: call.toolCallId, toolName: call.toolName,
-          output: { type: 'error-json', value: { code: 'interrupted-tool-outcome', hostGenerated: true,
+          output: { type: 'error-json', value: { code: ERROR_CODES.INTERRUPTED_TOOL_OUTCOME, hostGenerated: true,
             outcome: unexecuted ? 'not-executed' : 'unknown',
             reason: unexecuted ? 'Interrupted before execution.' : 'Execution was interrupted without a recorded result.',
             next: 'Inspect current state and make a new decision. This receipt does not establish business success; the previous call is not replayed.' } } }] });
@@ -56,8 +58,8 @@ export class RuntimeExecutionJournal {
     });
   }
   async plan(messages: ModelMessage[], calls: Pending['calls']) {
-    if (this.state.pending) throw new Error('Cannot replace an uncheckpointed tool exchange.');
-    if (new Set(calls.map(call => call.toolCallId)).size !== calls.length) throw new Error('Duplicate tool call IDs in decision.');
+    if (this.state.pending) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Cannot replace an uncheckpointed tool exchange.');
+    if (new Set(calls.map(call => call.toolCallId)).size !== calls.length) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Duplicate tool call IDs in decision.');
     await this.save('model_planned', n => { n.pending = { id: randomUUID(), phase: 'planned', messages, calls, results: [], startedCallIds: [] }; }, async executor => {
       for (const call of calls) await executeDatabase('INSERT INTO agent_runtime_call (session_id, scope_id, call_id) VALUES (?, ?, ?)', [this.sessionId, this.scopeId, call.toolCallId], executor);
     });
@@ -69,7 +71,7 @@ export class RuntimeExecutionJournal {
       if (!pending || !id || !pending.calls.some(call => call.toolCallId === id)
         || pending.startedCallIds?.includes(id)
         || pending.results.some(message => message.role === 'tool' && message.content.some(part => part.type === 'tool-result' && part.toolCallId === id))) {
-        throw new Error('No unexecuted planned tool call to execute.');
+        throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'No unexecuted planned tool call to execute.');
       }
       (pending.startedCallIds ??= []).push(id);
       pending.phase = 'executing';
@@ -77,7 +79,7 @@ export class RuntimeExecutionJournal {
   }
   async result(message: ModelMessage, uncertain = false, observations?: unknown) {
     await this.save(uncertain ? 'execution_uncertain' : 'tool_result', n => {
-      if (!n.pending) throw new Error('Missing pending decision.');
+      if (!n.pending) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Missing pending decision.');
       n.pending.results.push(message);
       if (observations) n.observations = observations;
       const recordedIds = new Set(n.pending.results.flatMap(result => result.role === 'tool'

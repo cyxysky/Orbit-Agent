@@ -1,3 +1,4 @@
+import { getErrorCode } from "../errors.ts";
 import { chartResponses, chartResponseBlock } from './response.ts';
 import { z } from 'zod';
 import {
@@ -24,6 +25,8 @@ import {
 } from './core.ts';
 import { chartCapabilitySettings } from './settings.ts';
 import { chartCapabilityRuntimeSkill } from './runtime-skill.ts';
+import { CodedError, ERROR_CODES } from '../errors.ts';
+
 export * from './core.ts';
 export * from './runtime-skill.ts';
 export * from './settings.ts';
@@ -345,7 +348,7 @@ export async function readChartApi(
     return {
       ok: false,
       error: {
-        code: 'chart-api-module-not-found',
+        code: ERROR_CODES.CHART_API_MODULE_NOT_FOUND,
         message: `Unknown ECharts API module: ${query}. Call chart action=api without query to read the module index, then use an exact module id.`,
       },
     };
@@ -373,12 +376,12 @@ export async function createChart(store: ChartArtifactStore, input: {
   title?: unknown;
 }, options: { validateOption?: ChartOptionValidator } = {}): Promise<CapabilityResult<{ chartId: string }>> {
   try {
-    if (input.engine !== undefined && !chartEngines.includes(input.engine as ChartEngine)) throw new Error('Unknown chart engine.');
+    if (input.engine !== undefined && !chartEngines.includes(input.engine as ChartEngine)) throw new CodedError(ERROR_CODES.CHART_OPERATION_FAILED, 'Unknown chart engine.');
     const engine = (input.engine as ChartEngine | undefined) || 'echarts';
     const option = normalizeEngineOption(engine, input.option);
     const maps = normalizeChartMaps(input.maps);
     if (new TextEncoder().encode(JSON.stringify({ maps, option })).byteLength > maxChartBytes) {
-      throw new Error('option and maps must be no larger than 4 MB in total.');
+      throw new CodedError(ERROR_CODES.CHART_OPERATION_FAILED, 'option and maps must be no larger than 4 MB in total.');
     }
     const height = normalizedHeight(input.height);
     const renderer = input.renderer === 'svg' ? 'svg' : 'canvas';
@@ -403,7 +406,7 @@ export async function createChart(store: ChartArtifactStore, input: {
     return {
       ok: false,
       error: {
-        code: 'chart-generation-failed',
+        code: getErrorCode(error, ERROR_CODES.CHART_GENERATION_FAILED),
         message: `Chart generation failed: ${error instanceof Error ? error.message : String(error)}`,
       },
     };
@@ -412,8 +415,8 @@ export async function createChart(store: ChartArtifactStore, input: {
 
 export async function updateChart(store: ChartArtifactStore, chartId: string, input: ChartUpdateInput, expectedRevision: number,
   options: { validateOption?: ChartOptionValidator } = {}) {
-  if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0 || expectedRevision >= Number.MAX_SAFE_INTEGER) throw new Error('Invalid expectedRevision.');
-  if (!store.update) throw new Error('This chart store does not support persistent updates.');
+  if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0 || expectedRevision >= Number.MAX_SAFE_INTEGER) throw new CodedError(ERROR_CODES.CHART_OPERATION_FAILED, 'Invalid expectedRevision.');
+  if (!store.update) throw new CodedError(ERROR_CODES.CHART_OPERATION_FAILED, 'This chart store does not support persistent updates.');
   const previous = await store.read(chartId);
   if (!previous) return undefined;
   if ((previous.revision || 0) !== expectedRevision) throw new ChartRevisionConflict();
@@ -426,11 +429,11 @@ async function readOrUpdateChart(store: ChartArtifactStore, input: ChartToolInpu
   try {
     const update = Object.fromEntries(['option', 'title', 'description', 'height', 'renderer', 'maps', 'engine'].filter((key) => input[key as keyof ChartToolInput] !== undefined).map((key) => [key, input[key as keyof ChartToolInput]])) as ChartUpdateInput;
     const chart = input.action === 'read' ? await store.read(input.chartId!) : await updateChart(store, input.chartId!, update, input.expectedRevision!, options);
-    if (!chart) return { ok: false, error: { code: 'chart-not-found', message: 'Chart not found.' } };
+    if (!chart) return { ok: false, error: { code: ERROR_CODES.CHART_NOT_FOUND, message: 'Chart not found.' } };
     return { ok: true, summary: `Chart ${chart.chartId} ${input.action === 'read' ? 'read' : 'updated'} at revision ${chart.revision || 0}.`, data: { chartId: chart.chartId, chart, revision: chart.revision || 0 },
       content: [{ type: 'response', block: chartResponseBlock(chart) }] };
   } catch (error) {
-    return { ok: false, error: { code: error instanceof ChartRevisionConflict ? 'chart-revision-conflict' : 'chart-operation-failed', message: error instanceof Error ? error.message : String(error) } };
+    return { ok: false, error: { code: getErrorCode(error, error instanceof ChartRevisionConflict ? ERROR_CODES.CHART_REVISION_CONFLICT_TOOL : ERROR_CODES.CHART_OPERATION_FAILED), message: error instanceof Error ? error.message : String(error) } };
   }
 }
 

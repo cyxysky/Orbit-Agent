@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
 import { tool, type ModelMessage } from 'ai';
 import { z } from 'zod';
+import { ERROR_CODES, toCodedError } from '@cjfclonedeep/capability-sdk';
 import { browserChatContextRecordId, projectCompletedTurnReasoning, serializableBrowserChatModelMessages } from './browser-chat-model-context';
-import { estimateRuntimeMessageContext, estimateRuntimeTextTokens } from './runtime-context-budget';
+import { estimateRuntimeMessageContext, estimateRuntimeTextTokens, type RuntimeRequestContextStats } from './runtime-context-budget';
 import { type RuntimeKnowledgeBlock } from './runtime-knowledge-context';
 import { runtimeContextMaterialValue as materialValue, searchRuntimeContextRecords } from './runtime-context-search';
 import { runtimeReferenceContextMarker, withoutRuntimePromptCacheMetadata } from './runtime-prompt-cache';
@@ -15,7 +16,9 @@ export type RuntimeContextManifest = {
   version: 2; id: string; sessionId?: string; createdAt: string;
   contextWindowTokens: number; estimatedTokensBefore: number; estimatedTokensAfter: number;
   model?: { provider?: string; model?: string }; systemRef?: string; toolSchemaRef?: string; backgroundRef?: string;
-  inputBudgetTokens?: number; prefixHash?: string; countKind?: 'heuristic'; epoch?: number; compactionFailure?: string;
+  inputBudgetTokens?: number; prefixHash?: string; countKind?: 'heuristic' | 'codex'; epoch?: number; compactionFailure?: string;
+  engine?: 'codex-app-server'; threadId?: string;
+  modelContextStats?: RuntimeRequestContextStats;
   compactionFailureDetails?: Record<string, unknown>;
   compactionStopReason?: { code: string; message: string };
   compression?: { waveCount: number; completedBatchCount: number; maximumParallelBatches: number;
@@ -71,7 +74,10 @@ export function createRuntimeContextReadTool(getRecords: () => Record<string, Mo
   return tool({
     description: contextReadDescription,
     inputSchema: contextReadInputSchema,
-    execute: async ({ ref, pointer, query, offset, limit }) => readRuntimeContextMaterial(getRecords(), { ref, pointer, query, offset, limit }),
+    execute: async ({ ref, pointer, query, offset, limit }) => {
+      try { return readRuntimeContextMaterial(getRecords(), { ref, pointer, query, offset, limit }); }
+      catch (error) { throw toCodedError(error, ERROR_CODES.CONTEXT_READ_FAILED); }
+    },
   });
 }
 
@@ -84,7 +90,7 @@ export function readRuntimeContextMaterial(records: Record<string, ModelMessage>
     ? { requestedLimit: input.limit, appliedLimit: limit, maxLimit: contextReadMaxCharacters,
       notice: `Requested limit ${input.limit} exceeds the ${contextReadMaxCharacters}-character maximum; using ${limit}. Use nextOffset for more content only if needed.` }
     : {};
-  if (!input.ref && input.pointer) return { ok: false, error: 'pointer requires an exact ref.' };
+  if (!input.ref && input.pointer) return { ok: false, code: ERROR_CODES.CONTEXT_READ_FAILED, error: 'pointer requires an exact ref.' };
   if (!input.ref && input.query) return { ...searchRuntimeContextRecords(records, input.query, offset, limit), ...limitNotice };
   if (!input.ref) {
     const entries = Object.entries(records).filter(([, message]) => message.role !== 'system'
@@ -92,7 +98,7 @@ export function readRuntimeContextMaterial(records: Record<string, ModelMessage>
     const page = entries.slice(offset, offset + 40);
     return { ...limitNotice, total: entries.length, records: page.map(([ref, message]) => ({ ref, role: message.role, preview: JSON.stringify(materialValue(message)).slice(0, 180) })), nextOffset: offset + page.length < entries.length ? offset + page.length : null };
   }
-  if (!Object.hasOwn(records, input.ref)) return { ok: false, error: 'Unknown reference in this conversation.' };
+  if (!Object.hasOwn(records, input.ref)) return { ok: false, code: ERROR_CODES.CONTEXT_READ_FAILED, error: 'Unknown reference in this conversation.' };
   const record = records[input.ref];
   const originalSources = projectedReadSources(record, records, input.pointer || '');
   const projectionNotice = originalSources.length ? { sourceComplete: false, originalSources, readWith: contextReadToolName,
@@ -108,15 +114,15 @@ export function readRuntimeContextMaterial(records: Record<string, ModelMessage>
     ...(typeof sourceInput?.action === 'string' ? { action: sourceInput.action } : {}) } : undefined;
   let value = materialValue(records[input.ref]);
   if (input.pointer) {
-    if (!input.pointer.startsWith('/')) return { ok: false, error: 'pointer must be an RFC 6901 JSON Pointer.' };
+    if (!input.pointer.startsWith('/')) return { ok: false, code: ERROR_CODES.CONTEXT_READ_FAILED, error: 'pointer must be an RFC 6901 JSON Pointer.' };
     for (const segment of input.pointer.slice(1).split('/')) {
       const key = segment.replace(/~1/g, '/').replace(/~0/g, '~');
-      if (!value || typeof value !== 'object' || !Object.hasOwn(value, key)) return { ...projectionNotice, ok: false, error: 'Pointer not found.', ref: input.ref };
+      if (!value || typeof value !== 'object' || !Object.hasOwn(value, key)) return { ...projectionNotice, ok: false, code: ERROR_CODES.CONTEXT_READ_FAILED, error: 'Pointer not found.', ref: input.ref };
       value = (value as JsonRecord)[key];
     }
   }
   const content = typeof value === 'string' ? value : JSON.stringify(value);
-  if (offset > content.length) return { ...limitNotice, ...projectionNotice, ok: false, ref: input.ref, pointer: input.pointer || '',
+  if (offset > content.length) return { ...limitNotice, ...projectionNotice, ok: false, code: ERROR_CODES.CONTEXT_READ_FAILED, ref: input.ref, pointer: input.pointer || '',
     error: `Offset ${offset} exceeds the ${content.length}-character content. Use an offset from 0 to ${content.length}, or the nextOffset of the preceding read.`,
     offset, totalCharacters: content.length, nextOffset: null };
   const start = input.query ? content.indexOf(input.query, offset) : offset;

@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { OfficeDocumentDraft } from '../office/types.ts';
+import { CodedError, ERROR_CODES } from '../../errors.ts';
+
 
 export function sourceDigest(source: string) {
   return createHash('sha256').update(source, 'utf8').digest('hex');
@@ -26,7 +28,7 @@ export const SOURCE_UNIT_END = /^\s*(?:#|\/\/)\s*@webpilot-endunit\s*$/;
 export function normalizedSourceUnitPath(value: string | undefined) {
   const unitPath = String(value || '').trim().replace(/\\/g, '/').replace(/^\/+/, '');
   if (!unitPath || unitPath.includes('..') || !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,159}$/.test(unitPath)) {
-    throw new Error('Office source unit path must be a relative path using letters, numbers, dot, underscore, slash, or hyphen.');
+    throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'Office source unit path must be a relative path using letters, numbers, dot, underscore, slash, or hyphen.');
   }
   return unitPath;
 }
@@ -39,11 +41,11 @@ export function parseSourceUnits(source: string): ParsedSourceUnit[] {
     const match = SOURCE_UNIT_START.exec(lines[index]);
     if (!match) continue;
     const unitPath = normalizedSourceUnitPath(match[1]);
-    if (names.has(unitPath)) throw new Error(`Duplicate Office source unit path: ${unitPath}.`);
+    if (names.has(unitPath)) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `Duplicate Office source unit path: ${unitPath}.`);
     const endMarker = lines.findIndex((line, candidate) => candidate > index && SOURCE_UNIT_END.test(line));
-    if (endMarker < 0) throw new Error(`Office source unit ${unitPath} is missing @webpilot-endunit.`);
+    if (endMarker < 0) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `Office source unit ${unitPath} is missing @webpilot-endunit.`);
     const nested = lines.slice(index + 1, endMarker).find((line) => SOURCE_UNIT_START.test(line));
-    if (nested) throw new Error(`Office source unit ${unitPath} contains a nested unit marker.`);
+    if (nested) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `Office source unit ${unitPath} contains a nested unit marker.`);
     units.push({ path: unitPath, startLine: index + 2, endLine: endMarker, content: lines.slice(index + 1, endMarker).join('\n'), kind: 'explicit' });
     names.add(unitPath);
     index = endMarker;
@@ -402,15 +404,15 @@ export function emptyCodexDraftPatchChunk(changeContext?: string): CodexDraftPat
 export function parseCodexDraftPatch(patchText: string) {
   const lines = normalizedDraftSource(String(patchText || '')).trim().split('\n');
   if (lines[0]?.trim() !== '*** Begin Patch') {
-    throw new Error("The first line of the patch must be '*** Begin Patch'.");
+    throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, "The first line of the patch must be '*** Begin Patch'.");
   }
   if (lines.at(-1)?.trim() !== '*** End Patch') {
-    throw new Error("The last line of the patch must be '*** End Patch'.");
+    throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, "The last line of the patch must be '*** End Patch'.");
   }
   const updates: CodexDraftPatchChunk[][] = [];
   let chunks: CodexDraftPatchChunk[] | undefined;
   const currentChunk = () => {
-    if (!chunks) throw new Error("Expected an '*** Update File: draft.py' header before patch lines.");
+    if (!chunks) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, "Expected an '*** Update File: draft.py' header before patch lines.");
     if (!chunks.length) chunks.push(emptyCodexDraftPatchChunk());
     return chunks[chunks.length - 1];
   };
@@ -421,21 +423,21 @@ export function parseCodexDraftPatch(patchText: string) {
       ? line.slice('*** Update File: '.length).trim().replace(/^\.\//, '')
       : undefined;
     if (updatePath !== undefined) {
-      if (updatePath !== 'draft.py') throw new Error("Codex patch may update only the staged file named 'draft.py'.");
+      if (updatePath !== 'draft.py') throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, "Codex patch may update only the staged file named 'draft.py'.");
       chunks = [];
       updates.push(chunks);
       continue;
     }
     if (line.startsWith('*** Add File: ') || line.startsWith('*** Delete File: ') || line.startsWith('*** Move to: ')) {
-      throw new Error("Office draft patches may only use '*** Update File: draft.py'.");
+      throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, "Office draft patches may only use '*** Update File: draft.py'.");
     }
     if (line === '@@') {
-      if (!chunks) throw new Error("Expected an '*** Update File: draft.py' header before '@@'.");
+      if (!chunks) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, "Expected an '*** Update File: draft.py' header before '@@'.");
       chunks.push(emptyCodexDraftPatchChunk());
       continue;
     }
     if (line.startsWith('@@ ')) {
-      if (!chunks) throw new Error("Expected an '*** Update File: draft.py' header before '@@'.");
+      if (!chunks) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, "Expected an '*** Update File: draft.py' header before '@@'.");
       chunks.push(emptyCodexDraftPatchChunk(line.slice(3)));
       continue;
     }
@@ -445,7 +447,7 @@ export function parseCodexDraftPatch(patchText: string) {
     }
     const chunk = currentChunk();
     if (chunk.isEndOfFile && line === '') continue;
-    if (chunk.isEndOfFile) throw new Error("Expected a new '@@' context marker after '*** End of File'.");
+    if (chunk.isEndOfFile) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, "Expected a new '@@' context marker after '*** End of File'.");
     if (line === '') {
       chunk.contextLineIndices.push([chunk.oldLines.length, chunk.newLines.length]);
       chunk.oldLines.push('');
@@ -461,7 +463,7 @@ export function parseCodexDraftPatch(patchText: string) {
     } else if (marker === '+') chunk.newLines.push(content);
     else if (marker === '-') chunk.oldLines.push(content);
     else if (line.startsWith('*** ') || line.startsWith('@@')) {
-      throw new Error(`Unexpected patch control line ${index + 1}. Use one Codex-format Update File section with @@ hunks.`);
+      throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `Unexpected patch control line ${index + 1}. Use one Codex-format Update File section with @@ hunks.`);
     } else {
       // Models occasionally omit the one-character context marker while
       // preserving the exact source line. Inside a hunk, an otherwise bare
@@ -472,13 +474,13 @@ export function parseCodexDraftPatch(patchText: string) {
       chunk.newLines.push(line);
     }
   }
-  if (!updates.length) throw new Error("Patch requires at least one '*** Update File: draft.py' section.");
-  if (updates.some((update) => !update.length)) throw new Error("Update patch for 'draft.py' is empty.");
+  if (!updates.length) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, "Patch requires at least one '*** Update File: draft.py' section.");
+  if (updates.some((update) => !update.length)) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, "Update patch for 'draft.py' is empty.");
   const allChunks = updates.flat();
   if (!allChunks.length || allChunks.some((chunk) => !chunk.oldLines.length && !chunk.newLines.length)) {
-    throw new Error('Update patch contains an empty hunk.');
+    throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'Update patch contains an empty hunk.');
   }
-  if (allChunks.length > 100) throw new Error('Office draft patch is limited to 100 atomic hunks.');
+  if (allChunks.length > 100) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'Office draft patch is limited to 100 atomic hunks.');
   return updates;
 }
 
@@ -495,7 +497,7 @@ export function seekCodexPatchSequence(lines: string[], pattern: string[], start
   for (let index = searchStart; index <= upper; index += 1) {
     if (pattern.every((line, offset) => lines[index + offset] === line)) {
       if (found !== undefined) {
-        throw new Error(`PATCH_TARGET_AMBIGUOUS: exact matches on lines ${found + 1} and ${index + 1}. Include more unchanged context or use a readSource source-unit path. Nothing was saved.`);
+        throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `PATCH_TARGET_AMBIGUOUS: exact matches on lines ${found + 1} and ${index + 1}. Include more unchanged context or use a readSource source-unit path. Nothing was saved.`);
       }
       found = index;
     }
@@ -512,7 +514,7 @@ export function codexDraftPatchReplacements(originalLines: string[], chunks: Cod
     let scopeEnd = originalLines.length;
     if (chunk.changeContext !== undefined) {
       const contextIndex = seekCodexPatchSequence(originalLines, [chunk.changeContext], lineIndex, false);
-      if (contextIndex === undefined) throw new Error(`Failed to find patch context '${chunk.changeContext}' in draft.py.`);
+      if (contextIndex === undefined) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `Failed to find patch context '${chunk.changeContext}' in draft.py.`);
       lineIndex = contextIndex + 1;
       // A Python function/class anchor cannot drift into a later declaration.
       if (/^\s*(?:async\s+def|def|class)\s/.test(chunk.changeContext)) {
@@ -528,7 +530,7 @@ export function codexDraftPatchReplacements(originalLines: string[], chunks: Cod
     }
     if (!chunk.oldLines.length) {
       if (chunk.changeContext !== undefined) {
-        throw new Error('PATCH_INSERTION_ANCHOR_REQUIRED: include the exact anchor as an unchanged hunk line for an insertion. A context-free insertion only appends at EOF.');
+        throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'PATCH_INSERTION_ANCHOR_REQUIRED: include the exact anchor as an unchanged hunk line for an insertion. A context-free insertion only appends at EOF.');
       }
       replacements.push([originalLines.length, 0, [...chunk.newLines]]);
       continue;
@@ -543,7 +545,7 @@ export function codexDraftPatchReplacements(originalLines: string[], chunks: Cod
       startIndex = seekCodexPatchSequence(originalLines, pattern, lineIndex, true, scopeEnd);
     }
     if (startIndex === undefined) {
-      throw new Error('PATCH_TARGET_NOT_FOUND: copy the exact current program, including indentation and punctuation. No fuzzy match or already-applied guess was used.');
+      throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'PATCH_TARGET_NOT_FOUND: copy the exact current program, including indentation and punctuation. No fuzzy match or already-applied guess was used.');
     }
 
     // Leave unchanged context in place so neighboring hunks may share context.
@@ -570,7 +572,7 @@ export function codexDraftPatchReplacements(originalLines: string[], chunks: Cod
 
 export function applyUnoDraftPatch(source: string, patchText: string) {
   const result = applyUnoDraftPatchHunks(source, patchText);
-  if (result.failedHunks.length) throw new Error(result.failedHunks.map((failure) => `hunk ${failure.hunk}: ${failure.error}`).join('\n'));
+  if (result.failedHunks.length) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, result.failedHunks.map((failure) => `hunk ${failure.hunk}: ${failure.error}`).join('\n'));
   return result.source;
 }
 
@@ -631,7 +633,7 @@ export function applyUnoDraftPatchHunks(source: string, patchText: string): UnoD
     .filter(({ chunk }) => codexDraftPatchChunkHasChange(chunk));
   if (changedChunks.length !== parsedChunks.length) {
     const hunk = parsedChunks.findIndex((chunk) => !codexDraftPatchChunkHasChange(chunk)) + 1;
-    throw new Error(
+    throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED,
       `PATCH_MISSING_CHANGE_MARKERS: hunk ${hunk} has no source change. No hunks were saved. `
       + "Use '-old' and '+new' in the SAME @@ hunk, followed by the full source indentation. "
       + 'Two context-only @@ blocks are NOT an old/new replacement. '
@@ -667,7 +669,7 @@ export function applyUnoDraftPatchHunks(source: string, patchText: string): UnoD
   };
   const changedLineCount = candidates.reduce((sum, item) => sum + Math.max(item.end - item.start, item.newLines.length), 0);
   if (changedLineCount >= 100 && changedLineCount / Math.max(1, draftSourceLineCount(normalized)) >= 0.6) {
-    throw new Error('Near-complete source replacement through one edit is blocked. Keep the same draft and split the repair into focused Codex-format hunks based on the latest read.');
+    throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'Near-complete source replacement through one edit is blocked. Keep the same draft and split the repair into focused Codex-format hunks based on the latest read.');
   }
   for (const item of candidates.sort((a, b) => b.start - a.start)) lines.splice(item.start, item.end - item.start, ...item.newLines);
   return {
@@ -689,7 +691,7 @@ export function applyUnoDraftReplacements(
   if (!Array.isArray(replacements) || !replacements.length || replacements.length > 50
     || replacements.some((item) => !item || typeof item.oldText !== 'string' || !item.oldText.length || typeof item.newText !== 'string')
     || replacements.reduce((sum, item) => sum + item.oldText.length + item.newText.length, 0) > 200_000) {
-    throw new Error('replacements requires 1-50 oldText/newText pairs, nonempty oldText, at most 200000 total characters.');
+    throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'replacements requires 1-50 oldText/newText pairs, nonempty oldText, at most 200000 total characters.');
   }
   const positions = (text: string) => {
     const found: number[] = [];
@@ -747,10 +749,10 @@ export function applyUnoDraftReplacements(
     edited = edited.slice(0, item.start) + item.text + edited.slice(item.end);
   }
   if (changedLines >= 100 && changedLines / draftSourceLineCount(normalized) >= 0.6) {
-    throw new Error('Near-complete source replacement is blocked. Use focused replacements from the latest readSource.');
+    throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'Near-complete source replacement is blocked. Use focused replacements from the latest readSource.');
   }
   if (!applicable.length && !alreadyAppliedHunks) {
-    throw new Error(failedHunks.map((item) => `replacement ${item.hunk}: ${item.error}`).join('\n'));
+    throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, failedHunks.map((item) => `replacement ${item.hunk}: ${item.error}`).join('\n'));
   }
   return { source: edited, appliedHunks: applicable.length, alreadyAppliedHunks, failedHunks, ignoredHunks: 0, totalHunks: replacements.length, blockedHunks: [] };
 }

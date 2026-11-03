@@ -3,6 +3,8 @@ import { lazy, Suspense, useEffect, useId, useMemo, useRef, useState } from 'rea
 import { cellText, cellValue, chartDataTables, parseCell, replaceTableRows, tableColumns } from './editor-core.ts';
 import { ChartIcon } from './icons.tsx';
 import { defaultChartTranslate, type ChartTranslate } from './i18n.ts';
+import { CodedError, ERROR_CODES } from '../errors.ts';
+
 
 const ChartJsonEditor = lazy(() => import('./json-editor.tsx').then((module) => ({ default: module.ChartJsonEditor })));
 
@@ -42,7 +44,7 @@ export function ChartDataEditor({ option, title, saving, onSave, onCancel, onRel
   function reportError(reason: unknown) {
     setError(reason instanceof Error ? reason.message : String(reason));
     const details = reason as { status?: number; name?: string; code?: string } | null;
-    setConflict(details?.status === 409 || details?.name === 'ChartRevisionConflict' || details?.code === 'chart_revision_conflict' || details?.code === 'chart-revision-conflict');
+    setConflict(details?.status === 409 || details?.name === 'ChartRevisionConflict' || details?.code === ERROR_CODES.CHART_REVISION_CONFLICT || details?.code === ERROR_CODES.CHART_REVISION_CONFLICT_TOOL);
   }
   function committed() {
     if (!table) return base;
@@ -53,7 +55,7 @@ export function ChartDataEditor({ option, title, saving, onSave, onCancel, onRel
       const value = parseCell(text, cellValue(rows[rowIndex], key));
       if (key === null) rows[rowIndex] = value;
       else {
-        if (!rows[rowIndex] || typeof rows[rowIndex] !== 'object') throw new Error('混合结构数据请使用 JSON 配置编辑。');
+        if (!rows[rowIndex] || typeof rows[rowIndex] !== 'object') throw new CodedError(ERROR_CODES.CHART_OPERATION_FAILED, '混合结构数据请使用 JSON 配置编辑。');
         (rows[rowIndex] as Record<string | number, unknown>)[key] = value;
       }
     }
@@ -64,7 +66,7 @@ export function ChartDataEditor({ option, title, saving, onSave, onCancel, onRel
     if (advanced === nextAdvanced) return;
     attempt(() => {
       const next = advanced ? JSON.parse(json) as Record<string, unknown> : committed();
-      if (!next || typeof next !== 'object' || Array.isArray(next)) throw new Error('配置必须是 JSON 对象。');
+      if (!next || typeof next !== 'object' || Array.isArray(next)) throw new CodedError(ERROR_CODES.CHART_OPERATION_FAILED, '配置必须是 JSON 对象。');
       setBase(next); setJson(JSON.stringify(next, null, 2)); setCells({}); setSelected(0); setPage(0); setAdvanced(nextAdvanced);
     });
   }

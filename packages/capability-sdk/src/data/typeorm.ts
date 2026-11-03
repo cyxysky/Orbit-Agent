@@ -4,6 +4,8 @@ import type { CapabilityExecutionContext, CapabilityRunContext } from '../index.
 import { boundedReadStatement, sqlTokens } from './sql.ts';
 import { querySqliteFile } from './sqlite-query.ts';
 import { cancelPostgresQuery, type PostgresCancelableClient } from './postgres-cancel.ts';
+import { CodedError, ERROR_CODES } from '../errors.ts';
+
 
 function tableFromMetadata(metadata: EntityMetadata): DataTable {
   return {
@@ -21,7 +23,7 @@ function quoteSqliteIdentifier(value: string) {
 }
 
 async function introspectSchema(source: DataSource): Promise<DataTable[]> {
-  if (!source.isInitialized) throw new Error('TypeORM DataSource is not initialized.');
+  if (!source.isInitialized) throw new CodedError(ERROR_CODES.DATA_OPERATION_FAILED, 'TypeORM DataSource is not initialized.');
   if ((source.options.type as string) === 'sqlite' || source.options.type === 'better-sqlite3') {
     const tables = await source.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name") as Array<{ name?: unknown }>;
     return Promise.all(tables.flatMap((row) => typeof row.name === 'string' ? [row.name] : []).map(async (name) => {
@@ -65,11 +67,11 @@ export function createTypeOrmAgentDataSource(input: { id: string; name?: string;
     id: input.id, name: input.name || input.id, dialect: input.source.options.type, readOnly: input.readOnly !== false,
     async schema() { return introspectSchema(input.source); },
     async query(statement, parameters, options, context: CapabilityExecutionContext): Promise<DataQueryResult> {
-      if (!input.source.isInitialized) throw new Error('TypeORM DataSource is not initialized.');
+      if (!input.source.isInitialized) throw new CodedError(ERROR_CODES.DATA_OPERATION_FAILED, 'TypeORM DataSource is not initialized.');
       const readOnly = isReadOnlyStatement(statement);
       const allowWrite = options.allowWrite && input.readOnly === false;
-      if (!readOnly && !allowWrite) throw new Error('Data source rejected a write statement.');
-      if (!sqlTokens(statement).length) throw new Error('Exactly one valid SQL statement is required.');
+      if (!readOnly && !allowWrite) throw new CodedError(ERROR_CODES.DATA_OPERATION_FAILED, 'Data source rejected a write statement.');
+      if (!sqlTokens(statement).length) throw new CodedError(ERROR_CODES.DATA_OPERATION_FAILED, 'Exactly one valid SQL statement is required.');
       context.abortSignal?.throwIfAborted();
       const maxRows = Math.max(1, Math.min(10_000, Math.floor(options.maxRows) || 500));
       const timeoutMs = Math.max(100, Math.min(300_000, Math.floor(input.timeoutMs || 15_000)));
@@ -79,7 +81,7 @@ export function createTypeOrmAgentDataSource(input: { id: string; name?: string;
       const driver = input.source.options.type as string;
       if (driver === 'sqlite' || driver === 'better-sqlite3') {
         const database = String(input.source.options.database || '');
-        if (!database || database === ':memory:' || database.startsWith('file:')) throw new Error('Bounded SQLite queries require a file-backed database.');
+        if (!database || database === ':memory:' || database.startsWith('file:')) throw new CodedError(ERROR_CODES.DATA_OPERATION_FAILED, 'Bounded SQLite queries require a file-backed database.');
         raw = await querySqliteFile({ database, statement: sql, parameters, readOnly: !allowWrite, maxRows, timeoutMs, signal: context.abortSignal });
       } else if (driver === 'postgres') {
         const runner = input.source.createQueryRunner();
@@ -108,7 +110,7 @@ export function createTypeOrmAgentDataSource(input: { id: string; name?: string;
           await cancelling;
           await runner.release();
         }
-      } else throw new Error('Bounded TypeORM queries support PostgreSQL and file-backed SQLite. Supply a driver-specific AgentDataSource for other engines.');
+      } else throw new CodedError(ERROR_CODES.DATA_OPERATION_FAILED, 'Bounded TypeORM queries support PostgreSQL and file-backed SQLite. Supply a driver-specific AgentDataSource for other engines.');
       const rows = Array.isArray(raw) ? raw.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item)) : [];
       const bounded = rows.slice(0, maxRows);
       return { columns: [...new Set(bounded.flatMap((row) => Object.keys(row)))], rows: bounded, rowCount: bounded.length, truncated: rows.length > maxRows, elapsedMs: Date.now() - startedAt };

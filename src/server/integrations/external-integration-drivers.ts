@@ -22,6 +22,8 @@ import type {
   ExternalIntegrationConfiguration,
   ResolvedExternalIntegration,
 } from './external-integration-vault';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export type ExternalIntegrationFieldDescriptor = {
   key: string;
@@ -95,10 +97,10 @@ function httpEndpoint(value: string, label: string) {
   try {
     url = new URL(value);
   } catch {
-    throw new Error(`请输入有效的${label}。`);
+    throw new CodedError(ERROR_CODES.APPLICATION_ERROR, `请输入有效的${label}。`);
   }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error(`${label}仅支持 HTTP 或 HTTPS。`);
-  if (url.username || url.password) throw new Error(`${label}不能包含用户名或密码。`);
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new CodedError(ERROR_CODES.APPLICATION_ERROR, `${label}仅支持 HTTP 或 HTTPS。`);
+  if (url.username || url.password) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, `${label}不能包含用户名或密码。`);
   return url.href;
 }
 
@@ -110,9 +112,9 @@ function endpointPreview(endpoint: string) {
 
 function authenticationConfiguration(configuration: ExternalIntegrationConfiguration): ExternalIntegrationConfiguration {
   const authentication = configuration.authentication || 'none';
-  if (authentication !== 'none' && authentication !== 'bearer') throw new Error('不支持所选认证方式。');
+  if (authentication !== 'none' && authentication !== 'bearer') throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '不支持所选认证方式。');
   const token = configuration.token?.trim();
-  if (authentication === 'bearer' && !token) throw new Error('使用 Bearer Token 时必须填写访问令牌。');
+  if (authentication === 'bearer' && !token) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '使用 Bearer Token 时必须填写访问令牌。');
   return authentication === 'bearer' ? { authentication: 'bearer', token: token! } : { authentication: 'none' };
 }
 
@@ -124,20 +126,20 @@ function authorizationHeader(configuration: ExternalIntegrationConfiguration) {
 
 function accessConfiguration(configuration: ExternalIntegrationConfiguration) {
   const access = configuration.access || 'read-only';
-  if (access !== 'read-only' && access !== 'read-write') throw new Error('不支持所选数据访问权限。');
+  if (access !== 'read-only' && access !== 'read-write') throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '不支持所选数据访问权限。');
   return access;
 }
 
 function boundedPort(value: string, fallback: number) {
   const port = Number(value || fallback);
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error('请输入 1 到 65535 之间的数据库端口。');
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '请输入 1 到 65535 之间的数据库端口。');
   return port;
 }
 
 function requiredText(value: string | undefined, label: string, maximum = 500) {
   const normalized = value?.trim();
-  if (!normalized) throw new Error(`请输入${label}。`);
-  if (normalized.length > maximum) throw new Error(`${label}过长。`);
+  if (!normalized) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, `请输入${label}。`);
+  if (normalized.length > maximum) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, `${label}过长。`);
   return normalized;
 }
 
@@ -210,7 +212,7 @@ function verifyWeComMessageSendResult(result: unknown) {
     })) accepted = true;
   }
   if (!accepted) {
-    throw new Error(`企业微信 MCP 未返回可验证的发送回执，不能确认消息已送达。原始返回：${compactOperationResult(result)}`);
+    throw new CodedError(ERROR_CODES.APPLICATION_ERROR, `企业微信 MCP 未返回可验证的发送回执，不能确认消息已送达。原始返回：${compactOperationResult(result)}`);
   }
 }
 
@@ -226,14 +228,14 @@ function assertWeComOperationSucceeded(result: unknown, label: string) {
         return typeof entry?.text === 'string' ? [entry.text.trim()] : [];
       }).filter(Boolean).join('\n')
       : '';
-    throw new Error(`${label}失败：${text || String(root.message || root.error || '未知错误')}`);
+    throw new CodedError(ERROR_CODES.APPLICATION_ERROR, `${label}失败：${text || String(root.message || root.error || '未知错误')}`);
   }
   for (const value of decodedOperationResultValues(result)) {
     const record = resultRecord(value);
     if (!record || !Object.prototype.hasOwnProperty.call(record, 'errcode')) continue;
     const errcode = Number(record.errcode);
     if (Number.isFinite(errcode) && errcode !== 0) {
-      throw new Error(`${label}失败（errcode ${errcode}）：${String(record.errmsg || record.message || '未知错误')}`);
+      throw new CodedError(ERROR_CODES.APPLICATION_ERROR, `${label}失败（errcode ${errcode}）：${String(record.errmsg || record.message || '未知错误')}`);
     }
   }
 }
@@ -257,7 +259,7 @@ function weComRecentSessions(result: unknown) {
       return [{ kind, id, ...(name ? { name } : {}), ...(lastMessageTime ? { lastMessageTime } : {}) }];
     });
   }
-  throw new Error('企业微信最近会话接口没有返回 sessions 列表。');
+  throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '企业微信最近会话接口没有返回 sessions 列表。');
 }
 
 async function resolveWeComTargets(
@@ -268,13 +270,13 @@ async function resolveWeComTargets(
   const result = await connector.call(weComSessionsOperationId, {}, context);
   const sessions = weComRecentSessions(result);
   if (!sessions.length) {
-    throw new Error('企业微信最近会话列表为空。请先给机器人发送一条消息，群聊中需要先 @机器人。');
+    throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '企业微信最近会话列表为空。请先给机器人发送一条消息，群聊中需要先 @机器人。');
   }
   return targets.map((target) => {
     const expectedKind = target.kind === 'group' ? 'group' : 'user';
     const matches = sessions.filter((item) => item.kind === expectedKind && item.id === target.id);
     if (matches.length !== 1) {
-      throw new Error('接收会话已不在当前可发送列表中，或存在多个匹配。请刷新会话列表并重新选择。');
+      throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '接收会话已不在当前可发送列表中，或存在多个匹配。请刷新会话列表并重新选择。');
     }
     return matches[0];
   });
@@ -330,9 +332,9 @@ function createWeComWebSocketChannel(integration: ResolvedExternalIntegration, r
         const requested = draft.targets;
         const available = await weComBotTargets(integration);
         const targets = [...new Map(requested.map(target => [`${target.kind}:${target.id}`, target])).values()];
-        if (!targets.length) throw new Error('请从渠道 availableTargets 选择支持上传附件的接收对象。');
+        if (!targets.length) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '请从渠道 availableTargets 选择支持上传附件的接收对象。');
         if (targets.some(target => !available.some(item => item.kind === target.kind && item.id === target.id))) {
-          throw new Error('接收对象不在此机器人的长连接会话记录中。请让接收者给机器人发消息，再从 availableTargets 选择支持上传附件的会话。');
+          throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '接收对象不在此机器人的长连接会话记录中。请让接收者给机器人发消息，再从 availableTargets 选择支持上传附件的会话。');
         }
         const bot = getWeComConnection(integration);
         const uploads: Array<{ artifactId?: string; mediaId: string; transport: string }> = [];
@@ -349,7 +351,7 @@ function createWeComWebSocketChannel(integration: ResolvedExternalIntegration, r
         }).catch((error: unknown) => {
           const result = resultRecord(error);
           const detail = error instanceof Error ? error.message : String(result?.errmsg || '读取或上传失败');
-          throw new Error(`企业微信准备消息失败${result?.errcode === undefined ? '' : `（errcode ${result.errcode}）`}：${detail}。尚未调用发送接口。`);
+          throw new CodedError(ERROR_CODES.APPLICATION_ERROR, `企业微信准备消息失败${result?.errcode === undefined ? '' : `（errcode ${result.errcode}）`}：${detail}。尚未调用发送接口。`);
         });
         const deliveries = [];
         for (const target of targets) {
@@ -555,7 +557,7 @@ function sqliteDataDriver(): ExternalIntegrationDriver {
     async createDataSource(integration, timeoutMs) {
       const readOnly = integration.configuration.access !== 'read-write';
       const databaseStat = await stat(integration.configuration.database).catch(() => undefined);
-      if (!databaseStat?.isFile()) throw new Error('找不到所选 SQLite 数据库文件。');
+      if (!databaseStat?.isFile()) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '找不到所选 SQLite 数据库文件。');
       const source = new DataSource({
         type: 'better-sqlite3',
         database: integration.configuration.database,
@@ -628,7 +630,7 @@ function postgresDataDriver(): ExternalIntegrationDriver {
     ],
     normalize(configuration) {
       const sslMode = configuration.sslMode || 'disable';
-      if (sslMode !== 'disable' && sslMode !== 'require' && sslMode !== 'verify-full') throw new Error('不支持所选 SSL 模式。');
+      if (sslMode !== 'disable' && sslMode !== 'require' && sslMode !== 'verify-full') throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '不支持所选 SSL 模式。');
       return {
         host: requiredText(configuration.host, '主机地址'),
         port: String(boundedPort(configuration.port, 5432)),
@@ -774,17 +776,17 @@ function weComAiBotDriver(): ExternalIntegrationDriver {
     ],
     normalize(configuration) {
       const endpoint = configuration.endpoint?.trim();
-      if (!endpoint) throw new Error('请输入企业微信消息 MCP 地址。');
+      if (!endpoint) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '请输入企业微信消息 MCP 地址。');
       const defaultTarget = configuration.defaultTarget?.trim();
       const defaultTargetKind = configuration.defaultTargetKind || 'user';
-      if (defaultTargetKind !== 'user' && defaultTargetKind !== 'group') throw new Error('已验证会话类型无效。');
-      if (defaultTarget && defaultTarget.length > 500) throw new Error('接收会话标识过长。');
+      if (defaultTargetKind !== 'user' && defaultTargetKind !== 'group') throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '已验证会话类型无效。');
+      if (defaultTarget && defaultTarget.length > 500) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '接收会话标识过长。');
       const normalizedEndpoint = httpEndpoint(endpoint, '企业微信消息 MCP 地址');
       const botId = configuration.botId?.trim();
       const botSecret = configuration.botSecret?.trim();
-      if (Boolean(botId) !== Boolean(botSecret)) throw new Error('Bot ID 和 Secret 必须一起配置。');
+      if (Boolean(botId) !== Boolean(botSecret)) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Bot ID 和 Secret 必须一起配置。');
       const receiveMessages = configuration.receiveMessages === 'true';
-      if (receiveMessages && !botId) throw new Error('开启接收消息需要配置 Bot ID 和 Secret。');
+      if (receiveMessages && !botId) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '开启接收消息需要配置 Bot ID 和 Secret。');
       const expectedTargetBinding = defaultTarget
         ? weComTargetBinding({ endpoint: normalizedEndpoint, target: { kind: defaultTargetKind, id: defaultTarget } })
         : '';
@@ -816,10 +818,10 @@ function weComAiBotDriver(): ExternalIntegrationDriver {
         const operations = await connector.listOperations(context);
         const required = [weComSessionsOperationId, weComMessageOperationId];
         const missing = required.filter(id => !operations.some(operation => operation.id === id));
-        if (missing.length) throw new Error('这个 MCP 地址缺少必要能力：' + missing.join('、'));
+        if (missing.length) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '这个 MCP 地址缺少必要能力：' + missing.join('、'));
         if (!selectedTarget) {
           const targets = weComRecentSessions(await connector.call(weComSessionsOperationId, {}, context));
-          if (!targets.length) throw new Error('当前没有可发送的接收会话。请先给机器人发送消息，群聊中需要 @机器人，然后重新读取。');
+          if (!targets.length) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '当前没有可发送的接收会话。请先给机器人发送消息，群聊中需要 @机器人，然后重新读取。');
           return { kind: 'available-targets', targets };
         }
         onProgress?.({ stage: 'verifying' });
@@ -866,7 +868,7 @@ export function listExternalIntegrationDrivers(category?: ExternalIntegrationCat
 
 export function externalIntegrationDriver(driverId: string, category?: ExternalIntegrationCategory) {
   const driver = driversById.get(driverId);
-  if (!driver || (category && driver.category !== category)) throw new Error('不支持所选外部集成驱动。');
+  if (!driver || (category && driver.category !== category)) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '不支持所选外部集成驱动。');
   return driver;
 }
 
@@ -880,10 +882,10 @@ export function resolveExternalIntegrationConfiguration(input: {
   const driver = externalIntegrationDriver(input.driverId, input.category);
   const allowedFields = new Set(driver.fields.map((field) => field.key));
   for (const key of Object.keys(input.configuration)) {
-    if (!allowedFields.has(key)) throw new Error(`配置字段 ${key} 不属于所选驱动。`);
+    if (!allowedFields.has(key)) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, `配置字段 ${key} 不属于所选驱动。`);
   }
   for (const key of input.clearFields || []) {
-    if (!allowedFields.has(key)) throw new Error(`不能清除未知配置字段 ${key}。`);
+    if (!allowedFields.has(key)) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, `不能清除未知配置字段 ${key}。`);
   }
   const merged: ExternalIntegrationConfiguration = { ...(input.existing?.configuration || {}) };
   for (const key of input.clearFields || []) delete merged[key];
@@ -919,19 +921,19 @@ export function publicExternalIntegrationSummary(integration: ResolvedExternalIn
 
 export function createExternalIntegrationConnector(integration: ResolvedExternalIntegration, timeoutMs: number) {
   const driver = externalIntegrationDriver(integration.driverId, 'connector');
-  if (!driver.createConnector) throw new Error(`驱动 ${driver.id} 不能创建连接器。`);
+  if (!driver.createConnector) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, `驱动 ${driver.id} 不能创建连接器。`);
   return driver.createConnector(integration, timeoutMs);
 }
 
 export function createExternalCommunicationChannel(integration: ResolvedExternalIntegration, timeoutMs: number, readArtifact?: CommunicationMediaOperations['readArtifact']) {
   const driver = externalIntegrationDriver(integration.driverId, 'communication');
-  if (!driver.createChannel) throw new Error(`驱动 ${driver.id} 不能创建通信渠道。`);
+  if (!driver.createChannel) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, `驱动 ${driver.id} 不能创建通信渠道。`);
   return driver.createChannel(integration, timeoutMs, readArtifact);
 }
 
 export function createExternalDataSource(integration: ResolvedExternalIntegration, timeoutMs: number) {
   const driver = externalIntegrationDriver(integration.driverId, 'data');
-  if (!driver.createDataSource) throw new Error(`驱动 ${driver.id} 不能创建数据源。`);
+  if (!driver.createDataSource) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, `驱动 ${driver.id} 不能创建数据源。`);
   return driver.createDataSource(integration, timeoutMs);
 }
 

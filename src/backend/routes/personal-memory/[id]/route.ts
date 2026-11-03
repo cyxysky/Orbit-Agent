@@ -7,6 +7,8 @@ import { requestApplicationUserId } from '@/server/auth/user-context';
 import { ApiRequestError, apiError, apiJson, parseJsonRequest } from '@/server/http/api-request';
 import { personalMemoryPatchSchema } from '@/server/http/personal-memory-request.schema';
 import { idempotencyFingerprint, runIdempotentJson } from '@/server/http/idempotency';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 
 type RouteContext = {
@@ -32,9 +34,9 @@ export async function PATCH(request: Request, context: RouteContext) {
       userId,
     }, async () => {
       const visibleItem = await getPersonalMemoryItem(id, userId);
-      if (visibleItem && visibleItem.userId !== userId) throw new ApiRequestError('Only the memory creator can edit this shared memory', { code: 'forbidden', status: 403 });
+      if (visibleItem && visibleItem.userId !== userId) throw new ApiRequestError('Only the memory creator can edit this shared memory', { code: ERROR_CODES.FORBIDDEN, status: 403 });
       const item = await updatePersonalMemoryItem(id, body, userId);
-      if (!item) throw new ApiRequestError('Personal memory item not found', { code: 'not_found', status: 404 });
+      if (!item) throw new ApiRequestError('Personal memory item not found', { code: ERROR_CODES.NOT_FOUND, status: 404 });
       return apiJson(request, { item });
     });
   } catch (error) {
@@ -52,9 +54,9 @@ export async function DELETE(request: Request, context: RouteContext) {
       userId,
     }, async () => {
       const visibleItem = await getPersonalMemoryItem(id, userId);
-      if (visibleItem && visibleItem.userId !== userId) throw new ApiRequestError('Only the memory creator can delete this shared memory', { code: 'forbidden', status: 403 });
+      if (visibleItem && visibleItem.userId !== userId) throw new ApiRequestError('Only the memory creator can delete this shared memory', { code: ERROR_CODES.FORBIDDEN, status: 403 });
       const deleted = await deletePersonalMemoryItem(id, userId);
-      if (!deleted) throw new ApiRequestError('Personal memory item not found', { code: 'not_found', status: 404 });
+      if (!deleted) throw new ApiRequestError('Personal memory item not found', { code: ERROR_CODES.NOT_FOUND, status: 404 });
       return apiJson(request, { ok: true, deleted });
     });
   } catch (error) {

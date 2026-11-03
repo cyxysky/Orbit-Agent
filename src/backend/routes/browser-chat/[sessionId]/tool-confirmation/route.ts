@@ -3,6 +3,8 @@ import { requestApplicationUserId } from '@/server/auth/user-context';
 import { browserChatToolConfirmationRequestSchema } from '@/server/http/browser-chat-request.schema';
 import { ApiRequestError, apiError, apiJson, parseJsonRequest } from '@/server/http/api-request';
 import type { BrowserChatSessionRouteContext } from '@/server/http/browser-chat-route';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 
 export async function POST(request: Request, context: BrowserChatSessionRouteContext) {
@@ -14,7 +16,7 @@ export async function POST(request: Request, context: BrowserChatSessionRouteCon
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to resolve tool confirmation';
     const normalizedError = /Browser chat session not found/i.test(message)
-      ? new ApiRequestError('Browser chat session not found', { code: 'not_found', status: 404 })
+      ? new ApiRequestError('Browser chat session not found', { code: ERROR_CODES.NOT_FOUND, status: 404 })
       : error;
     return apiError(request, normalizedError, { fallback: 'Failed to resolve tool confirmation' });
   }

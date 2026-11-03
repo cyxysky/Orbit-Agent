@@ -1,10 +1,12 @@
+
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 // Preserve the AI SDK HTTP response contract while carrying its stream over an
 // upgraded socket. No automatic retry: a lost connection may follow execution.
 export const browserChatStreamFetch: typeof fetch = async (input, init) => {
   const request = new Request(input, init);
   const url = new URL(request.url);
   if (url.origin !== window.location.origin || request.method !== 'POST') {
-    throw new Error('Chat streaming requires a same-origin POST');
+    throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Chat streaming requires a same-origin POST');
   }
   const body = await request.text();
   request.signal.throwIfAborted();
@@ -24,21 +26,21 @@ export const browserChatStreamFetch: typeof fetch = async (input, init) => {
       socket.close();
     };
     const abort = () => fail(request.signal.reason || new DOMException('Aborted', 'AbortError'));
-    const timeout = setTimeout(() => fail(new Error('对话连接初始化超时，请刷新会话查看任务状态。')), 60_000);
+    const timeout = setTimeout(() => fail(new CodedError(ERROR_CODES.APPLICATION_ERROR, '对话连接初始化超时，请刷新会话查看任务状态。')), 60_000);
     request.signal.addEventListener('abort', abort, { once: true });
     if (request.signal.aborted) { abort(); return; }
     socket.onopen = () => { if (!finished) socket.send(body); };
-    socket.onerror = () => fail(new Error('对话连接失败，请检查 WebSocket 连接并刷新会话。'));
+    socket.onerror = () => fail(new CodedError(ERROR_CODES.APPLICATION_ERROR, '对话连接失败，请检查 WebSocket 连接并刷新会话。'));
     socket.onclose = () => {
-      if (!finished) fail(new Error('对话连接已断开，任务可能仍在后台运行，请刷新查看，勿重复提交。'));
+      if (!finished) fail(new CodedError(ERROR_CODES.APPLICATION_ERROR, '对话连接已断开，任务可能仍在后台运行，请刷新查看，勿重复提交。'));
     };
     socket.onmessage = event => {
       if (finished) return;
       try {
         if (event.data instanceof ArrayBuffer) {
-          if (!controller) throw new Error('Missing chat response headers');
+          if (!controller) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Missing chat response headers');
           controller.enqueue(new Uint8Array(event.data));
-          if ((controller.desiredSize || 0) < -4 * 1024 * 1024) throw new Error('Chat consumer is too slow; refresh to load persisted results');
+          if ((controller.desiredSize || 0) < -4 * 1024 * 1024) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Chat consumer is too slow; refresh to load persisted results');
           return;
         }
         const message = JSON.parse(event.data);
@@ -56,7 +58,7 @@ export const browserChatStreamFetch: typeof fetch = async (input, init) => {
           cleanup();
           controller?.close();
           socket.close();
-        } else throw new Error(message.type === 'error'
+        } else throw new CodedError(ERROR_CODES.APPLICATION_ERROR, message.type === 'error'
           ? '对话传输中断，任务可能仍在后台运行，请刷新查看，勿重复提交。' : 'Invalid chat stream response');
       } catch (error) { fail(error); }
     };

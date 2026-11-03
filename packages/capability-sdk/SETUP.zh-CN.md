@@ -4,30 +4,32 @@
 默认运行环境不包含脱敏推理依赖及模型权重。需要时再执行 `npx capability-runtime install sensitive-data` 或使用设置页下载，详见[运行环境](RUNTIME.zh-CN.md)。
 本入口随当前源码提供；旧版已安装包需要升级到包含 `scripts/setup.mjs` 的发布包。需要 Node.js >=22.16 和 npm，无需启动 Orbit。自动安装运行环境支持 Windows x64，以及 Ubuntu 22.04/24.04、Debian 12/13 的 x64/arm64。
 
-## 在本仓库运行
+## 在独立工具仓库运行
 
 Windows 在仓库根目录执行：
 
 ```powershell
-.\install-mcp.cmd
+.\install.cmd
 ```
 
 跨平台等价命令：
 
 ```sh
-npm run mcp:setup
+node install.mjs
 ```
 
-默认复用本项目已准备好的 SDK，补齐缺少的 npm 依赖，安装/修复 Chromium、Python、LibreOffice/UNO、FFmpeg 和脱敏模型，创建缺少的 `capability.config.json`，再为下表客户端写入**用户级配置**。工具项目固定为此目录，各应用启动自己的 stdio 进程；不依赖 Orbit 的界面或 Web 服务，也不会执行 dev/build。
+独立入口默认将固定版本的发布包安装到 `~/.capability-tools`，要求已发布的 0.3.1 或后续版本。可用 `--project` 指定工具目录、`--clients` 选择客户端、`--dry-run` 预览。随后安装/修复 Chromium、Python、LibreOffice/UNO、FFmpeg 和脱敏模型，创建缺少的 `capability.config.json`，再为下表客户端写入**用户级配置**。各应用启动自己的 stdio 进程；不依赖 Orbit 的界面或 Web 服务，也不会执行 dev/build。
+
+在原 Orbit 应用仓库中，`install-mcp.cmd` / `npm run mcp:setup` 仍可复用工作区内准备好的 SDK，补齐缺少的依赖。
 
 纯源码缺少 `dist` 时不能直接运行 MCP。请使用维护者准备好的 SDK 发布包，安装到单独目录；安装脚本不会替你编译源码。
 
 ## 安装到独立目录
 
-使用包含此安装器的 SDK `.tgz`，从本仓库运行：
+使用包含此安装器的 SDK `.tgz`，从 SDK 仓库运行：
 
 ```powershell
-.\install-mcp.cmd --project "D:\AgentTools" --package "D:\Downloads\capability-sdk.tgz"
+node scripts/setup.mjs --project "D:\AgentTools" --package "D:\Downloads\capability-sdk.tgz"
 ```
 
 也支持 `--package @cjfclonedeep/capability-sdk@<已发布版本>`。不要把 `<已发布版本>` 原样执行；版本必须包含统一安装器。此命令只安装 SDK 的依赖，不安装 Orbit。新目录会创建最小 `package.json`。发布包自身的 `capability-setup` 命令提供相同功能。
@@ -73,8 +75,8 @@ VS Code 支持 `VSCODE_PORTABLE` 指定的便携版默认用户目录；其他�
 ## 预览、已有配置与重复执行
 
 ```powershell
-.\install-mcp.cmd --dry-run
-.\install-mcp.cmd --clients cursor,codex --name capability-work
+node install.mjs --dry-run
+node install.mjs --clients cursor,codex --name capability-work
 ```
 
 - `--dry-run` 不下载、不安装、不创建或修改配置。SDK 尚未安装时只显示安装计划，文件级校验需在 SDK 可用后执行。
@@ -86,5 +88,7 @@ VS Code 支持 `VSCODE_PORTABLE` 指定的便携版默认用户目录；其他�
 - 配置使用本机 Node 和 SDK 的绝对路径，避免 GUI 的 PATH 差异；移动项目或 Node 后需更新连接配置。显式 `CAPABILITY_RUNTIME_HOME` 会转换为绝对路径并写入 MCP 的 `env`。
 
 首次运行会下载数 GB 环境；失败后重试可复用缓存。Linux 系统依赖需要 root 或免密码 sudo。安装完成后重启/重载客户端，并按客户端提示启用或信任 MCP；脚本不替应用确认授权。
+
+模型默认使用可续传的 HTTP 下载，避免部分代理环境下 Xet 传输停滞。如需主动启用 Xet，可设置 `HF_HUB_DISABLE_XET=0`。
 
 API Key、数据库、企业通信及自定义媒体 Provider 仍需自行配置。地图默认不启用，敏感数据模型也不会自动拦截客户端的模型请求。这里的“全部工具”指包内可自动准备的本地能力和运行环境，完整边界见 [运行环境](RUNTIME.zh-CN.md) 与 [工具配置](MCP-CONFIG.zh-CN.md)。

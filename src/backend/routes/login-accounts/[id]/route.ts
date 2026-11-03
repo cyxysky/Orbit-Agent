@@ -3,6 +3,8 @@ import { deleteLoginAccount, getLoginAccountById, updateLoginAccount } from '@/s
 import { requestApplicationUserId } from '@/server/auth/user-context';
 import { ApiRequestError, apiError, apiJson, parseJsonRequest } from '@/server/http/api-request';
 import { idempotencyFingerprint, runIdempotentJson } from '@/server/http/idempotency';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 
 type RouteContext = { params: Promise<{ id: string }> };
@@ -23,16 +25,16 @@ function accountError(error: unknown) {
   if (error instanceof ApiRequestError) return error;
   const message = error instanceof Error ? error.message : '登录账号操作失败';
   return new ApiRequestError(message, {
-    code: /已存在|already exists/i.test(message) ? 'account_already_exists' : 'account_operation_failed',
+    code: /已存在|already exists/i.test(message) ? ERROR_CODES.ACCOUNT_ALREADY_EXISTS : ERROR_CODES.ACCOUNT_OPERATION_FAILED,
     status: /已存在|already exists/i.test(message) ? 409 : 400,
   });
 }
 
 async function editableAccount(id: string, userId: string) {
   const account = await getLoginAccountById(id, userId);
-  if (!account) throw new ApiRequestError('登录账号不存在', { code: 'not_found', status: 404 });
+  if (!account) throw new ApiRequestError('登录账号不存在', { code: ERROR_CODES.NOT_FOUND, status: 404 });
   if (account.userId !== userId) {
-    throw new ApiRequestError('只有账号创建者可以修改或删除共享账号', { code: 'forbidden', status: 403 });
+    throw new ApiRequestError('只有账号创建者可以修改或删除共享账号', { code: ERROR_CODES.FORBIDDEN, status: 403 });
   }
   return account;
 }
@@ -49,7 +51,7 @@ export async function PATCH(request: Request, context: RouteContext) {
     }, async () => {
       await editableAccount(id, userId);
       const account = await updateLoginAccount(id, body, userId);
-      if (!account) throw new ApiRequestError('登录账号不存在', { code: 'not_found', status: 404 });
+      if (!account) throw new ApiRequestError('登录账号不存在', { code: ERROR_CODES.NOT_FOUND, status: 404 });
       return apiJson(request, { account });
     });
   } catch (error) {
@@ -68,7 +70,7 @@ export async function DELETE(request: Request, context: RouteContext) {
     }, async () => {
       await editableAccount(id, userId);
       if (!await deleteLoginAccount(id, userId)) {
-        throw new ApiRequestError('登录账号不存在', { code: 'not_found', status: 404 });
+        throw new ApiRequestError('登录账号不存在', { code: ERROR_CODES.NOT_FOUND, status: 404 });
       }
       return apiJson(request, { ok: true });
     });

@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { CodedError, ERROR_CODES } from '../errors.ts';
+
 
 export const mediaModelKinds = ['image', 'video', 'speech'] as const;
 export type MediaModelKind = typeof mediaModelKinds[number];
@@ -66,7 +68,7 @@ export const mediaModelDrivers: readonly MediaModelDriverDefinition[] = [
 
 export function mediaModelDriver(id: MediaModelDriver) {
   const driver = mediaModelDrivers.find((item) => item.id === id);
-  if (!driver) throw new Error(`Unknown media model driver: ${id}`);
+  if (!driver) throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, `Unknown media model driver: ${id}`);
   return driver;
 }
 
@@ -100,7 +102,7 @@ export const mediaModelSchema = z.object({
   if (model.baseURL) {
     try {
       const url = new URL(model.baseURL);
-      if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error();
+      if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED);
     } catch { issue('baseURL', '服务地址必须是 HTTP(S) 地址，不能包含凭据、查询参数或片段。'); }
   }
   for (const [key, value] of Object.entries(model.paths)) {
@@ -152,6 +154,6 @@ export function resolveMediaModel(configuration: MediaModelConfiguration, kind: 
   const available = configuration.models.filter((model) => model.kind === kind && model.enabled);
   const selected = id || configuration.defaults[kind];
   const model = selected ? available.find((item) => item.id === selected) : available[0];
-  if (!model) throw new Error(`未配置可用的 ${kind} 生成模型${selected ? `：${selected}` : ''}。请在模型设置中添加并启用。`);
+  if (!model) throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, `未配置可用的 ${kind} 生成模型${selected ? `：${selected}` : ''}。请在模型设置中添加并启用。`);
   return model;
 }

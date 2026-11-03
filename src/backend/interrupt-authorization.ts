@@ -4,6 +4,8 @@ import { readEmbedAuth } from '@/server/embed/browser-chat-embed';
 import { readBrowserChatSessionOwner, readBrowserChatMessageById } from '@/server/storage/browser-chat-history-store';
 import { getAutomationRun } from '@/server/storage/automation-store';
 import type { ExecutionTask } from '@/server/runtime/execution-ownership';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export function isInterruptRequest(method: string | undefined, pathname: string) {
   return method === 'POST' && /^\/api\/(?:embed\/)?browser-chat\/[^/]+\/(?:interrupt|subagents\/[^/]+\/stop)$/.test(pathname)
@@ -15,7 +17,7 @@ export async function authorizeInterrupt(incoming: IncomingMessage, pathname: st
   let size = 0;
   for await (const chunk of incoming) {
     const value = Buffer.from(chunk); size += value.length;
-    if (size > 8192) throw new Error('Interrupt request too large');
+    if (size > 8192) throw new CodedError(ERROR_CODES.HTTP_REQUEST_FAILED, 'Interrupt request too large');
     parts.push(value);
   }
   const body = Buffer.concat(parts);
@@ -31,11 +33,11 @@ export async function authorizeInterrupt(incoming: IncomingMessage, pathname: st
       const sessionId = decodeURIComponent(chat[2]);
       const userId = chat[1] ? readEmbedAuth(request, sessionId).userId : requestApplicationUserId(request);
       const owner = await readBrowserChatSessionOwner(sessionId);
-      if (!owner || String(owner.userId || '1') !== userId) throw new Error('Browser chat session not found');
+      if (!owner || String(owner.userId || '1') !== userId) throw new CodedError(ERROR_CODES.HTTP_REQUEST_FAILED, 'Browser chat session not found');
       const task = [...tasks].find(item => item.kind === 'chat' && item.id === sessionId);
       if (pathname.endsWith('/interrupt')) {
         const input = JSON.parse(body.toString('utf8') || '{}');
-        if (typeof input.clientMessageId !== 'string' || !input.clientMessageId.trim()) throw new Error('Browser chat turn id is required');
+        if (typeof input.clientMessageId !== 'string' || !input.clientMessageId.trim()) throw new CodedError(ERROR_CODES.HTTP_REQUEST_FAILED, 'Browser chat turn id is required');
         const message = task?.turnId ? await readBrowserChatMessageById<{ clientMessageId?: string }>(sessionId, task.turnId) : undefined;
         watchdog = Boolean(message && message.clientMessageId === input.clientMessageId.trim());
       }
@@ -44,7 +46,7 @@ export async function authorizeInterrupt(incoming: IncomingMessage, pathname: st
     } else {
       const runId = decodeURIComponent(pathname.split('/').at(-1)!);
       const run = await getAutomationRun(runId, requestApplicationUserId(request));
-      if (!run) throw new Error('Automation run not found');
+      if (!run) throw new CodedError(ERROR_CODES.HTTP_REQUEST_FAILED, 'Automation run not found');
       watchdog = [...tasks].some(task => task.kind === 'automation' && task.id === runId);
     }
     return { body, watchdog };

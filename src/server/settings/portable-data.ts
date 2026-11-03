@@ -20,6 +20,8 @@ import { store } from '@/server/db/store';
 import type { ModelProvider, ModelProviderSettings } from '@/server/ai/schemas/runtime.schema';
 import { skillResourceSchema } from '@/server/ai/schemas/runtime.schema';
 import { normalizeApplicationUserId } from '@/server/auth/user-context';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export type PortableDataKind = 'credentials' | 'skills' | 'memory' | 'model';
 type SecretDataKind = 'credentials' | 'model';
@@ -132,15 +134,15 @@ export type PortableDataImportResult = {
 
 function requirePassphrase(value: unknown) {
   const passphrase = typeof value === 'string' ? value : '';
-  if (passphrase.trim().length < 8) throw new Error('导出密码至少需要 8 个字符');
-  if (passphrase.length > 1_024) throw new Error('导出密码过长');
+  if (passphrase.trim().length < 8) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '导出密码至少需要 8 个字符');
+  if (passphrase.length > 1_024) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '导出密码过长');
   return passphrase;
 }
 
 function decodeBase64(value: string, expectedLength: number) {
-  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(value)) throw new Error('加密文件格式无效');
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(value)) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '加密文件格式无效');
   const decoded = Buffer.from(value, 'base64');
-  if (decoded.length !== expectedLength) throw new Error('加密文件格式无效');
+  if (decoded.length !== expectedLength) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '加密文件格式无效');
   return decoded;
 }
 
@@ -190,7 +192,7 @@ async function encryptSecretPayload(kind: SecretDataKind, payload: unknown, pass
 
 async function decryptSecretPayload(bundleValue: unknown, kind: SecretDataKind, passphraseValue: unknown) {
   const bundle = encryptedBundleSchema.parse(bundleValue);
-  if (bundle.kind !== kind) throw new Error('导入文件类型与当前设置项不一致');
+  if (bundle.kind !== kind) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '导入文件类型与当前设置项不一致');
   const passphrase = requirePassphrase(passphraseValue);
   try {
     const salt = decodeBase64(bundle.encryption.salt, 16);
@@ -205,16 +207,16 @@ async function decryptSecretPayload(bundleValue: unknown, kind: SecretDataKind, 
     ]).toString('utf8');
     return JSON.parse(plaintext) as unknown;
   } catch {
-    throw new Error('导入密码错误或加密文件已损坏');
+    throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '导入密码错误或加密文件已损坏');
   }
 }
 
 function parseModelConfig(value: unknown): Pick<Awaited<ReturnType<typeof store.saveModelConfig>>, 'provider' | 'providers' | 'providerOrder' | 'mediaSelections'> {
   const parsed = rawModelConfigSchema.parse(value);
-  if (!isModelProvider(parsed.provider)) throw new Error('模型服务商无效');
+  if (!isModelProvider(parsed.provider)) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '模型服务商无效');
   const providers: Partial<Record<ModelProvider, ModelProviderSettings>> = {};
   for (const [providerValue, settings] of Object.entries(parsed.providers)) {
-    if (!isModelProvider(providerValue)) throw new Error(`未知模型服务商：${providerValue}`);
+    if (!isModelProvider(providerValue)) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, `未知模型服务商：${providerValue}`);
     providers[providerValue as ModelProvider] = settings;
   }
   const providerOrder = parsed.providerOrder === undefined
@@ -248,7 +250,7 @@ export async function exportPortableData(input: {
   }
   if (input.kind === 'model') {
     const saved = await store.getModelConfig();
-    if (!saved) throw new Error('请先保存模型配置再导出');
+    if (!saved) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '请先保存模型配置再导出');
     const providers = Object.fromEntries(modelProviderDefinitionsForConfig(saved.providers).map((definition) => {
       const current = saved.providers[definition.value];
       if (!current) return [definition.value, undefined];
@@ -379,7 +381,7 @@ export async function importPortableData(input: {
     counts = existing ? { created: 0, updated: 1 } : { created: 1, updated: 0 };
   } else {
     const bundle = plainBundleSchema.parse(input.bundle);
-    if (bundle.kind !== input.kind) throw new Error('导入文件类型与当前设置项不一致');
+    if (bundle.kind !== input.kind) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '导入文件类型与当前设置项不一致');
     if (input.kind === 'skills') {
       counts = await importSkills(z.array(skillItemSchema).parse(bundle.items), input.userId);
     } else {

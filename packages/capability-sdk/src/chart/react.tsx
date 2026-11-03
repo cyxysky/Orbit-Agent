@@ -9,16 +9,12 @@ import { chartStyles } from './styles.ts';
 import { ChartIcon } from './icons.tsx';
 import { defaultChartTranslate, type ChartTranslate } from './i18n.ts';
 import { ExcalidrawRenderer } from './excalidraw-react.tsx';
+import { downloadChartFile, type ChartDownload } from './download.ts';
+import { CodedError, ERROR_CODES } from '../errors.ts';
+
 export { exportChartPng } from './png.ts';
 
 export type ChartRendererClassNames = { root?: string; canvas?: string; surface?: string; error?: string };
-
-function download(data: Blob | string, name: string) {
-  const url = typeof data === 'string' ? data : URL.createObjectURL(data);
-  const anchor = document.createElement('a'); anchor.href = url; anchor.download = name;
-  document.body.append(anchor); anchor.click(); anchor.remove();
-  if (typeof data !== 'string') setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
 
 export type ChartRendererProps = {
   chart: ChartRecord; classNames?: ChartRendererClassNames;
@@ -26,6 +22,10 @@ export type ChartRendererProps = {
   excalidraw?: { assetPath?: string; langCode?: string; theme?: 'light' | 'dark' };
   onSave?(next: ChartRecord, expectedRevision: number): Promise<ChartRecord>;
   onReload?(): Promise<ChartRecord>;
+  onDownload?: ChartDownload;
+  /** Supply both props when a host controls the card's fullscreen container. */
+  fullscreen?: boolean;
+  onFullscreenChange?(fullscreen: boolean): Promise<void>;
 };
 
 export function ChartRenderer(props: ChartRendererProps) {
@@ -34,7 +34,8 @@ export function ChartRenderer(props: ChartRendererProps) {
     : <DataChartRenderer {...props} />;
 }
 
-function DataChartRenderer({ chart, classNames = {}, onSave, onReload, translate: t = defaultChartTranslate }: ChartRendererProps) {
+function DataChartRenderer({ chart, classNames = {}, onSave, onReload, onDownload, fullscreen: hostFullscreen, onFullscreenChange, translate: t = defaultChartTranslate }: ChartRendererProps) {
+  const download = (data: Blob | string, name: string) => downloadChartFile(data, name, onDownload);
   const editableChart = useMemo(() => {
     if (chart.engine === 'three') return chart;
     try { return { ...chart, option: normalizeChartOption(chart.option, { invalidFormatters: 'omit' }) }; }
@@ -53,7 +54,8 @@ function DataChartRenderer({ chart, classNames = {}, onSave, onReload, translate
   const [ready, setReady] = useState(false);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [fullscreen, setFullscreen] = useState(false);
+  const [nativeFullscreen, setFullscreen] = useState(false);
+  const fullscreen = hostFullscreen ?? nativeFullscreen;
   const [threeView, setThreeView] = useState(false);
   const [refresh, setRefresh] = useState(0);
   const converted = useMemo(() => current.engine === 'three' ? undefined : echartsToThree(current.option, t), [current, t]);
@@ -159,7 +161,7 @@ function DataChartRenderer({ chart, classNames = {}, onSave, onReload, translate
   }
   function action(task: () => Promise<void> | void) { void Promise.resolve().then(task).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason))); }
   const filename = (current.title || current.chartId).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').slice(0, 100);
-  return <figure ref={rootRef} className={`${classNames.root || 'capability-chart'} capability-chart-interactive${error ? ` ${classNames.error || 'has-error'}` : ''}`} aria-label={current.description || current.title || current.chartId} data-chart-id={current.chartId} data-chart-engine={isThree ? 'three' : 'echarts'}>
+  return <figure ref={rootRef} className={`${classNames.root || 'capability-chart'} capability-chart-interactive${error ? ` ${classNames.error || 'has-error'}` : ''}`} aria-label={current.description || current.title || current.chartId} data-chart-id={current.chartId} data-chart-engine={isThree ? 'three' : 'echarts'} data-fullscreen={fullscreen || undefined}>
     <style>{chartStyles}</style>
     <figcaption className="capability-chart-header">
       <strong className="capability-chart-title">{current.title || t('图表')}</strong>
@@ -168,16 +170,17 @@ function DataChartRenderer({ chart, classNames = {}, onSave, onReload, translate
       <button type="button" className="capability-chart-icon-button" aria-label={t("编辑数据")} title={t("编辑数据")} disabled={saving} aria-haspopup="dialog" onClick={() => { if (downloadRef.current) downloadRef.current.open = false; editSnapshotRef.current = current; setEditing(true); setNotice(''); }}><ChartIcon name="edit" /></button>
       <details ref={downloadRef} className="capability-chart-download"><summary className="capability-chart-icon-button" aria-label={t("下载")} title={t("下载图表")}><ChartIcon name="download" /></summary><div className="capability-chart-download-menu" onClick={(event) => { if (event.target instanceof Element && event.target.closest('button:not(:disabled)') && downloadRef.current) downloadRef.current.open = false; }}>
         <p>{t("导出图表")}</p>
-        <button type="button" aria-label={t("图片 PNG")} disabled={!ready} onClick={() => action(async () => { const uri = await instanceRef.current?.png(); if (uri) download(uri, `${filename}${isThree ? '-3d' : ''}.png`); })}><ChartIcon name="image" /><span>{t("图片")}</span><small>PNG</small></button>
-        {!isThree && current.renderer === 'svg' && <button type="button" aria-label={t("矢量 SVG")} disabled={!ready} onClick={() => action(() => { const svg = instanceRef.current?.svg?.(); if (svg) download(new Blob([svg], { type: 'image/svg+xml' }), `${filename}.svg`); })}><ChartIcon name="image" /><span>{t("矢量图")}</span><small>SVG</small></button>}
-        <button type="button" aria-label={t("完整配置 JSON")} onClick={() => download(new Blob([JSON.stringify(current, null, 2)], { type: 'application/json' }), `${filename}.json`)}><ChartIcon name="code" /><span>{t("完整配置")}</span><small>JSON</small></button>
+        <button type="button" aria-label={t("图片 PNG")} disabled={!ready} onClick={() => action(async () => { const uri = await instanceRef.current?.png(); if (uri) await download(uri, `${filename}${isThree ? '-3d' : ''}.png`); })}><ChartIcon name="image" /><span>{t("图片")}</span><small>PNG</small></button>
+        {!isThree && current.renderer === 'svg' && <button type="button" aria-label={t("矢量 SVG")} disabled={!ready} onClick={() => action(async () => { const svg = instanceRef.current?.svg?.(); if (svg) await download(new Blob([svg], { type: 'image/svg+xml' }), `${filename}.svg`); })}><ChartIcon name="image" /><span>{t("矢量图")}</span><small>SVG</small></button>}
+        <button type="button" aria-label={t("完整配置 JSON")} onClick={() => action(() => download(new Blob([JSON.stringify(current, null, 2)], { type: 'application/json' }), `${filename}.json`))}><ChartIcon name="code" /><span>{t("完整配置")}</span><small>JSON</small></button>
         {dataTables.length > 0 && <p>{t("导出数据")}</p>}
-        {dataTables.map((table, index) => <button type="button" key={table.id} aria-label={t('数据 CSV · {name}', { name: table.label })} onClick={() => download(new Blob([tableCsv(table, t)], { type: 'text/csv;charset=utf-8' }), `${filename}-data-${index + 1}.csv`)}><ChartIcon name="grid" /><span>{table.label}</span><small>CSV</small></button>)}
+        {dataTables.map((table, index) => <button type="button" key={table.id} aria-label={t('数据 CSV · {name}', { name: table.label })} onClick={() => action(() => download(new Blob([tableCsv(table, t)], { type: 'text/csv;charset=utf-8' }), `${filename}-data-${index + 1}.csv`))}><ChartIcon name="grid" /><span>{table.label}</span><small>CSV</small></button>)}
       </div></details>
       <button type="button" className="capability-chart-icon-button" aria-label={t(fullscreen ? '退出全屏' : '全屏')} title={t(fullscreen ? '退出全屏' : '全屏')} onClick={() => action(async () => {
-        if (document.fullscreenElement === rootRef.current) await document.exitFullscreen();
+        if (onFullscreenChange) await onFullscreenChange(!fullscreen);
+        else if (document.fullscreenElement === rootRef.current) await document.exitFullscreen();
         else if (rootRef.current?.requestFullscreen) await rootRef.current.requestFullscreen();
-        else throw new Error('当前浏览器不支持全屏 API。');
+        else throw new CodedError(ERROR_CODES.CHART_OPERATION_FAILED, '当前浏览器不支持全屏 API。');
       })}><ChartIcon name={fullscreen ? 'collapse' : 'expand'} /></button>
       </div>
     </figcaption>

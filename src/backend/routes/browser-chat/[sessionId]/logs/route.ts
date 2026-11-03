@@ -2,6 +2,8 @@ import { readBrowserChatSessionLogs } from '@/server/ai/agents/browser-chat-read
 import { ApiRequestError, apiError, apiJson, boundedQueryInteger } from '@/server/http/api-request';
 import { requestApplicationUserId } from '@/server/auth/user-context';
 import type { BrowserChatSessionRouteContext } from '@/server/http/browser-chat-route';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 
 export async function GET(request: Request, context: BrowserChatSessionRouteContext) {
@@ -14,7 +16,7 @@ export async function GET(request: Request, context: BrowserChatSessionRouteCont
       messageId: url.searchParams.get('messageId') || undefined,
       subagentsOnly: url.searchParams.get('subagentsOnly') === 'true',
     });
-    if (!result) throw new ApiRequestError('Browser chat session not found', { code: 'not_found', status: 404 });
+    if (!result) throw new ApiRequestError('Browser chat session not found', { code: ERROR_CODES.NOT_FOUND, status: 404 });
     return apiJson(request, result);
   } catch (error) {
     return apiError(request, error, { fallback: 'Failed to read browser chat logs' });

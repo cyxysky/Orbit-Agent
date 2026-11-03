@@ -1,3 +1,5 @@
+
+import { CodedError, ERROR_CODES } from './errors.ts';
 export type CapabilityTaskOptions = {
   abortSignal?: AbortSignal;
   queueTimeoutMs?: number;
@@ -25,13 +27,13 @@ export class CapabilityTaskQueue {
     if (options.abortSignal?.aborted) return Promise.reject(options.abortSignal.reason);
     const concurrency = Math.max(1, this.options.concurrency || 1);
     if (this.active.size >= concurrency && this.waiting.length >= (this.options.maxQueued ?? 64)) {
-      return Promise.reject(new Error('Task queue capacity reached. Retry after an active task completes.'));
+      return Promise.reject(new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, 'Task queue capacity reached. Retry after an active task completes.'));
     }
     return new Promise<T>((resolve, reject) => {
       const controller = new AbortController();
       let queueTimer: ReturnType<typeof setTimeout> | undefined;
       const onAbort = () => {
-        controller.abort(options.abortSignal?.reason || new Error('Task aborted.'));
+        controller.abort(options.abortSignal?.reason || new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, 'Task aborted.'));
         const index = this.waiting.indexOf(task);
         if (index >= 0) {
           this.waiting.splice(index, 1);
@@ -58,7 +60,7 @@ export class CapabilityTaskQueue {
         if (index < 0) return;
         this.waiting.splice(index, 1);
         task.cleanup();
-        reject(new Error(`Task queue wait timed out after ${queueTimeout}ms.`));
+        reject(new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, `Task queue wait timed out after ${queueTimeout}ms.`));
         this.notifyIdle();
       }, queueTimeout);
       // Stop only the queue timer when dispatched; retain the caller's abort listener.
@@ -74,7 +76,7 @@ export class CapabilityTaskQueue {
 
   snapshot() { return { active: this.active.size, queued: this.waiting.length }; }
 
-  cancel(reason: Error = new Error('Task queue cancelled.')) {
+  cancel(reason: Error = new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, 'Task queue cancelled.')) {
     for (const task of this.waiting.splice(0)) {
       task.cleanup();
       task.controller.abort(reason);
@@ -101,7 +103,7 @@ export class CapabilityTaskQueue {
       const task = this.waiting.shift()!;
       this.active.add(task);
       const timer = task.executionTimeoutMs && task.executionTimeoutMs > 0
-        ? setTimeout(() => task.controller.abort(new Error(`Task execution timed out after ${task.executionTimeoutMs}ms.`)), task.executionTimeoutMs)
+        ? setTimeout(() => task.controller.abort(new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, `Task execution timed out after ${task.executionTimeoutMs}ms.`)), task.executionTimeoutMs)
         : undefined;
       void Promise.resolve().then(() => {
         task.controller.signal.throwIfAborted();

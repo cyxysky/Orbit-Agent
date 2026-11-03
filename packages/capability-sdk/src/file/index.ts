@@ -26,6 +26,8 @@ import {
   type FileVisualToolAction,
   type FileVisualToolInput,
 } from './types.ts';
+import { ERROR_CODES } from '../errors.ts';
+
 
 export * from './formats.ts';
 export * from './office/types.ts';
@@ -81,7 +83,7 @@ function executionFailure(toolName: string, error: unknown): CapabilityResult {
   return {
     ok: false,
     error: {
-      code: `${toolName}-execution-failed`,
+      code: ERROR_CODES.FILE_EXECUTION_FAILED,
       message: `${toolName} execution failed: ${error instanceof Error ? error.message : String(error)}`,
     },
   };
@@ -97,14 +99,14 @@ export async function executeFileAction(
     return {
       ok: false,
       error: {
-        code: 'invalid-file-action',
+        code: ERROR_CODES.INVALID_FILE_ACTION,
         message: 'file requires one action: list | readSource | readContent | write | download | convert | plan | generate | edit | unoApi | jsApi | render.',
       },
     };
   }
   const issues = fileActionInputIssues(input);
   if (issues.length) {
-    return { ok: false, error: { code: 'file-action-input-mismatch', message: issues.map((issue) => `${issue.field}: ${issue.message}`).join('\n'), details: issues } };
+    return { ok: false, error: { code: ERROR_CODES.FILE_ACTION_INPUT_MISMATCH, message: issues.map((issue) => `${issue.field}: ${issue.message}`).join('\n'), details: issues } };
   }
   // Text reads never attach page previews unless explicitly requested.
   if (input.action === 'readContent') input = { ...input, includeVisuals: input.includeVisuals === true };
@@ -117,7 +119,7 @@ export async function executeFileAction(
     return {
       ok: false,
       error: {
-        code: 'file-action-unavailable',
+        code: ERROR_CODES.FILE_ACTION_UNAVAILABLE,
         message: `file action=${input.action} is unavailable in this runtime.`,
       },
     };
@@ -138,7 +140,7 @@ async function executeFileVisualAction(
     return {
       ok: false,
       error: {
-        code: 'invalid-file-visual-action',
+        code: ERROR_CODES.INVALID_FILE_VISUAL_ACTION,
         message: 'file requires action=visualIndex|visualRead|visualReport for visual inspection.',
       },
     };
@@ -151,7 +153,7 @@ async function executeFileVisualAction(
     return {
       ok: false,
       error: {
-        code: 'file-visual-action-unavailable',
+        code: ERROR_CODES.FILE_VISUAL_ACTION_UNAVAILABLE,
         message: `file action=visual${input.action[0].toUpperCase()}${input.action.slice(1)} is unavailable in this runtime.`,
       },
     };
@@ -221,7 +223,7 @@ export function createFileTools(
           return Promise.resolve({
             ok: false,
             error: {
-              code: 'file-visual-action-unavailable',
+              code: ERROR_CODES.FILE_VISUAL_ACTION_UNAVAILABLE,
               message: `file action=${input.action} is unavailable because this runtime has no visual input support.`,
             },
           });

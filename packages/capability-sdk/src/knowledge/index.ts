@@ -1,3 +1,4 @@
+import { getErrorCode } from "../errors.ts";
 import { z } from 'zod';
 import { defineCapabilityInput, defineCapabilityTool, normalizeBoundedInteger, type CapabilityHealth, type CapabilityManifest, type CapabilityProvider, type CapabilityRunContext } from '../index.ts';
 import { knowledgeRuntimeSkill } from './runtime-skill.ts';
@@ -6,6 +7,7 @@ import type { KnowledgeDocument, KnowledgeDocumentSummary, KnowledgeSearchHit, K
 export * from './types.ts';
 export * from './runtime-skill.ts';
 export * from './settings.ts';
+import { ERROR_CODES } from '../errors.ts';
 
 export const knowledgeCapabilityToolNames = Object.freeze({ knowledge: 'knowledge' } as const);
 export interface KnowledgeStore {
@@ -78,7 +80,7 @@ export function createKnowledgeTool(store: KnowledgeStore, configuration: Capabi
           if (input.packageId) {
             const pack = await store.getPackage(input.packageId);
             return pack ? { ok: true, summary: 'Knowledge package.', data: { ...pack, referenceOnly: true } }
-              : { ok: false, error: { code: 'knowledge-package-not-found', message: 'Unknown knowledge package.' } };
+              : { ok: false, error: { code: ERROR_CODES.KNOWLEDGE_PACKAGE_NOT_FOUND, message: 'Unknown knowledge package.' } };
           }
           const offset = input.offset || 0, packs = await store.packages(limit + 1, offset);
           return { ok: true, summary: 'Imported knowledge packages.', data: { packages: packs.slice(0, limit), nextOffset: packs.length > limit ? offset + limit : null } };
@@ -92,17 +94,17 @@ export function createKnowledgeTool(store: KnowledgeStore, configuration: Capabi
         if (input.action === 'delete') {
           const deleted = await store.delete(id);
           return deleted ? { ok: true, summary: 'Exact standalone knowledge document deleted.' }
-            : { ok: false, error: { code: 'knowledge-document-not-found', message: 'Unknown knowledge document.' } };
+            : { ok: false, error: { code: ERROR_CODES.KNOWLEDGE_DOCUMENT_NOT_FOUND, message: 'Unknown knowledge document.' } };
         }
         if (input.action === 'get') {
           const document = await store.get(id);
-          if (!document || (input.packageId && document.packageId !== input.packageId) || (input.version && document.packageVersion !== input.version)) return { ok: false, error: { code: 'knowledge-document-not-found', message: 'Unknown, disabled, or mismatched knowledge document.' } };
+          if (!document || (input.packageId && document.packageId !== input.packageId) || (input.version && document.packageVersion !== input.version)) return { ok: false, error: { code: ERROR_CODES.KNOWLEDGE_DOCUMENT_NOT_FOUND, message: 'Unknown, disabled, or mismatched knowledge document.' } };
           return { ok: true, summary: 'Reference record ' + document.id, data: page(document, input.offset || 0, input.maxChars || 8000) };
         }
         const hits = input.action === 'context' ? await store.search(input.query!, limit, preview, filter) : [];
         const roots = input.action === 'inspect' ? [await store.get(id)].filter((item): item is KnowledgeDocument => !!item)
           : (await Promise.all(hits.map(hit => store.get(hit.id)))).filter((item): item is KnowledgeDocument => !!item);
-        if (input.action === 'inspect' && (!roots.length || (input.version && roots[0].packageVersion !== input.version))) return { ok: false, error: { code: 'knowledge-document-not-found', message: 'Unknown or disabled knowledge document.' } };
+        if (input.action === 'inspect' && (!roots.length || (input.version && roots[0].packageVersion !== input.version))) return { ok: false, error: { code: ERROR_CODES.KNOWLEDGE_DOCUMENT_NOT_FOUND, message: 'Unknown or disabled knowledge document.' } };
         const records = new Map(roots.map(record => [record.id, record]));
         const deferred = new Set<string>();
         for (const record of roots) for (const linked of [record.parentId, record.entryId, ...(record.linkedIds || [])].filter((v): v is string => !!v)) {
@@ -125,7 +127,7 @@ export function createKnowledgeTool(store: KnowledgeStore, configuration: Capabi
           complete: documents.length > 0 && !pendingDocumentIds.length && documents.every(document => document.complete),
           inferenceRequired: true, referenceOnly: true,
           instruction: 'Read nextOffset and pendingDocumentIds with get before using omitted conditions. No live facts were read or business actions executed.' } };
-      } catch (error) { return { ok: false, error: { code: 'knowledge-operation-failed', message: error instanceof Error ? error.message : String(error) } }; }
+      } catch (error) { return { ok: false, error: { code: getErrorCode(error, ERROR_CODES.KNOWLEDGE_OPERATION_FAILED), message: error instanceof Error ? error.message : String(error) } }; }
     },
   });
 }

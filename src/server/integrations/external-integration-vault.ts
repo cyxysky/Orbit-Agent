@@ -5,6 +5,8 @@ import {
   encryptCredentialSecret,
 } from '@/server/credentials/credential-master-key';
 import { readRuntimeMeta, writeRuntimeMeta } from '@/server/storage/database-record-store';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export type ExternalIntegrationCategory = 'connector' | 'communication' | 'data';
 export type ExternalIntegrationConfiguration = Record<string, string>;
@@ -54,17 +56,17 @@ function integrationAad(record: Pick<StoredExternalIntegration, 'id' | 'category
 
 function normalizedConfiguration(value: ExternalIntegrationConfiguration) {
   const entries = Object.entries(value);
-  if (entries.length > 50) throw new Error('外部集成配置字段过多。');
+  if (entries.length > 50) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '外部集成配置字段过多。');
   const result: ExternalIntegrationConfiguration = {};
   for (const [key, rawValue] of entries) {
-    if (!/^[a-zA-Z][a-zA-Z0-9_]{0,99}$/.test(key)) throw new Error(`无效的外部集成配置字段：${key}`);
-    if (typeof rawValue !== 'string') throw new Error(`外部集成配置字段 ${key} 必须是文本。`);
+    if (!/^[a-zA-Z][a-zA-Z0-9_]{0,99}$/.test(key)) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, `无效的外部集成配置字段：${key}`);
+    if (typeof rawValue !== 'string') throw new CodedError(ERROR_CODES.APPLICATION_ERROR, `外部集成配置字段 ${key} 必须是文本。`);
     const trimmed = rawValue.trim();
     if (!trimmed) continue;
-    if (trimmed.length > 20_000) throw new Error(`外部集成配置字段 ${key} 过长。`);
+    if (trimmed.length > 20_000) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, `外部集成配置字段 ${key} 过长。`);
     result[key] = trimmed;
   }
-  if (JSON.stringify(result).length > 128 * 1024) throw new Error('外部集成配置过大。');
+  if (JSON.stringify(result).length > 128 * 1024) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '外部集成配置过大。');
   return result;
 }
 
@@ -82,10 +84,10 @@ function decryptConfiguration(record: StoredExternalIntegration) {
   });
   try {
     const parsed = JSON.parse(serialized) as unknown;
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error();
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new CodedError(ERROR_CODES.APPLICATION_ERROR);
     return normalizedConfiguration(parsed as ExternalIntegrationConfiguration);
   } catch {
-    throw new Error('外部集成配置内容损坏。');
+    throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '外部集成配置内容损坏。');
   }
 }
 
@@ -95,7 +97,7 @@ async function readStore() {
   try {
     return storeSchema.parse(JSON.parse(serialized));
   } catch {
-    throw new Error('外部集成配置损坏，无法读取。');
+    throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '外部集成配置损坏，无法读取。');
   }
 }
 
@@ -153,9 +155,9 @@ export async function upsertExternalIntegration(input: {
   return mutateStore((items) => {
     const existingIndex = input.id ? items.findIndex((item) => item.id === input.id) : -1;
     const existing = existingIndex >= 0 ? items[existingIndex] : undefined;
-    if (input.id && !existing) throw new Error('外部集成不存在。');
+    if (input.id && !existing) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '外部集成不存在。');
     if (existing && (existing.category !== input.category || existing.driverId !== input.driverId)) {
-      throw new Error('外部集成的类别和驱动不能修改。');
+      throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '外部集成的类别和驱动不能修改。');
     }
     const id = existing?.id || randomUUID();
     const timestamp = new Date().toISOString();

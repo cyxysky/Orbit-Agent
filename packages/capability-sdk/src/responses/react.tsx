@@ -5,6 +5,8 @@ import { ResponseRegistry, type ResponseBlock, type ResponseDefinition } from '.
 import { htmlResponse, markdownResponse, uiResponse } from './index.ts';
 import { DeclarativeResponseView as DataUI } from './data-ui.tsx';
 import { HTMLResponseView as HTMLUI } from './html-ui.tsx';
+import { CodedError, ERROR_CODES } from '../errors.ts';
+
 
 // Static export hosts use the same safe document and declarative layout renderers.
 export { DeclarativeResponseView } from './data-ui.tsx';
@@ -40,15 +42,15 @@ export class ResponseRendererRegistry {
   constructor(readonly definitions: ResponseRegistry) {}
   register(renderers: readonly ResponseRenderer[]) {
     for (const renderer of renderers) {
-      if (this.definitions.require(renderer.definition.type) !== renderer.definition) throw new Error(`Mismatched renderer definition: ${renderer.definition.type}`);
-      if (this.#renderers.has(renderer.definition.type)) throw new Error(`Duplicate response renderer: ${renderer.definition.type}`);
+      if (this.definitions.require(renderer.definition.type) !== renderer.definition) throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, `Mismatched renderer definition: ${renderer.definition.type}`);
+      if (this.#renderers.has(renderer.definition.type)) throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, `Duplicate response renderer: ${renderer.definition.type}`);
       this.#renderers.set(renderer.definition.type, renderer);
     }
     return this;
   }
   assertComplete() {
     for (const definition of this.definitions.definitions()) {
-      if (!this.#renderers.has(definition.type)) throw new Error(`Missing response renderer: ${definition.type}`);
+      if (!this.#renderers.has(definition.type)) throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, `Missing response renderer: ${definition.type}`);
     }
     return this;
   }

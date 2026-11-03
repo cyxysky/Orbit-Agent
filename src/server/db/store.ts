@@ -41,6 +41,8 @@ import {
   writeSkillRecords,
   writeSkillRecordsQueued,
 } from '@/server/storage/database-record-store';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 type ConfigStoreData = {
   runtimeEnv: RuntimeEnvRecord[];
@@ -335,7 +337,7 @@ export const store = {
     const timestamp = now();
     const storedExisting = input.id ? await readSkillById(input.id) : undefined;
     if (storedExisting && normalizeApplicationUserId(storedExisting.userId) !== userId) {
-      throw new Error('Only the Skill creator can edit this shared Skill.');
+      throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED, 'Only the Skill creator can edit this shared Skill.');
     }
     const existing = storedExisting ? normalizeSkillRecord(storedExisting) : undefined;
     const skill = buildSkillRecord(input, existing, userId, timestamp);
@@ -348,7 +350,7 @@ export const store = {
       const userId = normalizeApplicationUserId(input.userId);
       const existing = input.id ? existingById.get(input.id) : undefined;
       if (existing && normalizeApplicationUserId(existing.userId) !== userId) {
-        throw new Error('Only the Skill creator can edit this shared Skill.');
+        throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED, 'Only the Skill creator can edit this shared Skill.');
       }
       const skill = buildSkillRecord(input, existing, userId, now());
       existingById.set(skill.id, skill);

@@ -19,6 +19,8 @@ import {
   type NodeArtifactPayload,
   type NodeArtifactUrlResolver,
 } from './artifacts.ts';
+import { CodedError, ERROR_CODES } from '../../errors.ts';
+
 
 const defaultTimeoutMs = 120_000;
 const defaultMaxBytes = 50 * 1024 * 1024;
@@ -103,26 +105,26 @@ function fileNameFromUrl(value: string) {
 function normalizedDownloadFileType(value: string | undefined | null) {
   const fileType = String(value || '').trim().toLowerCase();
   if (!/^[a-z0-9]{1,10}$/.test(fileType)) {
-    throw new Error('download requires fileType as an extension without a dot, for example jpg, pdf, or docx.');
+    throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'download requires fileType as an extension without a dot, for example jpg, pdf, or docx.');
   }
   return `.${fileType}`;
 }
 
 function resolveDownloadUrl(input: NodeFileDownloadInput) {
   const raw = String(input.url || input.urlOrPath || input.path || '').trim();
-  if (!raw) throw new Error('download requires url, path, or urlOrPath.');
+  if (!raw) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'download requires url, path, or urlOrPath.');
   if (/^[a-z]:[\\/]|^\\\\|^file:/i.test(raw)) {
-    throw new Error('download accepts HTTP(S) URLs or page-relative URL paths, not operating-system file paths. Use an uploaded/host-bound attachment asset; do not retry this path with sourcePageUrl.');
+    throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'download accepts HTTP(S) URLs or page-relative URL paths, not operating-system file paths. Use an uploaded/host-bound attachment asset; do not retry this path with sourcePageUrl.');
   }
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) return raw;
   const sourcePageUrl = String(input.sourcePageUrl || '').trim();
   if (!sourcePageUrl) {
-    throw new Error('download needs a source page URL to resolve relative paths; provide an absolute URL instead.');
+    throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'download needs a source page URL to resolve relative paths; provide an absolute URL instead.');
   }
   try {
     return new URL(raw, sourcePageUrl).toString();
   } catch {
-    throw new Error(`download cannot resolve "${raw}" against source page URL "${sourcePageUrl}".`);
+    throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `download cannot resolve "${raw}" against source page URL "${sourcePageUrl}".`);
   }
 }
 
@@ -164,7 +166,7 @@ function preferredDownloadUrl(url: string) {
 async function writeLimitedResponse(response: Response, filePath: string, maxBytes: number) {
   const contentLength = Number(response.headers.get('content-length') || '');
   if (Number.isFinite(contentLength) && contentLength > maxBytes) {
-    throw new Error(`Download is too large: ${contentLength} bytes exceeds ${maxBytes} bytes.`);
+    throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `Download is too large: ${contentLength} bytes exceeds ${maxBytes} bytes.`);
   }
   if (!response.body) {
     await writeFile(filePath, Buffer.alloc(0), { flag: 'wx' });
@@ -175,7 +177,7 @@ async function writeLimitedResponse(response: Response, filePath: string, maxByt
     transform(chunk: Buffer, _encoding, callback) {
       bytes += chunk.byteLength;
       if (bytes > maxBytes) {
-        callback(new Error(`Download is too large: received more than ${maxBytes} bytes.`));
+        callback(new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `Download is too large: received more than ${maxBytes} bytes.`));
         return;
       }
       callback(null, chunk);
@@ -335,7 +337,7 @@ export function createNodeFileDownloader(
     const current = queue;
     try {
       return await current.run(async (signal) => {
-        if (disposed) throw new Error('File downloader has been disposed.');
+        if (disposed) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'File downloader has been disposed.');
         return operation(signal);
       }, { abortSignal });
     } finally {
@@ -356,12 +358,12 @@ export function createNodeFileDownloader(
     const onAbort = () => controller.abort(
       externalSignal?.reason instanceof Error
         ? externalSignal.reason
-        : new Error('Download aborted.'),
+        : new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'Download aborted.'),
     );
     if (externalSignal?.aborted) onAbort();
     else externalSignal?.addEventListener('abort', onAbort, { once: true });
     const timer = setTimeout(
-      () => controller.abort(new Error(`Download timed out after ${timeoutMs}ms`)),
+      () => controller.abort(new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `Download timed out after ${timeoutMs}ms`)),
       timeoutMs,
     );
     activeControllers.add(controller);
@@ -385,7 +387,7 @@ export function createNodeFileDownloader(
       const directory = downloadsDirectory(input.runId);
       const relativeDirectory = path.relative(artifactsRoot, directory);
       if (relativeDirectory.startsWith('..') || path.isAbsolute(relativeDirectory)) {
-        throw new Error('Downloads directory must stay inside the configured artifact root.');
+        throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'Downloads directory must stay inside the configured artifact root.');
       }
       const cacheDirectory = path.join(directory, '.url-cache');
       const cachePath = path.join(cacheDirectory, `${key}.json`);
@@ -519,10 +521,10 @@ export function createNodeFileDownloader(
       if (disposed) return;
       disposed = true;
       for (const controller of activeControllers) {
-        controller.abort(new Error('File downloader disposed.'));
+        controller.abort(new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'File downloader disposed.'));
       }
       for (const state of originStates.values()) {
-        state.cancel(new Error('File downloader disposed.'));
+        state.cancel(new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'File downloader disposed.'));
       }
       await Promise.allSettled(activeDownloads.values());
       activeControllers.clear();

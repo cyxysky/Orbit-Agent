@@ -1,16 +1,18 @@
+
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 export type RuntimeRetryCategory =
-  | 'aborted'
+  | typeof ERROR_CODES.ABORTED
   | 'authentication'
   | 'billing'
   | 'configuration'
-  | 'invalid-request'
+  | typeof ERROR_CODES.INVALID_REQUEST_TOOL
   | 'network'
   | 'persistence'
   | 'provider-overloaded'
   | 'protocol'
   | 'rate-limited'
   | 'request-timeout'
-  | 'server-error'
+  | typeof ERROR_CODES.SERVER_ERROR
   | 'unknown';
 
 export type RuntimeRetryDecision = {
@@ -46,8 +48,8 @@ const retryableNetworkCodes = new Set([
 const invalidRequestCodes = new Set([
   'ERR_INVALID_ARG_TYPE',
   'ERR_INVALID_URL',
-  'INVALID_API_KEY',
-  'MODEL_NOT_FOUND',
+  ERROR_CODES.INVALID_API_KEY,
+  ERROR_CODES.MODEL_NOT_FOUND,
 ]);
 
 function errorRecords(error: unknown) {
@@ -200,13 +202,13 @@ export function classifyRuntimeRetry(error: unknown, signal?: AbortSignal): Runt
 
   // Only the caller's cancellation is terminal; a provider abort can be retried.
   if (signal?.aborted) {
-    return { category: 'aborted', reason: 'request was aborted', retryable: false, statusCode };
+    return { category: ERROR_CODES.ABORTED, reason: 'request was aborted', retryable: false, statusCode };
   }
-  if (records.some(record => record.code === 'PERSISTENCE_CHECKPOINT_FAILED')) {
+  if (records.some(record => record.code === ERROR_CODES.PERSISTENCE_CHECKPOINT_FAILED)) {
     return { category: 'persistence', reason: 'durable context write failed; resolve storage failure before requesting the model again', retryable: false, statusCode };
   }
-  if (code === 'COMPLETION_REVIEW_UNAVAILABLE') {
-    const retryable = records.some(record => record.code === 'COMPLETION_REVIEW_UNAVAILABLE' && record.retryable === true);
+  if (code === ERROR_CODES.COMPLETION_REVIEW_UNAVAILABLE) {
+    const retryable = records.some(record => record.code === ERROR_CODES.COMPLETION_REVIEW_UNAVAILABLE && record.retryable === true);
     return { category: 'protocol', reason: retryable
       ? 'completion review response failed after internal recovery; retry from preserved evidence without replaying completed actions'
       : 'completion review has a non-retryable infrastructure failure; execution state is preserved', retryable, statusCode };
@@ -220,7 +222,7 @@ export function classifyRuntimeRetry(error: unknown, signal?: AbortSignal): Runt
   if (name === 'AI_InvalidToolInputSchemaError'
     || ((statusCode === undefined || statusCode === 400 || statusCode === 422)
       && /\binvalid (?:json )?schema\b|\bschema\b.{0,160}\b(?:must|required|invalid|unsupported|not supported)\b/i.test(message))) {
-    return { category: 'invalid-request', reason: 'request schema is invalid; correct the schema before retrying', retryable: false, statusCode };
+    return { category: ERROR_CODES.INVALID_REQUEST_TOOL, reason: 'request schema is invalid; correct the schema before retrying', retryable: false, statusCode };
   }
   if (statusCode === 402 || isProviderBillingLimitMessage(message)
     || /\b(insufficient balance|payment required|billing quota)\b/.test(normalizedMessage)
@@ -228,7 +230,7 @@ export function classifyRuntimeRetry(error: unknown, signal?: AbortSignal): Runt
     return { category: 'billing', reason: `provider balance is unavailable${statusCode ? ` (${statusCode})` : ''}`, retryable: false, statusCode };
   }
   if (/context[_ -]?(?:length|window|limit|overflow)|maximum context|too many (?:input )?tokens|prompt (?:is )?too long|input.*exceeds.*token/i.test(message)) {
-    return { category: 'invalid-request', reason: 'provider context limit exceeded; compress more history', recovery: 'compact-context', retryable: true, statusCode };
+    return { category: ERROR_CODES.INVALID_REQUEST_TOOL, reason: 'provider context limit exceeded; compress more history', recovery: 'compact-context', retryable: true, statusCode };
   }
   if ((statusCode === 400 || statusCode === 422)
     && (/\b(?:does not support|not supported|unsupported|incompatible|not compatible)\b/i.test(message)
@@ -236,7 +238,7 @@ export function classifyRuntimeRetry(error: unknown, signal?: AbortSignal): Runt
     return { category: 'configuration', reason: 'provider rejected an unsupported request option or mode combination; change the request before retrying', retryable: false, statusCode };
   }
   if (name === 'AbortError' || /\b(aborted|cancelled|canceled)\b/.test(normalizedMessage)) {
-    return { category: 'aborted', reason: 'provider request was aborted; caller is still active', retryAfterMs, retryable: true, statusCode };
+    return { category: ERROR_CODES.ABORTED, reason: 'provider request was aborted; caller is still active', retryAfterMs, retryable: true, statusCode };
   }
   if (privateToolProtocolFailure) {
     return {
@@ -265,14 +267,14 @@ export function classifyRuntimeRetry(error: unknown, signal?: AbortSignal): Runt
     )
   ) {
     return {
-      category: 'invalid-request',
+      category: ERROR_CODES.INVALID_REQUEST_TOOL,
       reason: 'provider rejected request parameters',
       retryable: false,
       statusCode,
     };
   }
   if (statusCode === 400 || statusCode === 404 || statusCode === 405 || statusCode === 410 || statusCode === 422 || invalidRequestCodes.has(code)) {
-    return { category: 'invalid-request', reason: `request failure${statusCode ? ` (${statusCode})` : code ? ` (${code})` : ''}`, retryable: true, statusCode };
+    return { category: ERROR_CODES.INVALID_REQUEST_TOOL, reason: `request failure${statusCode ? ` (${statusCode})` : code ? ` (${code})` : ''}`, retryable: true, statusCode };
   }
   if (/\b(model not found|unknown model|unsupported|invalid (request|argument|parameter)|schema|tool input)\b/.test(normalizedMessage)) {
     return { category: 'configuration', reason: 'model or request configuration is invalid', retryable: true, statusCode };
@@ -284,7 +286,7 @@ export function classifyRuntimeRetry(error: unknown, signal?: AbortSignal): Runt
     return { category: 'request-timeout', reason: `temporary request timeout${statusCode ? ` (${statusCode})` : ''}`, retryAfterMs, retryable: true, statusCode };
   }
   if (statusCode !== undefined && statusCode >= 500 && statusCode <= 599) {
-    return { category: 'server-error', reason: `provider server failure (${statusCode})`, retryAfterMs, retryable: true, statusCode };
+    return { category: ERROR_CODES.SERVER_ERROR, reason: `provider server failure (${statusCode})`, retryAfterMs, retryable: true, statusCode };
   }
   if (statusCode === 503 || /\b(overloaded|over capacity|temporarily unavailable|service unavailable)\b/.test(normalizedMessage)) {
     return { category: 'provider-overloaded', reason: 'provider is temporarily overloaded', retryAfterMs, retryable: true, statusCode };
@@ -293,10 +295,10 @@ export function classifyRuntimeRetry(error: unknown, signal?: AbortSignal): Runt
     return { category: 'network', reason: `temporary network failure${code ? ` (${code})` : ''}`, retryAfterMs, retryable: true, statusCode };
   }
   if (/ai sdk returned retryable finish reason\s+"(?:error|other)"/i.test(message)) {
-    return { category: 'server-error', reason: 'provider returned an error finish state', retryAfterMs, retryable: true, statusCode };
+    return { category: ERROR_CODES.SERVER_ERROR, reason: 'provider returned an error finish state', retryAfterMs, retryable: true, statusCode };
   }
   if (name === 'AI_NoOutputGeneratedError' || /\bno output generated\b/i.test(message)) {
-    return { category: 'server-error', reason: 'provider stream ended without an output', retryAfterMs, retryable: true, statusCode };
+    return { category: ERROR_CODES.SERVER_ERROR, reason: 'provider stream ended without an output', retryAfterMs, retryable: true, statusCode };
   }
   return { category: 'unknown', reason: 'retry request failure within the configured attempt limit', retryAfterMs, retryable: true, statusCode };
 }
@@ -359,19 +361,19 @@ export async function waitForRuntimeRetry(
   shouldContinue?: () => boolean,
 ) {
   if (signal?.aborted || (shouldContinue && !shouldContinue())) {
-    throw signal?.reason || new Error('Browser chat retry was cancelled.');
+    throw signal?.reason || new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Browser chat retry was cancelled.');
   }
   if (delayMs <= 0) return;
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => {
       cleanup();
-      if (shouldContinue && !shouldContinue()) reject(new Error('Browser chat retry was cancelled.'));
+      if (shouldContinue && !shouldContinue()) reject(new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Browser chat retry was cancelled.'));
       else resolve();
     }, delayMs);
     timer.unref?.();
     const onAbort = () => {
       cleanup();
-      reject(signal?.reason || new Error('Browser chat retry was cancelled.'));
+      reject(signal?.reason || new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Browser chat retry was cancelled.'));
     };
     const cleanup = () => {
       clearTimeout(timer);

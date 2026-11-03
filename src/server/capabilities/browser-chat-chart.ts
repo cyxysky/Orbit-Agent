@@ -12,6 +12,8 @@ import { artifactPath } from '@/server/storage/paths';
 import { capabilityResultToBrowserActionResult } from './browser-chat-result';
 import { publishRealtimeRefreshEvent } from '@/server/realtime/ws-refresh';
 import { normalizeApplicationUserId } from '@/server/auth/user-context';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 const browserChatSessionIdPattern = /^(chat_[a-f0-9]{12})(?:_|$)/i;
 const automationRunIdPattern = /^automation_run_[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
@@ -21,7 +23,7 @@ function browserChatSessionId(runId: string) {
   const normalized = String(runId || '').trim();
   if (automationRunIdPattern.test(normalized)) return normalized;
   const sessionId = normalized.match(browserChatSessionIdPattern)?.[1];
-  if (!sessionId) throw new Error('Chart creation requires a valid browser-chat session run id.');
+  if (!sessionId) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Chart creation requires a valid browser-chat session run id.');
   return sessionId;
 }
 

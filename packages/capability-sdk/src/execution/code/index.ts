@@ -1,3 +1,4 @@
+import { getErrorCode } from "../../errors.ts";
 import { z } from 'zod';
 import {
   defineCapabilityInput,
@@ -12,6 +13,8 @@ import {
 } from '../../index.ts';
 import { codeSandboxRuntimeSkill, codeSandboxRuntimeSkillId } from './runtime-skill.ts';
 import { codeSandboxCapabilitySettings } from './settings.ts';
+import { CodedError, ERROR_CODES } from '../../errors.ts';
+
 export * from './runtime-skill.ts';
 export * from './settings.ts';
 
@@ -62,7 +65,7 @@ export interface CodeSandboxExecutor {
 }
 
 export class CodeSandboxRunnerError extends Error {
-  constructor(readonly code: string, message: string, options?: ErrorOptions) {
+  constructor(readonly code: import('../../errors.ts').ErrorCode, message: string, options?: ErrorOptions) {
     super(message, options);
     this.name = 'CodeSandboxRunnerError';
   }
@@ -127,16 +130,16 @@ export function createCodeSandboxTool(executor: CodeSandboxExecutor, configurati
     policy: { concurrency: 'parallel', concurrencyGroup: 'code-sandbox', permissions: codeSandboxCapabilityManifest.permissions },
     async execute(input, context): Promise<CapabilityResult<CodeSandboxExecutionResult | CodeSandboxReadResult>> {
       if (configuration.AGENT_CODE_SANDBOX_ENABLED !== 'true') {
-        return { ok: false, error: { code: 'code-sandbox-disabled', message: 'Code Sandbox is disabled by host configuration.' } };
+        return { ok: false, error: { code: ERROR_CODES.CODE_SANDBOX_DISABLED, message: 'Code Sandbox is disabled by host configuration.' } };
       }
       if (input.action === 'readFile') {
         try {
-          if (!executor.readFile) throw new Error('This host does not provide persistent sandbox file storage.');
+          if (!executor.readFile) throw new CodedError(ERROR_CODES.CODE_EXECUTION_ERROR, 'This host does not provide persistent sandbox file storage.');
           const { imagePath, ...data } = await executor.readFile(input, context);
           return { ok: true, summary: `Read ${data.fileName}${data.nextOffset === undefined ? '.' : '; more bytes are available at nextOffset.'}`, data,
             content: imagePath ? [{ type: 'image', artifactId: imagePath, mediaType: data.mediaType }] : [] };
         } catch (error) {
-          return { ok: false, error: { code: 'code-file-read-failed', message: error instanceof Error ? error.message : String(error) } };
+          return { ok: false, error: { code: getErrorCode(error, ERROR_CODES.CODE_FILE_READ_FAILED), message: error instanceof Error ? error.message : String(error) } };
         }
       }
       const packages = (input.packages || []).map((item) => item.trim());
@@ -145,17 +148,17 @@ export function createCodeSandboxTool(executor: CodeSandboxExecutor, configurati
         return {
           ok: false,
           error: {
-            code: 'code-package-spec-invalid',
+            code: ERROR_CODES.CODE_PACKAGE_SPEC_INVALID,
             message: `Only exact package versions are allowed. Invalid ${input.language} package spec(s): ${invalidPackages.join(', ')}. Example: ${input.language === 'python' ? 'matplotlib==3.10.1' : 'lodash@4.17.21'}.`,
           },
         };
       }
       const maxPackages = normalizeBoundedInteger(configuration.AGENT_CODE_SANDBOX_MAX_PACKAGES, 16, 0, 32);
       if (packages.length > maxPackages) {
-        return { ok: false, error: { code: 'code-package-limit', message: `At most ${maxPackages} package(s) may be installed per execution.` } };
+        return { ok: false, error: { code: ERROR_CODES.CODE_PACKAGE_LIMIT, message: `At most ${maxPackages} package(s) may be installed per execution.` } };
       }
       if (packages.length && configuration.AGENT_CODE_SANDBOX_ALLOW_PACKAGE_INSTALL !== 'true') {
-        return { ok: false, error: { code: 'code-package-install-disabled', message: 'Package installation is disabled by host configuration.' } };
+        return { ok: false, error: { code: ERROR_CODES.CODE_PACKAGE_INSTALL_DISABLED, message: 'Package installation is disabled by host configuration.' } };
       }
       const configuredTimeoutMs = normalizeBoundedInteger(configuration.AGENT_CODE_SANDBOX_TIMEOUT_MS, 300_000, 1_000, 300_000);
       const configuredMaxOutputChars = normalizeBoundedInteger(configuration.AGENT_CODE_SANDBOX_MAX_OUTPUT_CHARS, 30_000, 1_000, 200_000);
@@ -177,7 +180,7 @@ export function createCodeSandboxTool(executor: CodeSandboxExecutor, configurati
           pidsLimit: normalizeBoundedInteger(configuration.AGENT_CODE_SANDBOX_PIDS_LIMIT, 128, 16, 512),
           workspaceLimitMb: normalizeBoundedInteger(configuration.AGENT_CODE_SANDBOX_WORKSPACE_MB, 256, 32, 4096),
         }, context);
-        if (result.files?.length) throw new Error('The host must persist sandbox output files before returning them to the model.');
+        if (result.files?.length) throw new CodedError(ERROR_CODES.CODE_EXECUTION_ERROR, 'The host must persist sandbox output files before returning them to the model.');
         delete result.files;
         const outputWarning = result.truncated || result.outputLimitExceeded
           ? `Output was truncated at ${maxOutputChars} combined stdout/stderr characters. Captured stdout/stderr is incomplete; saved artifacts are unaffected. Read saved files with readFile or mount them with inputFiles. maxOutputChars cannot exceed the host setting AGENT_CODE_SANDBOX_MAX_OUTPUT_CHARS.`
@@ -189,7 +192,7 @@ export function createCodeSandboxTool(executor: CodeSandboxExecutor, configurati
             ok: false,
             summary: `${input.language} computation failed.`,
             error: {
-              code: 'code-execution-failed',
+              code: ERROR_CODES.CODE_EXECUTION_FAILED,
               message: [
                 result.timedOut
                   ? 'Process timed out.'
@@ -209,7 +212,7 @@ export function createCodeSandboxTool(executor: CodeSandboxExecutor, configurati
             },
           };
       } catch (error) {
-        return { ok: false, error: { code: error instanceof CodeSandboxRunnerError ? error.code : 'code-execution-error', message: error instanceof Error ? error.message : String(error), retryable: false } };
+        return { ok: false, error: { code: getErrorCode(error, ERROR_CODES.CODE_EXECUTION_ERROR), message: error instanceof Error ? error.message : String(error), retryable: false } };
       }
     },
   });
