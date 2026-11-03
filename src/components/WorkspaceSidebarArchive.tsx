@@ -70,6 +70,7 @@ type WorkspaceHistoryListProps<T> = {
   ariaBusy?: boolean;
   className?: string;
   compactGroupHeaders?: boolean;
+  groupByDate?: boolean;
   footer?: ReactNode;
   getKey: (item: T) => string;
   getTimestamp?: (item: T) => string | undefined;
@@ -99,6 +100,7 @@ export function WorkspaceHistoryList<T>({
   ariaBusy,
   className = '',
   compactGroupHeaders = false,
+  groupByDate = true,
   footer,
   getKey,
   getTimestamp,
@@ -110,8 +112,8 @@ export function WorkspaceHistoryList<T>({
 }: WorkspaceHistoryListProps<T>) {
   const [collapsedGroupKeys, setCollapsedGroupKeys] = useState<Set<string>>(() => new Set());
   const groups = useMemo(
-    () => groupWorkspaceHistory(items, language, getTimestamp),
-    [getTimestamp, items, language],
+    () => groupByDate ? groupWorkspaceHistory(items, language, getTimestamp) : [],
+    [getTimestamp, groupByDate, items, language],
   );
   const assignListRef = useCallback((node: HTMLOListElement | null) => {
     if (typeof listRef === 'function') {
@@ -129,7 +131,7 @@ export function WorkspaceHistoryList<T>({
         onScroll={onScroll}
         ref={assignListRef}
       >
-        {groups.map((group) => {
+        {!groupByDate ? items.map((item) => <li key={getKey(item)}>{renderItem(item)}</li>) : groups.map((group) => {
           const collapsed = compactGroupHeaders && collapsedGroupKeys.has(group.key);
           return (
             <li className="browser-chat-history-date-group workspace-sidebar-archive-date-group" key={group.key}>

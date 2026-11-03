@@ -793,25 +793,6 @@ input[type="checkbox"]:not([data-slot], [data-slot] *):focus-visible {
   font-weight: 500;
 }
 
-.browser-chat-session-loading {
-  align-content: center;
-  animation: ui-loading-content-in 0.2s ease both;
-  color: var(--muted-strong);
-  display: grid;
-  flex: 1 1 auto;
-  justify-items: center;
-  min-height: 0;
-  padding: 48px 0 24px;
-  text-align: center;
-  gap: 10px;
-}
-
-.browser-chat-session-loading > span {
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 500;
-}
-
 .spin {
   animation: ui-icon-loading-spin 1s linear infinite;
   stroke-width: 1.75;

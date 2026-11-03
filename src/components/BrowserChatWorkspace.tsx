@@ -4,6 +4,7 @@ import { normalizeReasoningEffort, reasoningEffortOptions, type ReasoningEffortS
 import { normalizeBrowserChatInteractionMode, type BrowserChatInteractionMode } from '@/lib/browser-chat-interaction-mode';
 import { BrowserChatRecoveryPanel } from './BrowserChatRecoveryPanel';
 import { BrowserChatFilesPanel } from './BrowserChatFilesPanel';
+import { BrowserChatLoadingSkeleton } from './BrowserChatLoadingSkeleton';
 import { BrowserChatExportButton } from './BrowserChatExportButton';
 import { BrowserChatFailureNotice, isBrowserChatFailureNotice } from './BrowserChatFailureNotice';
 
@@ -6140,15 +6141,6 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
   );
 });
 
-function BrowserChatSessionLoading({ label }: { label: string }) {
-  return (
-    <div className="browser-chat-session-loading" role="status" aria-live="polite" aria-label={label}>
-      <LiquidGlassLoader />
-      <span>{label}</span>
-    </div>
-  );
-}
-
 function compactContextTokens(tokens: number) {
   if (tokens >= 1_000_000) return { decimalPlaces: tokens < 10_000_000 ? 1 : 0, suffix: 'm', value: tokens / 1_000_000 };
   if (tokens >= 1_000) return { decimalPlaces: tokens < 10_000 ? 1 : 0, suffix: 'k', value: tokens / 1_000 };
@@ -8821,7 +8813,7 @@ export function BrowserChatWorkspace({
     '',
   ) || '';
   const [loadingSessionId, setLoadingSessionId] = useState<string | null>(null);
-  const [sessionMinimumLoadingElapsed, setSessionMinimumLoadingElapsed] = useState(false);
+  const [sessionDataLoaded, setSessionDataLoaded] = useState(false);
   const [loadingSessionHistory, setLoadingSessionHistory] = useState(true);
   const [messageViewportReady, setMessageViewportReady] = useState(false);
   const [messageViewportGeneration, setMessageViewportGeneration] = useState(0);
@@ -9657,9 +9649,8 @@ export function BrowserChatWorkspace({
       activeSessionIdRef.current = sessionId;
       setSession((current) => current?.id === sessionId ? current : null);
       if (previousSessionId && previousSessionId !== sessionId) releaseSessionRuntime(previousSessionId);
-      const loadingStartedAt = Date.now();
       setLoadingSessionId(sessionId);
-      setSessionMinimumLoadingElapsed(false);
+      setSessionDataLoaded(false);
       setMessageViewportReady(false);
       setMessageViewportGeneration((current) => current + 1);
       try {
@@ -9677,9 +9668,8 @@ export function BrowserChatWorkspace({
         if (sessionActivationSequenceRef.current === activationSequence) setMessageViewportReady(true);
         throw loadError;
       } finally {
-        await waitForMinimumLoading(loadingStartedAt);
         if (sessionActivationSequenceRef.current === activationSequence) {
-          setSessionMinimumLoadingElapsed(true);
+          setSessionDataLoaded(true);
         }
       }
     };
@@ -10322,7 +10312,7 @@ export function BrowserChatWorkspace({
     mountedSessionActivationRef.current = '';
     activeSessionIdRef.current = null;
     setLoadingSessionId(null);
-    setSessionMinimumLoadingElapsed(true);
+    setSessionDataLoaded(true);
     setMessageViewportReady(true);
     setSession(null);
     setDisabledTools(readBrowserChatToolPreferences(requestUserId).disabledTools);
@@ -10498,7 +10488,7 @@ export function BrowserChatWorkspace({
       loadingSessionRef.current = null;
       mountedSessionActivationRef.current = '';
       setLoadingSessionId(null);
-      setSessionMinimumLoadingElapsed(true);
+      setSessionDataLoaded(true);
     }
     mountedSessionActivationRef.current = '';
     setError('');
@@ -10553,12 +10543,12 @@ export function BrowserChatWorkspace({
   useEffect(() => {
     if (!shouldFinishBrowserChatSessionLoading({
       loadingSessionId,
-      minimumLoadingElapsed: sessionMinimumLoadingElapsed,
+      dataLoaded: sessionDataLoaded,
       viewportReady: messageViewportReady,
     })) return;
     if (loadingSessionRef.current === loadingSessionId) loadingSessionRef.current = null;
     setLoadingSessionId((current) => current === loadingSessionId ? null : current);
-  }, [loadingSessionId, messageViewportReady, sessionMinimumLoadingElapsed]);
+  }, [loadingSessionId, messageViewportReady, sessionDataLoaded]);
 
   useEscapeDismiss(mobileHistoryOpen, () => setMobileHistoryOpen(false));
 
@@ -10735,15 +10725,14 @@ export function BrowserChatWorkspace({
           </WorkspaceSidebarArchiveHeader>
           <div className={loadingSessionHistory ? 'browser-chat-history-stage is-loading' : 'browser-chat-history-stage'} aria-busy={loadingSessionHistory}>
             {loadingSessionHistory ? (
-            <div className="browser-chat-history-loading" role="status" aria-live="polite" aria-label={t('正在加载对话')}>
-              <Loader2 className="spin" size={16} />
-              <span>{t('正在加载对话')}</span>
+            <div className="browser-chat-history-skeleton" role="status" aria-live="polite" aria-label={t('正在加载对话')}>
+              {Array.from({ length: 6 }, (_, index) => <span aria-hidden="true" key={index} />)}
             </div>
           ) : filteredRecentSessions.length || (!historyFilter.trim() && sessionListPage.hasMore) ? (
             <WorkspaceHistoryList
               aria-busy={loadingMoreSessions}
               className="browser-chat-recent-list workspace-sidebar-archive-list"
-              compactGroupHeaders
+              groupByDate={false}
               footer={sessionListPage.hasMore && sessionListPage.next ? (
                 <li
                   className={`browser-chat-history-scroll-sentinel${loadingMoreSessions ? ' is-loading' : ''}`}
@@ -11128,7 +11117,7 @@ export function BrowserChatWorkspace({
       )}
       {messageViewportPositioning ? (
         <div className="browser-chat-session-loading-overlay">
-          <BrowserChatSessionLoading label={t(loadingSessionHistory || loadingSessionId ? '正在加载对话' : '正在定位对话')} />
+          <BrowserChatLoadingSkeleton label={t(loadingSessionHistory || loadingSessionId ? '正在加载对话' : '正在定位对话')} />
         </div>
       ) : null}
 

@@ -28,7 +28,7 @@
 }
 
 .settings-workspace-route .settings-content .settings-detail-panel-head {
-  border-bottom-color: var(--settlement-line);
+  border-bottom: 0;
   gap: 7px;
   padding: 0 0 20px;
 }
@@ -38,7 +38,7 @@
 }
 
 .settings-workspace-route .settings-content .settings-group-card-body {
-  border-top-color: var(--settlement-line);
+  border-top: 0;
   padding: 0 24px 8px;
 }
 
@@ -51,7 +51,7 @@
 }
 
 .settings-workspace-route .settings-content :is(.settings-detail-panel, .settings-group-card) .settings-row {
-  border-bottom-color: var(--settlement-line);
+  border-bottom: 0;
   gap: 24px;
   min-width: 0;
   padding: 16px 0;

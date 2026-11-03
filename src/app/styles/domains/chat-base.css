@@ -1368,11 +1368,6 @@
   z-index: 30;
 }
 
-.browser-chat-session-loading-overlay .browser-chat-session-loading {
-  flex: 0 0 auto;
-  padding: 0;
-}
-
 .browser-chat-message.is-running {
   content-visibility: visible;
   overflow: visible;

@@ -22,6 +22,8 @@ Custom OpenAI-compatible providers can be deleted from their list row after conf
 
 The conversation panel uses a white card surface. Tables share a continuous white header/body surface without gray framing or rounded body insets. Memory tables show titles and metadata; open the title for full details. Remove the memory applicability/context inputs and skill reference-resource editor; retain existing stored data when editing other fields. Model selection presents reasoning effort as a compact, always-visible option grid at the bottom of the menu, without an expanding accordion.
 
+Conversation loading uses static skeleton placeholders for the header, messages and composer while retaining the surrounding workspace. Reveal the selected conversation when its data and initial scroll position are ready, without a fixed minimum delay. Show conversation history as a flat ordered list without date groups; preserve search, pagination, selection and actions. Settings omit the top toolbar divider, configuration sidebar divider and card-internal dividers while retaining card outlines.
+
 ## Constraints
 
 - Preserve existing capabilities, product facts, authorization boundaries and API behavior.

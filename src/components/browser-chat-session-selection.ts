@@ -71,14 +71,14 @@ export function shouldAcceptBrowserChatViewportPosition({
 
 export function shouldFinishBrowserChatSessionLoading({
   loadingSessionId,
-  minimumLoadingElapsed,
+  dataLoaded,
   viewportReady,
 }: {
   loadingSessionId: string | null;
-  minimumLoadingElapsed: boolean;
+  dataLoaded: boolean;
   viewportReady: boolean;
 }) {
-  return Boolean(loadingSessionId && minimumLoadingElapsed && viewportReady);
+  return Boolean(loadingSessionId && dataLoaded && viewportReady);
 }
 
 export function browserChatSessionNavigationHref(currentHref: string, sessionId?: string) {

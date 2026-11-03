@@ -75,20 +75,20 @@ test('ignores a viewport-ready callback emitted by the previous conversation', (
   }), true);
 });
 
-test('keeps session loading visible until time and viewport gates are both ready', () => {
+test('keeps session loading visible until data and viewport are both ready', () => {
   assert.equal(shouldFinishBrowserChatSessionLoading({
     loadingSessionId: 'chat-new',
-    minimumLoadingElapsed: false,
+    dataLoaded: false,
     viewportReady: true,
   }), false);
   assert.equal(shouldFinishBrowserChatSessionLoading({
     loadingSessionId: 'chat-new',
-    minimumLoadingElapsed: true,
+    dataLoaded: true,
     viewportReady: false,
   }), false);
   assert.equal(shouldFinishBrowserChatSessionLoading({
     loadingSessionId: 'chat-new',
-    minimumLoadingElapsed: true,
+    dataLoaded: true,
     viewportReady: true,
   }), true);
 });
