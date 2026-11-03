@@ -2,6 +2,7 @@
 
 import { FilePreviewContext, fileNameFromPreviewUrl, isFilePreviewHref, type FilePreviewContextValue, type FilePreviewRequest } from './file-preview-context';
 import {
+  Component,
   lazy,
   Suspense,
   useCallback,
@@ -12,6 +13,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { OpenFileViewerSurface } from './OpenFileViewerSurface';
 import { FileText, Scissors, X } from 'lucide-react';
 import type { VideoEditorHandle } from './VideoEditorPanel';
 import type { PreviewSource } from '@open-file-viewer/core';
@@ -29,11 +31,25 @@ function FilePreviewModuleLoading() {
   return <BeautifulLoadingState label={t('正在加载文件预览')} />;
 }
 
-// Requests originate from client interactions, so these components are never
-// rendered on the server. React.lazy also avoids next/dynamic's eager targets
-// when Turbopack lazy compilation is enabled.
-const OpenFileViewerSurface = lazy(() => import('./OpenFileViewerSurface').then(module => ({ default: module.OpenFileViewerSurface })));
+// A direct import avoids Turbopack's experimental lazy compilation loader for
+// the viewer host. Format renderers remain loaded by the viewer as needed.
 const VideoEditorPanel = lazy(() => import('./VideoEditorPanel').then(module => ({ default: module.VideoEditorPanel })));
+
+class SurfaceErrorBoundary extends Component<{ children: ReactNode; onError: (error: Error) => void }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: Error) {
+    this.props.onError(error);
+  }
+
+  render() {
+    return this.state.failed ? null : this.props.children;
+  }
+}
 
 function filePreviewMimeType(fileName: string, mimeType?: string) {
   const explicit = String(mimeType || '').trim();
@@ -52,6 +68,7 @@ export function FilePreviewProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState('');
   const [editingVideo, setEditingVideo] = useState(false);
   const editor = useRef<VideoEditorHandle>(null);
+  const handleSurfaceError = useCallback((reason: Error) => setError(reason.message), []);
 
   const closeFilePreview = useCallback(async () => {
     try { await editor.current?.flush(); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); return; }
@@ -135,7 +152,7 @@ export function FilePreviewProvider({ children }: { children: ReactNode }) {
         <Suspense fallback={<CreativeEditorLoading label={t('正在加载编辑器')} />}>
           {error ? <p role="alert" className="media-video-editor-error">{error}</p> : null}
           {editingVideo && loadingSource ? <CreativeEditorLoading label={t('正在读取文件')} /> : null}
-          {editingVideo && !loadingSource && typeof resolvedSource === 'string' ? <VideoEditorPanel key={resolvedSource} sourceUrl={resolvedSource} handleRef={editor} /> : null}
+          {editingVideo && !loadingSource && !error && typeof resolvedSource === 'string' ? <SurfaceErrorBoundary onError={handleSurfaceError}><VideoEditorPanel key={resolvedSource} sourceUrl={resolvedSource} handleRef={editor} /></SurfaceErrorBoundary> : null}
         </Suspense>
       </div>
     </FloatingWindow>
@@ -171,16 +188,17 @@ export function FilePreviewProvider({ children }: { children: ReactNode }) {
             </div>
           ) : null}
           {editingVideo && error ? <p role="alert" className="media-video-editor-error">{error}</p> : null}
-          {!loadingSource && editingVideo && typeof resolvedSource === 'string' ? <VideoEditorPanel key={resolvedSource} sourceUrl={resolvedSource} handleRef={editor} /> : null}
           {!editingVideo && !loadingSource && !error && resolvedSource !== null ? (
-            <OpenFileViewerSurface
-              fileName={request.fileName}
-              locale={language === 'en' ? 'en-US' : 'zh-CN'}
-              mimeType={request.mimeType}
-              onError={(reason) => setError(reason.message)}
-              source={resolvedSource}
-              theme={mode}
-            />
+            <SurfaceErrorBoundary onError={handleSurfaceError}>
+              <OpenFileViewerSurface
+                fileName={request.fileName}
+                locale={language === 'en' ? 'en-US' : 'zh-CN'}
+                mimeType={request.mimeType}
+                onError={handleSurfaceError}
+                source={resolvedSource}
+                theme={mode}
+              />
+            </SurfaceErrorBoundary>
           ) : null}
         </Suspense>
       </div>

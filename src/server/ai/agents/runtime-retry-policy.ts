@@ -5,6 +5,7 @@ export type RuntimeRetryCategory =
   | 'configuration'
   | 'invalid-request'
   | 'network'
+  | 'persistence'
   | 'provider-overloaded'
   | 'protocol'
   | 'rate-limited'
@@ -200,6 +201,9 @@ export function classifyRuntimeRetry(error: unknown, signal?: AbortSignal): Runt
   // Only the caller's cancellation is terminal; a provider abort can be retried.
   if (signal?.aborted) {
     return { category: 'aborted', reason: 'request was aborted', retryable: false, statusCode };
+  }
+  if (records.some(record => record.code === 'PERSISTENCE_CHECKPOINT_FAILED')) {
+    return { category: 'persistence', reason: 'durable context write failed; resolve storage failure before requesting the model again', retryable: false, statusCode };
   }
   if (code === 'COMPLETION_REVIEW_UNAVAILABLE') {
     const retryable = records.some(record => record.code === 'COMPLETION_REVIEW_UNAVAILABLE' && record.retryable === true);

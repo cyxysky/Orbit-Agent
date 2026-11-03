@@ -53,10 +53,11 @@ export default function nextConfig(phase: string): NextConfig {
       pagesBufferLength: 10,
     },
     experimental: {
-      // Defer optional viewers/editors in both client and SSR graphs. Loading
-      // a route must not compile every dynamic import reachable from it.
-      turbopackLazyDynamicImports: phase === PHASE_DEVELOPMENT_SERVER,
-      turbopackLazyDynamicImportsSSR: phase === PHASE_DEVELOPMENT_SERVER,
+      // React.lazy still splits optional viewers into async chunks. The
+      // experimental compilation proxies can reference an unavailable loader
+      // after HMR, so keep the ordinary Turbopack import graph in both runtimes.
+      turbopackLazyDynamicImports: false,
+      turbopackLazyDynamicImportsSSR: false,
       turbopackGc: phase === PHASE_DEVELOPMENT_SERVER,
       // Leave the plugin runtime at Next's default.
       // Keep the Webpack fallback/build path at a lower peak, and avoid eagerly

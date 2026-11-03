@@ -160,6 +160,7 @@ import type {
   StepToolCall,
 } from '@/server/ai/schemas/runtime.schema';
 import { store } from '@/server/db/store';
+import { commitPersistenceCheckpoint, PersistenceCheckpointError } from '@/server/storage/persistence-checkpoint';
 import { publishRealtimeRefreshEvent } from '@/server/realtime/ws-refresh';
 import { createLatestOnlyAsyncScheduler, type LatestOnlyAsyncScheduler } from '@/server/realtime/latest-only-async-scheduler';
 import {
@@ -675,8 +676,9 @@ async function releaseInactiveBrowserChatSessionRuntime(sessionId: string) {
   }
   const persisted = await persistSession(sessionId, { mergePersisted: false });
   if (!persisted) return false;
-  const pendingWrite = pendingDatabaseWrites.get(sessionId);
-  if (pendingWrite && !(await pendingWrite)) return false;
+  if (persisted !== true) {
+    try { await persisted.committed; } catch { return false; }
+  }
   if (browserChatSessionIsSelected(session) || browserChatSessionHasActiveRuntimeWork(session)) return false;
   session.logs = [];
   persistenceCursors.delete(sessionId);
@@ -2631,7 +2633,9 @@ function trackSessionDatabaseWrite(sessionId: string, operation: Promise<void>) 
   return tracked;
 }
 
-function writeSessionSnapshot(item: BrowserChatPersistedSessionSnapshot): BrowserChatSessionRealtimePatch {
+type BrowserChatSessionWrite = { patch: BrowserChatSessionRealtimePatch; committed: Promise<void> };
+
+function writeSessionSnapshot(item: BrowserChatPersistedSessionSnapshot): BrowserChatSessionWrite {
   const persistedLogs = item.logs.length > browserChatLogStorageLimit() ? trimBrowserChatLogs(item.logs) : item.logs;
   const persistedItem = persistedLogs === item.logs ? item : { ...item, logs: persistedLogs };
   const persistenceChanges = persistenceDelta(persistedItem);
@@ -2692,7 +2696,7 @@ function writeSessionSnapshot(item: BrowserChatPersistedSessionSnapshot): Browse
     runtimeSession.logs = [];
     persistenceCursors.get(item.id)?.logs.clear();
   }
-  return patch;
+  return { patch, committed: databaseWrite };
 }
 
 const publishedStreamOutputCycles = new WeakSet<BrowserChatAiOutputCycle>();
@@ -3098,7 +3102,7 @@ async function hydrateSession(sessionId: string) {
   return session;
 }
 
-async function persistSession(sessionId: string, options: { deletedUserId?: string; mergePersisted?: boolean } = {}): Promise<BrowserChatSessionRealtimePatch | true | false> {
+async function persistSession(sessionId: string, options: { deletedUserId?: string; mergePersisted?: boolean; throwOnFailure?: boolean } = {}): Promise<BrowserChatSessionWrite | true | false> {
   try {
     const currentSession = sessions.get(sessionId);
     const persistedHeader = currentSession?.runtimeCompacted
@@ -3132,6 +3136,7 @@ async function persistSession(sessionId: string, options: { deletedUserId?: stri
     return patch;
   } catch (error) {
     warnPersistFailure(error);
+    if (options.throwOnFailure) throw new PersistenceCheckpointError('conversation snapshot', error);
     return false;
   }
 }
@@ -3188,9 +3193,14 @@ async function persistAndNotifyTerminal(sessionId: string) {
   clearPendingPersist(sessionId);
   const persisted = await persistSession(sessionId);
   if (!persisted) return false;
-  const pendingWrite = pendingDatabaseWrites.get(sessionId);
-  if (pendingWrite && !(await pendingWrite)) return false;
-  if (persisted !== true && !(await publishPersistedRealtimePatch(persisted))) return false;
+  if (persisted !== true) {
+    try {
+      await commitPersistenceCheckpoint({
+        operation: 'completed conversation', committed: persisted.committed,
+        notify: () => publishPersistedRealtimePatch(persisted.patch),
+      });
+    } catch { return false; }
+  }
   scheduleBrowserChatSessionEviction(sessionId);
   return true;
 }
@@ -3206,18 +3216,23 @@ async function publishPersistedRealtimePatch(patch: BrowserChatSessionRealtimePa
     });
     return true;
   } catch (error) {
-    warnPersistFailure(error);
+    incrementMetric('browser_chat_realtime_publish_failures_total');
+    structuredLog({ event: 'browser_chat_realtime_publish_failed', level: 'warn', sessionId: patch.session.id, error });
     return false;
   }
 }
 
 async function persistBrowserChatCheckpoint(sessionId: string) {
   clearPendingPersist(sessionId);
-  const persisted = await persistSession(sessionId, { mergePersisted: false });
+  const persisted = await persistSession(sessionId, { mergePersisted: false, throwOnFailure: true });
   if (!persisted) return false;
-  const pendingWrite = pendingDatabaseWrites.get(sessionId);
-  if (pendingWrite && !(await pendingWrite)) return false;
-  return persisted === true ? true : publishPersistedRealtimePatch(persisted);
+  if (persisted !== true) {
+    await commitPersistenceCheckpoint({
+      operation: 'conversation context checkpoint', committed: persisted.committed,
+      notify: () => publishPersistedRealtimePatch(persisted.patch),
+    });
+  }
+  return true;
 }
 
 function persistDeletedSessions(items: Array<{ id: string; userId: string }>) {

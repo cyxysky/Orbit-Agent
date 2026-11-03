@@ -22,7 +22,7 @@ async function windowsJobAssembly(shell: string, env: NodeJS.ProcessEnv): Promis
     try {
       const target = path.join(directory, 'job.dll');
       const source = "Add-Type -TypeDefinition @'\n" + windowsTerminalJobType + "\n'@ -OutputAssembly " + quotePowerShell(target) + " -ErrorAction Stop";
-      const child = spawn(shell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(source, 'utf16le').toString('base64')], {
+      const child = spawn(shell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-OutputFormat', 'Text', '-EncodedCommand', Buffer.from(source, 'utf16le').toString('base64')], {
         env, stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true,
       });
       let stderr = '';
@@ -30,7 +30,11 @@ async function windowsJobAssembly(shell: string, env: NodeJS.ProcessEnv): Promis
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => { child.kill(); }, 15000);
         child.once('error', error => { clearTimeout(timer); reject(error); });
-        child.once('close', code => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error('Cannot initialize terminal process ownership: ' + stderr)); });
+        child.once('close', code => {
+          clearTimeout(timer);
+          if (code === 0) resolve();
+          else reject(new Error('Cannot initialize terminal process ownership: ' + stderr));
+        });
       });
       try { await rename(target, assembly); }
       catch (error) { try { await access(assembly); } catch { throw error; } }
@@ -60,7 +64,7 @@ $OutputEncoding = [Console]::OutputEncoding
 $global:LASTEXITCODE = 0
 try {
   ${assembly ? `Add-Type -Path ${quotePowerShell(assembly)} -ErrorAction Stop; [OrbitTerminalJob]::Attach()` : ''}
-  . ${quotePowerShell(source)}
+  . ([ScriptBlock]::Create([System.IO.File]::ReadAllText(${quotePowerShell(source)}, [System.Text.Encoding]::UTF8)))
   $commandOk = $?
   if ($LASTEXITCODE) { exit $LASTEXITCODE }
   if (-not $commandOk) { exit 1 }
@@ -69,7 +73,12 @@ try {
   exit 1
 }
 `, 'utf8');
-    args = ['-NoLogo', '-NoProfile', '-NonInteractive', '-File', wrapper];
+    // Run the SDK-owned wrapper as command text: -File is blocked by the
+    // default Restricted policy before UTF-8 and process ownership initialize.
+    // Reading the script also avoids command-line limits for large commands
+    // without changing the host's execution policy.
+    const bootstrap = `& ([ScriptBlock]::Create([System.IO.File]::ReadAllText(${quotePowerShell(wrapper)}, [System.Text.Encoding]::UTF8)))`;
+    args = ['-NoLogo', '-NoProfile', '-NonInteractive', '-OutputFormat', 'Text', '-Command', bootstrap];
   }
   signal?.throwIfAborted();
   const child = spawn(shell === 'powershell' ? 'powershell.exe' : shell, args, {
