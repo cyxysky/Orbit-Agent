@@ -1,0 +1,258 @@
+/* Color-only refinements outside the explicitly scoped cards and overlays. */
+:root {
+  --navigation-selected-bg: #d9dfe1;
+  --navigation-selected-foreground: #1a2227;
+  --navigation-font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", Inter, system-ui, sans-serif;
+  --navigation-font-size: 14px;
+  --navigation-line-height: 1.45;
+  --navigation-font-weight: 400;
+  --navigation-selected-font-weight: var(--navigation-font-weight);
+}
+
+:root[data-theme="dark"] {
+  --navigation-selected-bg: #303335;
+  --navigation-selected-foreground: #f4f5f5;
+}
+
+html :is(.browser-chat-sidebar, .settings-secondary-nav, .settings-provider-list, .settings-view-tabs, .settings-model-types, .settings-capability-tabs, .custom-select-menu) {
+  --menu-selected-bg: var(--navigation-selected-bg);
+  --menu-selected-foreground: var(--navigation-selected-foreground);
+}
+
+html :is(.workspace-mode-tabs [data-slot="tabs-tab"], .browser-chat-subnav button, .settings-secondary-nav button, .settings-provider-select, .settings-model-types button, .settings-view-tabs button, .settings-capability-tabs button) {
+  font: var(--navigation-font-weight) var(--navigation-font-size) / var(--navigation-line-height) var(--navigation-font-family);
+  letter-spacing: normal;
+}
+
+html .workspace-mode-tab-label {
+  font: inherit;
+}
+
+html .workspace-mode-tabs [data-slot="tabs-tab"][aria-selected="true"] {
+  background: var(--menu-selected-bg) !important;
+  color: var(--menu-selected-foreground) !important;
+  box-shadow: none;
+  font-weight: var(--navigation-selected-font-weight);
+}
+
+html .workspace-mode-tabs [data-slot="tabs-tab"][aria-selected="true"] > svg {
+  color: var(--menu-selected-foreground) !important;
+}
+
+html .workspace-mode-tabs [data-slot="tabs-tab"][aria-selected="true"] .workspace-mode-tab-label {
+  color: var(--menu-selected-foreground) !important;
+  font-weight: var(--navigation-selected-font-weight);
+}
+
+html :is(.settings-secondary-nav button.active, .settings-provider-row.active) small,
+html .custom-select-option[aria-selected="true"] .custom-select-option-copy > small,
+html .workspace-sidebar-archive-row.active :is(.workspace-sidebar-archive-row-title, .workspace-sidebar-archive-row-meta, .workspace-sidebar-archive-row-open, .workspace-sidebar-archive-row-action) {
+  color: var(--menu-selected-foreground);
+}
+
+html .settings-provider-row.active .settings-provider-drag-handle {
+  color: var(--menu-selected-foreground);
+}
+
+html .browser-chat-layout .browser-chat-sidebar .workspace-sidebar-archive-row.active .workspace-sidebar-archive-row-meta {
+  color: var(--menu-selected-foreground);
+}
+
+html .workspace-mode-tabs [data-slot="tabs-indicator"] { background: transparent; box-shadow: none; }
+
+html .browser-chat-brand-aurora { color: var(--foreground); background: none; -webkit-text-fill-color: currentColor; }
+
+/* Shared dialog shell: white sections, quiet dividers and filled controls. */
+html .settlement-modal-backdrop {
+  background: var(--modal-overlay-bg);
+  backdrop-filter: blur(3px);
+}
+
+html .settlement-modal.settlement-modal {
+  background: var(--panel-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--modal-radius);
+  box-shadow: var(--modal-shadow);
+  color: var(--foreground);
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  max-height: calc(100dvh - 40px);
+  min-height: 0;
+  overflow: hidden;
+  --form-dialog-surface: var(--panel-elevated);
+  --form-dialog-field: var(--panel-warm);
+  --form-dialog-field-border: transparent;
+  --form-dialog-title: var(--foreground);
+  --form-dialog-label: var(--muted);
+  --form-dialog-value: var(--foreground);
+  --form-dialog-placeholder: var(--muted);
+}
+
+html .settlement-modal.settlement-modal > form {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+html .settlement-modal.settlement-modal .app-modal-header {
+  align-items: flex-start;
+  background: var(--panel-elevated) !important;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 7px;
+  margin: 0;
+  min-height: 0;
+  padding: 24px 64px 24px 28px;
+  position: relative;
+}
+
+html .settlement-modal.settlement-modal .app-modal-header :is(h2, [data-slot="heading"], .ui-modal-title) {
+  color: var(--foreground);
+  font-size: 21px;
+  font-weight: 700;
+  letter-spacing: -.025em;
+  line-height: 1.4;
+  margin: 0;
+}
+
+html .settlement-modal.settlement-modal .app-modal-header :is(p, .ui-modal-subtitle) {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.6;
+  margin: 0;
+}
+
+html .settlement-modal.settlement-modal :is(.settlement-modal-close, [data-slot="modal-close-trigger"], [data-slot="alert-dialog-close-trigger"]) {
+  background: transparent;
+  border: 0;
+  border-radius: 10px;
+  box-shadow: none;
+  color: var(--muted);
+  height: 34px;
+  inset: 23px 20px auto auto;
+  position: absolute;
+  width: 34px;
+}
+
+html .settlement-modal.settlement-modal :is(.settlement-modal-close, [data-slot="modal-close-trigger"], [data-slot="alert-dialog-close-trigger"]):hover {
+  background: var(--panel-soft);
+  color: var(--foreground);
+}
+
+html .settlement-modal.settlement-modal .app-modal-body {
+  background: var(--panel-elevated) !important;
+  flex: 1 1 auto;
+  margin: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 26px 28px !important;
+}
+
+html .settlement-modal.settlement-modal .app-modal-footer {
+  align-items: center;
+  background: var(--panel-elevated) !important;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+  margin: 0;
+  min-height: 0;
+  padding: 20px 28px;
+}
+
+html .settlement-modal.settlement-modal :is([data-slot="input-group"], [data-slot="textarea"], .custom-select-button) {
+  background: var(--panel-warm) !important;
+  border: 1px solid transparent !important;
+  border-radius: 11px;
+  box-shadow: none !important;
+  color: var(--foreground);
+  min-height: 44px;
+}
+
+html .settlement-modal.settlement-modal :is([data-slot="input-group-input"], [data-slot="input-group"] input) {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  min-height: 0;
+}
+
+html .settlement-modal.settlement-modal :is([data-slot="input-group"], [data-slot="textarea"], .custom-select-button):focus-within {
+  border-color: var(--focus-ring) !important;
+  outline: 2px solid color-mix(in srgb, var(--focus-ring) 20%, transparent);
+  outline-offset: 2px;
+}
+
+html .settlement-modal.settlement-modal :is(.modal-field, .personal-memory-field > span, .admin-settings-password-form label > span, .login-account-form label > span) {
+  color: var(--foreground);
+  font-family: var(--app-font-sans);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+html .settlement-modal.settlement-modal .app-modal-footer :is(.ui-button, [data-slot="button"]) {
+  border: 0 !important;
+  border-radius: 11px;
+  box-shadow: none;
+  font-size: 14px;
+  font-weight: 600;
+  min-height: 42px;
+  padding-inline: 18px;
+}
+
+html .settlement-modal.settlement-modal .app-modal-footer .ui-button:not(.ui-button--primary, .ui-button--danger) {
+  background: var(--button-neutral-bg) !important;
+  color: var(--button-neutral-foreground);
+}
+
+html .settlement-modal.settlement-modal .app-modal-footer .ui-button--primary {
+  background: var(--button-primary-bg) !important;
+  color: var(--button-primary-foreground);
+}
+
+html .settlement-modal.settlement-modal .app-modal-footer .ui-button--primary:hover:not(:disabled) {
+  background: var(--button-primary-hover-bg) !important;
+}
+
+html .settlement-modal.settlement-modal .app-modal-footer .ui-button--neutral:hover:not(:disabled) {
+  background: var(--button-neutral-hover-bg) !important;
+}
+
+html .settlement-modal.settlement-modal .app-modal-footer .ui-button:disabled {
+  background: var(--disabled-bg) !important;
+  color: var(--disabled-foreground);
+  cursor: not-allowed;
+}
+
+html .settlement-modal.settlement-modal :is(input, textarea)::placeholder {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+html .settlement-delete-modal .app-modal-body > h3 {
+  background: var(--panel-soft);
+  border-radius: 11px;
+  font-size: 15px;
+  margin: 0 0 18px;
+  overflow-wrap: anywhere;
+  padding: 16px 18px;
+}
+
+html .settlement-delete-modal .app-modal-body > p { color: var(--muted); line-height: 1.7; margin: 0; }
+html .settlement-delete-modal .app-modal-body > [role="alert"] { color: var(--danger); margin-top: 12px; }
+
+@media (max-width: 600px) {
+  html .settlement-modal.settlement-modal { border-radius: 18px; max-height: calc(100dvh - 24px); }
+  html .settlement-modal.settlement-modal .app-modal-header { padding: 20px 54px 20px 20px; }
+  html .settlement-modal.settlement-modal .app-modal-header :is(h2, [data-slot="heading"], .ui-modal-title) { font-size: 19px; }
+  html .settlement-modal.settlement-modal .app-modal-body { padding: 20px !important; }
+  html .settlement-modal.settlement-modal .app-modal-footer { padding: 16px 20px; }
+  html .settlement-modal.settlement-modal :is(.settlement-modal-close, [data-slot="modal-close-trigger"], [data-slot="alert-dialog-close-trigger"]) { top: 17px; right: 14px; }
+}

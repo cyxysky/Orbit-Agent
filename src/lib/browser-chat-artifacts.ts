@@ -1,5 +1,5 @@
 import { jsonRecordFromUnknown, jsonValueFromString } from '@cjfclonedeep/capability-sdk';
-import { artifactApiUrl } from './artifacts';
+import { artifactApiUrl, artifactApiUrlFromRelative } from './artifacts';
 import type { StepExecutionResult, StepToolCall } from '@/server/ai/schemas/runtime.schema';
 
 export type BrowserChatArtifactSummary = {
@@ -23,7 +23,29 @@ export type BrowserChatMessageFileGroup = {
 };
 
 export function browserChatArtifactOpenUrl(artifact: BrowserChatArtifactSummary) {
-  return artifact.url || artifactApiUrl(artifact.path) || artifact.downloadUrl;
+  return browserChatArtifactDeliveryUrl(artifact, artifact.url || artifactApiUrl(artifact.path) || artifact.downloadUrl);
+}
+
+export function browserChatArtifactDownloadUrl(artifact: BrowserChatArtifactSummary) {
+  return browserChatArtifactDeliveryUrl(artifact, artifact.downloadUrl || artifact.url || artifactApiUrl(artifact.path));
+}
+
+/** Delivery URLs can outlive a deployment prefix; artifact identity does not. */
+function browserChatArtifactDeliveryUrl(artifact: BrowserChatArtifactSummary, value?: string) {
+  if (!value?.startsWith('/') || value.startsWith('//')) return value;
+  const id = browserChatArtifactIdFromUrl(value);
+  const pathId = browserChatArtifactIdFromUrl(artifactApiUrl(artifact.path) || '');
+  if (!id || (artifact.id !== id && artifact.id !== `file:${id}` && artifact.path !== id && pathId !== id)) return value;
+  try {
+    const url = new URL(value, 'http://artifact.invalid');
+    const segments = url.pathname.slice(url.pathname.indexOf('/api/artifacts/') + '/api/artifacts/'.length)
+      .split('/').map(decodeURIComponent);
+    // Do not turn encoded separators or invalid segments into a different path.
+    if (segments.some(segment => !segment || segment === '.' || segment === '..' || /[\\/:\0]/.test(segment))) return value;
+    return `${artifactApiUrlFromRelative(id)}${url.search}${url.hash}`;
+  } catch {
+    return value;
+  }
 }
 
 export function browserChatArtifactIdFromUrl(value: string) {
@@ -54,6 +76,7 @@ export function resolveBrowserChatArtifactReference(
   image = false,
 ) {
   const alias = /^attachment:\/\//i.test(value);
+  if (!alias && /^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(value)) return value;
   // Browser tools historically returned screenshot file names. A name is not a
   // page-relative URL: resolve it only when the message identifies one artifact.
   const localImageReference = image && !alias && !/^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(value);
@@ -71,12 +94,12 @@ export function resolveBrowserChatArtifactReference(
   ));
   if (matches.length !== 1) return alias || (localImageReference && matches.length > 1) ? '' : value;
   const artifact = matches[0];
-  const url = image ? artifact.url || artifactApiUrl(artifact.path) || artifact.downloadUrl
-    : artifact.downloadUrl || artifact.url || artifactApiUrl(artifact.path);
+  const deliveredUrl = image ? browserChatArtifactOpenUrl(artifact) : browserChatArtifactDownloadUrl(artifact);
   // Validation/review results may identify an artifact without supplying its
   // delivery URL. They must not erase a URL already present in the message.
-  if (!url) return alias ? '' : value;
-  return image ? (url || '').replace(/([?&])download=1(&|$)/, '$1').replace(/[?&]$/, '') : url || '';
+  if (!deliveredUrl) return alias ? '' : value;
+  const url = browserChatArtifactIdFromUrl(value) ? browserChatArtifactDeliveryUrl(artifact, value) || value : deliveredUrl;
+  return image ? url.replace(/([?&])download=1(&|(?=#|$))/, '$1').replace(/[?&](?=#|$)/, '') : url;
 }
 
 /** Consume the shared artifact contract regardless of which tool produced it. */

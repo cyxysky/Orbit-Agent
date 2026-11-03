@@ -238,6 +238,7 @@ import { sortBrowserChatAiOutputCycles } from '@/lib/browser-chat-output-cycles'
 import {
   browserChatArtifactExtension,
   browserChatArtifactOpenUrl,
+  browserChatArtifactDownloadUrl,
   browserChatArtifactKey,
   mergeBrowserChatArtifactSummaries,
   browserChatArtifactIsImage,
@@ -3144,7 +3145,7 @@ function BrowserChatMessageArtifactCards({
                   <button aria-label={t('预览文件 {name}', { name: file.fileName })} onClick={openPreview} title={t('预览')} type="button">
                     <Eye size={15} /><span>{t('预览')}</span>
                   </button>
-                  <a aria-label={`${t('下载文件')}：${file.fileName}`} download={file.fileName} href={file.downloadUrl || file.openUrl} rel="noopener noreferrer" title={t('下载文件')}>
+                  <a aria-label={`${t('下载文件')}：${file.fileName}`} download={file.fileName} href={browserChatArtifactDownloadUrl(file) || file.openUrl} rel="noopener noreferrer" title={t('下载文件')}>
                     <Download size={15} /><span>{t('下载')}</span>
                   </a>
                   <a aria-label={t('打开文件 {name}', { name: file.fileName })} data-file-preview="false" href={file.openUrl} rel="noopener noreferrer" target="_blank" title={t('打开文件 {name}', { name: file.fileName })}>

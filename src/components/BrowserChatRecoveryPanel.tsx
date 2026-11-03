@@ -1,11 +1,11 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { Button } from '@heroui/react/button';
-import { Popover } from '@heroui/react/popover';
 import { ArrowRight, Brain, Check, CircleAlert, Loader2, Sparkles, X } from 'lucide-react';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 import { ExpandableActionLabel } from '@/components/ui/expandable-action-label';
+import { AppModal } from '@/components/ui/app-modal';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 
 
@@ -15,6 +15,7 @@ type MemoryJob = { id: string; status: string; attempts: number; error?: string;
   diagnostics?: { candidateCount: number; rejectedCount: number; rejectedCandidates: Array<{ key: string; reasonDescription: string }> };
 } };
 export function BrowserChatRecoveryPanel({ sessionId, busy }: { sessionId: string; busy: boolean }) {
+  const titleId = useId();
   const [candidates, setCandidates] = useState<MemoryProposal[]>([]);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -90,18 +91,18 @@ export function BrowserChatRecoveryPanel({ sessionId, busy }: { sessionId: strin
                 : '提炼完成，本轮没有新增可保存的长期记忆。'
           : '';
   const pendingCount = candidates.length;
-  return <Popover isOpen={open} onOpenChange={setOpen}>
+  return <>
     <Button type="button" variant="ghost" className="browser-chat-conversation-direct-action browser-chat-recovery-trigger"
-      aria-label={`长期记忆${pendingCount ? `，${pendingCount} 项待处理` : ''}`} aria-expanded={open}>
+      aria-label={`长期记忆${pendingCount ? `，${pendingCount} 项待处理` : ''}`} aria-haspopup="dialog" aria-expanded={open} onPress={() => setOpen(true)}>
       <Brain size={17} aria-hidden="true" />
       <ExpandableActionLabel>长期记忆</ExpandableActionLabel>
       {pendingCount > 0 && <span className="browser-chat-recovery-badge">{pendingCount}</span>}
       {(error || loadError) && !pendingCount && <CircleAlert size={14} aria-label="读取失败" />}
     </Button>
-    <Popover.Content className="browser-chat-recovery-popover" placement="bottom end" offset={8} containerPadding={12}>
-      <Popover.Dialog aria-label="长期记忆" className="browser-chat-recovery-dialog">
+    <AppModal ariaLabelledBy={titleId} dialogClassName="settlement-resource-dialog settlement-memory-dialog browser-chat-recovery-dialog" size="wide" open={open} onClose={() => setOpen(false)}>
         <header className="browser-chat-recovery-header">
-          <strong><span className="browser-chat-recovery-header-icon"><Brain size={17} aria-hidden="true" /></span><span>长期记忆<small>审核后用于后续对话</small></span></strong>
+          <span className="browser-chat-recovery-header-icon"><Brain size={20} aria-hidden="true" /></span>
+          <div className="settlement-resource-heading"><h2 id={titleId}>长期记忆{pendingCount > 0 && <span className="settlement-memory-pending">{pendingCount} 待审核</span>}</h2><p>审核后用于后续对话</p></div>
           <button type="button" className="ui-icon-button" aria-label="关闭长期记忆" onClick={() => setOpen(false)}><X size={16} /></button>
         </header>
         <div className="browser-chat-recovery-body" aria-busy={loading && !candidates.length}>
@@ -111,7 +112,7 @@ export function BrowserChatRecoveryPanel({ sessionId, busy }: { sessionId: strin
           {jobMessage && <p className="browser-chat-recovery-hint" role="status">{extractionEnabled && extracting ? <Loader2 size={14} className="animate-spin" /> : null}{jobMessage}</p>}
           {currentJob?.status === 'failed' && currentJob.error ? <details><summary>失败详情</summary><p className="browser-chat-recovery-error">{currentJob.error}</p></details> : null}
           {Boolean(currentJob?.result?.diagnostics?.rejectedCount) && <details><summary>查看未保留的候选原因</summary>{currentJob?.result?.diagnostics?.rejectedCandidates.map((item, index) => <p className="browser-chat-recovery-hint" key={index}>{item.key}：{item.reasonDescription}</p>)}</details>}
-          {!loading && !candidates.length && !error && !jobMessage && <p className="browser-chat-recovery-empty">暂无待审核的记忆</p>}
+          {!loading && !candidates.length && !error && !loadError && !jobMessage && <p className="browser-chat-recovery-empty">暂无待审核的记忆</p>}
           {candidates.length > 0 && <h3 className="browser-chat-recovery-section-title">待审核 · {candidates.length}</h3>}
           {candidates.map(proposal => <section className="browser-chat-recovery-section" key={proposal.id}>
             <div className="browser-chat-recovery-content">
@@ -130,11 +131,10 @@ export function BrowserChatRecoveryPanel({ sessionId, busy }: { sessionId: strin
           {(error || loadError) && <p className="browser-chat-recovery-error" role="alert">{error || loadError}</p>}
         </div>
         <footer className="browser-chat-recovery-footer">
-          <button type="button" className="ui-button browser-chat-recovery-extract" disabled={extractionDisabled || extracting || !extractionEnabled} onClick={() => void memoryAction()}>
+          <button type="button" className="ui-button ui-button--primary browser-chat-recovery-extract" disabled={extractionDisabled || extracting || !extractionEnabled} onClick={() => void memoryAction()}>
             {pendingAction === 'extract' || (extracting && extractionEnabled) ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}<span>{pendingAction === 'extract' ? '正在处理…' : extracting && extractionEnabled ? '正在提炼…' : '提炼本轮记忆'}</span><ArrowRight size={15} />
           </button>
         </footer>
-      </Popover.Dialog>
-    </Popover.Content>
-  </Popover>;
+    </AppModal>
+  </>;
 }

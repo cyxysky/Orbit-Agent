@@ -69,15 +69,6 @@
   padding: 16px 24px;
 }
 
-.browser-chat-tool-dialog-tab {
-  background: var(--panel-soft);
-  border: 1px solid var(--border);
-  border-bottom-color: var(--accent);
-  border-radius: 8px 8px 0 0;
-  padding: 7px 13px;
-  width: fit-content;
-}
-
 .browser-chat-tool-output-body {
   display: flex;
   flex-direction: column;

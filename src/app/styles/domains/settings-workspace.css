@@ -30,7 +30,7 @@
 
   .settings-workspace-route:not(.sidebar-collapsed) .browser-chat-settings-nav-label {
     color: var(--muted);
-    font-size: 10px;
+    font-size: 13px;
     font-weight: 700;
     letter-spacing: 0.09em;
     line-height: 20px;
@@ -48,9 +48,7 @@
     color: var(--muted);
     cursor: pointer;
     display: flex;
-    font: inherit;
-    font-size: 13px;
-    font-weight: 500;
+    font: var(--navigation-font-weight) var(--navigation-font-size) / var(--navigation-line-height) var(--navigation-font-family);
     gap: 8px;
     height: var(--nav-item-height);
     justify-content: flex-start;
@@ -63,7 +61,7 @@
     width: 100%;
   }
 
-  .settings-workspace-route:not(.sidebar-collapsed) .browser-chat-subnav button:hover {
+  .settings-workspace-route:not(.sidebar-collapsed) .browser-chat-subnav button:hover:not(.active) {
     background: var(--menu-hover-bg);
     color: var(--menu-hover-foreground);
   }
@@ -74,7 +72,7 @@
     border-color: transparent;
     box-shadow: none !important;
     color: var(--menu-selected-foreground);
-    font-weight: 600;
+    font-weight: var(--navigation-selected-font-weight);
   }
 
   .settings-workspace-route:not(.sidebar-collapsed) .browser-chat-subnav button > svg:not(.browser-chat-settings-tab-lock) {

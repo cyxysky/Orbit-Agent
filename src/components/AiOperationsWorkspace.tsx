@@ -5,7 +5,6 @@ import {
   Activity,
   Bot,
   CircleAlert,
-  Clock3,
   Gauge,
   LockKeyhole,
   RefreshCw,
@@ -15,7 +14,7 @@ import {
   Wrench,
   type LucideIcon,
 } from 'lucide-react';
-import { useCallback, useLayoutEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { CustomSelect } from '@/components/CustomSelect';
 import { BackendRuntimePanel } from '@/components/BackendRuntimePanel';
 import { DataTable } from '@/components/ui/data-table';
@@ -94,17 +93,14 @@ function MetricCard({
 }) {
   return (
     <article className={`ai-operations-metric-card tone-${tone}`}>
-      <div className="ai-operations-metric-icon"><Icon aria-hidden="true" size={17} /></div>
-      <div>
-        <span>{label}</span>
-        <strong>{value}</strong>
-        <small>{detail}</small>
-      </div>
+      <header><span>{label}</span><Icon aria-hidden="true" size={18} /></header>
+      <strong>{value}</strong>
+      <small>{detail}</small>
     </article>
   );
 }
 
-function ChartShell({ children, description, title }: { children: ReactNode; description: string; title: string }) {
+function ChartShell({ actions, children, description, title }: { actions?: ReactNode; children: ReactNode; description: string; title: string }) {
   return (
     <section className="ai-operations-panel ai-operations-chart-panel">
       <header className="ai-operations-panel-header">
@@ -112,6 +108,7 @@ function ChartShell({ children, description, title }: { children: ReactNode; des
           <h2>{title}</h2>
           <p>{description}</p>
         </div>
+        {actions ? <div className="ai-operations-chart-actions">{actions}</div> : null}
       </header>
       {children}
     </section>
@@ -120,15 +117,17 @@ function ChartShell({ children, description, title }: { children: ReactNode; des
 
 function UsageTrendChart({ points }: { points: AiOperationsTrendPoint[] }) {
   const { t } = useI18n();
-  const maximum = Math.max(1, ...points.map((point) => point.chatTasks + point.automationRuns));
+  const maximum = Math.max(4, Math.ceil(Math.max(0, ...points.map((point) => point.chatTasks + point.automationRuns)) / 4) * 4);
   const labelEvery = points.length <= 7 ? 1 : points.length <= 30 ? 5 : 15;
   return (
     <div
       aria-label={t("对话任务与自动化运行使用趋势")}
       className="ai-operations-chart"
+      data-density={points.length > 30 ? 'dense' : 'normal'}
       role="img"
     >
-      <div className="ai-operations-chart-grid" aria-hidden="true"><span /><span /><span /><span /></div>
+      <div className="ai-operations-chart-scale" aria-hidden="true">{[1, .75, .5, .25, 0].map((fraction) => <span key={fraction}>{maximum * fraction}</span>)}</div>
+      <div className="ai-operations-chart-grid" aria-hidden="true"><span /><span /><span /><span /><span /></div>
       <div className="ai-operations-chart-columns">
         {points.map((point, index) => {
           const total = point.chatTasks + point.automationRuns;
@@ -164,11 +163,12 @@ function UsageTrendChart({ points }: { points: AiOperationsTrendPoint[] }) {
 
 function OutcomeTrendChart({ points }: { points: AiOperationsTrendPoint[] }) {
   const { t } = useI18n();
-  const maximum = Math.max(1, ...points.map((point) => point.passed + point.failed + point.blocked + point.interrupted));
+  const maximum = Math.max(4, Math.ceil(Math.max(0, ...points.map((point) => point.passed + point.failed + point.blocked + point.interrupted)) / 4) * 4);
   const labelEvery = points.length <= 7 ? 1 : points.length <= 30 ? 5 : 15;
   return (
-    <div aria-label={t("任务执行结果趋势")} className="ai-operations-chart" role="img">
-      <div className="ai-operations-chart-grid" aria-hidden="true"><span /><span /><span /><span /></div>
+    <div aria-label={t("任务执行结果趋势")} className="ai-operations-chart" data-density={points.length > 30 ? 'dense' : 'normal'} role="img">
+      <div className="ai-operations-chart-scale" aria-hidden="true">{[1, .75, .5, .25, 0].map((fraction) => <span key={fraction}>{maximum * fraction}</span>)}</div>
+      <div className="ai-operations-chart-grid" aria-hidden="true"><span /><span /><span /><span /><span /></div>
       <div className="ai-operations-chart-columns">
         {points.map((point, index) => {
           const total = point.passed + point.failed + point.blocked + point.interrupted;
@@ -225,13 +225,17 @@ export function AiOperationsWorkspace({
   const [trendUserId, setTrendUserId] = useState(initialData.trendUserId || '');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const dashboardRequest = useRef<AbortController | null>(null);
   const [activeView, setActiveView] = useState<'overview' | 'runtime'>('overview');
+  const [trendView, setTrendView] = useState<'usage' | 'outcome'>('usage');
 
   useLayoutEffect(() => {
     const stored = readSidebarCollapsedPreference(initialSidebarCollapsed);
     setSidebarCollapsed(stored);
     writeSidebarCollapsedPreference(stored);
   }, [initialSidebarCollapsed]);
+
+  useEffect(() => () => dashboardRequest.current?.abort(), []);
 
   const toggleSidebar = useCallback(() => {
     setSidebarCollapsed((current) => {
@@ -242,6 +246,9 @@ export function AiOperationsWorkspace({
   }, []);
 
   const loadDashboard = useCallback(async (days: number, userId: string) => {
+    dashboardRequest.current?.abort();
+    const request = new AbortController();
+    dashboardRequest.current = request;
     setLoading(true);
     setError('');
     try {
@@ -249,15 +256,22 @@ export function AiOperationsWorkspace({
       if (userId) query.set('userId', userId);
       const response = await fetch(withWebPilotBasePath(`/api/admin/ai-operations?${query}`), {
         cache: 'no-store',
+        signal: request.signal,
       });
       const nextData = await readApiJson<AiOperationsDashboardData>(response, '加载 AI 运营指标失败');
+      if (request.signal.aborted || dashboardRequest.current !== request) return;
       setData(nextData);
       setRangeDays(days);
       setTrendUserId(nextData.trendUserId || '');
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : '加载 AI 运营指标失败');
+      if (!request.signal.aborted && dashboardRequest.current === request) {
+        setError(loadError instanceof Error ? loadError.message : '加载 AI 运营指标失败');
+      }
     } finally {
-      setLoading(false);
+      if (!request.signal.aborted && dashboardRequest.current === request) {
+        dashboardRequest.current = null;
+        setLoading(false);
+      }
     }
   }, []);
 
@@ -348,49 +362,49 @@ export function AiOperationsWorkspace({
             {error ? <strong role="alert">{t(error)}</strong> : null}
           </div>
 
-          <section className="ai-operations-panel ai-operations-runtime-panel">
-            <header className="ai-operations-panel-header"><div><h2>{t('系统与运营总览')}</h2><p>{t('统计范围内的核心运营指标')}</p></div></header>
-            <div className="ai-operations-metric-grid" aria-label={t('系统与运营总览')}>
-              <MetricCard detail={`${overview.automationRuns} ${t('次范围内运行')}`} icon={Workflow} label={t('启用的执行计划')} value={overview.enabledSchedules} />
-              <MetricCard detail={data.timezone} icon={Clock3} label={t('数据生成时间')} value={dateTime(data.generatedAt)} />
+          <section className="ai-operations-metric-grid" aria-label={t('系统与运营总览')}>
               <MetricCard detail={t('{chat} 对话 · {automation} 自动化', { chat: overview.chatTasks, automation: overview.automationRuns })} icon={Activity} label={t('任务总量')} value={compactNumber(overview.totalTasks)} />
               <MetricCard detail={t('{count} 个成功结果', { count: overview.passed })} icon={Gauge} label={t('任务成功率')} tone="success" value={percent(overview.successRate)} />
               <MetricCard detail={t('{failed} 失败 · {blocked} 阻塞', { failed: overview.failed, blocked: overview.blocked })} icon={CircleAlert} label={t('异常任务')} tone={overview.failed || overview.blocked ? 'danger' : 'default'} value={compactNumber(overview.failed + overview.blocked)} />
-              <MetricCard detail={t('{count} 个计划已启用', { count: overview.enabledSchedules })} icon={Workflow} label={t('当前执行中')} tone={overview.runningNow ? 'warning' : 'default'} value={compactNumber(overview.runningNow)} />
-              <MetricCard detail={`P95 ${duration(overview.p95DurationMs)}`} icon={Timer} label={t('平均耗时')} value={duration(overview.averageDurationMs)} />
-              <MetricCard detail={t('{count} 次恢复或修复', { count: overview.repairs })} icon={Wrench} label={t('AI 自动修复')} value={compactNumber(overview.repairs)} />
               <MetricCard detail={t('{count} 次进程内模型调用', { count: overview.modelCalls })} icon={Bot} label={t('模型 Token')} value={compactNumber(overview.inputTokens + overview.outputTokens)} />
-              <MetricCard detail={t('统计范围内有任务的用户')} icon={Users} label={t('活跃用户')} value={compactNumber(overview.activeUsers)} />
-            </div>
           </section>
 
-          <div className="ai-operations-trend-toolbar">
-            <div>
-              <strong>{t('趋势分析')}</strong>
-              <span>{trendScopeLabel} · {rangeDays} {t('天')}</span>
-            </div>
-            <div className="ai-operations-trend-user-filter">
-              <span>{t('趋势用户')}</span>
-              <CustomSelect
-                className="ai-operations-user-select"
-                disabled={loading}
-                onChange={(userId) => void loadDashboard(rangeDays, userId)}
-                options={trendUserOptions}
-                searchable={trendUserOptions.length > 8}
-                searchPlaceholder={t('搜索用户')}
-                title={t('选择要查看趋势的用户')}
-                value={trendUserId}
-              />
-            </div>
-          </div>
-
-          <div className="ai-operations-chart-grid-layout">
-            <ChartShell description={`${trendScopeLabel} · ${t('按天统计对话请求与自动化运行次数')}`} title={t('使用趋势')}>
-              <UsageTrendChart points={data.trend} />
+          <div className="ai-operations-analysis-grid">
+            <ChartShell
+              title={t('趋势分析')}
+              description={`${trendScopeLabel} · ${rangeDays} ${t('天')} · ${trendView === 'usage' ? t('按天统计对话请求与自动化运行次数') : t('按天查看成功、失败、阻塞与中断情况')}`}
+              actions={<>
+                <div className="ai-operations-chart-tabs" aria-label={t('趋势类型')}>
+                  <button type="button" aria-pressed={trendView === 'usage'} onClick={() => setTrendView('usage')}>{t('使用量')}</button>
+                  <button type="button" aria-pressed={trendView === 'outcome'} onClick={() => setTrendView('outcome')}>{t('执行结果')}</button>
+                </div>
+                <div className="ai-operations-trend-user-filter">
+                  <CustomSelect
+                    className="ai-operations-user-select"
+                    disabled={loading}
+                    onChange={(userId) => void loadDashboard(rangeDays, userId)}
+                    options={trendUserOptions}
+                    searchable={trendUserOptions.length > 8}
+                    searchPlaceholder={t('搜索用户')}
+                    title={t('选择要查看趋势的用户')}
+                    value={trendUserId}
+                  />
+                </div>
+              </>}
+            >
+              {trendView === 'usage' ? <UsageTrendChart points={data.trend} /> : <OutcomeTrendChart points={data.trend} />}
             </ChartShell>
-            <ChartShell description={`${trendScopeLabel} · ${t('按天查看成功、失败、阻塞与中断情况')}`} title={t('执行结果趋势')}>
-              <OutcomeTrendChart points={data.trend} />
-            </ChartShell>
+            <section className="ai-operations-run-summary" aria-label={t('运行摘要')}>
+              <header><h2>{t('运行摘要')}</h2><Activity aria-hidden="true" size={19} /></header>
+              <div className="ai-operations-running-count"><strong>{compactNumber(overview.runningNow)}</strong><span>{t('当前执行中')}</span></div>
+              <dl className="ai-operations-summary-list">
+                <div><dt><Workflow size={15} />{t('启用的执行计划')}</dt><dd>{compactNumber(overview.enabledSchedules)}</dd></div>
+                <div><dt><Timer size={15} />{t('平均耗时')}</dt><dd>{duration(overview.averageDurationMs)}<small>P95 {duration(overview.p95DurationMs)}</small></dd></div>
+                <div><dt><Wrench size={15} />{t('AI 自动修复')}</dt><dd>{compactNumber(overview.repairs)}</dd></div>
+                <div><dt><Users size={15} />{t('活跃用户')}</dt><dd>{compactNumber(overview.activeUsers)}</dd></div>
+              </dl>
+              <footer>{t('耗时、修复与用户按当前统计范围汇总')}</footer>
+            </section>
           </div>
 
           <div className="ai-operations-lower-grid">

@@ -5,7 +5,7 @@ import { TextArea } from '@heroui/react/textarea';
 import { InputGroup } from '@heroui/react/input-group';
 import { ExpandableActionLabel } from '@/components/ui/expandable-action-label';
 import Link from 'next/link';
-import { AlertCircle, ArrowLeft, BookOpen, Bot, Brain, Bug, ChartNoAxesCombined, ChevronDown, CircleCheck, ClipboardCheck, CodeXml, Copy, Database, Files, FolderOpen, ImageIcon, KeyRound, Layers, Loader2, Maximize2, MessagesSquare, Monitor, Navigation, Network, Palette, PencilLine, PlayCircle, Plug, Plus, RefreshCw, Save, ScanSearch, Search, Server, ShieldCheck, SlidersHorizontal, Terminal, Trash2, X, type LucideIcon } from 'lucide-react';
+import { AlertCircle, ArrowLeft, BookOpen, Bot, Brain, Bug, ChartNoAxesCombined, ChevronDown, CircleCheck, ClipboardCheck, CodeXml, Copy, Database, Files, FolderOpen, Gauge, ImageIcon, KeyRound, Layers, Loader2, Maximize2, MessagesSquare, Monitor, Navigation, Network, Palette, PencilLine, PlayCircle, Plug, Plus, RefreshCw, Save, ScanSearch, Search, Server, ShieldCheck, SlidersHorizontal, Terminal, Trash2, X, type LucideIcon } from 'lucide-react';
 import { CustomSelect } from '@/components/CustomSelect';
 import { ConfirmDeleteModal } from '@/components/ConfirmDeleteModal';
 import { SkillsManager } from '@/components/SkillsManager';
@@ -18,9 +18,11 @@ import {
   modelProviderDefinitionsForConfig,
   modelProviderDefinition,
   openAICompatibleProviderIndex,
+  removeCustomModelProviders,
   runtimeEnvDefinition,
   uniqueModelIds,
   type SettingsTab,
+  type OpenAICompatibleModelProvider,
 } from '@/config/settings';
 import { useI18n } from '@/i18n/I18nProvider';
 import { ThemeColorControl } from '@/components/ThemeColorControl';
@@ -59,6 +61,8 @@ import { WorkspaceSidebarArchiveRow } from '@/components/WorkspaceSidebarArchive
 import { useWorkspaceBrand } from '@/brand/WorkspaceBrandProvider';
 import { ExternalIntegrationSettings } from '@/components/ExternalIntegrationSettings';
 import { ModelTypeSettings } from '@/components/ModelTypeSettings';
+import { ToolCapabilitySettings } from '@/components/ToolCapabilitySettings';
+import { toolCapabilitySettings, TOOL_CAPABILITY_SETTINGS_CHANGED_EVENT } from '@/lib/tool-capability-settings';
 import { builtInMediaModels, createMediaTypeSettings, normalizeProviderMediaSettings, mediaSettingFields, mediaModelTypeDefinitions, type MediaTypeSettings } from '@cjfclonedeep/capability-sdk/media/model-settings';
 import { mediaModelDrivers, mediaModelDriver, type MediaModelKind, type MediaModelDriver } from '@cjfclonedeep/capability-sdk/media/models';
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
@@ -82,12 +86,14 @@ export type EnvRow = Pick<RuntimeEnvRecord, 'key' | 'value' | 'enabled' | 'secre
 
 export type ModelConfig = Pick<ModelConfigRecord, 'provider' | 'providers' | 'providerOrder' | 'updatedAt'>;
 
-function SortableProviderRow({ provider, active, label, children, onSelect }: {
+function SortableProviderRow({ provider, active, label, children, onSelect, onDelete, deleteDisabled }: {
   provider: ModelProvider;
   active: boolean;
   label: string;
   children: ReactNode;
   onSelect: () => void;
+  onDelete?: () => void;
+  deleteDisabled?: boolean;
 }) {
   const { t } = useI18n();
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id: provider });
@@ -117,6 +123,7 @@ function SortableProviderRow({ provider, active, label, children, onSelect }: {
       >
         {children}
       </button>
+      {onDelete ? <button aria-label={t('删除供应商：{name}', { name: label })} className="settings-provider-delete" disabled={deleteDisabled} onClick={onDelete} title={t('删除自定义供应商')} type="button"><Trash2 size={15} /></button> : null}
     </div>
   );
 }
@@ -161,8 +168,7 @@ type PersonalMemoryItem = {
 };
 
 type PersonalMemoryDraft = {
-  whenText: string;
-  contextTermsText: string;
+  applicability?: PersonalMemoryItem['applicability'];
   recall: 'always' | 'relevant';
   id?: string;
   userId?: string;
@@ -326,6 +332,8 @@ type SettingsSecondaryNavItem = {
 // Section IDs stay stable when the displayed labels are translated.
 const settingsSectionIcons: Record<string, LucideIcon> = {
   'general:appearance': Palette,
+  'capability:overview': SlidersHorizontal,
+  'capability:browser': Monitor,
   'integration:connector': Plug,
   'integration:communication': MessagesSquare,
   'integration:data': Database,
@@ -337,6 +345,9 @@ const settingsSectionIcons: Record<string, LucideIcon> = {
   '浏览器 Agent': Bot,
   '浏览器调试': Bug,
   'Agent 运行时': Bot,
+  '运行规则': Bot,
+  '请求超时': Gauge,
+  '执行控制': SlidersHorizontal,
   '子 Agent': Network,
   '对话运行': MessagesSquare,
   '上下文管理': Layers,
@@ -363,8 +374,15 @@ const integrationSettingsSections: Record<string, string> = {
   '通信': 'integration:communication',
   '数据': 'integration:data',
 };
-const browserRuntimeGroups = new Set(['浏览器 Agent']);
+const browserRuntimeGroups = new Set(['浏览器观察', '实时预览', '浏览器实例', '导航与诊断', '浏览器 Agent', '浏览器调试']);
 const capabilityRuntimeGroups = new Set(['代码沙箱', '计算机', '文件能力', '本地终端', '知识库', '媒体', '地图', '数据与文件', ...Object.keys(integrationSettingsSections)]);
+const browserSettingsPages = [
+  { id: 'interaction', label: '操作与观察' },
+  { id: 'instance', label: '实例与会话' },
+  { id: 'preview', label: '实时预览' },
+  { id: 'diagnostics', label: '诊断与日志' },
+] as const;
+type BrowserSettingsPage = (typeof browserSettingsPages)[number]['id'];
 
 function SettingsSecondaryNav({
   activeId,
@@ -469,15 +487,21 @@ function runtimeSettingGroup(tab: SettingsTab, key: string, configuredGroup?: st
     if (/^BROWSER_CHAT_/.test(key)) return '对话运行';
     if (/^AI_PERSONAL_MEMORY_/.test(key)) return '个性化记忆';
     if (/^AI_(?:CONTEXT|GLM_CONTEXT|IMAGE_CONTEXT|VISUAL_)/.test(key)) return '上下文管理';
-    return 'Agent 运行时';
+    if (key === 'AI_CUSTOM_SYSTEM_PROMPT') return '运行规则';
+    if (/^AI_(?:REQUEST_TIMEOUT|RUNTIME_REQUEST_TIMEOUT|RUNTIME_FIRST_CHUNK_TIMEOUT|STREAM_FIRST_CHUNK_TIMEOUT|STREAM_CHUNK_TIMEOUT)_MS$/.test(key)) return '请求超时';
+    return '执行控制';
   }
   return '配置';
 }
 
-function groupVisibleEnvSettings(tab: SettingsTab, settings: VisibleEnvSetting[]) {
+function envSettingGroup(setting: VisibleEnvSetting) {
+  return runtimeSettingGroup(setting.definition?.tab || 'runtime', setting.item.key, setting.definition?.group);
+}
+
+function groupVisibleEnvSettings(settings: VisibleEnvSetting[]) {
   const groups = new Map<string, VisibleEnvSetting[]>();
   for (const setting of settings) {
-    const title = runtimeSettingGroup(tab, setting.item.key, setting.definition?.group);
+    const title = envSettingGroup(setting);
     const group = groups.get(title) || [];
     group.push(setting);
     groups.set(title, group);
@@ -487,17 +511,78 @@ function groupVisibleEnvSettings(tab: SettingsTab, settings: VisibleEnvSetting[]
 
 function envSettingDisplayTab(setting: VisibleEnvSetting): SettingsTab {
   const sourceTab = setting.definition?.tab;
-  const group = runtimeSettingGroup(sourceTab || 'runtime', setting.item.key, setting.definition?.group);
-  if (sourceTab === 'runtime' && browserRuntimeGroups.has(group)) return 'browser';
+  const group = envSettingGroup(setting);
+  if (sourceTab === 'browser' || browserRuntimeGroups.has(group)) return 'capabilities';
   if (sourceTab === 'runtime' && capabilityRuntimeGroups.has(group)) return 'capabilities';
   if (sourceTab === 'runtime' && group === '个性化记忆') return 'memory';
   return sourceTab || 'runtime';
 }
 
 function envSettingSectionId(setting: VisibleEnvSetting) {
-  const tab = envSettingDisplayTab(setting);
-  const group = runtimeSettingGroup(tab, setting.item.key, setting.definition?.group);
+  const group = envSettingGroup(setting);
+  if (setting.definition?.tab === 'browser' || browserRuntimeGroups.has(group)) return 'capability:browser';
+  if (group === '工具开关') return 'capability:overview';
   return integrationSettingsSections[group] || group;
+}
+
+function browserSettingsPageFor(setting: VisibleEnvSetting): BrowserSettingsPage {
+  const group = envSettingGroup(setting);
+  const key = setting.item.key;
+  if (group === '实时预览') return 'preview';
+  if (group === '浏览器实例' || key === 'BROWSER_CHAT_KEEP_BROWSER_OPEN_AFTER_TURN') return 'instance';
+  if (group === '导航与诊断' || group === '浏览器调试' || key === 'BROWSER_CHAT_LOG_LIMIT') return 'diagnostics';
+  return 'interaction';
+}
+
+function envSettingCardTitle(setting: VisibleEnvSetting) {
+  const key = setting.item.key;
+  const group = envSettingGroup(setting);
+  if (envSettingSectionId(setting) === 'capability:browser') {
+    switch (browserSettingsPageFor(setting)) {
+      case 'preview':
+        if (/^BROWSER_(?:OUTPUT|SCREENCAST)/.test(key)) return '图像输出';
+        if (/_TRANSPORT$|_SOURCE_FORMAT$|_KEYFRAME_INTERVAL$/.test(key)) return '传输与编码';
+        return '视频画面';
+      case 'instance':
+        if (/^BROWSER_VIEWPORT_/.test(key)) return '视口尺寸';
+        if (key === 'HEADLESS_BROWSER' || key === 'ELECTRON_EMBEDDED_BROWSER') return '浏览器进程';
+        return '会话与缓存';
+      case 'diagnostics':
+        if (key.startsWith('BROWSER_NAVIGATION_')) return '页面稳定等待';
+        if (/HTTP|LOG_LIMIT/.test(key)) return '网络与记录';
+        return '执行诊断';
+      default:
+        if (key === 'BROWSER_CODE_AUTO_SCREENSHOT' || key === 'AI_VISUAL_HISTORY_LIMIT') return '视觉观察';
+        if (key === 'MANUAL_VERIFICATION_TIMEOUT_MS' || key === 'BROWSER_CHAT_SHOW_REASONING') return '任务交互';
+        return '操作方式';
+    }
+  }
+  if (group === '请求超时') return /FIRST_CHUNK|STREAM_CHUNK/.test(key) ? '流式响应' : '模型请求';
+  if (group === '代码沙箱') {
+    if (/RUNNER_|_BACKEND$|_ENABLED$/.test(key)) return '执行环境';
+    if (/NETWORK_MODE|ALLOW_PACKAGE_INSTALL|MAX_PACKAGES|INSTALL_TIMEOUT/.test(key)) return '网络与依赖';
+    if (/MEMORY_MB|CPU_LIMIT|PIDS_LIMIT|WORKSPACE_MB/.test(key)) return '资源配额';
+    return '执行限制';
+  }
+  if (group === 'Codex CLI') {
+    if (/PATH$|CWD$/.test(key)) return '程序与目录';
+    if (/APPROVAL|SANDBOX/.test(key)) return '访问权限';
+    return '启动选项';
+  }
+  if (group === '本地终端') return /ENABLED|CWD|SHELL/.test(key) ? '终端环境' : '执行与输出';
+  if (group === '地图') return /_KEY$|_LANGUAGE$/.test(key) ? '连接与语言' : '请求配额';
+  if (group === '脱敏策略') return /THRESHOLD|LABELS/.test(key) ? '识别范围' : '过滤与失败策略';
+  if (group === '推理服务') return /DEVICE|BATCH_SIZE/.test(key) ? '推理性能' : '服务连接';
+  return group;
+}
+
+function groupEnvSettingCards(settings: VisibleEnvSetting[]) {
+  const cards = new Map<string, VisibleEnvSetting[]>();
+  for (const setting of settings) {
+    const title = envSettingCardTitle(setting);
+    cards.set(title, [...(cards.get(title) || []), setting]);
+  }
+  return [...cards].map(([title, items]) => ({ title, items }));
 }
 
 function envSettingIsContextuallyVisible(setting: VisibleEnvSetting, values: Map<string, string>) {
@@ -562,8 +647,6 @@ const personalMemoryTypeOptions: Array<{ label: string; value: PersonalMemoryTyp
 
 function createPersonalMemoryDraft(): PersonalMemoryDraft {
   return {
-    whenText: '',
-    contextTermsText: '',
     recall: 'relevant',
     shared: false,
     scope: 'global',
@@ -578,8 +661,7 @@ function createPersonalMemoryDraft(): PersonalMemoryDraft {
 
 function personalMemoryDraftFromItem(item: PersonalMemoryItem): PersonalMemoryDraft {
   return {
-    whenText: item.applicability?.when || '',
-    contextTermsText: item.applicability?.contextTerms.join(', ') || '',
+    applicability: item.applicability,
     recall: item.recall || 'relevant',
     id: item.id,
     userId: item.userId,
@@ -791,6 +873,7 @@ export function EnvironmentSettings({
   defaultUserId = '1',
   embedded = false,
   initialData,
+  initialSection,
   onActiveTabChange,
   onModelSaved,
   onRuntimeEnvSaved,
@@ -806,6 +889,7 @@ export function EnvironmentSettings({
   defaultUserId?: string;
   embedded?: boolean;
   initialData?: EnvironmentSettingsInitialData;
+  initialSection?: string;
   onActiveTabChange?: (tab: SettingsTab) => void;
   onModelSaved?: () => void;
   onRuntimeEnvSaved?: () => void;
@@ -842,6 +926,7 @@ export function EnvironmentSettings({
   const [personalMemoryItems, setPersonalMemoryItems] = useState<PersonalMemoryItem[]>([]);
   const [personalMemoryDraft, setPersonalMemoryDraft] = useState<PersonalMemoryDraft>(() => createPersonalMemoryDraft());
   const [personalMemoryEditorMode, setPersonalMemoryEditorMode] = useState<PersonalMemoryEditorMode>(null);
+  const [personalMemoryDetail, setPersonalMemoryDetail] = useState<PersonalMemoryItem | null>(null);
   const [loginAccounts, setLoginAccounts] = useState<LoginAccountMetadata[]>([]);
   const [loginAccountEditor, setLoginAccountEditor] = useState<LoginAccountMetadata | 'create' | null>(null);
   const [loadingLoginAccounts, setLoadingLoginAccounts] = useState(false);
@@ -852,6 +937,9 @@ export function EnvironmentSettings({
   const [loading, setLoading] = useState(!initialData && shouldLoadEnvironmentConfig && (!adminSettingsPasswordRequired || Boolean(adminSettingsAccessToken)));
   const [savingEnv, setSavingEnv] = useState(false);
   const [savingModel, setSavingModel] = useState(false);
+  const [deleteModelProviderTarget, setDeleteModelProviderTarget] = useState<{ provider: OpenAICompatibleModelProvider; label: string } | null>(null);
+  const [deleteModelProviderError, setDeleteModelProviderError] = useState('');
+  const [deletingModelProvider, setDeletingModelProvider] = useState(false);
   const [envAutoSaveError, setEnvAutoSaveError] = useState('');
   const [modelAutoSaveError, setModelAutoSaveError] = useState('');
   const envFailedFingerprintRef = useRef('');
@@ -860,6 +948,7 @@ export function EnvironmentSettings({
   const [settingsSearchFocused, setSettingsSearchFocused] = useState(false);
   const [highlightedSettingKey, setHighlightedSettingKey] = useState('');
   const [activeSettingsSections, setActiveSettingsSections] = useState<Partial<Record<SettingsTab, string>>>({});
+  const [activeBrowserSettingsPage, setActiveBrowserSettingsPage] = useState<BrowserSettingsPage>('interaction');
   const [sensitiveDataTestInput, setSensitiveDataTestInput] = useState('');
   const [sensitiveDataTestResult, setSensitiveDataTestResult] = useState<SensitiveDataTestResult | null>(null);
   const sensitiveDataTestRequestRef = useRef(0);
@@ -891,18 +980,26 @@ export function EnvironmentSettings({
   const normalizedDefaultUserId = defaultUserId.trim() || '1';
   const normalizedUserId = userId?.trim() || normalizedDefaultUserId;
   const visibleSettingsTabs = environmentSettingsTabsForUser(normalizedUserId, normalizedDefaultUserId);
-  const requestedActiveTab = controlledActiveTab || internalActiveTab;
+  const requestedSourceTab = controlledActiveTab || internalActiveTab;
+  const requestedActiveTab = requestedSourceTab === 'browser' ? 'capabilities' : requestedSourceTab;
   const standaloneManagementTab = !showTabs && ['skills', 'memory', 'accounts', 'knowledge'].includes(requestedActiveTab);
   const activeTab = standaloneManagementTab || visibleSettingsTabs.some((tab) => tab.id === requestedActiveTab) ? requestedActiveTab : 'general';
   const adminSettingsAuthorizationHeaders: Record<string, string> = adminSettingsAccessToken
     ? { Authorization: `Bearer ${adminSettingsAccessToken}` }
     : {};
   const selectTab = (tab: SettingsTab) => {
-    if (!visibleSettingsTabs.some((item) => item.id === tab)) return;
-    (onActiveTabChange || setInternalActiveTab)(tab);
+    const nextTab = tab === 'browser' ? 'capabilities' : tab;
+    if (!visibleSettingsTabs.some((item) => item.id === nextTab)) return;
+    if (tab === 'browser') setActiveSettingsSections((current) => ({ ...current, capabilities: 'capability:browser' }));
+    (onActiveTabChange || setInternalActiveTab)(nextTab);
   };
   itemsRef.current = items;
   sensitiveDataEvaluationCasesRef.current = sensitiveDataEvaluationCases;
+
+  useEffect(() => {
+    const section = requestedSourceTab === 'browser' ? 'capability:browser' : initialSection;
+    if (section) setActiveSettingsSections((current) => ({ ...current, [requestedActiveTab]: section }));
+  }, [initialSection, requestedActiveTab, requestedSourceTab]);
 
   function optionLabel(option: { label: string; value: string }) {
     if (option.label === '关闭' && option.value === 'false') return language === 'en' ? 'Off' : '关闭';
@@ -991,6 +1088,13 @@ export function EnvironmentSettings({
     setItems((current) => current.map((item, itemIndex) => (itemIndex === index ? { ...item, enabled: true, ...patch } : item)));
   }
 
+  function updateToolCapability(key: string, enabled: boolean) {
+    if (!toolCapabilitySettings.some((tool) => tool.envKey === key)) return;
+    const index = items.findIndex((item) => item.key === key);
+    if (index >= 0) update(index, { value: String(enabled) });
+    else setItems((current) => [...current, { key, value: String(enabled), enabled: true, secret: false }]);
+  }
+
   async function chooseRuntimeDirectory(index: number, item: EnvRow) {
     const bridge = typeof window !== 'undefined' ? window.webPilotSystem : undefined;
     if (!bridge?.selectDirectory) return;
@@ -1014,10 +1118,18 @@ export function EnvironmentSettings({
       });
       const data = await readApiJson<{ saved?: EnvRow[] }>(response, t('保存环境配置失败'));
       const saved = data.saved || [];
+      const unsavedTool = toolCapabilitySettings.find((tool) => {
+        const requested = items.find((item) => item.key === tool.envKey);
+        const previous = savedItems.find((item) => item.key === tool.envKey);
+        if (!requested || requested.value === previous?.value) return false;
+        return saved.find((item) => item.key === tool.envKey)?.value !== requested.value;
+      });
+      if (unsavedTool) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, t('工具开关未保存：{name}', { name: t(unsavedTool.label) }));
       envFailedFingerprintRef.current = '';
       setSavedItems(saved);
       if (envItemsFingerprint(itemsRef.current) === sourceFingerprint) setItems(saved);
       onRuntimeEnvSaved?.();
+      window.dispatchEvent(new Event(TOOL_CAPABILITY_SETTINGS_CHANGED_EVENT));
     } catch (error) {
       envFailedFingerprintRef.current = sourceFingerprint;
       setEnvAutoSaveError(error instanceof Error ? t(error.message) : t('保存环境配置失败'));
@@ -1140,7 +1252,7 @@ export function EnvironmentSettings({
       ? openAICompatibleProviderIndex(availableDefinition.value) || 1
       : Math.max(0, ...compatibleDefinitions.map((definition) => openAICompatibleProviderIndex(definition.value) || 0)) + 1;
     const provider = availableDefinition?.value
-      || `openai-compatible-${sequence}` as ModelProvider;
+      || (sequence === 1 ? 'openai-compatible' : `openai-compatible-${sequence}`) as OpenAICompatibleModelProvider;
     setModelDraft({
       ...next,
       providers: {
@@ -1371,15 +1483,18 @@ export function EnvironmentSettings({
     setModelCapabilitiesEditor(null);
   }
 
-  async function saveModel() {
+  async function saveModel(removedProvider?: OpenAICompatibleModelProvider) {
     for (const definition of modelProviderDefinitionsForConfig(modelDraft.providers)) {
+      if (definition.value === removedProvider) continue;
       const duplicates = duplicateExtraRequestParameterKeys(extraRequestParameterRows[definition.value] || []);
       if (duplicates.length) {
+        if (removedProvider) throw new Error(t('请先修正其他供应商的重复请求参数。'));
         return;
       }
     }
     const draftFingerprint = JSON.stringify(modelDraft);
-    const payload = createModelConfig(modelDraft);
+    const draft = createModelConfig(modelDraft);
+    const payload = removedProvider ? removeCustomModelProviders(draft, [removedProvider]) : draft;
     const sourceFingerprint = JSON.stringify(payload);
     setSavingModel(true);
     setModelAutoSaveError('');
@@ -1387,7 +1502,7 @@ export function EnvironmentSettings({
       const response = await fetch(withWebPilotBasePath('/api/settings/model'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...adminSettingsAuthorizationHeaders },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ ...payload, ...(removedProvider ? { removedProviders: [removedProvider] } : {}) }),
       });
       const data = await readApiJson<{ config?: Partial<ModelConfig> }>(response, t('保存模型配置失败'));
       const nextModel = createModelConfig(data.config);
@@ -1396,15 +1511,34 @@ export function EnvironmentSettings({
       // Compare the actual state, including draft rows, when applying the response.
       // Normalized payload equality cannot detect an empty row added during saving.
       setModelDraft((current) => JSON.stringify(current) === draftFingerprint
-        ? reconcileSavedModelDraft(current, nextModel)
+        ? (removedProvider ? nextModel : reconcileSavedModelDraft(current, nextModel))
         : current);
       onModelSaved?.();
+      return nextModel;
     } catch (error) {
       modelFailedFingerprintRef.current = sourceFingerprint;
       setModelAutoSaveError(error instanceof Error ? t(error.message) : t('保存模型配置失败'));
       throw error;
     } finally {
       setSavingModel(false);
+    }
+  }
+
+  async function deleteCustomModelProvider() {
+    const target = deleteModelProviderTarget;
+    if (!target || savingModel || deletingModelProvider) return;
+    setDeletingModelProvider(true);
+    setDeleteModelProviderError('');
+    try {
+      const saved = await saveModel(target.provider);
+      if (!saved) return;
+      setSelectedModelProvider((current) => current === target.provider ? saved.provider : current);
+      setExtraRequestParameterRows(extraRequestParameterDrafts(saved));
+      setDeleteModelProviderTarget(null);
+    } catch (error) {
+      setDeleteModelProviderError(error instanceof Error ? t(error.message) : t('删除供应商失败'));
+    } finally {
+      setDeletingModelProvider(false);
     }
   }
 
@@ -1538,9 +1672,7 @@ export function EnvironmentSettings({
 
   function personalMemoryPayload() {
     return {
-      applicability: personalMemoryDraft.whenText.trim() ? {
-        when: personalMemoryDraft.whenText.trim(), contextTerms: personalMemoryAliasesFromText(personalMemoryDraft.contextTermsText),
-      } : null,
+      applicability: personalMemoryDraft.applicability ?? null,
       recall: personalMemoryDraft.scope === 'global' && personalMemoryDraft.type === 'preference' ? personalMemoryDraft.recall : 'relevant',
       shared: personalMemoryDraft.shared,
       scope: personalMemoryDraft.scope,
@@ -1556,10 +1688,6 @@ export function EnvironmentSettings({
 
   async function savePersonalMemory() {
     const payload = personalMemoryPayload();
-    if (personalMemoryDraft.contextTermsText.trim() && !personalMemoryDraft.whenText.trim()) {
-      window.alert(t('限定项目或环境时，请同时说明适用条件'));
-      return;
-    }
     if (!payload.key || !payload.value) {
       window.alert(t('记忆需要填写短语和说明'));
       return;
@@ -2051,18 +2179,6 @@ export function EnvironmentSettings({
                 onChange={(event) => updatePersonalMemoryDraft({ value: event.target.value })}
               />
             </label>
-            <label className="personal-memory-field wide">
-              <span>{t('适用条件（可选）')}</span>
-              <input value={personalMemoryDraft.whenText} maxLength={300}
-                onChange={(event) => updatePersonalMemoryDraft({ whenText: event.target.value })}
-                placeholder={t('这条记忆应该在什么任务中使用')} />
-            </label>
-            <label className="personal-memory-field wide">
-              <span>{t('限定项目或环境（可选）')}</span>
-              <input value={personalMemoryDraft.contextTermsText}
-                onChange={(event) => updatePersonalMemoryDraft({ contextTermsText: event.target.value })}
-                placeholder={t('多个名称用逗号分隔；任务提到其中一个时才会召回')} />
-            </label>
             <div className="resource-sharing-field wide">
               <div>
                 <strong>{t('所有 ID 共享')}</strong>
@@ -2090,6 +2206,35 @@ export function EnvironmentSettings({
               {t(editing ? '保存记忆' : '新增记忆')}
             </button>
           </footer>
+      </AppModal>
+    );
+  }
+
+  function renderPersonalMemoryDetailModal() {
+    const item = personalMemoryDetail;
+    if (!item) return null;
+    return (
+      <AppModal ariaLabelledBy="personal-memory-detail-title" dialogClassName="ui-modal personal-memory-detail-modal" onClose={() => setPersonalMemoryDetail(null)}>
+        <header className="ui-modal-header">
+          <h2 id="personal-memory-detail-title">{item.key}</h2>
+          <button aria-label={t('关闭')} className="ui-icon-button ui-modal-close" onClick={() => setPersonalMemoryDetail(null)} type="button"><X size={16} /></button>
+        </header>
+        <div className="ui-modal-body personal-memory-detail-body">
+          <p>{item.value}</p>
+          {item.aliases?.length ? <p>{t('等价说法')}：{item.aliases.join(' · ')}</p> : null}
+          {item.applicability ? <p>{t('适用条件')}：{item.applicability.when}
+            {item.applicability.contextTerms.length ? ` (${item.applicability.contextTerms.join(' / ')})` : ''}</p> : null}
+          <details>
+            <summary>{t('记忆依据与记录')}</summary>
+            {item.utility ? <p>{t('未来用途')}：{item.utility}</p> : null}
+            {item.reviewReason ? <p>{t('保存理由')}：{item.reviewReason}</p> : <p>{t('尚无自动复核记录')}</p>}
+            {item.evidence?.map((quote, index) => <blockquote key={index}>{quote}</blockquote>)}
+            {item.verification?.map((proof, index) => <p key={index}>{t('验证依据')}：{proof.quote}<br />{t('复用时检查')}：{proof.check}</p>)}
+            {item.expiresAt ? <p>{t('有效期至')}：{new Date(item.expiresAt).toLocaleString()}</p> : null}
+            <p>{t('召回次数')}：{item.useCount} · {t('召回不代表已验证有效')}</p>
+            {item.history?.map((entry, index) => <p key={index}>{t('此前内容')}：{entry.value}</p>)}
+          </details>
+        </div>
       </AppModal>
     );
   }
@@ -2171,23 +2316,9 @@ export function EnvironmentSettings({
                   type: 'text',
                 },
                 render: (item) => (
-                  <div className="management-table-primary-copy">
+                  <button className="management-table-primary-button" onClick={() => setPersonalMemoryDetail(item)} type="button">
                     <strong>{item.key}</strong>
-                    <span>{item.value}</span>
-                    {item.aliases?.length ? <small>{t('等价说法')}：{item.aliases.join(' · ')}</small> : null}
-                    {item.applicability ? <small>{t('适用条件')}：{item.applicability.when}
-                      {item.applicability.contextTerms.length ? ` (${item.applicability.contextTerms.join(' / ')})` : ''}</small> : null}
-                    <details>
-                      <summary>{t('记忆依据与记录')}</summary>
-                      {item.utility ? <p>{t('未来用途')}：{item.utility}</p> : null}
-                      {item.reviewReason ? <p>{t('保存理由')}：{item.reviewReason}</p> : <p>{t('尚无自动复核记录')}</p>}
-                      {item.evidence?.map((quote, index) => <blockquote key={index}>{quote}</blockquote>)}
-                      {item.verification?.map((proof, index) => <p key={index}>{t('验证依据')}：{proof.quote}<br />{t('复用时检查')}：{proof.check}</p>)}
-                      {item.expiresAt ? <p>{t('有效期至')}：{new Date(item.expiresAt).toLocaleString()}</p> : null}
-                      <p>{t('召回次数')}：{item.useCount} · {t('召回不代表已验证有效')}</p>
-                      {item.history?.map((entry, index) => <p key={index}>{t('此前内容')}：{entry.value}</p>)}
-                    </details>
-                  </div>
+                  </button>
                 ),
               },
               {
@@ -2314,6 +2445,7 @@ export function EnvironmentSettings({
           />
         )}
         {renderPersonalMemoryEditorModal()}
+        {renderPersonalMemoryDetailModal()}
         {renderDeletePersonalMemoryModal()}
       </section>
     );
@@ -2635,15 +2767,19 @@ export function EnvironmentSettings({
     && envSettingDisplayTab(setting) === activeTab
     && envSettingIsContextuallyVisible(setting, envValues)
   ));
-  const visibleEnvGroups = groupVisibleEnvSettings(activeTab, visibleEnvItems);
+  const visibleEnvGroups = groupVisibleEnvSettings(visibleEnvItems);
+  const browserEnvItems = visibleEnvItems.filter((setting) => envSettingSectionId(setting) === 'capability:browser');
+  const activeBrowserEnvItems = browserEnvItems.filter((setting) => browserSettingsPageFor(setting) === activeBrowserSettingsPage);
   const settingsSecondaryItems: SettingsSecondaryNavItem[] = [
     ...(activeTab === 'sensitive-data' ? [{ id: 'sensitive:runtime', label: t('本地组件下载') }] : []),
     ...(activeTab === 'capabilities' ? [
+      { id: 'capability:overview', label: t('工具开关'), meta: String(toolCapabilitySettings.length) },
+      { id: 'capability:browser', label: t('浏览器') },
       { id: 'integration:connector', label: t('连接器') },
       { id: 'integration:communication', label: t('通信') },
       { id: 'integration:data', label: t('数据') },
     ] : []),
-    ...visibleEnvGroups.filter((group) => !integrationSettingsSections[group.title]).map((group) => ({
+    ...visibleEnvGroups.filter((group) => !integrationSettingsSections[group.title] && !browserRuntimeGroups.has(group.title) && group.title !== '工具开关').map((group) => ({
       id: group.title,
       label: t(group.title),
       meta: String(group.items.length),
@@ -2689,7 +2825,7 @@ export function EnvironmentSettings({
         key: setting.item.key,
         title: t(setting.definition?.label || setting.item.key),
         description: t(setting.definition?.description || '网页配置项。'),
-        group: t(runtimeSettingGroup(envSettingDisplayTab(setting), setting.item.key, setting.definition?.group)),
+        group: t(envSettingGroup(setting)),
         section: envSettingSectionId(setting),
         tab: envSettingDisplayTab(setting),
       })),
@@ -2702,14 +2838,43 @@ export function EnvironmentSettings({
     if ('provider' in result && result.provider) selectProvider(result.provider as ModelProvider);
     if ('section' in result && result.section) {
       setActiveSettingsSections((current) => ({ ...current, [result.tab]: result.section }));
+      if (result.section === 'capability:browser') {
+        const setting = allEnvSettings.find((item) => item.item.key === result.key);
+        if (setting) setActiveBrowserSettingsPage(browserSettingsPageFor(setting));
+      }
     }
     setSettingsSearch('');
     setSettingsSearchFocused(false);
     selectTab(result.tab);
   }
 
+  function renderEnvSettingCards(settings: VisibleEnvSetting[]) {
+    return <div className="settings-group-stack">
+      {groupEnvSettingCards(settings).map((card) => (
+        <SettingsGroupCard
+          forceOpen={card.items.some((setting) => setting.item.key === highlightedSettingKey)}
+          key={card.title}
+          meta={t('{count} 项设置', { count: card.items.length })}
+          title={t(card.title)}
+        >
+          {renderEnvSettingList(card.items)}
+        </SettingsGroupCard>
+      ))}
+    </div>;
+  }
+
   return (
     <main className={embedded ? 'settings-workspace embedded' : 'settings-workspace'}>
+      {deleteModelProviderTarget ? <ConfirmDeleteModal
+        deleting={deletingModelProvider || savingModel}
+        description={t('将删除此供应商的模型、连接配置和访问密钥；如果它是默认供应商，将切换到其他可用供应商。')}
+        error={deleteModelProviderError}
+        id="delete-model-provider-title"
+        itemTitle={deleteModelProviderTarget.label}
+        onClose={() => { if (!deletingModelProvider && !savingModel) setDeleteModelProviderTarget(null); }}
+        onConfirm={deleteCustomModelProvider}
+        title={t('删除自定义供应商')}
+      /> : null}
       {modelCapabilitiesEditor ? (
         <ModelCapabilitiesModal
           key={`${modelCapabilitiesEditor.provider}/${modelCapabilitiesEditor.model}`}
@@ -2907,6 +3072,12 @@ export function EnvironmentSettings({
                               label={settings?.displayName?.trim() || t(provider.label)}
                               key={provider.value}
                               onSelect={() => selectProvider(provider.value)}
+                              deleteDisabled={savingModel || loading}
+                              onDelete={isOpenAICompatibleProvider(provider.value) ? () => {
+                                if (!isOpenAICompatibleProvider(provider.value)) return;
+                                setDeleteModelProviderError('');
+                                setDeleteModelProviderTarget({ provider: provider.value, label: settings?.displayName?.trim() || t(provider.label) });
+                              } : undefined}
                             >
                               <span className="settings-provider-icon"><ModelBrandIcon model={settings?.defaultModel || provider.defaultModel} provider={provider.value} /></span>
                               <span><strong>{settings?.displayName?.trim() || t(provider.label)}</strong><small>{enabled ? t('已启用') : t('未启用')}</small></span>
@@ -2919,7 +3090,7 @@ export function EnvironmentSettings({
                   </div>
                 </aside>
                 <div className="settings-model-detail">
-                <section className="settings-detail-panel settings-model-group">
+                <section className="settings-detail-panel settings-model-group settings-provider-basics">
                 <header className="settings-detail-panel-head"><h3>{t('基础信息')}</h3><span>{t('配置供应商名称和可用状态。')}</span></header>
                 <div className="settings-row">
                   <div>
@@ -3156,6 +3327,34 @@ export function EnvironmentSettings({
                   onChange={(section) => setActiveSettingsSections((current) => ({ ...current, [activeTab]: section }))}
                 />
                 <div className="settings-detail-content">
+                  {activeSettingsSection === 'capability:overview' ? (
+                    <ToolCapabilitySettings
+                      disabled={savingEnv || loading}
+                      items={items}
+                      onChange={updateToolCapability}
+                      onConfigure={(section) => setActiveSettingsSections((current) => ({ ...current, capabilities: section }))}
+                    />
+                  ) : null}
+                  {activeSettingsSection === 'capability:browser' ? (
+                    <section className="settings-capability-page">
+                      <header className="settings-capability-head">
+                        <h3>{t('浏览器')}</h3>
+                        <p>{t('管理浏览器操作、实例和实时预览。')}</p>
+                      </header>
+                      <nav aria-label={t('浏览器配置分组')} className="settings-capability-tabs">
+                        {browserSettingsPages.map((page) => (
+                          <button
+                            aria-pressed={activeBrowserSettingsPage === page.id}
+                            className={activeBrowserSettingsPage === page.id ? 'active' : undefined}
+                            key={page.id}
+                            onClick={() => setActiveBrowserSettingsPage(page.id)}
+                            type="button"
+                          >{t(page.label)}</button>
+                        ))}
+                      </nav>
+                      {renderEnvSettingCards(activeBrowserEnvItems)}
+                    </section>
+                  ) : null}
                   {activeSettingsSection === 'sensitive:test' ? renderSensitiveDataToolPanel('test') : null}
                   {activeSettingsSection === 'sensitive:runtime' ? <SensitiveDataRuntimeSettings accessToken={adminSettingsAccessToken} /> : null}
                   {activeSettingsSection === 'sensitive:evaluation' ? renderSensitiveDataToolPanel('evaluation') : null}
@@ -3203,7 +3402,15 @@ export function EnvironmentSettings({
                       {renderEnvSettingList(activeIntegrationSettings)}
                     </section>
                   ) : null}
-                  {activeEnvGroup ? (
+                  {activeEnvGroup && groupEnvSettingCards(activeEnvGroup.items).length > 1 ? (
+                    <section className="settings-capability-page">
+                      <header className="settings-capability-head">
+                        <h3>{t(activeEnvGroup.title)}</h3>
+                        <p>{t('{count} 项设置，修改后自动保存。', { count: activeEnvGroup.items.length })}</p>
+                      </header>
+                      {renderEnvSettingCards(activeEnvGroup.items)}
+                    </section>
+                  ) : activeEnvGroup ? (
                     <section className="settings-detail-panel">
                       <header className="settings-detail-panel-head">
                         <h3>{t(activeEnvGroup.title)}</h3>

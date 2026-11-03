@@ -367,6 +367,7 @@
 
   .settings-workspace-route .browser-chat-settings-pane .settings-tabs button {
     flex: 0 0 auto;
+    font-size: 14px;
     white-space: nowrap;
   }
 }
@@ -1002,8 +1003,8 @@
   color: var(--settings-muted);
   cursor: pointer;
   font: inherit;
-  font-size: 13px;
-  font-weight: 550;
+  font-size: var(--navigation-font-size);
+  font-weight: var(--navigation-font-weight);
   min-height: 34px;
   padding: 0 14px;
 }
@@ -1012,6 +1013,7 @@
   background: var(--menu-selected-bg);
   box-shadow: none;
   color: var(--menu-selected-foreground);
+  font-weight: var(--navigation-selected-font-weight);
 }
 
 .settings-model-workspace {
@@ -1056,13 +1058,14 @@
   color: var(--settings-muted);
   background: transparent;
   font: inherit;
+  font-size: var(--navigation-font-size);
   cursor: pointer;
 }
 
 .settings-model-types button.active {
   color: var(--menu-selected-foreground);
   background: var(--menu-selected-bg);
-  font-weight: 600;
+  font-weight: var(--navigation-selected-font-weight);
 }
 
 .settings-provider-rail {
@@ -1092,7 +1095,7 @@
 
 .settings-provider-rail-head span {
   color: var(--settings-muted);
-  font-size: 11.5px;
+  font-size: 12px;
   grid-column: 1;
   grid-row: 2;
 }
@@ -1129,6 +1132,28 @@
   box-shadow: 0 4px 14px #0002;
   z-index: 1;
 }
+
+.settings-provider-delete {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  flex: 0 0 26px;
+  height: 28px;
+  justify-content: center;
+  margin-right: 4px;
+  opacity: 0;
+  padding: 0;
+}
+
+.settings-provider-row:is(.active, :hover, :focus-within) .settings-provider-delete { opacity: 1; }
+.settings-provider-delete:hover:not(:disabled) { background: color-mix(in srgb, var(--danger) 10%, transparent); color: var(--danger); }
+.settings-provider-delete:focus-visible { opacity: 1; outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.settings-provider-delete:disabled { cursor: default; opacity: .35; }
+@media (hover: none) { .settings-provider-delete { opacity: 1; } }
 
 .settings-provider-drag-handle {
   align-items: center;
@@ -1167,6 +1192,8 @@
   color: var(--settings-text);
   cursor: pointer;
   display: grid;
+  font-size: var(--navigation-font-size);
+  font-weight: var(--navigation-font-weight);
   flex: 1;
   gap: 9px;
   grid-template-columns: 28px minmax(0, 1fr) 8px;
@@ -1200,7 +1227,7 @@
 
 .settings-provider-row.active .settings-provider-select > span:nth-child(2) strong {
   color: var(--menu-selected-foreground);
-  font-weight: 600;
+  font-weight: var(--navigation-selected-font-weight);
 }
 
 .settings-provider-icon {
@@ -1234,13 +1261,13 @@
 }
 
 .settings-provider-select strong {
-  font-size: 12.5px;
-  font-weight: 600;
+  font-size: inherit;
+  font-weight: inherit;
 }
 
 .settings-provider-select small {
   color: var(--settings-muted);
-  font-size: 10.5px;
+  font-size: 13px;
 }
 
 .settings-provider-select > i {
@@ -1285,7 +1312,7 @@
 .settings-secondary-nav-label {
   color: var(--settings-muted);
   display: block;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 650;
   letter-spacing: 0.04em;
   padding: 4px 10px 10px;
@@ -1305,8 +1332,8 @@
   cursor: pointer;
   display: flex;
   font: inherit;
-  font-size: 13px;
-  font-weight: 540;
+  font-size: var(--navigation-font-size);
+  font-weight: var(--navigation-font-weight);
   gap: 10px;
   justify-content: space-between;
   height: var(--nav-item-height);
@@ -1317,7 +1344,7 @@
   width: 100%;
 }
 
-.settings-secondary-nav button:hover {
+.settings-secondary-nav button:hover:not(.active) {
   background: var(--menu-hover-bg);
   color: var(--menu-hover-foreground);
 }
@@ -1325,12 +1352,12 @@
 .settings-secondary-nav button.active {
   background: var(--menu-selected-bg);
   color: var(--menu-selected-foreground);
-  font-weight: 600;
+  font-weight: var(--navigation-selected-font-weight);
 }
 
 .settings-secondary-nav button small {
   color: var(--settings-muted);
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 500;
 }
 

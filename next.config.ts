@@ -53,6 +53,9 @@ export default function nextConfig(phase: string): NextConfig {
       pagesBufferLength: 10,
     },
     experimental: {
+      // Keep development Flight debug metadata in the HTTP response. A blocked
+      // HMR WebSocket must not leave the initial React tree waiting forever.
+      reactDebugChannel: false,
       // React.lazy still splits optional viewers into async chunks. The
       // experimental compilation proxies can reference an unavailable loader
       // after HMR, so keep the ordinary Turbopack import graph in both runtimes.

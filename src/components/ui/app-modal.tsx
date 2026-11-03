@@ -44,9 +44,9 @@ function stripModalClasses(node: ReactNode): ReactNode {
   return Children.map(node, (child) => {
     if (!isValidElement<ModalContentProps>(child)) return child;
     const { children, className } = child.props;
-    const { modalClasses, remainingClassName } = splitModalClasses(className);
+    const { modalClasses } = splitModalClasses(className);
     if (modalClasses.includes('ui-modal-title')) {
-      return <Modal.Heading id={child.props.id}>{stripModalClasses(children)}</Modal.Heading>;
+      return <Modal.Heading id={child.props.id} className={className}>{stripModalClasses(children)}</Modal.Heading>;
     }
     if (modalClasses.includes('ui-modal-heading-icon')) {
       return null;
@@ -57,6 +57,7 @@ function stripModalClasses(node: ReactNode): ReactNode {
     if (modalClasses.includes('ui-modal-close')) {
       return (
         <Modal.CloseTrigger
+          className="settlement-modal-close"
           aria-label={child.props['aria-label']}
           isDisabled={child.props.disabled}
         />
@@ -64,7 +65,7 @@ function stripModalClasses(node: ReactNode): ReactNode {
     }
     const nextProps: ModalContentProps = { children: stripModalClasses(children) };
     if (Object.prototype.hasOwnProperty.call(child.props, 'className')) {
-      nextProps.className = remainingClassName || undefined;
+      nextProps.className = className;
     }
     return cloneElement(child, nextProps);
   });
@@ -78,13 +79,13 @@ function renderModalSections(children: ReactNode): ReactNode {
       return cloneElement(child, { children: renderModalSections(child.props.children) });
     }
     if (child.type === 'header' || modalClasses.includes('ui-modal-header')) {
-      return <Modal.Header className={joinModalSectionClasses('app-modal-header', remainingClassName)}>{stripModalClasses(child.props.children)}</Modal.Header>;
+      return <Modal.Header className={joinModalSectionClasses('app-modal-header ui-modal-header', remainingClassName)}>{stripModalClasses(child.props.children)}</Modal.Header>;
     }
     if (child.type === 'footer' || modalClasses.includes('ui-modal-footer')) {
-      return <Modal.Footer className={joinModalSectionClasses('app-modal-footer', remainingClassName)}>{stripModalClasses(child.props.children)}</Modal.Footer>;
+      return <Modal.Footer className={joinModalSectionClasses('app-modal-footer ui-modal-footer', remainingClassName)}>{stripModalClasses(child.props.children)}</Modal.Footer>;
     }
     if (modalClasses.includes('ui-modal-body')) {
-      return <Modal.Body className={joinModalSectionClasses('app-modal-body', remainingClassName)}>{stripModalClasses(child.props.children)}</Modal.Body>;
+      return <Modal.Body className={joinModalSectionClasses('app-modal-body ui-modal-body', remainingClassName)}>{stripModalClasses(child.props.children)}</Modal.Body>;
     }
     return stripModalClasses(child);
   });
@@ -149,7 +150,7 @@ export function AppModal({
   // Backdrop supplies both the overlay state and the component style context.
   return (
     <Modal.Backdrop
-      className={backdropClassName}
+      className={joinModalSectionClasses('settlement-modal-backdrop', backdropClassName)}
       isDismissable={dismissable}
       isKeyboardDismissDisabled={!keyboardDismissable}
       isOpen={open}
@@ -165,7 +166,7 @@ export function AppModal({
         <Modal.Dialog
           aria-label={ariaLabel}
           aria-labelledby={ariaLabelledBy}
-          className={dialogClassName}
+          className={joinModalSectionClasses('settlement-modal', dialogClassName)}
           style={dialogStyle}
         >
           {renderModalSections(children)}

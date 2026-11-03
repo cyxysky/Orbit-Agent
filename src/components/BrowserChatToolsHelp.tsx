@@ -12,6 +12,7 @@ import { useI18n } from '@/i18n/I18nProvider';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 import { normalizeDisabledBrowserChatTools, type BrowserChatToolHelp } from '@/lib/browser-chat-tools';
 import { readBrowserChatToolPreferences, saveBrowserChatToolPreferences } from '@/lib/browser-chat-tool-preferences';
+import { TOOL_CAPABILITY_SETTINGS_CHANGED_EVENT } from '@/lib/tool-capability-settings';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 
 
@@ -93,17 +94,32 @@ export function BrowserChatToolsHelp({ userId, sessionId, disabledTools, onChang
   useEffect(() => { setOrder(readBrowserChatToolPreferences(userId).order); }, [userId]);
   useEffect(() => {
     if (!open) return;
-    const controller = new AbortController();
+    let controller: AbortController | undefined;
     setTools(undefined); setError('');
-    void fetch(withWebPilotBasePath('/api/browser-chat/tools'), { signal: controller.signal, cache: 'no-store' })
-      .then(async (response) => {
-        const payload = await response.json();
-        controller.signal.throwIfAborted();
-        if (!response.ok || !Array.isArray(payload.tools)) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, payload.error || '无法读取工具说明');
-        setTools(payload.tools); setError('');
-      }).catch((reason) => { if (!controller.signal.aborted) setError(reason.message); });
-    return () => controller.abort();
-  }, [open]);
+    const refresh = () => {
+      controller?.abort();
+      const request = new AbortController();
+      controller = request;
+      void fetch(withWebPilotBasePath('/api/browser-chat/tools'), { signal: request.signal, cache: 'no-store' })
+        .then(async (response) => {
+          const payload = await response.json();
+          request.signal.throwIfAborted();
+          if (!response.ok || !Array.isArray(payload.tools)) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, payload.error || '无法读取工具说明');
+          setTools(payload.tools); setError('');
+        }).catch((reason) => { if (!request.signal.aborted) setError(reason instanceof Error ? reason.message : String(reason)); });
+    };
+    const refreshWhenVisible = () => { if (document.visibilityState === 'visible') refresh(); };
+    refresh();
+    window.addEventListener('focus', refreshWhenVisible);
+    window.addEventListener(TOOL_CAPABILITY_SETTINGS_CHANGED_EVENT, refresh);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    return () => {
+      controller?.abort();
+      window.removeEventListener('focus', refreshWhenVisible);
+      window.removeEventListener(TOOL_CAPABILITY_SETTINGS_CHANGED_EVENT, refresh);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+    };
+  }, [open, userId]);
   async function toggle(name: string) {
     if (busy || savingRef.current) return;
     savingRef.current = true;
@@ -177,7 +193,8 @@ export function BrowserChatToolsHelp({ userId, sessionId, disabledTools, onChang
                 enabled={tool.available && !disabledTools.includes(tool.name)} disabled={busy || Boolean(saving) || !tool.available}
                 onToggle={() => void toggle(tool.name)} />)}
             </SortableContext>
-            {tools && !visibleTools.length && <p role="status">{t('没有匹配的工具')}</p>}
+            {tools?.length === 0 && <p role="status">{t('所有工具均已在工具能力设置中关闭。重新启用后，即可在这里选择对话工具。')}</p>}
+            {Boolean(tools?.length) && !visibleTools.length && <p role="status">{t('没有匹配的工具')}</p>}
           </div>
         </DndContext>
         <footer className="browser-chat-tools-card-footer">

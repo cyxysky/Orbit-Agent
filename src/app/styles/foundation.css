@@ -221,10 +221,11 @@ body {
 
 /* Shared by Markdown tables and the data-table component. */
 .table-root--primary {
-  background: var(--table-header-bg);
+  background: var(--panel);
   border: 1px solid var(--table-border);
   border-radius: 20px;
-  padding: 0 3px 3px;
+  overflow: hidden;
+  padding: 0;
 }
 
 .table-root .table__content {
@@ -233,10 +234,11 @@ body {
 }
 
 .table-root :is(.table__header, .table__column) {
-  background: var(--table-header-bg);
+  background: var(--panel);
 }
 
 .table-root .table__column {
+  border-bottom: 1px solid var(--table-border);
   color: var(--table-header-foreground);
 }
 
@@ -252,21 +254,9 @@ body {
   border-bottom: 0;
 }
 
-/* React Aria renders row headers as th; both cell types share the body corners. */
-.table-root--primary .table__body > tr:first-child > :is(td, th):first-child {
-  border-start-start-radius: 16px;
-}
-
-.table-root--primary .table__body > tr:first-child > :is(td, th):last-child {
-  border-start-end-radius: 16px;
-}
-
-.table-root--primary .table__body > tr:last-child > :is(td, th):first-child {
-  border-end-start-radius: 16px;
-}
-
-.table-root--primary .table__body > tr:last-child > :is(td, th):last-child {
-  border-end-end-radius: 16px;
+/* The table owns the outer corners; header and body form one continuous surface. */
+.table-root--primary .table__body > tr > :is(td, th) {
+  border-radius: 0;
 }
 
 .app-data-table.is-compact :is(.table__column, .table__cell) {

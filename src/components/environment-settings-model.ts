@@ -17,15 +17,14 @@ export const environmentSettingsTabs: EnvironmentSettingsTab[] = [
   { id: 'model', label: '模型与供应商', description: '模型、密钥和服务地址' },
   { id: 'runtime', label: 'Agent 运行', description: '推理、上下文和并发策略' },
   { id: 'knowledge', label: '知识库', description: '导入、管理业务知识包和下载模板' },
-  { id: 'browser', label: '浏览器', description: '实例、预览和浏览器 Agent' },
-  { id: 'capabilities', label: '工具能力', description: '代码、文件、桌面、连接器、通信和数据' },
+  { id: 'capabilities', label: '工具能力', description: '工具开关、浏览器、文件、桌面和外部连接' },
   { id: 'sensitive-data', label: '安全与隐私', description: '敏感数据过滤、检测和评测' },
 ];
 
 export const environmentSettingsTabGroups: EnvironmentSettingsTabGroup[] = [
   { id: 'interface', label: '界面', tabs: ['general'] },
   { id: 'ai', label: 'AI 与运行', tabs: ['model', 'runtime', 'knowledge'] },
-  { id: 'tools', label: '工具与连接', tabs: ['browser', 'capabilities'] },
+  { id: 'tools', label: '工具与连接', tabs: ['capabilities'] },
   { id: 'system', label: '安全与系统', tabs: ['sensitive-data'] },
 ];
 

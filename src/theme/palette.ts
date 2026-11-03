@@ -1,4 +1,4 @@
-export const DEFAULT_THEME_COLOR = '#48654a';
+export const DEFAULT_THEME_COLOR = '#1a2227';
 
 type Triple = [number, number, number];
 const clamp = (value: number) => Math.max(0, Math.min(1, value));

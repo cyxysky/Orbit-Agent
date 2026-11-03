@@ -1,16 +1,16 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import { Button } from '@heroui/react/button';
-import { Popover } from '@heroui/react/popover';
 import { Download, Files, FolderOpen, Loader2, RefreshCw, Search, X } from 'lucide-react';
 import { useI18n } from '@/i18n/I18nProvider';
 import { AppInput } from '@/components/ui/app-input';
+import { AppModal } from '@/components/ui/app-modal';
 import { ExpandableActionLabel } from '@/components/ui/expandable-action-label';
 import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { useFilePreview } from '@/components/file-preview-context';
 import { WorkspaceHistoryList } from '@/components/WorkspaceSidebarArchive';
-import { browserChatArtifactKey, browserChatArtifactOpenUrl, type BrowserChatMessageFileGroup } from '@/lib/browser-chat-artifacts';
+import { browserChatArtifactDownloadUrl, browserChatArtifactKey, browserChatArtifactOpenUrl, type BrowserChatMessageFileGroup } from '@/lib/browser-chat-artifacts';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 
@@ -20,6 +20,7 @@ export function BrowserChatFilesPanel({ sessionId, busy }: {
 }) {
   const { t, language } = useI18n();
   const { openFilePreview, filePreviewOpen } = useFilePreview();
+  const titleId = useId();
   const [open, setOpen] = useState(false);
   const [groups, setGroups] = useState<BrowserChatMessageFileGroup[]>([]);
   const [selectedId, setSelectedId] = useState<string>();
@@ -53,16 +54,16 @@ export function BrowserChatFilesPanel({ sessionId, busy }: {
   const selected = filtered.find(group => group.messageId === selectedId) || filtered[0];
   const count = groups.reduce((total, group) => total + group.files.length, 0);
   const time = (value: string) => new Intl.DateTimeFormat(language, { hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value));
-  return <Popover isOpen={open} onOpenChange={nextOpen => { if (nextOpen || !filePreviewOpen) setOpen(nextOpen); }}>
-    <Button type="button" variant="ghost" className="browser-chat-conversation-direct-action" aria-label={t('对话文件管理')} aria-expanded={open}>
+  return <>
+    <Button type="button" variant="ghost" className="browser-chat-conversation-direct-action" aria-label={t('对话文件管理')} aria-haspopup="dialog" aria-expanded={open} onPress={() => setOpen(true)}>
       <Files size={17} aria-hidden="true" /><ExpandableActionLabel>{t('对话文件')}</ExpandableActionLabel>
     </Button>
-    <Popover.Content className="browser-chat-files-popover" placement="bottom end" offset={10} containerPadding={12}
-      isKeyboardDismissDisabled={filePreviewOpen} shouldCloseOnInteractOutside={element => !filePreviewOpen && !element.closest('.file-preview-overlay')}>
-      <Popover.Dialog aria-label={t('对话文件管理')} className="browser-chat-files-dialog">
+    <AppModal ariaLabelledBy={titleId} dialogClassName="settlement-resource-dialog settlement-files-dialog browser-chat-files-dialog" size="wide"
+      open={open && !filePreviewOpen} dismissable={!filePreviewOpen} keyboardDismissable={!filePreviewOpen}
+      onClose={() => { if (!filePreviewOpen) setOpen(false); }}>
         <header className="browser-chat-files-header">
           <span className="browser-chat-files-heading-icon"><Files size={20} /></span>
-          <div><strong>{t('对话文件')}</strong><small>{t('当前对话')} · {t('{count} 条消息', { count: groups.length })} · {t('{count} 个文件', { count })}</small></div>
+          <div className="settlement-resource-heading"><h2 id={titleId}>{t('对话文件')}</h2><p>{t('当前对话')} · {t('{count} 条消息', { count: groups.length })} · {t('{count} 个文件', { count })}</p></div>
           <button type="button" className="ui-icon-button" disabled={loading} aria-label={t('刷新文件')} onClick={() => setRefresh(value => value + 1)}><RefreshCw size={15} className={loading ? 'animate-spin' : ''} /></button>
           <button type="button" className="ui-icon-button" aria-label={t('关闭文件管理')} onClick={() => setOpen(false)}><X size={17} /></button>
         </header>
@@ -90,14 +91,13 @@ export function BrowserChatFilesPanel({ sessionId, busy }: {
                           <span className="browser-chat-files-file-icon"><FileTypeIcon fileName={file.fileName} size={26} /></span>
                           <span><strong>{file.fileName}</strong><small>{file.fileName.split('.').at(-1)?.toUpperCase()} {typeof file.bytes === 'number' ? `· ${new Intl.NumberFormat(language, { maximumFractionDigits: 1 }).format(file.bytes / 1024)} KB` : ''}{file.pageCount ? ` · ${t('{count} 页', { count: file.pageCount })}` : ''}</small></span>
                         </button>
-                        <a href={file.downloadUrl || source} download={file.fileName} data-file-preview="false" className="browser-chat-files-download" aria-label={t('下载文件 {name}', { name: file.fileName })} title={t('下载文件')}><Download size={16} /></a>
+                        <a href={browserChatArtifactDownloadUrl(file)} download={file.fileName} data-file-preview="false" className="browser-chat-files-download" aria-label={t('下载文件 {name}', { name: file.fileName })} title={t('下载文件')}><Download size={16} /></a>
                       </article>;
                     })}
                   </div>
                 </section>
               </div>}
         <footer className="browser-chat-files-footer"><span>{t('当前对话 · 按消息归档')}</span><span>{t('点击文件即可预览')}</span></footer>
-      </Popover.Dialog>
-    </Popover.Content>
-  </Popover>;
+    </AppModal>
+  </>;
 }

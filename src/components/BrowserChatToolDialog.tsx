@@ -155,7 +155,7 @@ export function BrowserChatToolDialog({
     >
         <header className="ui-modal-header browser-chat-tool-dialog-header">
           <div className="ui-modal-heading">
-            <h2 className="ui-modal-title browser-chat-tool-dialog-tab" id="browser-chat-tool-dialog-title" title={detail.tool.name}>{toolName}</h2>
+            <h2 className="ui-modal-title" id="browser-chat-tool-dialog-title" title={detail.tool.name}>{toolName}</h2>
             <div className="browser-chat-tool-dialog-subtitle">
               <p className="ui-modal-subtitle">
                 {t('步骤 {step} · 工具调用 {index}', { step: detail.stepIndex, index: detail.toolIndex + 1 })}

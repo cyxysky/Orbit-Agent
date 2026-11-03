@@ -30,6 +30,7 @@ export function ConfirmDeleteModal({
 
   return (
     <AlertDialog.Backdrop
+      className="settlement-modal-backdrop"
       isDismissable={!deleting}
       isKeyboardDismissDisabled={deleting}
       isOpen
@@ -38,18 +39,17 @@ export function ConfirmDeleteModal({
       }}
     >
       <AlertDialog.Container placement="center" size="sm">
-        <AlertDialog.Dialog aria-labelledby={id}>
-          <AlertDialog.Header>
-            <AlertDialog.Icon status="danger" />
+        <AlertDialog.Dialog aria-labelledby={id} className="settlement-modal settlement-delete-modal" style={{ padding: 0 }}>
+          <AlertDialog.Header className="app-modal-header">
             <AlertDialog.Heading id={id}>{title}</AlertDialog.Heading>
             <AlertDialog.CloseTrigger aria-label={t('关闭')} isDisabled={deleting} />
           </AlertDialog.Header>
-          <AlertDialog.Body>
+          <AlertDialog.Body className="app-modal-body">
             <h3>{itemTitle}</h3>
             <p>{description}</p>
             {error ? <p role="alert">{error}</p> : null}
           </AlertDialog.Body>
-          <AlertDialog.Footer>
+          <AlertDialog.Footer className="app-modal-footer">
             <Button isDisabled={deleting} onPress={onClose} variant="secondary">
               <X size={15} />
               {t('取消')}

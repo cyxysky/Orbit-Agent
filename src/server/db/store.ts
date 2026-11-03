@@ -8,6 +8,8 @@ import {
   modelProviderDefinitionsForConfig,
   normalizeMiniMaxOpenAIBaseURL,
   openAICompatibleProviderIndex,
+  removeCustomModelProviders,
+  type OpenAICompatibleModelProvider,
   migrateRuntimeEnvValue,
   runtimeEnvDefinitions,
   runtimeEnvKeys,
@@ -392,16 +394,18 @@ export const store = {
   async getModelConfig() {
     return normalizeStoredModelConfig((await readConfigData()).modelConfig);
   },
-  async saveModelConfig(input: Pick<ModelConfigRecord, 'provider' | 'providers' | 'providerOrder' | 'mediaSelections'>) {
+  async saveModelConfig(input: Pick<ModelConfigRecord, 'provider' | 'providers' | 'providerOrder' | 'mediaSelections'>, removedProviders: readonly OpenAICompatibleModelProvider[] = []) {
     const data = await readConfigData();
     const existing = normalizeStoredModelConfig(data.modelConfig);
     const providers: Partial<Record<ModelProvider, ModelProviderSettings>> = {};
     const { providerMediaSettingsSchema, mediaModelSelectionsSchema } = await import('@cjfclonedeep/capability-sdk/media/model-settings');
     const timestamp = now();
-    const providerDefinitions = modelProviderDefinitionsForConfig({
+    const providerInputs = {
       ...existing?.providers,
       ...input.providers,
-    });
+    };
+    for (const provider of removedProviders) delete providerInputs[provider];
+    const providerDefinitions = modelProviderDefinitionsForConfig(providerInputs);
     for (const definition of providerDefinitions) {
       const provider = definition.value;
       const current = input.providers[provider];
@@ -428,8 +432,15 @@ export const store = {
       };
     }
     const providerOrder = modelProviderDefinitionsForConfig(providers, input.providerOrder ?? existing?.providerOrder).map(({ value }) => value);
-    const config: ModelConfigRecord = { provider: input.provider, providers, providerOrder, mediaSelections: mediaModelSelectionsSchema.parse(input.mediaSelections ?? existing?.mediaSelections ?? {}), updatedAt: timestamp };
+    const config = removeCustomModelProviders({ provider: input.provider, providers, providerOrder, mediaSelections: mediaModelSelectionsSchema.parse(input.mediaSelections ?? existing?.mediaSelections ?? {}), updatedAt: timestamp }, removedProviders);
     await writeConfigData({ ...data, modelConfig: config });
+    const removedEnvironment: Record<string, undefined> = {};
+    for (const provider of removedProviders) {
+      for (const key of [modelApiKeyEnvironment(provider), modelBaseUrlEnvironment(provider), modelExtraRequestParametersEnvironment(provider)]) {
+        if (key) { delete process.env[key]; removedEnvironment[key] = undefined; }
+      }
+    }
+    if (removedProviders.length) updateInitialEnv(removedEnvironment);
     applyModelConfig(config);
     return config;
   },

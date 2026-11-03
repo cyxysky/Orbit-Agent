@@ -158,6 +158,12 @@ type MutableModelMetric = Omit<AiOperationsModelMetric, 'sessionCount'> & { sess
 type MutableSystemMetric = Omit<AiOperationsSystemMetric, 'successRate'>;
 
 const dashboardTimezone = 'Asia/Hong_Kong';
+const dashboardDateFormatter = new Intl.DateTimeFormat('en-CA', {
+  day: '2-digit',
+  month: '2-digit',
+  timeZone: dashboardTimezone,
+  year: 'numeric',
+});
 
 function parseRecord(value: unknown): JsonRecord {
   if (value && typeof value === 'object' && !Array.isArray(value)) return value as JsonRecord;
@@ -207,12 +213,7 @@ function durationMs(start: unknown, finish: unknown) {
 function dateKey(value: unknown) {
   const timestamp = timestampMs(value);
   if (!timestamp) return '';
-  return new Intl.DateTimeFormat('en-CA', {
-    day: '2-digit',
-    month: '2-digit',
-    timeZone: dashboardTimezone,
-    year: 'numeric',
-  }).format(new Date(timestamp));
+  return dashboardDateFormatter.format(timestamp);
 }
 
 function normalizedStatus(value: unknown): AiOperationsStatus {
@@ -462,8 +463,20 @@ async function buildAiOperationsDashboard(
   let chatInterrupted = 0;
   let chatRunning = 0;
 
+  // SQLite messages can include multi-megabyte tool payloads. Only transfer the
+  // fields counted below, preserving JSON value types and malformed-record fallback.
+  const messageRecord = databaseDriver() === 'sqlite' ? `
+    CASE WHEN json_valid(message.record_json) THEN json_object(
+      'id', json(message.record_json -> '$.id'),
+      'role', json(message.record_json -> '$.role'),
+      'status', json(message.record_json -> '$.status'),
+      'content', json(message.record_json -> '$.content'),
+      'createdAt', json(message.record_json -> '$.createdAt'),
+      'updatedAt', json(message.record_json -> '$.updatedAt')
+    ) ELSE '{}' END
+  ` : 'message.record_json';
   for await (const row of dashboardRows<MessageRow>(`
-    SELECT message.id, message.session_id, message.time, message.record_json,
+    SELECT message.id, message.session_id, message.time, ${messageRecord} AS record_json,
       (SELECT user_id FROM browser_chat_session WHERE id = message.session_id) AS user_id
     FROM browser_chat_message AS message
     WHERE message.time >= ?

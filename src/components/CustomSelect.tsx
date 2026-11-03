@@ -65,9 +65,7 @@ export function CustomSelect({
   const [menuVisible, setMenuVisible] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
-  const [submenuOpen, setSubmenuOpen] = useState(false);
   const submenuId = useId();
-  const submenuSelection = submenu?.options.find(option => option.value === submenu.value);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const searchRef = useRef<HTMLInputElement | null>(null);
@@ -118,7 +116,6 @@ export function CustomSelect({
 
   function closeMenu() {
     setOpen(false);
-    setSubmenuOpen(false);
     window.clearTimeout(closeTimerRef.current);
     closeTimerRef.current = window.setTimeout(() => setMenuVisible(false), 170);
   }
@@ -221,11 +218,11 @@ export function CustomSelect({
         active={open}
         align={className?.includes('browser-chat-provider-select') ? 'end' : 'start'}
         anchorRef={buttonRef}
-        className={`custom-select-menu${className?.includes('browser-chat-provider-select') ? ' browser-chat-provider-select-menu' : ''}${submenu ? ' has-submenu' : ''}${submenuOpen ? ' submenu-expanded' : ''} ${open ? 'open' : 'closing'}`}
+        className={`custom-select-menu${className?.includes('browser-chat-provider-select') ? ' browser-chat-provider-select-menu' : ''}${submenu ? ' has-submenu' : ''} ${open ? 'open' : 'closing'}`}
         id={menuId}
         layerRef={menuRef}
         matchAnchorWidth={!className?.includes('browser-chat-provider-select')}
-        maxHeight={submenuOpen ? menuMaxHeight + 120 : menuMaxHeight}
+        maxHeight={submenu ? 440 : menuMaxHeight}
         onDismiss={closeMenu}
         preferredWidth={className?.includes('browser-chat-provider-select') ? 336 : undefined}
         present={menuVisible}
@@ -283,28 +280,19 @@ export function CustomSelect({
           </div>
           {submenu ? (
             <div className="custom-select-submenu">
-              <button className="custom-select-submenu-trigger" type="button"
-                aria-expanded={submenuOpen} aria-controls={submenuId}
-                onClick={() => setSubmenuOpen(current => !current)}>
-                <span>{submenu.label}</span>
-                <span className="custom-select-submenu-value">{submenuSelection?.label}</span>
-                <ChevronDown aria-hidden="true" className={submenuOpen ? 'open' : undefined} size={15} />
-              </button>
-              {submenuOpen ? (
-                <div id={submenuId} className="custom-select-submenu-body">
-                  <div className="custom-select-submenu-options" role="group" aria-label={submenu.label}>
-                    {submenu.options.map(option => (
-                      <button key={option.value} className="custom-select-submenu-option" type="button"
-                        aria-pressed={option.value === submenu.value} disabled={submenu.disabled || option.disabled}
-                        onClick={() => submenu.onChange(option.value)}>
-                        <span>{option.label}</span>
-                        {option.value === submenu.value ? <Check aria-hidden="true" size={14} /> : null}
-                      </button>
-                    ))}
-                  </div>
-                  {submenu.description ? <p className="custom-select-submenu-description">{submenu.description}</p> : null}
+              <span className="custom-select-submenu-label" id={submenuId}>{submenu.label}</span>
+              <div className="custom-select-submenu-body">
+                <div className="custom-select-submenu-options" role="group" aria-labelledby={submenuId}>
+                  {submenu.options.map(option => (
+                    <button key={option.value} className="custom-select-submenu-option" type="button"
+                      aria-pressed={option.value === submenu.value} disabled={submenu.disabled || option.disabled}
+                      onClick={() => submenu.onChange(option.value)}>
+                      <span>{option.label}</span>
+                    </button>
+                  ))}
                 </div>
-              ) : null}
+                {submenu.description ? <p className="custom-select-submenu-description">{submenu.description}</p> : null}
+              </div>
             </div>
           ) : null}
       </FloatingLayer>

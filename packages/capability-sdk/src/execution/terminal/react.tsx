@@ -300,6 +300,16 @@ export function TerminalWorkspace({ client, onClose, closed = false, orderStorag
   useEffect(() => {
     const selected = selectedRef.current;
     if (!ready || !viewport || !selected || !modules.current) return;
+    const readTheme = () => {
+      const style = getComputedStyle(viewport);
+      const background = style.getPropertyValue('--ct-canvas').trim();
+      const foreground = style.getPropertyValue('--ct-output').trim();
+      return {
+        background, foreground, cursor: foreground, cursorAccent: background,
+        selectionBackground: '#88939940', selectionInactiveBackground: '#88939925',
+        scrollbarSliderBackground: '#88939940', scrollbarSliderHoverBackground: '#88939970',
+      };
+    };
     const id = selected.terminalId;
     let view = views.current.get(id);
     if (!view) {
@@ -313,7 +323,7 @@ export function TerminalWorkspace({ client, onClose, closed = false, orderStorag
         windowsPty: modernConpty ? undefined : selected.windowsPty,
         reflowCursorLine: modernConpty,
         fontFamily: 'Cascadia Code, Consolas, monospace', fontSize: 13,
-        theme: { background: '#131917', foreground: '#d7e4db', cursor: '#9cddb8', selectionBackground: '#355747', scrollbarSliderBackground: '#ffffff18', scrollbarSliderHoverBackground: '#ffffff28' },
+        theme: readTheme(),
         allowProposedApi: false,
       });
       const fit = new modules.current.FitAddon(); terminal.loadAddon(fit);
@@ -331,6 +341,10 @@ export function TerminalWorkspace({ client, onClose, closed = false, orderStorag
       view = createdView; views.current.set(id, view);
     } else viewport.replaceChildren(view.element);
     const currentView = view;
+    const updateTheme = () => { currentView.terminal.options.theme = readTheme(); };
+    updateTheme();
+    const themeObserver = new MutationObserver(updateTheme);
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style', 'data-theme'] });
     currentView.terminal.options.disableStdin = !inputAllowed.current || selected.status === 'closed' || selected.status === 'starting';
     let frame = 0, fitTimer = 0;
     const fit = () => {
@@ -361,7 +375,7 @@ export function TerminalWorkspace({ client, onClose, closed = false, orderStorag
     frame = requestAnimationFrame(() => { fit(); currentView.terminal.focus(); });
     return () => {
       if (currentView.scheduleFit === scheduleFit) currentView.scheduleFit = undefined;
-      cancelAnimationFrame(frame); window.clearTimeout(fitTimer); observer.disconnect();
+      cancelAnimationFrame(frame); window.clearTimeout(fitTimer); observer.disconnect(); themeObserver.disconnect();
       window.removeEventListener('resize', scheduleFit);
       window.visualViewport?.removeEventListener('resize', scheduleFit);
     };
@@ -397,10 +411,9 @@ export function TerminalWorkspace({ client, onClose, closed = false, orderStorag
               if (createDisabled) { event.preventDefault(); return; }
               event.preventDefault(); void act({ action: 'create', reason: '用户新建终端', ...(name.trim() ? { name: name.trim() } : {}), ...(cwd.trim() ? { cwd: cwd.trim() } : {}) });
             }}>
-              <div className="cap-terminal-create-name"><input autoFocus aria-label={t('终端名称')} placeholder={t('终端名称（可选）')} value={name} maxLength={100} disabled={!!pending} onChange={event => setName(event.target.value)} />
-                <button className="cap-terminal-create-submit" type="submit" aria-label={t('创建')} title={t('创建')} disabled={createDisabled}><span aria-hidden="true">{pending === 'create' ? <Loader2 size={14} className="cap-terminal-spin" /> : <Check size={14} />}</span></button>
-              </div>
-              <label className="cap-terminal-create-directory" title={t('工作目录（默认使用配置目录）')}><FolderOpen size={13} aria-hidden="true" /><input aria-label={t('工作目录')} placeholder={t('工作目录（默认使用配置目录）')} value={cwd} disabled={!!pending} onChange={event => setCwd(event.target.value)} /></label>
+              <label className="cap-terminal-create-name"><span>{t('终端名称（可选）')}</span><input autoFocus aria-label={t('终端名称')} value={name} maxLength={100} disabled={!!pending} onChange={event => setName(event.target.value)} /></label>
+              <label className="cap-terminal-create-directory"><span><FolderOpen size={13} aria-hidden="true" />{t('工作目录（默认使用配置目录）')}</span><input aria-label={t('工作目录')} value={cwd} disabled={!!pending} onChange={event => setCwd(event.target.value)} /></label>
+              <button className="cap-terminal-create-submit" type="submit" disabled={createDisabled}><span aria-hidden="true">{pending === 'create' ? <Loader2 size={14} className="cap-terminal-spin" /> : <Check size={14} />}</span>{t('创建')}</button>
             </form>}
             <nav className="cap-terminal-list" aria-label={t('终端列表')} data-reordering={!!draggedId || undefined}>
               {orderedTerminals.map((item, index) => <TerminalListItem key={item.terminalId} item={item} selected={selected?.terminalId === item.terminalId} disabled={!!pending || !connected}

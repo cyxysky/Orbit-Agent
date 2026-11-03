@@ -66,6 +66,7 @@ export function SettingsWorkspace({
   const { mode: themeMode, setMode } = useTheme();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(initialSidebarCollapsed);
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
+  const [requestedSection, setRequestedSection] = useState<string>();
   const [adminSettingsAccessToken, setAdminSettingsAccessToken] = useState('');
   const [pendingAdminSettingsTab, setPendingAdminSettingsTab] = useState<SettingsTab | null>(null);
   const [adminSettingsPassword, setAdminSettingsPassword] = useState('');
@@ -96,8 +97,11 @@ export function SettingsWorkspace({
     setAdminSettingsPasswordError('');
   }
 
-  function selectSettingsTab(tab: SettingsTab) {
+  function selectSettingsTab(requestedTab: SettingsTab, section?: string) {
+    const tab = requestedTab === 'browser' ? 'capabilities' : requestedTab;
+    const nextSection = requestedTab === 'browser' ? 'capability:browser' : section;
     if (!visibleSettingsTabs.some((item) => item.id === tab)) return;
+    setRequestedSection(nextSection);
     if (adminSettingsLocked && isAdministratorOnlySettingsTab(tab)) {
       setPendingAdminSettingsTab(tab);
       setAdminSettingsPassword('');
@@ -108,14 +112,17 @@ export function SettingsWorkspace({
     if (typeof window !== 'undefined') {
       const url = new URL(window.location.href);
       url.searchParams.set('tab', tab);
+      if (nextSection) url.searchParams.set('section', nextSection);
+      else url.searchParams.delete('section');
       window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
     }
   }
 
   useEffect(() => {
     const selectTabFromLocation = () => {
-      const tab = new URL(window.location.href).searchParams.get('tab') as SettingsTab | null;
-      if (tab && visibleSettingsTabs.some((item) => item.id === tab)) selectSettingsTab(tab);
+      const url = new URL(window.location.href);
+      const tab = url.searchParams.get('tab') as SettingsTab | null;
+      if (tab) selectSettingsTab(tab, url.searchParams.get('section') || undefined);
     };
     selectTabFromLocation();
     window.addEventListener('popstate', selectTabFromLocation);
@@ -142,6 +149,8 @@ export function SettingsWorkspace({
       setActiveTab(nextTab);
       const url = new URL(window.location.href);
       url.searchParams.set('tab', nextTab);
+      if (requestedSection) url.searchParams.set('section', requestedSection);
+      else url.searchParams.delete('section');
       window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
       setPendingAdminSettingsTab(null);
       setAdminSettingsPassword('');
@@ -207,6 +216,7 @@ export function SettingsWorkspace({
             defaultUserId={defaultUserId}
             embedded
             initialData={initialData}
+            initialSection={requestedSection}
             key={adminSettingsAccessToken || 'admin-settings-locked'}
             onActiveTabChange={selectSettingsTab}
             showTabs

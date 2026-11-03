@@ -1,5 +1,6 @@
 import { capabilityRuntimeToolCatalog, hiddenRuntimeToolCatalog, hiddenRuntimeSkillIds } from './hidden-runtime-skills';
 import { normalizeDisabledBrowserChatTools } from '@/lib/browser-chat-tools';
+import { globallyDisabledCapabilityTools, isToolCapabilityEnabled, toolCapabilitySettings, type ToolCapabilityEnvironment } from '@/lib/tool-capability-settings';
 
 // Internal instructions shared with the runtime tool definitions.
 export const runtimeBuiltinToolPrompts = {
@@ -7,21 +8,7 @@ export const runtimeBuiltinToolPrompts = {
   skill: `Read a Skill by exact id. Hidden runtime Skills for this mode are ${hiddenRuntimeSkillIds().join(', ')}. A successful read can be reused while its exact current content remains in the active tool history; reread only when missing, compacted away, or changed.`,
 };
 
-const help: Record<string, [string, string]> = {
-  browser: ['浏览器', '搜索并读取网页、操作页面、检查界面和截图。'],
-  file: ['文件', '下载文件，读取 PDF、Word、Excel、PPT 的文本和表格，以及创建、修改和预览文档。'],
-  chart: ['图表与画布', '创建和更新二维、三维图表，以及可编辑的 Excalidraw 画布。'],
-  maps: ['地图', '搜索 Google 地点，规划驾车、步行和骑行路线，并展示交互地图。'],
-  codeSandbox: ['代码沙箱', '运行隔离代码，计算和转换数据，执行自定义程序。普通 PDF 和 Office 内容读取使用文件工具。'],
-  connectors: ['连接器', '调用已配置外部服务的接口和操作。'],
-  knowledge: ['知识库', '保存、检索和维护可复用的参考资料。'],
-  data: ['数据源', '查询已配置的数据源，读取结构并分析数据。'],
-  media: ['多媒体', '按模型和服务配置生成、转写或处理图片、音频和视频。'],
-  textEditor: ['文本编辑', '创建、编辑和导出纯文本、Markdown 与 HTML 文档，支持 AI 改写和内容预览。'],
-  communication: ['通信', '通过已配置的渠道读取消息、发送文字或文件。'],
-  terminal: ['本地终端', '在宿主机器执行命令、查看输出并管理命令进程。'],
-  computer: ['电脑操作', '通过已配置的电脑控制服务观察界面、点击和输入。'],
-};
+const help = new Map<string, typeof toolCapabilitySettings[number]>(toolCapabilitySettings.map(tool => [tool.name, tool]));
 
 // User-facing conversation starters; these are separate from model operating rules.
 const prompts: Record<string, string[]> = {
@@ -83,7 +70,8 @@ const prompts: Record<string, string[]> = {
 };
 
 export function nativeRuntimeToolNames() {
-  return [...new Set([...hiddenRuntimeToolCatalog().map((tool) => tool.name), ...Object.keys(runtimeBuiltinToolPrompts)])];
+  return [...new Set([...hiddenRuntimeToolCatalog().map((tool) => tool.name), ...Object.keys(runtimeBuiltinToolPrompts)])]
+    .filter(name => isToolCapabilityEnabled(name, process.env));
 }
 
 const capabilityToolNames = new Set(capabilityRuntimeToolCatalog().map((tool) => tool.name));
@@ -92,10 +80,15 @@ export function normalizeDisabledCapabilityTools(value: unknown) {
   return normalizeDisabledBrowserChatTools(value).filter((name) => capabilityToolNames.has(name));
 }
 
-export function browserChatCapabilityToolCatalog() {
+/** Runtime-only union; never persist this list as the user's session preferences. */
+export function effectiveDisabledCapabilityTools(value: unknown, env: ToolCapabilityEnvironment = process.env) {
+  return [...new Set([...normalizeDisabledCapabilityTools(value), ...globallyDisabledCapabilityTools(env)])].sort();
+}
+
+export function browserChatCapabilityToolCatalog(env: ToolCapabilityEnvironment = process.env) {
   const tools = capabilityRuntimeToolCatalog();
-  return [...new Map(tools.map((tool) => [tool.name, tool])).values()].map((tool) => ({
-    name: tool.name, label: help[tool.name]?.[0] || tool.label, description: help[tool.name]?.[1] || tool.description,
+  return [...new Map(tools.map((tool) => [tool.name, tool])).values()].filter(tool => isToolCapabilityEnabled(tool.name, env)).map((tool) => ({
+    name: tool.name, label: help.get(tool.name)?.label || tool.label, description: help.get(tool.name)?.description || tool.description,
     prompts: prompts[tool.name] || [],
     available: true,
   }));

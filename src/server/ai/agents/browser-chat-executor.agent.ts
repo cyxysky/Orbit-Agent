@@ -3,6 +3,7 @@ import { browserInteractionSchema, browserInteractionInstructions, executeBrowse
 import { normalizeBrowserChatInteractionMode, type BrowserChatInteractionMode } from '@/lib/browser-chat-interaction-mode';
 import { artifactApiUrl } from '@/lib/artifacts';
 import { browserChatCapabilityResult } from '@/lib/browser-chat-capability-result';
+import { isToolCapabilityEnabled } from '@/lib/tool-capability-settings';
 import { coreResponses } from '@cjfclonedeep/capability-sdk/responses';
 import { type StructuredResponse } from '@cjfclonedeep/capability-sdk';
 import { contextReadToolName, type RuntimeContextManifest } from './runtime-context-assembler';
@@ -25,7 +26,7 @@ import { type BrowserCodeAttachmentBinding, type BrowserCodeCredentialBinding } 
 import { richTextToPlainText } from '@/lib/rich-text';
 import { fileToolModelOutput } from './browser-chat-file-model-output';
 import { fileArtifactRuntimeSkillId } from '@cjfclonedeep/capability-sdk/file/runtime-skill';
-import { runtimeBuiltinToolPrompts } from './runtime-tool-catalog';
+import { nativeRuntimeToolNames, runtimeBuiltinToolPrompts } from './runtime-tool-catalog';
 import { activeBrowserRuntimeSkillId, hiddenRuntimeSkillContent, hiddenRuntimeSkillForToolCall, requireHiddenRuntimeSkillRead } from './hidden-runtime-skills';
 import { subagentRuntimeSkillId } from './subagent-runtime-skill';
 import { chartRuntimeSkillId } from '@cjfclonedeep/capability-sdk/chart/runtime-skill';
@@ -948,6 +949,9 @@ async function makeBrowserTools(
     const run = async () => {
       throwIfStopped(referenceOptions?.abortSignal, referenceOptions?.shouldContinue);
       const actionWithCancellation = async (actionSignal?: AbortSignal, trace?: ToolTrace) => {
+        if (!isToolCapabilityEnabled(name, process.env)) {
+          return { ok: false, actual: `Tool ${name} has been disabled globally. No action was executed.` } satisfies BrowserActionResult;
+        }
         // Preserve the SDK's per-tool deadline as well as turn cancellation.
         // Let the action settle after cancellation so child batches can return
         // their result UUIDs and retained progress to the parent.
@@ -1039,9 +1043,9 @@ async function makeBrowserTools(
     return queued;
   }
 
-  const allowedCapabilityToolNames = referenceOptions?.allowedToolTypes !== undefined
-    ? new Set(referenceOptions.allowedToolTypes)
-    : undefined;
+  const allowedCapabilityToolNames = new Set(
+    (referenceOptions?.allowedToolTypes ?? nativeRuntimeToolNames()).filter(name => isToolCapabilityEnabled(name, process.env)),
+  );
   const infrastructureProviders = createAgentInfrastructureProviders({
     attachmentBindings: referenceOptions?.attachmentBindings,
   });

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   defaultModelByProvider,
   defaultModelForProvider,
+  isOpenAICompatibleProvider,
   modelListForProvider,
   modelProviderDefinitionsForConfig,
   modelProviderDefinition,
@@ -111,6 +112,10 @@ export async function POST(request: Request) {
       userId,
     }, async () => {
       const provider = normalizeModelProvider(body.provider);
+      const removedProviders = z.array(z.string()).max(100).optional().parse(body.removedProviders)?.map((value) => {
+        if (!isOpenAICompatibleProvider(value)) throw new ApiRequestError('只能删除自定义供应商。', { status: 400 });
+        return value;
+      }) || [];
       const providersInput = readProviderSettings(body.providers);
       if (!Object.keys(providersInput).length) {
         const definition = modelProviderDefinition(provider);
@@ -133,7 +138,7 @@ export async function POST(request: Request) {
       const providerOrder = body.providerOrder === undefined
         ? undefined
         : modelProviderDefinitionsForConfig(providersInput, body.providerOrder).map(({ value }) => value);
-      await store.saveModelConfig({ provider, providers: providersInput, providerOrder });
+      await store.saveModelConfig({ provider, providers: providersInput, providerOrder }, removedProviders);
       await store.applyRuntimeEnv();
       return apiJson(request, { ok: true, ...await readModelSettingsState() });
     });

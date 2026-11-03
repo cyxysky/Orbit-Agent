@@ -1,6 +1,7 @@
-import type { ModelProvider, ModelProviderSettings } from '@/server/ai/schemas/runtime.schema';
+import type { ModelConfigRecord, ModelProvider, ModelProviderSettings } from '@/server/ai/schemas/runtime.schema';
 import { normalizedModelCapabilities } from '@/lib/model-capabilities';
 import { browserChatInteractionModeOptions } from '@/lib/browser-chat-interaction-mode';
+import { toolCapabilitySettings } from '@/lib/tool-capability-settings';
 import { browserCapabilitySettings } from '@cjfclonedeep/capability-sdk/browser/settings';
 import { chartCapabilitySettings } from '@cjfclonedeep/capability-sdk/chart/settings';
 import { mapsCapabilitySettings } from '@cjfclonedeep/capability-sdk/maps/settings';
@@ -154,20 +155,6 @@ export const modelProviderDefinitions: ModelProviderDefinition[] = [
     baseUrlLabel: 'Azure OpenAI 服务地址',
     defaultBaseURL: 'http://mirrors.shterm.com:8801/openai',
   },
-  { value: 'groq', label: 'Groq', defaultModel: 'llama-3.3-70b-versatile', keyLabel: 'Groq 访问密钥', baseUrlLabel: 'Groq 服务地址' },
-  { value: 'xai', label: 'xAI', defaultModel: 'grok-4', keyLabel: 'xAI 访问密钥', baseUrlLabel: 'xAI 服务地址' },
-  { value: 'mistral', label: 'Mistral AI', defaultModel: 'mistral-large-latest', keyLabel: 'Mistral 访问密钥', baseUrlLabel: 'Mistral 服务地址' },
-  { value: 'alibaba', label: 'Alibaba Cloud', defaultModel: 'qwen-plus', keyLabel: 'Alibaba 访问密钥', baseUrlLabel: 'Alibaba 服务地址' },
-  { value: 'ai-gateway', label: 'Vercel AI Gateway', defaultModel: 'openai/gpt-5.5', keyLabel: 'AI Gateway 访问密钥', baseUrlLabel: 'AI Gateway 服务地址' },
-  { value: 'perplexity', label: 'Perplexity', defaultModel: 'sonar', keyLabel: 'Perplexity 访问密钥', baseUrlLabel: 'Perplexity 服务地址' },
-  { value: 'cohere', label: 'Cohere', defaultModel: 'command-a-03-2025', keyLabel: 'Cohere 访问密钥', baseUrlLabel: 'Cohere 服务地址' },
-  { value: 'togetherai', label: 'Together.ai', defaultModel: 'meta-llama/Llama-3.3-70B-Instruct-Turbo', keyLabel: 'Together.ai 访问密钥', baseUrlLabel: 'Together.ai 服务地址' },
-  { value: 'fireworks', label: 'Fireworks AI', defaultModel: 'accounts/fireworks/models/llama-v3p1-70b-instruct', keyLabel: 'Fireworks 访问密钥', baseUrlLabel: 'Fireworks 服务地址' },
-  { value: 'deepinfra', label: 'DeepInfra', defaultModel: 'meta-llama/Meta-Llama-3.1-8B-Instruct', keyLabel: 'DeepInfra 访问密钥', baseUrlLabel: 'DeepInfra 服务地址' },
-  { value: 'cerebras', label: 'Cerebras', defaultModel: 'llama3.1-8b', keyLabel: 'Cerebras 访问密钥', baseUrlLabel: 'Cerebras 服务地址' },
-  { value: 'huggingface', label: 'Hugging Face', defaultModel: 'meta-llama/Llama-3.1-8B-Instruct', keyLabel: 'Hugging Face 访问密钥', baseUrlLabel: 'Hugging Face 服务地址' },
-  { value: 'bedrock', label: 'Amazon Bedrock', defaultModel: 'anthropic.claude-3-5-sonnet-20241022-v2:0', keyLabel: 'AWS Bedrock Bearer Token（可选）', baseUrlLabel: 'AWS 区域', defaultBaseURL: 'us-east-1' },
-  { value: 'vercel', label: 'Vercel v0', defaultModel: 'v0-1.5-md', keyLabel: 'Vercel 访问密钥', baseUrlLabel: 'Vercel 服务地址' },
   {
     value: 'openai-compatible-2',
     label: 'OpenAI Compatible 2',
@@ -211,14 +198,13 @@ export function isModelProvider(value: unknown): value is ModelProvider {
 }
 
 export function modelProviderDefinitionsForConfig(providers?: object | null, order?: unknown) {
-  const known = new Set(modelProviderDefinitions.map((definition) => definition.value));
   const custom = Object.keys(providers || {})
-    .filter((provider): provider is ModelProvider => isOpenAICompatibleProvider(provider) && !known.has(provider))
+    .filter((provider): provider is OpenAICompatibleModelProvider => isOpenAICompatibleProvider(provider))
     .sort((left, right) => (
       (openAICompatibleProviderIndex(left) || 0) - (openAICompatibleProviderIndex(right) || 0)
     ));
   const definitions = [
-    ...modelProviderDefinitions,
+    ...modelProviderDefinitions.filter((definition) => !isOpenAICompatibleProvider(definition.value)),
     ...custom.map((provider) => modelProviderDefinition(provider)),
   ];
   const remaining = new Map(definitions.map((definition) => [definition.value, definition]));
@@ -230,6 +216,21 @@ export function modelProviderDefinitionsForConfig(providers?: object | null, ord
     remaining.delete(value);
   }
   return [...ordered, ...remaining.values()];
+}
+
+export function removeCustomModelProviders(config: ModelConfigRecord, removedProviders: readonly OpenAICompatibleModelProvider[]): ModelConfigRecord {
+  const removed = new Set<string>(removedProviders);
+  const providers = { ...config.providers };
+  for (const provider of removedProviders) delete providers[provider];
+  const definitions = modelProviderDefinitionsForConfig(providers, config.providerOrder);
+  const provider = removed.has(config.provider)
+    ? definitions.find((item) => providers[item.value]?.enabled)?.value || 'openrouter'
+    : config.provider;
+  const mediaSelections = { ...config.mediaSelections };
+  for (const kind of ['image', 'video', 'speech'] as const) {
+    if (mediaSelections[kind] && removed.has(mediaSelections[kind]!.provider)) delete mediaSelections[kind];
+  }
+  return { ...config, provider, providers, providerOrder: definitions.map((item) => item.value), mediaSelections };
 }
 
 export const defaultModelByProvider = modelProviderDefinitions.reduce((acc, item) => {
@@ -344,6 +345,11 @@ const applicationRuntimeEnvDefinitions: RuntimeEnvDefinition[] = [
 
 export const runtimeEnvDefinitions: RuntimeEnvDefinition[] = [
   ...applicationRuntimeEnvDefinitions,
+  ...toolCapabilitySettings.map((tool): RuntimeEnvDefinition => ({
+    key: tool.envKey, label: tool.label, description: tool.description,
+    tab: 'capabilities', group: '工具开关', defaultValue: 'true', control: 'boolean',
+    applyMode: 'runtime', options: boolOptions,
+  })),
   ...capabilityRuntimeEnvDefinitions,
 ];
 
