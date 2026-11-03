@@ -6,7 +6,7 @@
   --navigation-font-size: 14px;
   --navigation-line-height: 1.45;
   --navigation-font-weight: 400;
-  --navigation-selected-font-weight: var(--navigation-font-weight);
+  --navigation-selected-font-weight: 600;
 }
 
 :root[data-theme="dark"] {
@@ -14,12 +14,13 @@
   --navigation-selected-foreground: #f4f5f5;
 }
 
-html :is(.browser-chat-sidebar, .settings-secondary-nav, .settings-provider-list, .settings-view-tabs, .settings-model-types, .settings-capability-tabs, .custom-select-menu) {
+html :is(.browser-chat-sidebar, .settings-secondary-nav, .settings-provider-list, .settings-view-tabs, .settings-model-types, .settings-capability-tabs, .settings-tabs, .custom-select-menu) {
   --menu-selected-bg: var(--navigation-selected-bg);
   --menu-selected-foreground: var(--navigation-selected-foreground);
 }
 
-html :is(.workspace-mode-tabs [data-slot="tabs-tab"], .browser-chat-subnav button, .settings-secondary-nav button, .settings-provider-select, .settings-model-types button, .settings-view-tabs button, .settings-capability-tabs button) {
+html :is(.workspace-mode-tabs [data-slot="tabs-tab"], .browser-chat-subnav button, .settings-secondary-nav button, .settings-provider-select, .settings-model-types button, .settings-view-tabs button, .settings-capability-tabs button),
+html .settings-workspace-route .browser-chat-settings-pane .settings-tabs button {
   font: var(--navigation-font-weight) var(--navigation-font-size) / var(--navigation-line-height) var(--navigation-font-family);
   letter-spacing: normal;
 }
@@ -41,6 +42,25 @@ html .workspace-mode-tabs [data-slot="tabs-tab"][aria-selected="true"] > svg {
 
 html .workspace-mode-tabs [data-slot="tabs-tab"][aria-selected="true"] .workspace-mode-tab-label {
   color: var(--menu-selected-foreground) !important;
+  font-weight: var(--navigation-selected-font-weight);
+}
+
+html .workspace-sidebar-archive-row.active .workspace-sidebar-archive-row-title {
+  font-weight: var(--navigation-selected-font-weight);
+}
+
+html .settings-workspace-route .browser-chat-settings-pane .settings-tabs button.active {
+  background: var(--menu-selected-bg);
+  color: var(--menu-selected-foreground);
+  font-weight: var(--navigation-selected-font-weight);
+}
+
+html .settings-workspace-route .browser-chat-settings-pane .settings-tabs button:hover:not(.active) {
+  background: var(--menu-hover-bg);
+}
+
+html .custom-select-option[aria-selected="true"] .custom-select-option-copy > b,
+html .custom-select-submenu-option[aria-pressed="true"] {
   font-weight: var(--navigation-selected-font-weight);
 }
 

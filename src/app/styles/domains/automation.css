@@ -121,7 +121,6 @@
   font-size: 12px;
 }
 
-.automation-loading-state,
 .automation-empty-state {
   align-items: center;
   color: var(--muted);
@@ -133,31 +132,11 @@
   text-align: center;
 }
 
-.automation-loading-state {
-  flex-direction: row;
-  gap: 18px;
-  text-align: left;
-}
-
-.automation-content:has(> .automation-loading-state) {
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
-  height: 100%;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.automation-content:has(> .automation-loading-state) > .automation-loading-state {
-  min-height: 0;
-}
-
-.automation-loading-state h2,
 .automation-empty-state h2 {
   font-size: 16px;
   margin: 0;
 }
 
-.automation-loading-state p,
 .automation-empty-state p {
   color: var(--muted);
   font-size: 12px;

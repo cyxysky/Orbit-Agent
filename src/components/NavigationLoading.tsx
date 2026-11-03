@@ -29,6 +29,7 @@ function isWorkspaceViewPathname(pathname: string) {
   pathname = withoutWebPilotBasePath(pathname);
   return pathname === '/automation'
     || pathname === '/browser-chat'
+    || pathname === '/admin/ai-operations'
     || pathname === '/settings';
 }
 
@@ -150,12 +151,18 @@ export function NavigationLoading() {
       const anchor = (event.target as Element | null)?.closest?.('a[href]');
       if (anchor instanceof HTMLAnchorElement && isInternalNavigationLink(anchor)) {
         const target = new URL(anchor.href, window.location.href);
-        start('正在切换界面', isWorkspaceViewPathname(target.pathname) ? 'workspace' : 'viewport');
+        // Workspace pages own their content skeletons and keep navigation usable.
+        if (isWorkspaceViewPathname(target.pathname)) return;
+        start('正在切换界面');
       }
     }
 
     function onPopState() {
-      start('正在切换界面', isWorkspaceViewPathname(window.location.pathname) ? 'workspace' : 'viewport');
+      if (isWorkspaceViewPathname(window.location.pathname)) {
+        stop(true);
+        return;
+      }
+      start('正在切换界面');
     }
 
     function onManualStart(event: Event) {

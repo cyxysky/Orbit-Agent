@@ -1,5 +1,7 @@
 'use client';
 
+import { SettingsDetailSection } from '@/components/SettingsDetailSection';
+
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { TextArea } from '@heroui/react/textarea';
 import { InputGroup } from '@heroui/react/input-group';
@@ -2743,10 +2745,9 @@ export function EnvironmentSettings({
 
   function renderMediaGenerationParameters() {
     if (!activeMediaSettings || !activeMediaKind) return null;
-    return <section className="settings-detail-panel settings-model-group">
-      <header className="settings-detail-panel-head"><h3>{t('生成参数')}</h3><span>{t('留空使用模型默认值；可用参数取决于模型。')}</span></header>
+    return <SettingsDetailSection className="settings-model-group" heading={t('生成参数')} description={t('留空使用模型默认值；可用参数取决于模型。')}>
       {renderMediaFields('generation')}
-    </section>;
+    </SettingsDetailSection>;
   }
 
   const activeProviderSupportsExtraRequestParameters = activeProvider === 'minimax' || activeProvider.startsWith('openai-compatible');
@@ -2982,11 +2983,7 @@ export function EnvironmentSettings({
                   label={t('设置项')}
                   onChange={() => undefined}
                 />
-                <section className="settings-detail-panel">
-                  <header className="settings-detail-panel-head">
-                    <h3>{t('基础设置')}</h3>
-                    <span>{t('调整品牌、界面语言与主题色。')}</span>
-                  </header>
+                <SettingsDetailSection heading={t('基础设置')} description={t('调整品牌、界面语言与主题色。')}>
                 <div className="settings-row">
                   <div>
                     <strong>{t('品牌前缀')}</strong>
@@ -3037,7 +3034,7 @@ export function EnvironmentSettings({
                   </div>
                   <ThemeColorControl />
                 </div>
-                </section>
+                </SettingsDetailSection>
               </div>
             </section>
           ) : null}
@@ -3090,8 +3087,7 @@ export function EnvironmentSettings({
                   </div>
                 </aside>
                 <div className="settings-model-detail">
-                <section className="settings-detail-panel settings-model-group settings-provider-basics">
-                <header className="settings-detail-panel-head"><h3>{t('基础信息')}</h3><span>{t('配置供应商名称和可用状态。')}</span></header>
+                <SettingsDetailSection className="settings-model-group settings-provider-basics" heading={t('基础信息')} description={t('配置供应商名称和可用状态。')}>
                 <div className="settings-row">
                   <div>
                     <strong>{t('默认服务商')}</strong>
@@ -3156,7 +3152,7 @@ export function EnvironmentSettings({
                         : t('填写该服务商的访问密钥')}
                   />
                 </div>
-                </section>
+                </SettingsDetailSection>
               <div className="settings-model-types" role="tablist" aria-label={t('模型类型')}>
                 {([{ id: 'language', label: '对话模型' }, ...mediaModelTypeDefinitions] as const).map((item) => (
                   <button key={item.id} type="button" role="tab" aria-selected={modelKind === item.id} className={modelKind === item.id ? 'active' : ''} onClick={() => setModelKind(item.id)}>{t(item.label)}</button>
@@ -3360,15 +3356,13 @@ export function EnvironmentSettings({
                   {activeSettingsSection === 'sensitive:evaluation' ? renderSensitiveDataToolPanel('evaluation') : null}
 
                   {activeSettingsSection === 'integration:connector' ? (
-                    <section className="settings-detail-panel">
-                      <header className="settings-detail-panel-head"><h3>{t('连接器')}</h3><span>{t('配置第三方服务入口和授权信息。')}</span></header>
+                    <SettingsDetailSection heading={t('连接器')} description={t('配置第三方服务入口和授权信息。')}>
                       <ExternalIntegrationSettings accessToken={adminSettingsAccessToken} category="connector" />
                       {renderEnvSettingList(activeIntegrationSettings)}
-                    </section>
+                    </SettingsDetailSection>
                   ) : null}
                   {activeSettingsSection === 'integration:communication' ? (
-                    <section className="settings-detail-panel">
-                      <header className="settings-detail-panel-head"><h3>{t('通信')}</h3><span>{t('消息发送保持逐次确认，避免意外外发。')}</span></header>
+                    <SettingsDetailSection heading={t('通信')} description={t('消息发送保持逐次确认，避免意外外发。')}>
                       <ExternalIntegrationSettings
                         accessToken={adminSettingsAccessToken}
                         category="communication"
@@ -3382,11 +3376,10 @@ export function EnvironmentSettings({
                         }}
                       />
                       {renderEnvSettingList(activeIntegrationSettings)}
-                    </section>
+                    </SettingsDetailSection>
                   ) : null}
                   {activeSettingsSection === 'integration:data' ? (
-                    <section className="settings-detail-panel">
-                      <header className="settings-detail-panel-head"><h3>{t('数据')}</h3><span>{t('统一管理数据源，并单独控制写入权限。')}</span></header>
+                    <SettingsDetailSection heading={t('数据')} description={t('统一管理数据源，并单独控制写入权限。')}>
                       <ExternalIntegrationSettings
                         accessToken={adminSettingsAccessToken}
                         category="data"
@@ -3400,7 +3393,7 @@ export function EnvironmentSettings({
                         }}
                       />
                       {renderEnvSettingList(activeIntegrationSettings)}
-                    </section>
+                    </SettingsDetailSection>
                   ) : null}
                   {activeEnvGroup && groupEnvSettingCards(activeEnvGroup.items).length > 1 ? (
                     <section className="settings-capability-page">
@@ -3411,13 +3404,9 @@ export function EnvironmentSettings({
                       {renderEnvSettingCards(activeEnvGroup.items)}
                     </section>
                   ) : activeEnvGroup ? (
-                    <section className="settings-detail-panel">
-                      <header className="settings-detail-panel-head">
-                        <h3>{t(activeEnvGroup.title)}</h3>
-                        <span>{t('{count} 项设置，修改后自动保存。', { count: activeEnvGroup.items.length })}</span>
-                      </header>
+                    <SettingsDetailSection heading={t(activeEnvGroup.title)} description={t('{count} 项设置，修改后自动保存。', { count: activeEnvGroup.items.length })}>
                       {renderEnvSettingList(activeEnvGroup.items)}
-                    </section>
+                    </SettingsDetailSection>
                   ) : null}
 
                   {!activeSettingsSection ? <div className="empty-state">{t('这个分类暂无配置。')}</div> : null}

@@ -26,7 +26,7 @@
 .ai-operations-sidebar-access { color: var(--muted); font-size: 11px; line-height: 1.5; padding: 0 8px; }
 .browser-chat-layout.sidebar-collapsed .ai-operations-sidebar-summary { display: none; }
 .browser-chat-main.ai-operations-main { background: var(--background); border: 0; border-radius: 0; min-width: 0; overflow: auto; }
-.ai-operations-content { margin: 0 auto; max-width: 1520px; min-width: 0; padding: 32px 30px 48px; width: 100%; }
+.ai-operations-content { margin: 0; min-width: 0; padding: 28px 24px 48px; width: 100%; }
 
 .ai-operations-page-header { align-items: center; display: flex; gap: 24px; justify-content: space-between; margin-bottom: 24px; }
 .ai-operations-page-header > div:first-child { min-width: 0; }

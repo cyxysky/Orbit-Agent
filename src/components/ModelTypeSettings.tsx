@@ -1,5 +1,7 @@
 'use client';
 
+import { SettingsDetailSection } from '@/components/SettingsDetailSection';
+
 import type { ReactNode } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { AppInput } from '@/components/ui/app-input';
@@ -24,14 +26,13 @@ export function ModelTypeSettings({ provider, enabled, models, defaultModel, onD
   const { t } = useI18n();
   const availableModels = Array.from(new Set(models.map((model) => model.trim()).filter(Boolean)));
   return <>
-    <section className="settings-detail-panel settings-model-group">
+    <SettingsDetailSection className="settings-model-group">
       <div className="settings-row">
         <div><strong>{t('默认模型')}</strong><span>{t('选择当前类型默认使用的模型。')}</span></div>
         <CustomSelect className="settings-control" disabled={!enabled || !availableModels.length} value={defaultModel} onChange={onDefaultChange} options={availableModels.map((model) => ({ label: model, value: model }))} />
       </div>
-    </section>
-    <section className="settings-detail-panel settings-model-group">
-      <header className="settings-detail-panel-head"><h3>{t('模型列表')}</h3><span>{t('管理该供应商在当前类型下可选择的模型。')}</span></header>
+    </SettingsDetailSection>
+    <SettingsDetailSection className="settings-model-group" heading={t('模型列表')} description={t('管理该供应商在当前类型下可选择的模型。')}>
       <div className="settings-row settings-model-list-row">
         <div><span>{t('一个类型可以添加多个模型，运行时可在对话框中选择。')}</span></div>
         <div className="settings-model-list-control">
@@ -42,11 +43,10 @@ export function ModelTypeSettings({ provider, enabled, models, defaultModel, onD
           <button className="ui-button settings-add-model-button" disabled={!enabled} onClick={onAdd} type="button"><Plus size={15} />{t('添加模型')}</button>
         </div>
       </div>
-    </section>
-    <section className="settings-detail-panel settings-model-group">
-      <header className="settings-detail-panel-head"><h3>{t('连接配置')}</h3><span>{t('服务地址、接口路径和请求参数仅用于当前类型。')}</span></header>
+    </SettingsDetailSection>
+    <SettingsDetailSection className="settings-model-group" heading={t('连接配置')} description={t('服务地址、接口路径和请求参数仅用于当前类型。')}>
       {connection}
-    </section>
+    </SettingsDetailSection>
     {children}
   </>;
 }

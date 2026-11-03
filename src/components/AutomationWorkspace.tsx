@@ -28,7 +28,7 @@ import {
 } from 'lucide-react';
 import { CustomSelect } from '@/components/CustomSelect';
 import { ConfirmDeleteModal } from '@/components/ConfirmDeleteModal';
-import { LiquidGlassLoader } from '@/components/LiquidGlassLoader';
+import { WorkspaceContentSkeleton } from '@/components/WorkspaceContentSkeleton';
 import { WorkspaceNavigationSidebar } from '@/components/WorkspaceSidebar';
 import {
   WorkspaceSidebarArchiveFilter,
@@ -41,7 +41,6 @@ import { useI18n } from '@/i18n/I18nProvider';
 import type { Language } from '@/i18n/language';
 import { readApiJson } from '@/lib/api-client';
 import { artifactApiUrl } from '@/lib/artifacts';
-import { waitForMinimumLoading } from '@/lib/minimum-loading';
 import { subscribeRealtimeRefresh } from '@/lib/realtime-refresh';
 import { asRecord } from '@/lib/unknown-value';
 import {
@@ -626,7 +625,6 @@ export function AutomationWorkspace({
 
   const loadAll = useCallback(async (silent = false) => {
     const loadingSequence = silent ? 0 : ++loadSequenceRef.current;
-    const loadingStartedAt = Date.now();
     if (!silent) setLoading(true);
     try {
       const [casePage, nextSchedules, nextRuns] = await Promise.all([
@@ -643,7 +641,6 @@ export function AutomationWorkspace({
       if (!silent) setError(loadError instanceof Error ? t(loadError.message) : t('加载自动化数据失败'));
     } finally {
       if (!silent) {
-        await waitForMinimumLoading(loadingStartedAt);
         if (loadSequenceRef.current === loadingSequence) setLoading(false);
       }
     }
@@ -1112,9 +1109,8 @@ export function AutomationWorkspace({
             </WorkspaceSidebarArchiveHeader>
             <div className={loading ? 'browser-chat-history-stage is-loading' : 'browser-chat-history-stage'} aria-busy={loading}>
             {loading ? (
-              <div className="browser-chat-history-loading" role="status" aria-live="polite" aria-label={t('正在加载任务')}>
-                <Loader2 className="spin" size={16} />
-                <span>{t('正在加载任务')}</span>
+              <div className="browser-chat-history-skeleton" role="status" aria-live="polite" aria-label={t('正在加载任务')}>
+                {[0, 1, 2, 3, 4, 5].map((row) => <span aria-hidden="true" key={row} />)}
               </div>
             ) : filteredCases.length ? (
               <WorkspaceHistoryList
@@ -1238,13 +1234,7 @@ export function AutomationWorkspace({
           </div>
 
           {loading && !cases.length ? (
-            <section aria-live="polite" className="automation-loading-state" role="status">
-              <LiquidGlassLoader />
-              <div>
-                <h2>{t('正在加载自动化任务')}</h2>
-                <p>{t('同步任务、执行计划与运行状态。')}</p>
-              </div>
-            </section>
+            <WorkspaceContentSkeleton label={t('正在加载自动化任务')} />
           ) : cases.length ? (
             <section className="automation-case-section" aria-label={t('自动化任务')}>
               <div className="automation-case-workbench">
