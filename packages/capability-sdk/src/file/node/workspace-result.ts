@@ -4,6 +4,8 @@ import { type OfficeProgramDiagnostic } from './office/program-analysis.ts';
 import type { OfficeDocumentDraft, OfficeDocumentKind } from '../office/types.ts';
 import { officeDesignGuidance } from '../design-guidance.ts';
 import type { createFileVisualIndex } from './visual-index.ts';
+import { ERROR_CODES } from '../../errors.ts';
+
 
 export type ArtifactToolPayload = {
   documentType?: OfficeDocumentKind;
@@ -157,7 +159,7 @@ export function compactOfficeFailure(payload: ArtifactToolPayload) {
             : diagnostic.target ? `@${diagnostic.target}` : '';
         const identity = [diagnostic.severity, diagnostic.code].filter(Boolean).join(':') || 'issue';
         const rawMessage = String(diagnostic.message || '');
-        const terminalMessage = diagnostic.code === 'UNO_RUNTIME_ERROR' || rawMessage.startsWith('Traceback (most recent call last):')
+        const terminalMessage = diagnostic.code === ERROR_CODES.UNO_RUNTIME_ERROR || rawMessage.startsWith('Traceback (most recent call last):')
           ? rawMessage.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).at(-1) || rawMessage
           : rawMessage;
         const message = terminalMessage
@@ -197,68 +199,68 @@ export function officeValidationRepairHints(
 ) {
   const codes = new Set(diagnostics.map((diagnostic) => String(diagnostic.code || '')).filter(Boolean));
   const combinedError = [errorText, ...diagnostics.map((diagnostic) => diagnostic.message || '')].join('\n');
-  if (codes.has('UNO_WORKER_INTERNAL_ERROR') || codes.has('UNO_STYLE_PROPERTY_INFO_MISSING') || isUnoWorkerInternalError(combinedError)) {
+  if (codes.has(ERROR_CODES.UNO_WORKER_INTERNAL_ERROR) || codes.has(ERROR_CODES.UNO_STYLE_PROPERTY_INFO_MISSING) || isUnoWorkerInternalError(combinedError)) {
     return ['The renderer failed internally; preserve the current source. Do not edit the draft, query unoApi, or repeat the same render. Report the runtime error and retry only after the renderer is fixed.'];
   }
   const hints: string[] = [];
-  if (codes.has('OFFICE_ARTIFACT_REOPEN_FAILED')) {
+  if (codes.has(ERROR_CODES.OFFICE_ARTIFACT_REOPEN_FAILED)) {
     hints.push('The file was saved but LibreOffice could not reopen it. A prior DisposedException does not prove a startup failure. Inspect the exported package, relationships and export compatibility; preserve the draft and do not guess source edits or repeatedly restart. Native editability and render validity remain unverified for this output.');
   }
   if (diagnostics.length > 1) {
     hints.push(`The preflight returned ${diagnostics.length} diagnostics. Put every independent, non-overlapping repair into one Codex-format patch with separate @@ hunks; separate only repairs whose context or dependencies conflict.`);
   }
-  if (codes.has('PYTHON_SYNTAX')) {
+  if (codes.has(ERROR_CODES.PYTHON_SYNTAX)) {
     hints.push('Read every reported syntax block, then patch each smallest complete Python block. Copy context and indentation byte-for-byte from read; the patcher never adds or removes indentation implicitly. Do not replace the complete source for local syntax errors.');
   }
-  if (codes.has('PYTHON_UNDEFINED_NAME')) {
+  if (codes.has(ERROR_CODES.PYTHON_UNDEFINED_NAME)) {
     hints.push('Define the reported name before first use or replace it with the intended existing variable. Repair the exact sourceExcerpt; do not use numbered batch replacement for a local name error.');
   }
-  if (codes.has('PYTHON_INDEX_OUT_OF_RANGE')) {
+  if (codes.has(ERROR_CODES.PYTHON_INDEX_OUT_OF_RANGE)) {
     hints.push('This is a source indexing error, not a UNO bridge startup failure. Compare the data length, loop bounds, and allocated grid/stack cell count. stack(n) returns n cells; grid(columns, rows) returns columns*rows cells. Fix the allocation and dependent geometry together; do not truncate data or suppress the exception.');
   }
-  if (codes.has('PRESENTATION_TABLE_CELL_OUT_OF_RANGE')) {
+  if (codes.has(ERROR_CODES.PRESENTATION_TABLE_CELL_OUT_OF_RANGE)) {
     hints.push('table.set_cell uses zero-based (column, row), while table.merge uses existing A1 addresses. Check both dimensions and preserve the intended data; merging populated cells is a real data/layout change, not a no-op demo.');
   }
-  if (codes.has('PRESENTATION_ANIMATION_TARGET_INVALID')) {
+  if (codes.has(ERROR_CODES.PRESENTATION_ANIMATION_TARGET_INVALID)) {
     hints.push('animate is supported. Pass the shape object returned by add_shape/select_shape, or an exact selector dictionary; do not pass a bare elementId and do not delete the requested animation.');
   }
-  if (codes.has('PRESENTATION_MASTER_SELECTOR_INVALID') || codes.has('PRESENTATION_CUSTOM_SHOW_INDEX_INVALID')) {
+  if (codes.has(ERROR_CODES.PRESENTATION_MASTER_SELECTOR_INVALID) || codes.has(ERROR_CODES.PRESENTATION_CUSTOM_SHOW_INDEX_INVALID)) {
     hints.push('Master and custom-show slide indices are one-based, unlike table cell coordinates. Use deck.masters() for exact master selectors and [1] for the first slide in a show. Correct indices without deleting these supported features.');
   }
-  if (codes.has('UNO_PYTHON_IMPORT_UNSUPPORTED')) {
+  if (codes.has(ERROR_CODES.UNO_PYTHON_IMPORT_UNSUPPORTED)) {
     hints.push('Remove the raw UNO import and replace the affected block with a method copied from the corresponding queried facade module. Never substitute enums, structs, constants, or service calls.');
   }
   if (codes.has('MODEL_RAW_UNO_FORBIDDEN')) {
     hints.push('Raw UNO is worker-owned. Keep the current document facade and replace only the reported raw block with a supported call from the already-loaded manifest; preserve-only/unsupported features must not be recreated.');
   }
-  if (codes.has('DRAFT_ENTRYPOINT_CALLED_DIRECTLY')) {
+  if (codes.has(ERROR_CODES.DRAFT_ENTRYPOINT_CALLED_DIRECTLY)) {
     hints.push('Delete the direct create_document(...) call. The LibreOffice worker invokes create_document(job) with the real job object; the draft must only define that function.');
   }
-  if (codes.has('PRESENTATION_GEOMETRY_INVALID')) {
+  if (codes.has(ERROR_CODES.PRESENTATION_GEOMETRY_INVALID)) {
     hints.push('Move the reported element into a named slide slot, or repair only its explicit semantic box. Prefer deck.slide(...).add_* with slot=... over hand-calculated coordinates.');
   }
-  if (codes.has('PRESENTATION_TEXT_OVERFLOW')) {
+  if (codes.has(ERROR_CODES.PRESENTATION_TEXT_OVERFLOW)) {
     hints.push('Increase the reported text box, shorten its copy, or redesign that local block. Use deck.text_height()/estimate_text_box() or add_text_box/card/footer so pt text is converted to 1/100 mm geometry safely. Do not auto-grow a shared helper without reflowing its dependent layout.');
   }
   if (codes.has('PRESENTATION_TEXT_BOX_TOO_SHORT')) {
     hints.push('The source mixes point font sizes with an undersized 1/100 mm geometry box. Replace the hand-sized height with deck.text_height()/estimate_text_box(), or use add_text_box/card/footer; keep min_font_size readable.');
   }
-  if (codes.has('PRESENTATION_OVERLAP')) {
+  if (codes.has(ERROR_CODES.PRESENTATION_OVERLAP)) {
     hints.push('The layout preflight returned the complete overlap set. Repair every independent pair in one patch by reallocating real space: move/resize image and text boxes together, or use a content-specific composition. Do not merely add allow_overlap, relabel content as background/decoration, fade imagery into an unrequested watermark, or shrink important copy to bypass checks. Intentional overlays must belong to the design brief and remain visibly legible in actual QA.');
   }
-  if (codes.has('FACADE_METHOD_ON_RAW_UNO_DOCUMENT')) {
+  if (codes.has(ERROR_CODES.FACADE_METHOD_ON_RAW_UNO_DOCUMENT)) {
     hints.push('Replace the raw document receiver with job.presentation/job.writer/job.spreadsheet and keep every operation on its returned slide, flow-document, or A1 worksheet facade.');
   }
-  if (codes.has('FACADE_COMPONENT_ACCESS_UNSUPPORTED')) {
+  if (codes.has(ERROR_CODES.FACADE_COMPONENT_ACCESS_UNSUPPORTED)) {
     hints.push('Do not inspect facade internals. Query the corresponding unoApi module and use its installed signatures and examples.');
   }
   if (codes.has('ELEMENT_ID_AUTO_DISAMBIGUATED')) {
     hints.push('The artifact was kept valid by deterministic runtime ID disambiguation. On the next relevant edit, update the shared helper namespace once instead of renaming only the last reported object or rewriting the complete source.');
   }
-  if (codes.has('UNO_BRIDGE_DISPOSED')) {
+  if (codes.has(ERROR_CODES.UNO_BRIDGE_DISPOSED)) {
     hints.push('The runtime already retried once with a fresh isolated LibreOffice profile. The disposed LibreOffice process prevented validation from completing and does not by itself identify a source defect.');
   }
-  if (codes.has('UNO_BRIDGE_STARTUP')) {
+  if (codes.has(ERROR_CODES.UNO_BRIDGE_STARTUP)) {
     hints.push('LibreOffice failed before the document source could run. Validation did not produce evidence of a source defect.');
   }
   if (codes.has('RAW_CONNECTOR_SHAPE_UNSTABLE')) {
@@ -270,16 +272,16 @@ export function officeValidationRepairHints(
   if (codes.has('HELPER_OVERLAP_DEFAULT_ENABLED')) {
     hints.push('Default reusable layout helpers to allow_overlap=False. Pass True only at explicit background, container, or decorative call sites so content overlap remains detectable.');
   }
-  if (codes.has('UNO_API_METHOD_UNKNOWN') || codes.has('UNO_API_SIGNATURE_MISMATCH') || codes.has('UNO_API_ARGUMENT_INVALID')) {
+  if (codes.has('UNO_API_METHOD_UNKNOWN') || codes.has('UNO_API_SIGNATURE_MISMATCH') || codes.has(ERROR_CODES.UNO_API_ARGUMENT_INVALID)) {
     hints.push('The AST preflight rejected a guessed facade method, signature, or nested value. Query the module named by the diagnostic and copy its installed signature and complete registered examples before editing every affected call site together.');
   }
-  if (codes.has('UNO_REQUIRED_CAPABILITY_MISSING')) {
+  if (codes.has(ERROR_CODES.UNO_REQUIRED_CAPABILITY_MISSING)) {
     hints.push('Query presentation.shape and copy its specialized-shape example. Add each missing real facade capability with a unique elementId; do not infer semantic coverage from a lookalike, from visual QA, or from another shape type. Revalidate until every explicitly requested capability has a non-zero generated featureCounts entry.');
   }
-  if (codes.has('PPTX_ELEMENT_ID_MISSING')) {
+  if (codes.has(ERROR_CODES.PPTX_ELEMENT_ID_MISSING)) {
     hints.push('A serialized slide object lacks its stable element marker. Recreate only that object through the PresentationSlide facade; raw objects and expert tagging are not model-facing.');
   }
-  if (codes.has('PPTX_OBJECT_OUT_OF_BOUNDS')) {
+  if (codes.has(ERROR_CODES.PPTX_OBJECT_OUT_OF_BOUNDS)) {
     hints.push('Repair only the reported elementId geometry using deck.bounds(); keep x/y non-negative and x+width/y+height inside those bounds with a small edge margin. Full-slide backgrounds must use bounds["width"] and bounds["height"].');
   }
   if (codes.has('RUNTIME_TEXT_OUT_OF_BOUNDS')) {
@@ -291,7 +293,7 @@ export function officeValidationRepairHints(
   if (codes.has('RUNTIME_IMAGE_OVERLAP')) {
     hints.push('Move or resize every independently reported image-overlap pair in one patch. If a collage is intentional, compose it as one image asset before placing it.');
   }
-  if (codes.has('ELEMENT_MAPPING_NOT_EMBEDDED')) {
+  if (codes.has(ERROR_CODES.ELEMENT_MAPPING_NOT_EMBEDDED)) {
     hints.push('The registered element ID was not written onto the serialized artifact object. Tag the actual saved object rather than a wrapper, page collection, or temporary value.');
   }
   if (codes.has('EXPERT_ELEMENTS_NOT_TAGGED')) {
@@ -340,7 +342,7 @@ export function formatFileArtifactResult(toolName: string, actual?: string) {
     }
     // Edit receipts and conflicts are a protocol, not a prose success summary.
     // Keep historical partial results readable too; never hide their failed hunks.
-    if (payload.editStatus || payload.patchHunks || payload.kind === 'uno-draft-patch-conflict' || payload.kind === 'uno-draft-patch-no-changes') {
+    if (payload.editStatus || payload.patchHunks || payload.kind === ERROR_CODES.UNO_DRAFT_PATCH_CONFLICT || payload.kind === 'uno-draft-patch-no-changes') {
       return JSON.stringify({
         kind: payload.kind, code: payload.code, documentId: payload.documentId,
         editStatus: payload.editStatus, changed: payload.changed, saved: payload.saved,

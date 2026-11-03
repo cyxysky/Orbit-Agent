@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { MigrationInterface, QueryRunner } from 'typeorm';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export class HybridRuntime1790000200000 implements MigrationInterface {
   async up(runner: QueryRunner) {
@@ -42,7 +44,7 @@ export class HybridRuntime1790000200000 implements MigrationInterface {
         }
         const pendingMessages = messages.filter(message => message.role === 'assistant' && Array.isArray(message.content)).flatMap(message => {
           const content = message.content.filter((part: { type: string; toolCallId: string }) => part.type === 'tool-call'
-            && (!results.has(part.toolCallId) || results.get(part.toolCallId)?.code === 'interrupted-tool-outcome'));
+            && (!results.has(part.toolCallId) || results.get(part.toolCallId)?.code === ERROR_CODES.INTERRUPTED_TOOL_OUTCOME));
           return content.length ? [{ ...message, content }] : [];
         });
         if (pendingMessages.length) {

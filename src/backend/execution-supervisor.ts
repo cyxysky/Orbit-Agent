@@ -4,6 +4,8 @@ import { stopProcessTree } from '../../server/process-tree.cjs';
 import { recoverExecutionTasks } from './execution-recovery';
 import { setBrowserChatExecutionOwner, type ExecutionTask } from '@/server/runtime/execution-ownership';
 import { authorizeInterrupt, isInterruptRequest } from './interrupt-authorization';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 const executionPrefixes = ['/api/browser-chat', '/api/embed/browser-chat', '/api/automation', '/api/communication',
   '/api/admin/ai-operations/runtime', '/api/debug', '/api/settings/integrations', '/api/settings/sensitive-data', '/api/metrics', '/api/system/shutdown'];
@@ -41,7 +43,7 @@ export function createExecutionSupervisor() {
   };
   const ensure = async () => {
     await recovering;
-    if (stopped) throw new Error('Execution supervisor stopped');
+    if (stopped) throw new CodedError(ERROR_CODES.HTTP_REQUEST_FAILED, 'Execution supervisor stopped');
     if (!worker) {
       const args = [
         '--max-old-space-size=' + (Number(process.env.ORBIT_EXECUTION_HEAP_MB) || 4096),
@@ -54,7 +56,7 @@ export function createExecutionSupervisor() {
       const current: Worker = { child, port: 0, ready: Promise.resolve(), tasks: new Map() };
       worker = current;
       current.ready = new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => { reject(new Error('Execution startup timed out')); killTree(child); }, 60_000);
+        const timer = setTimeout(() => { reject(new CodedError(ERROR_CODES.HTTP_REQUEST_FAILED, 'Execution startup timed out')); killTree(child); }, 60_000);
         child.once('error', error => { clearTimeout(timer); reject(error); });
         child.on('message', (message: { type?: string; port?: number; task?: ExecutionTask; active?: boolean }) => {
           if (message?.type === 'ready' && message.port) { clearTimeout(timer); current.port = message.port; resolve(); }
@@ -63,7 +65,7 @@ export function createExecutionSupervisor() {
             if (message.active) current.tasks.set(key, message.task); else current.tasks.delete(key);
           }
         });
-        child.once('exit', () => { clearTimeout(timer); reject(new Error('Execution process exited before ready')); });
+        child.once('exit', () => { clearTimeout(timer); reject(new CodedError(ERROR_CODES.HTTP_REQUEST_FAILED, 'Execution process exited before ready')); });
       });
       // Observe rejection even while starting background services without HTTP traffic.
       void current.ready.catch(() => undefined);
@@ -109,7 +111,7 @@ export function createExecutionSupervisor() {
         upstream.destroy();
         if (!response.headersSent && !response.destroyed) {
           response.writeHead(503, { 'Content-Type': 'application/json', 'Retry-After': '1', ...(pathname.startsWith('/api/embed/') ? { 'Access-Control-Allow-Origin': '*' } : {}) });
-          response.end(JSON.stringify({ code: 'execution_restarted', error: '执行进程未响应中止，已请求强制终止，正在恢复任务状态。该进程中的任务不会自动重试，请稍后刷新会话。', interrupted: true }));
+          response.end(JSON.stringify({ code: ERROR_CODES.EXECUTION_RESTARTED, error: '执行进程未响应中止，已请求强制终止，正在恢复任务状态。该进程中的任务不会自动重试，请稍后刷新会话。', interrupted: true }));
         }
       }, Math.max(500, Number(process.env.ORBIT_INTERRUPT_GRACE_MS) || 5000));
       upstream.once('response', incoming => {
@@ -123,9 +125,9 @@ export function createExecutionSupervisor() {
         if (forced || response.destroyed) return;
         if (response.headersSent) { response.destroy(error); return; }
         response.writeHead(502, { 'Content-Type': 'application/json' });
-        response.end(JSON.stringify({ code: 'execution_unavailable', error: 'Execution process unavailable; the request was not replayed.' }));
+        response.end(JSON.stringify({ code: ERROR_CODES.EXECUTION_UNAVAILABLE, error: 'Execution process unavailable; the request was not replayed.' }));
       });
-      request.once('aborted', () => { clear(); upstream.destroy(); });
+      request.once(ERROR_CODES.ABORTED, () => { clear(); upstream.destroy(); });
       response.once('close', () => { clear(); if (!response.writableFinished) upstream.destroy(); });
       if (interruption) upstream.end(interruption.body); else request.pipe(upstream);
     },

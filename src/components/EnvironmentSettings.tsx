@@ -63,6 +63,8 @@ import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, us
 import { SortableContext, arrayMove, rectSortingStrategy, sortableKeyboardCoordinates, useSortable } from '@dnd-kit/sortable';
 import { CSS as DndCSS } from '@dnd-kit/utilities';
 import { GripVertical } from 'lucide-react';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export {
   environmentSettingsTabs,
@@ -1509,7 +1511,7 @@ export function EnvironmentSettings({
   }
 
   async function deleteLoginAccount(account: LoginAccountMetadata) {
-    if (account.userId !== normalizedUserId) throw new Error(t('只读'));
+    if (account.userId !== normalizedUserId) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, t('只读'));
     const response = await fetch(withWebPilotBasePath(`/api/login-accounts/${encodeURIComponent(account.id)}`), { method: 'DELETE' });
     await readApiJson(response, t('删除登录账号失败'));
     setLoginAccounts((current) => current.filter((item) => item.id !== account.id));
@@ -1607,7 +1609,7 @@ export function EnvironmentSettings({
   }
 
   async function deletePersonalMemory(item: PersonalMemoryItem) {
-    if (item.userId !== normalizedUserId) throw new Error(t('只读'));
+    if (item.userId !== normalizedUserId) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, t('只读'));
     const response = await fetch(personalMemoryItemApiPath(item), { method: 'DELETE' });
     await readApiJson(response, t('删除个性化记忆失败'));
     setPersonalMemoryItems((current) => current.filter((entry) => entry.id !== item.id));

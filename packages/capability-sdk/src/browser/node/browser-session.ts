@@ -1,3 +1,4 @@
+import { browserExecutionErrorCode } from "../../errors.ts";
 import sharp from 'sharp';
 import { readManagedRuntime } from '../../runtime.ts';
 import { acquireSharedBrowser, connectOrLaunchPersistentBrowserOverCdp, launchPersistentContextWithBrowserCodeConnection, connectExistingBrowserOverCdp, launchBrowserServerWithConnection, sleep, closeConnectedBrowserProcess, type BrowserOwnership } from './browser-shared-runtime.ts';
@@ -31,6 +32,8 @@ import { AI_DOM_RUNTIME_VERSION, applyPageGroupMarker, collectAiDomObservation, 
 import { domObservationPageCharLimit, domObservationPageStarts, parseDomObservationCursor, readDomObservationPage, type DomObservationPageRecord } from './browser-dom-observation-pagination.ts';
 import { resolveBrowserSessionTransportAdapter, type BrowserSessionTransportKind } from './browser-session-transport-adapter.ts';
 import { closeManagedBrowserSessions, registerBrowserSession, unregisterBrowserSession } from './browser-session-lifecycle.ts';
+import { CodedError, ERROR_CODES } from '../../errors.ts';
+
 
 
 const DEFAULT_SCREENSHOT_TIMEOUT_MS = 15000;
@@ -118,6 +121,8 @@ export type BrowserSessionCookie = {
 
 export type AccessibilitySnapshotExportControlResult = {
   ok: boolean;
+  /** Registered textual error code, present on failed tool results. */
+  code?: import('../../errors.ts').ErrorCode;
   fileName?: string;
   path?: string;
   downloadUrl?: string;
@@ -134,6 +139,8 @@ export type { BrowserActiveSurface, BrowserPageObservation } from './browser-pag
 
 export type BrowserActionResult = {
   ok: boolean;
+  /** Registered textual error code, present on failed tool results. */
+  code?: import('../../errors.ts').ErrorCode;
   /** Text-only action output. Structured operations return data and summary instead. */
   actual?: string;
   /** The single structured result payload. */
@@ -161,7 +168,7 @@ export type BrowserActionResult = {
   /** Images emitted by browserCode that should be attached to the next model request in order. */
   referenceImagePaths?: string[];
   /** Final viewport observation, distinct from explicitly emitted image artifacts. */
-  browserObservation?: { width?: number; height?: number; surfaceId?: string; visualHash?: string; id?: string; domEpoch?: number; actionable?: boolean; retention?: 'replace' | 'append' | 'keep-pair'; disabledReason?: 'automatic-screenshot-disabled' | 'model-image-input-unavailable'; status: 'available' | 'unavailable' | 'disabled'; path?: string; url?: string; capturedAt?: string; error?: string };
+  browserObservation?: { width?: number; height?: number; surfaceId?: string; visualHash?: string; id?: string; domEpoch?: number; actionable?: boolean; retention?: 'replace' | 'append' | 'keep-pair'; disabledReason?: typeof ERROR_CODES.AUTOMATIC_SCREENSHOT_DISABLED | typeof ERROR_CODES.MODEL_IMAGE_INPUT_UNAVAILABLE; status: 'available' | 'unavailable' | 'disabled'; path?: string; url?: string; capturedAt?: string; error?: string };
   /** Safe basenames for emitted screenshots. */
   screenshotFileNames?: string[];
   /** A compact continuation cursor for paged snapshot readers. */
@@ -1148,7 +1155,7 @@ export class BrowserSession {
   private stateReader?: BrowserStateReader;
   private sessionScheduler?: BrowserSessionScheduler;
   private withSessionOperation<T>(operation: (signal: AbortSignal) => Promise<T>, signal?: AbortSignal): Promise<T> {
-    if (this.closePromise) return Promise.reject(new Error('Browser session is closing.'));
+    if (this.closePromise) return Promise.reject(new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Browser session is closing.'));
     return (this.sessionScheduler ||= new BrowserSessionScheduler()).run(operation, signal);
   }
 
@@ -1204,7 +1211,7 @@ export class BrowserSession {
   private async captureVisualFrame(runId: string, signal?: AbortSignal, settle = true): Promise<NonNullable<BrowserActionResult['browserObservation']>> {
     signal?.throwIfAborted();
     const page = this.activePage;
-    if (page.isClosed()) throw new Error('Current browser surface is closed.');
+    if (page.isClosed()) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Current browser surface is closed.');
     const surfaceId = this.visualSurfaceIds.get(page) || randomUUID();
     this.visualSurfaceIds.set(page, surfaceId);
     // Input dispatch and navigation commit both precede asynchronous rendering.
@@ -1232,7 +1239,7 @@ export class BrowserSession {
       let stableSince = Date.now();
       do {
         signal?.throwIfAborted();
-        if (page !== this.activePage) throw new Error('Browser surface changed during capture.');
+        if (page !== this.activePage) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Browser surface changed during capture.');
         const before = await readContext();
         // Playwright's scale:'css' uses a scaled CDP clip. Chromium temporarily
         // resizes its visible surface for that clip, making a headed window pulse
@@ -1245,7 +1252,7 @@ export class BrowserSession {
         });
         const after = await readContext();
         if (before !== after) {
-          if (!settle) throw new Error('Browser viewport or document changed during capture.');
+          if (!settle) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Browser viewport or document changed during capture.');
           // Discard frames spanning navigation/scroll; do not return an earlier frame.
           bytes = undefined;
           previousHash = undefined;
@@ -1267,11 +1274,11 @@ export class BrowserSession {
       await client.detach().catch(() => undefined);
     }
     signal?.throwIfAborted();
-    if (!bytes) throw new Error('Browser viewport or document changed during capture. Observe again.');
-    if (page !== this.activePage || page.url() !== url) throw new Error('Browser surface changed during capture.');
-    if (bytes.length < 24 || bytes.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') throw new Error('Invalid PNG observation.');
+    if (!bytes) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Browser viewport or document changed during capture. Observe again.');
+    if (page !== this.activePage || page.url() !== url) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Browser surface changed during capture.');
+    if (bytes.length < 24 || bytes.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Invalid PNG observation.');
     const width = bytes.readUInt32BE(16), height = bytes.readUInt32BE(20);
-    if (!width || !height || width > 8192 || height > 8192) throw new Error('Invalid observation dimensions.');
+    if (!width || !height || width > 8192 || height > 8192) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Invalid observation dimensions.');
     // Hash the page pixels before adding the host's click annotation.
     const visualHash = createHash('sha256').update(bytes).digest('hex');
     const click = this.lastVisualClick?.surfaceId === surfaceId && this.lastVisualClick.x < width && this.lastVisualClick.y < height
@@ -1341,7 +1348,7 @@ export class BrowserSession {
       const url = input.url ?? (operation === 'open' ? 'about:blank' : undefined);
       if (operation === 'navigate' || operation === 'open') {
         try {
-          if (!url || (!['http:', 'https:'].includes(new URL(url).protocol) && url !== 'about:blank')) throw new Error('Invalid URL');
+          if (!url || (!['http:', 'https:'].includes(new URL(url).protocol) && url !== 'about:blank')) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Invalid URL');
         } catch { return { ok: false, actual: 'Use an absolute HTTP(S) URL or about:blank; nothing executed.' }; }
       }
       await this.refreshSessionGroupPages({ forceNativeRefresh: true });
@@ -1381,7 +1388,7 @@ export class BrowserSession {
         this.notifyLivePreviewTabsChanged();
         return { ok: true, actual: JSON.stringify({ ...result(), next: 'Read a fresh observation/state and verify the destination before dependent page actions.' }) };
       } catch (error) {
-        return { ok: false, failureCategory: 'execution-uncertain',
+        return { ok: false, failureCategory: ERROR_CODES.EXECUTION_UNCERTAIN,
           actual: 'Browser control outcome is uncertain. Inspect current tabs and observation; do not repeat automatically.',
           data: { ...result(), outcome: 'unknown', safeToRetry: false, error: String(error) }, browserObservation: this.latestBrowserObservation };
       }
@@ -1403,13 +1410,13 @@ export class BrowserSession {
       const original = this.latestBrowserObservation;
       const originalContext = this.latestVisualFrameContext;
       const observationAgeMs = Date.now() - Date.parse(original?.capturedAt || '');
-      const staleReason = !original ? 'missing-observation'
+      const staleReason = !original ? ERROR_CODES.MISSING_OBSERVATION
         : original.id !== input.observationId ? 'observation-id-mismatch'
         : !original.actionable ? 'observation-not-actionable'
-        : !originalContext || originalContext.observationId !== original.id ? 'missing-viewport-evidence'
-        : !Number.isFinite(observationAgeMs) ? 'invalid-capture-time'
+        : !originalContext || originalContext.observationId !== original.id ? ERROR_CODES.MISSING_VIEWPORT_EVIDENCE
+        : !Number.isFinite(observationAgeMs) ? ERROR_CODES.INVALID_CAPTURE_TIME
         : observationAgeMs > 60000 ? 'observation-expired' : undefined;
-      if (staleReason || !original || !originalContext) return { ok: false, failureCategory: 'state-conflict',
+      if (staleReason || !original || !originalContext) return { ok: false, failureCategory: ERROR_CODES.STATE_CONFLICT,
         actual: `Stale observation (${staleReason}${staleReason === 'observation-expired' ? `: ${Math.round(observationAgeMs / 1000)}s old, limit 60s` : ''}); no action executed. Capture and decide again.`,
         data: { outcome: 'not-executed', reason: staleReason, requestedObservationId: input.observationId,
           currentObservationId: original?.id, observationAgeMs: Number.isFinite(observationAgeMs) ? observationAgeMs : undefined, maxAgeMs: 60000 } };
@@ -1417,14 +1424,14 @@ export class BrowserSession {
       try { fresh = await this.captureVisualFrame(input.runId, signal, false); }
       catch (error) {
         this.latestBrowserObservation = { status: 'unavailable', actionable: false, error: String(error) };
-        return { ok: false, failureCategory: 'state-conflict', actual: 'Could not capture the current page before input; no action executed. Observe again before deciding.',
+        return { ok: false, failureCategory: ERROR_CODES.STATE_CONFLICT, actual: 'Could not capture the current page before input; no action executed. Observe again before deciding.',
           data: { outcome: 'not-executed', error: String(error) }, browserObservation: this.latestBrowserObservation };
       }
       // The image ID identifies exact pixels, not whether coordinates are still
       // usable. Live video, chat, animations and caret blinking change it constantly.
       if (original.surfaceId !== fresh.surfaceId || original.url !== fresh.url
         || original.width !== fresh.width || original.height !== fresh.height
-        || originalContext.key !== this.latestVisualFrameContext?.key) return { ok: false, failureCategory: 'state-conflict',
+        || originalContext.key !== this.latestVisualFrameContext?.key) return { ok: false, failureCategory: ERROR_CODES.STATE_CONFLICT,
           actual: 'Browser surface, document, route, scroll position or viewport changed; no action executed. Inspect the fresh observation and decide again.',
           data: { outcome: 'not-executed' }, browserObservation: fresh };
       const page = this.activePage;
@@ -1498,7 +1505,7 @@ export class BrowserSession {
       if (inputFailed || releaseErrors.length) {
         this.latestBrowserObservation = { status: 'unavailable', actionable: false, error: String(inputError || releaseErrors.join('; ')) };
         return { ok: false, actual: 'Browser gesture outcome is uncertain. Inspect current state and choose the next action using fresh evidence.',
-          failureCategory: 'execution-uncertain', data: { outcome: 'unknown', safeToRetry: false, error: String(inputError || 'Input release failed'), releaseErrors }, browserObservation: this.latestBrowserObservation };
+          failureCategory: ERROR_CODES.EXECUTION_UNCERTAIN, data: { outcome: 'unknown', safeToRetry: false, error: String(inputError || 'Input release failed'), releaseErrors }, browserObservation: this.latestBrowserObservation };
       }
       // The input returned successfully. A navigation/capture race afterwards
       // makes the observation unavailable, not the input outcome uncertain.
@@ -1652,7 +1659,7 @@ export class BrowserSession {
 
   /** Browser transports may attach to this session without owning its browser. */
   browserAutomationConnection(): BrowserCodeConnection {
-    if (!this.browserCodeConnection || !this.isUsable()) throw new Error('Browser session is not ready for an external automation transport.');
+    if (!this.browserCodeConnection || !this.isUsable()) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Browser session is not ready for an external automation transport.');
     return { ...this.browserCodeConnection };
   }
 
@@ -1702,16 +1709,16 @@ export class BrowserSession {
       if (!reservedChild) return;
       if (reservedChild === this || reservedChild.lifecycle !== 'idle' || reservedChild.startPromise
         || reservedChild.closePromise || reservedChild.context || reservedChild.browser || reservedChild.ownedPages.size) {
-        throw new Error('A reserved child browser must be an independent, unstarted session.');
+        throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'A reserved child browser must be an independent, unstarted session.');
       }
       if (reservedChild.options.runId !== options.runId
         || reservedChild.options.browserCodeStateSessionId !== (options.browserCodeStateSessionId || this.options.browserCodeStateSessionId)) {
-        throw new Error('The reserved child browser scope must match its fork options.');
+        throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'The reserved child browser scope must match its fork options.');
       }
     };
     options.abortSignal?.throwIfAborted();
     assertReservedChild();
-    if (!this.context || !this.isUsable()) throw new Error('Parent browser session has not started');
+    if (!this.context || !this.isUsable()) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Parent browser session has not started');
     const context = this.context;
     const restorePage = options.background === false ? undefined : this.page;
     const inheritedSessionStorage = options.inheritSessionStorage === false
@@ -1782,7 +1789,7 @@ export class BrowserSession {
   async injectCookies(cookies: BrowserSessionCookie[]) {
     return this.withSessionOperation(async () => {
 
-    if (!this.context) throw new Error('Browser session has not started');
+    if (!this.context) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Browser session has not started');
     if (!cookies.length) return 0;
     await this.context.addCookies(cookies);
     return cookies.length;
@@ -1806,7 +1813,7 @@ export class BrowserSession {
       this.lifecycle = 'starting';
       try {
         await this.startNow();
-        if (!this.isUsable()) throw new Error('Browser startup completed without an owned, open page.');
+        if (!this.isUsable()) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Browser startup completed without an owned, open page.');
         // Reclaimed tabs may arrive without an active-page selection.
         void this.activePage;
         this.lifecycle = 'ready';
@@ -1983,7 +1990,7 @@ export class BrowserSession {
           }
           if (attempt < 49) await sleep(200);
         }
-        throw new Error('Electron embedded browser tab for this session is not ready.');
+        throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Electron embedded browser tab for this session is not ready.');
       }
       const existingContext = this.browser.contexts()[0];
       const context = existingContext || await this.browser.newContext(contextOptions);
@@ -2589,7 +2596,7 @@ export class BrowserSession {
   }
 
   async installAccessibilitySnapshotExportControl(exporter: () => Promise<AccessibilitySnapshotExportControlResult>) {
-    if (!this.context) throw new Error('Browser session has not started');
+    if (!this.context) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Browser session has not started');
     this.accessibilitySnapshotExporter = exporter;
     if (!this.accessibilitySnapshotExportControlInstalled) {
       this.accessibilitySnapshotExportControlInstalled = true;
@@ -3031,11 +3038,11 @@ export class BrowserSession {
           return { client, page: nextActivePage };
         }
         await detachCurrentPage();
-        if (stopped) throw new Error('Preview capture stopped');
+        if (stopped) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Preview capture stopped');
         const nextClient = await nextActivePage.context().newCDPSession(nextActivePage);
         if (stopped) {
           await nextClient.detach().catch(() => undefined);
-          throw new Error('Preview capture stopped');
+          throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Preview capture stopped');
         }
         page = nextActivePage;
         client = nextClient;
@@ -4074,7 +4081,7 @@ export class BrowserSession {
   private get activePage() {
     if (!this.page || this.page.isClosed()) {
       const replacement = this.sessionPages()[0];
-      if (!replacement) throw new Error(this.page
+      if (!replacement) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, this.page
         ? 'Active browser page has been closed and no replacement page is available.'
         : 'Browser session has not started');
       this.page = replacement;
@@ -4154,14 +4161,14 @@ export class BrowserSession {
         await raceWithAbort(page.mouse.click(point.x, point.y), signal);
       } catch (error) {
         const after = await this.readPageObservation().catch(() => undefined);
-        return { ok: false, failureCategory: 'surface-dismissal-uncertain',
+        return { ok: false, failureCategory: ERROR_CODES.SURFACE_DISMISSAL_UNCERTAIN,
           summary: 'The dismissal input failed or timed out; inspect current state before another action.',
           data: { error: unknownErrorMessage(error), method: 'corner-click', before, after, point, outcome: 'unknown' } };
       }
       let after = await this.readPageObservation().catch(() => undefined);
       if (!after) return { ok: true,
         summary: 'The corner click was sent, but the resulting surface state could not be read.',
-        data: { method: 'corner-click', before, point, outcome: 'observation-unavailable' } };
+        data: { method: 'corner-click', before, point, outcome: ERROR_CODES.OBSERVATION_UNAVAILABLE } };
       const deadline = Date.now() + 900;
       while (surfaceId && Date.now() < deadline && after.surfaces.some((candidate) => candidate.id === surfaceId)) {
         await raceWithAbort(new Promise<void>((resolve) => setTimeout(resolve, 60)), signal);
@@ -4431,7 +4438,7 @@ export class BrowserSession {
   }) {
     const diagnosticLines = await this.collectScreenshotFailureDiagnostics(details);
     const message = `${unknownErrorMessage(error)}\n\nScreenshot diagnostics:\n${diagnosticLines.join('\n')}`;
-    const enriched = new Error(message);
+    const enriched = new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, message);
     if (error instanceof Error) {
       enriched.name = error.name;
     }
@@ -4530,7 +4537,7 @@ export class BrowserSession {
         })(),
         new Promise<never>((_, reject) => {
           timeout = setTimeout(() => {
-            reject(new Error(`Browser screenshot timed out after ${input.timeoutMs}ms.`));
+            reject(new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `Browser screenshot timed out after ${input.timeoutMs}ms.`));
           }, input.timeoutMs);
           timeout.unref?.();
         }),
@@ -4909,7 +4916,7 @@ export class BrowserSession {
         result = await this.executeBrowserCodeCell({ ...input, abortSignal: signal });
       } catch (error) {
         if (signal.aborted) { this.browserViewportEvidence = undefined; throw error; }
-        result = { ok: false, failureCategory: 'browser-code-failed',
+        result = { ok: false, failureCategory: ERROR_CODES.BROWSER_CODE_FAILED,
           summary: 'Browser script failed; inspect the returned evidence before retrying.',
           data: { error: error instanceof Error ? error.message : String(error) } };
       }
@@ -4920,7 +4927,7 @@ export class BrowserSession {
       delete withoutSingularImagePath.referenceImagePath;
       if (input.imageInputAvailable === false || !this.automaticBrowserScreenshotEnabled()) {
         const observation = { status: 'disabled' as const,
-          disabledReason: input.imageInputAvailable === false ? 'model-image-input-unavailable' as const : 'automatic-screenshot-disabled' as const };
+          disabledReason: input.imageInputAvailable === false ? ERROR_CODES.MODEL_IMAGE_INPUT_UNAVAILABLE : ERROR_CODES.AUTOMATIC_SCREENSHOT_DISABLED };
         this.latestBrowserObservation = observation;
         return { ...withoutSingularImagePath, browserObservation: observation };
       }
@@ -4932,7 +4939,7 @@ export class BrowserSession {
       try {
         signal.throwIfAborted();
         const page = this.activePage;
-        if (page.isClosed()) throw new Error('The final browser page is closed.');
+        if (page.isClosed()) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'The final browser page is closed.');
         const readGeometry = () => page.evaluate(() => {
           const win = window as Window & { __aiCoordinateEvidenceDocumentId?: string; __aiDomMutationState?: { epoch?: number } };
           win.__aiCoordinateEvidenceDocumentId ||= Date.now() + '-' + Math.random();
@@ -5158,10 +5165,10 @@ export class BrowserSession {
     };
     const result: BrowserActionResult = {
       ok: effectiveOk,
-      ...(!effectiveOk ? { failureCategory: resultFailure ? 'browser-result-failed'
-        : reportedFailure ? 'browser-result-failed'
-        : execution.kernelReset?.reason === 'out-of-memory' ? 'browser-kernel-out-of-memory'
-          : `browser-${execution.executionState?.status || 'code-failed'}` } : {}),
+      ...(!effectiveOk ? { failureCategory: resultFailure ? ERROR_CODES.BROWSER_RESULT_FAILED
+        : reportedFailure ? ERROR_CODES.BROWSER_RESULT_FAILED
+        : execution.kernelReset?.reason === 'out-of-memory' ? ERROR_CODES.BROWSER_KERNEL_OUT_OF_MEMORY
+          : browserExecutionErrorCode(execution.executionState?.status) } : {}),
       data: payload,
       summary: effectiveOk
         ? noDeclaredActionExecuted
@@ -5181,12 +5188,12 @@ export class BrowserSession {
       const message = reason instanceof Error ? reason.message : 'Browser tool aborted.';
       return {
         ok: false,
-        failureCategory: timedOut ? 'browser-timeout' : 'browser-aborted',
+        failureCategory: timedOut ? ERROR_CODES.BROWSER_TIMEOUT : ERROR_CODES.BROWSER_ABORTED,
         summary: `Browser script ${timedOut ? 'timed out' : 'was aborted'} during ${operation.phase}; inspect the current page before retrying.`,
         data: { error: message, operationPhase: operation.phase, elapsedMs: Date.now() - operation.startedAt,
-          ...(operationKernel ? { kernelReset: { reason: timedOut ? 'timeout' : 'aborted',
+          ...(operationKernel ? { kernelReset: { reason: timedOut ? ERROR_CODES.TIMEOUT : ERROR_CODES.ABORTED,
             note: 'The browserCode kernel was stopped. Top-level JavaScript bindings from earlier cells are no longer available.' } } : {}),
-          executionState: { status: timedOut ? 'timeout' : 'aborted',
+          executionState: { status: timedOut ? ERROR_CODES.TIMEOUT : ERROR_CODES.ABORTED,
             ...interruptedProgress,
             phase: executionFinished ? 'finished' : executionStarted ? 'running' : 'startup',
             outcome: executionStarted ? 'unknown' : 'not-started', safeToRetry: false,
@@ -6644,7 +6651,7 @@ export class BrowserSession {
       : locator
         ? await locator.evaluate(readEditableText)
         : undefined;
-    if (before === undefined) throw new Error('The editable target no longer resolves to a live element.');
+    if (before === undefined) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'The editable target no longer resolves to a live element.');
     const selection = resolveEditableTextSelection(before, spec);
     const range = { direction: selection.direction, end: selection.end, start: selection.start };
     if (handle) await handle.evaluate(applyEditableTextSelection, range);
@@ -7297,7 +7304,7 @@ export class BrowserSession {
       if (!input.abortSignal?.aborted) return;
       throw input.abortSignal.reason instanceof Error
         ? input.abortSignal.reason
-        : new Error('Browser mouse action was cancelled.');
+        : new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Browser mouse action was cancelled.');
     };
     throwIfAborted();
     const page = this.activePage;
@@ -7605,7 +7612,7 @@ export class BrowserSession {
       if (!input.abortSignal?.aborted) return;
       throw input.abortSignal.reason instanceof Error
         ? input.abortSignal.reason
-        : new Error('Browser option selection was cancelled.');
+        : new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Browser option selection was cancelled.');
     };
     throwIfAborted();
     if (!input.target) return { ok: false, actual: 'selectOption requires a fresh snapshot-bound select target.' };
@@ -8377,16 +8384,16 @@ export class BrowserSession {
 
     const startedAt = Date.now();
     const cursor = options.cursor ? parseDomObservationCursor(options.cursor) : undefined;
-    if (options.cursor && !cursor) throw new Error('Invalid DOM-observation snapshot cursor. Read a fresh snapshot without a cursor.');
+    if (options.cursor && !cursor) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Invalid DOM-observation snapshot cursor. Read a fresh snapshot without a cursor.');
 
     if (cursor) {
-      if (!options.mode) throw new Error('Snapshot continuation requires the same explicit mode together with cursor.');
+      if (!options.mode) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Snapshot continuation requires the same explicit mode together with cursor.');
       const record = this.domObservationPagination;
       if (!record || record.id !== cursor.id || record.mode !== cursor.mode) {
-        throw new Error('The DOM-observation snapshot cursor is no longer available. Read a fresh snapshot without a cursor.');
+        throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'The DOM-observation snapshot cursor is no longer available. Read a fresh snapshot without a cursor.');
       }
       if (options.mode && options.mode !== cursor.mode) {
-        throw new Error(`Snapshot cursor mode is ${cursor.mode}; do not change mode while paging.`);
+        throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `Snapshot cursor mode is ${cursor.mode}; do not change mode while paging.`);
       }
       const page = readDomObservationPage(record, cursor.index);
       this.exposeDomReferencesFromText(page.content);

@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { createWeComBotConnection, WECOM_BOT_RUNTIME_REVISION, type WeComBotConnection } from '@cjfclonedeep/capability-sdk/integrations/communication/node';
 import type { ResolvedExternalIntegration } from './external-integration-vault';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 type Connection = { fingerprint: string; integrationId: string; bot: WeComBotConnection };
 const connections: Map<string, Connection> = ((globalThis as typeof globalThis & { __orbitWeComConnections?: Map<string, Connection> })
@@ -8,11 +10,11 @@ const connections: Map<string, Connection> = ((globalThis as typeof globalThis &
 
 export function getWeComConnection(integration: ResolvedExternalIntegration) {
   const { botId, botSecret } = integration.configuration;
-  if (!integration.enabled || !botId || !botSecret) throw new Error('请先为此渠道配置 Bot ID 和 Secret，启用机器人连接。');
+  if (!integration.enabled || !botId || !botSecret) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '请先为此渠道配置 Bot ID 和 Secret，启用机器人连接。');
   const fingerprint = createHash('sha256').update(JSON.stringify([botId, botSecret, WECOM_BOT_RUNTIME_REVISION])).digest('hex');
   const current = connections.get(botId);
   if (current?.fingerprint === fingerprint) return current.bot;
-  if (current && current.integrationId !== integration.id) throw new Error('同一机器人的连接凭据不一致，请修改已有渠道。');
+  if (current && current.integrationId !== integration.id) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '同一机器人的连接凭据不一致，请修改已有渠道。');
   current?.bot.close();
   const bot = createWeComBotConnection({ botId, secret: botSecret });
   connections.set(botId, { fingerprint, integrationId: integration.id, bot });

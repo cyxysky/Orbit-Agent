@@ -12,6 +12,8 @@ import type {
   PageInteractiveCandidate,
   WindowWithAiDomRuntime,
 } from './browser-session.ts';
+import { CodedError, ERROR_CODES } from '../../errors.ts';
+
 
 export const AI_DOM_RUNTIME_VERSION = 31;
 
@@ -54,7 +56,7 @@ export function installAccessibilitySnapshotExportControl() {
       button.textContent = '正在采集...';
       try {
         const result = await browserWindow.__webPilotExportAccessibilitySnapshot?.();
-        if (!result?.ok) throw new Error(result?.error || '页面快照导出失败');
+        if (!result?.ok) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, result?.error || '页面快照导出失败');
         button.textContent = '导出完成';
         button.title = result.path || result.fileName || '页面快照已导出';
         if (result.downloadUrl) {

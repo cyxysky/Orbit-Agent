@@ -14,6 +14,8 @@ import { ApiRequestError, apiError, apiJson, parseJsonRequest } from '@/server/h
 import { requestHasAdminSettingsAccess } from '@/server/settings/admin-settings-access';
 import { requestApplicationUserId } from '@/server/auth/user-context';
 import { refreshCommunicationRuntime, startCommunicationRuntime } from '@/server/integrations/communication-runtime';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 const categorySchema = z.enum(['connector', 'communication', 'data']);
 const configurationSchema = z.record(z.string().max(100), z.string().max(20_000)).refine(
@@ -32,7 +34,7 @@ const integrationSchema = z.object({
 
 function requireAdmin(request: Request) {
   if (!requestHasAdminSettingsAccess(request)) {
-    throw new ApiRequestError('请先输入管理员设置密码。', { code: 'admin_access_required', status: 401 });
+    throw new ApiRequestError('请先输入管理员设置密码。', { code: ERROR_CODES.ADMIN_ACCESS_REQUIRED, status: 401 });
   }
 }
 
@@ -58,7 +60,7 @@ export async function POST(request: Request) {
     const body = await parseJsonRequest(request, integrationSchema, { maxBytes: 128 * 1024 });
     const existing = body.id ? await resolveExternalIntegration(body.id) : undefined;
     if (body.id && !existing) {
-      throw new ApiRequestError('外部集成不存在。', { code: 'integration_not_found', status: 404 });
+      throw new ApiRequestError('外部集成不存在。', { code: ERROR_CODES.INTEGRATION_NOT_FOUND, status: 404 });
     }
     const configuration = resolveExternalIntegrationConfiguration({
       driverId: body.driverId,
@@ -95,10 +97,10 @@ export async function DELETE(request: Request) {
     requireAdmin(request);
     const id = new URL(request.url).searchParams.get('id')?.trim();
     if (!id || !z.string().uuid().safeParse(id).success) {
-      throw new ApiRequestError('外部集成 ID 无效。', { code: 'invalid_integration_id' });
+      throw new ApiRequestError('外部集成 ID 无效。', { code: ERROR_CODES.INVALID_INTEGRATION_ID });
     }
     if (!(await deleteExternalIntegration(id))) {
-      throw new ApiRequestError('外部集成不存在。', { code: 'integration_not_found', status: 404 });
+      throw new ApiRequestError('外部集成不存在。', { code: ERROR_CODES.INTEGRATION_NOT_FOUND, status: 404 });
     }
     await refreshCommunicationRuntime();
     return apiJson(request, { ok: true });

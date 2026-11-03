@@ -160,7 +160,7 @@ async function main() {
     configStore: new EnvironmentCapabilityConfigStore(process.env),
     configurations: Object.fromEntries(providers.map((provider, index) => [provider.manifest.id, toolConfiguration(config, groups[index], projectRoot)])),
     skillMode: values['skill-mode'] || config.server?.skillMode || 'eager',
-    instructions: `Tools execute on this machine. Project root: ${projectRoot}. Local artifacts: ${stateDirectory}. Media sourceRef accepts local paths and file:// URLs. The built-in media provider supports inspection and frame extraction. Configure tools in ${loaded.filename || path.join(projectRoot, configFilename)}. Read MCP-CONFIG.zh-CN.md and mcp-config.schema.json in the installed capability-sdk package for supported fields, defaults, units and constraints; capability-mcp --describe-config prints the schema. Configuration changes require restarting MCP.`,
+    instructions: `Tools execute on this machine. Project root: ${projectRoot}. Local artifacts: ${stateDirectory}. Media sourceRef accepts local paths and file:// URLs. The built-in media provider supports inspection, frame extraction, composition and Codex image generation using local login. Call media listModels before generation. Configure tools in ${loaded.filename || path.join(projectRoot, configFilename)}. Read MCP-CONFIG.zh-CN.md and mcp-config.schema.json in the installed capability-sdk package for supported fields, defaults, units and constraints; capability-mcp --describe-config prints the schema. Configuration changes require restarting MCP.`,
     ...custom,
     context: () => {
       const context = typeof custom.context === 'function' ? custom.context() : custom.context;

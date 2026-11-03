@@ -1,4 +1,6 @@
 import { raceWithAbort } from '../../index.ts';
+import { CodedError, ERROR_CODES } from '../../errors.ts';
+
 
 /** One budget, including queued work, preparation, execution and result handling. */
 export class BrowserOperationDeadline {
@@ -12,7 +14,7 @@ export class BrowserOperationDeadline {
   constructor(readonly timeoutMs: number, parent?: AbortSignal) {
     this.follow(parent);
     this.timer = setTimeout(() => {
-      const error = new Error(`Browser tool timed out after ${timeoutMs}ms during ${this.phase}.`);
+      const error = new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `Browser tool timed out after ${timeoutMs}ms during ${this.phase}.`);
       error.name = 'TimeoutError';
       this.controller.abort(error);
     }, timeoutMs);

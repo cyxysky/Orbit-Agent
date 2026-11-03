@@ -3,6 +3,8 @@ import { executeDatabase, queryDatabase, queryDatabaseOne, runDatabaseTransactio
 import { ApiRequestError, apiJson } from './api-request';
 import { incrementMetric } from '@/server/observability/runtime-observability';
 import { queueDatabaseWrite } from '@/server/storage/database-write-queue';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 type IdempotencyRow = {
   request_hash: string;
@@ -53,7 +55,7 @@ export async function runIdempotentJson(
   const key = String(request.headers.get('idempotency-key') || '').trim();
   if (!key) return operation();
   if (!/^[a-zA-Z0-9._:-]{8,200}$/.test(key)) {
-    throw new ApiRequestError('Idempotency-Key is invalid', { code: 'invalid_idempotency_key' });
+    throw new ApiRequestError('Idempotency-Key is invalid', { code: ERROR_CODES.INVALID_IDEMPOTENCY_KEY });
   }
   const timestamp = new Date();
   const expiresAt = new Date(timestamp.getTime() + idempotencyTtlMs()).toISOString();
@@ -82,13 +84,13 @@ export async function runIdempotentJson(
     if (!claim.row || claim.row.request_hash !== input.fingerprint) {
       incrementMetric('api_idempotency_conflict_total', { scope: input.scope });
       throw new ApiRequestError('Idempotency-Key was already used with a different request', {
-        code: 'idempotency_conflict',
+        code: ERROR_CODES.IDEMPOTENCY_CONFLICT,
         status: 409,
       });
     }
     if (claim.row.state !== 'completed' || !claim.row.response_json) {
       throw new ApiRequestError('An identical request is still being processed', {
-        code: 'request_in_progress',
+        code: ERROR_CODES.REQUEST_IN_PROGRESS,
         status: 409,
       });
     }

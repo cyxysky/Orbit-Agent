@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import type { OfficeDocumentDraft } from '../../office/types.ts';
 import { resolveUnoProgramWorker } from './uno.ts';
+import { ERROR_CODES } from '../../../errors.ts';
+
 
 /** Code revision only; do not rescan every installed font on a source read. */
 export async function currentUnoWorkerDigest(): Promise<string | null> {
@@ -30,7 +32,7 @@ export function officeValidationEvidence(draft: OfficeDocumentDraft, currentWork
   const currentSourceDigest = createHash('sha256').update(draft.program || '', 'utf8').digest('hex');
   const reason = !evidence ? 'unversioned-history'
     : evidence.sourceDigest !== currentSourceDigest ? 'source-changed'
-      : !evidence.workerDigest || !currentWorkerDigest ? 'worker-version-unavailable'
+      : !evidence.workerDigest || !currentWorkerDigest ? ERROR_CODES.WORKER_VERSION_UNAVAILABLE
         : evidence.workerDigest !== currentWorkerDigest ? 'worker-changed' : 'matching-revisions';
   const freshness = reason === 'matching-revisions' ? 'current'
     : reason === 'source-changed' || reason === 'worker-changed' ? 'stale' : 'unknown';
@@ -39,11 +41,11 @@ export function officeValidationEvidence(draft: OfficeDocumentDraft, currentWork
     freshness,
     reason,
     currentWorkerDigest,
-    ...(draft.program && freshness !== 'current' && reason !== 'worker-version-unavailable' ? {
+    ...(draft.program && freshness !== 'current' && reason !== ERROR_CODES.WORKER_VERSION_UNAVAILABLE ? {
       guidance: 'Saved diagnostics are historical, not a current runtime verdict. When resuming this task, run render once against the current source/worker before declaring an infrastructure blocker. Do not repeat unchanged renders after that fresh result.',
       nextAction: { action: 'render', documentId: draft.documentId },
     } : {}),
-    ...(reason === 'worker-version-unavailable' ? {
+    ...(reason === ERROR_CODES.WORKER_VERSION_UNAVAILABLE ? {
       guidance: 'Worker revision cannot be verified. Use checkedAt/stage and the latest execution; do not repeat a fresh failure merely to obtain a fingerprint.',
     } : {}),
   };

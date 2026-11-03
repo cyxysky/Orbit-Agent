@@ -57,6 +57,6 @@ test('labels presentation layout diagnostics by their actual failure category', 
   );
 });
 
-test('does not relabel unrelated tool failures as source validation failures', () => {
-  assert.equal(browserChatToolFailureSummary({ ok: false, error: 'network error' }), undefined);
+test('shows the actual reason for unrelated tool failures', () => {
+  assert.equal(browserChatToolFailureSummary({ ok: false, error: 'network error' }), 'network error');
 });

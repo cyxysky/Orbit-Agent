@@ -8,6 +8,8 @@ import { runCapabilityProcess } from '../node.ts';
 import { createMediaCapability, mediaToolInput, type MediaArtifact, type MediaOperations } from './index.ts';
 import type { CapabilityExecutionContext, CapabilityRunContext } from '../index.ts';
 import { createRemotionVideoComposer } from './remotion-renderer.ts';
+import { CodedError, ERROR_CODES } from '../errors.ts';
+
 
 function run(executable: string, args: string[], timeoutMs: number, context: CapabilityExecutionContext) {
   return runCapabilityProcess({ executable, args, timeoutMs, signal: context.abortSignal, maxOutputChars: 100_000 });
@@ -30,7 +32,7 @@ export function createFfmpegMediaOperations(input: {
       const remaining = () => {
         context.abortSignal?.throwIfAborted();
         const milliseconds = deadline - Date.now();
-        if (milliseconds <= 0) throw new Error('Video composition timed out. Use fewer scenes, shorter durations or a smaller size.');
+        if (milliseconds <= 0) throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, 'Video composition timed out. Use fewer scenes, shorter durations or a smaller size.');
         return milliseconds;
       };
       try {
@@ -47,10 +49,10 @@ export function createFfmpegMediaOperations(input: {
             hasAudio = /Audio:/.test(headers.stderr) && scene.muted !== true;
             const match = headers.stderr.match(/Duration:\s*(\d+):(\d+):([\d.]+)/);
             const sourceDuration = match ? Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]) : undefined;
-            if (sourceDuration !== undefined && (scene.trimStart || 0) + scene.duration > sourceDuration + 0.05) throw new Error(`Scene ${index + 1} extends beyond its source video. Reduce the trim start or duration.`);
+            if (sourceDuration !== undefined && (scene.trimStart || 0) + scene.duration > sourceDuration + 0.05) throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, `Scene ${index + 1} extends beyond its source video. Reduce the trim start or duration.`);
             sceneArgs.push('-ss', String(scene.trimStart || 0), '-i', source);
           } else {
-            if ((await stat(source)).size > 50 * 1024 * 1024) throw new Error('A scene image must not exceed 50 MB.');
+            if ((await stat(source)).size > 50 * 1024 * 1024) throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, 'A scene image must not exceed 50 MB.');
             const image = path.join(directory, `image-${index}.png`);
             await sharp(source, { limitInputPixels: 40_000_000, animated: false }).rotate()
               .resize(width, height, { fit: 'contain', background: '#000000' }).flatten({ background: '#000000' }).png().toFile(image);

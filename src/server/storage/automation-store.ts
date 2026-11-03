@@ -25,6 +25,8 @@ import {
 } from '@/server/db/database';
 import { publishRealtimeRefreshEvent, type RefreshEntityType } from '@/server/realtime/ws-refresh';
 import { automationTaskGuidance } from '@/server/automation/automation-task';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 type JsonRow = { record_json: string };
 
@@ -101,7 +103,7 @@ async function readSchedule(executor: DatabaseExecutor, id: string, userId?: str
 
 async function ensureCaseOwner(executor: DatabaseExecutor, caseId: string, userId: string) {
   if (!await readCase(executor, caseId, userId)) {
-    throw new Error(`Automation case ${caseId} was not found for this user.`);
+    throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED, `Automation case ${caseId} was not found for this user.`);
   }
 }
 
@@ -281,8 +283,8 @@ export async function updateAutomationRunIfStatus(
 }
 
 export async function claimAutomationRunLease(runId: string, owner: string, ttlMs: number, userId?: string) {
-  if (!owner.trim()) throw new Error('A lease owner is required.');
-  if (!Number.isFinite(ttlMs) || ttlMs <= 0) throw new Error('Lease TTL must be greater than zero.');
+  if (!owner.trim()) throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED, 'A lease owner is required.');
+  if (!Number.isFinite(ttlMs) || ttlMs <= 0) throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED, 'Lease TTL must be greater than zero.');
   const record = await runDatabaseTransaction(async (manager) => {
     const current = await readRun(manager, runId, userId);
     if (!current || terminalRunStatuses.has(current.status)) return undefined;
@@ -439,7 +441,7 @@ export async function createAutomationScheduleOccurrence(
     `, [advancedSchedule.nextRunAt, JSON.stringify(advancedSchedule), advancedSchedule.updatedAt,
       advancedSchedule.id, true, occurrenceAt], manager);
     if (updated.length !== 1) {
-      throw new Error(`Automation schedule ${schedule.id} changed while creating its occurrence.`);
+      throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED, `Automation schedule ${schedule.id} changed while creating its occurrence.`);
     }
     return { created: true, schedule: advancedSchedule, run };
   });

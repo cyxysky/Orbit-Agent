@@ -1,3 +1,4 @@
+import { getErrorCode } from '@cjfclonedeep/capability-sdk';
 type MetricState = {
   counters: Map<string, number>;
   gauges: Map<string, number>;
@@ -60,9 +61,10 @@ type StructuredLogInput = {
 };
 
 function serializedError(error: unknown) {
-  if (!(error instanceof Error)) return error === undefined ? undefined : String(error);
+  if (!(error instanceof Error)) return error === undefined ? undefined : { code: getErrorCode(error), message: String(error) };
   return {
     message: error.message,
+    code: getErrorCode(error),
     name: error.name,
     stack: process.env.NODE_ENV === 'development' ? error.stack : undefined,
   };

@@ -1,6 +1,8 @@
 import { raceWithAbort } from '../../index.ts';
 import type { Download } from 'patchright';
 import type { Readable } from 'node:stream';
+import { CodedError, ERROR_CODES } from '../../errors.ts';
+
 
 export type BrowserDownloadArtifact = {
   artifactId: string; fileName: string; bytes: number; url?: string; downloadUrl?: string;
@@ -46,9 +48,9 @@ export class BrowserDownloadManager {
           fileName: download.suggestedFilename(), sourceUrl: download.url(), abortSignal: controller.signal,
           cancel: () => download.cancel(), stream: async () => {
             const failure = await download.failure();
-            if (failure) throw new Error(`Browser download failed: ${failure}`);
+            if (failure) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `Browser download failed: ${failure}`);
             const stream = await download.createReadStream();
-            if (!stream) throw new Error(await download.failure() || 'Browser download did not return a readable stream.');
+            if (!stream) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, await download.failure() || 'Browser download did not return a readable stream.');
             return stream;
           },
         }), controller.signal);
@@ -76,7 +78,7 @@ export class BrowserDownloadManager {
     return Promise.all([...this.jobs.values()].filter((job) => job.id > after).map((job) => job.pending));
   }
   async dispose() {
-    for (const job of this.jobs.values()) job.controller.abort(new Error('Browser session closed.'));
+    for (const job of this.jobs.values()) job.controller.abort(new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Browser session closed.'));
     await Promise.allSettled([...this.jobs.values()].map((job) => job.pending));
     this.jobs.clear(); this.operation = undefined;
   }

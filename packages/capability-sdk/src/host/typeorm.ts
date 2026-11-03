@@ -13,6 +13,8 @@ import {
   type CapabilityConfigScope,
   type CapabilityConfigStore,
 } from './index.ts';
+import { CodedError, ERROR_CODES } from '../errors.ts';
+
 
 export type TypeOrmCapabilityConfigurationRecord = {
   scopeKey: string;
@@ -73,7 +75,7 @@ export class TypeOrmCapabilityConfigStore implements CapabilityConfigStore {
     try {
       values = JSON.parse(record.valuesJson) as CapabilityConfiguration;
     } catch {
-      throw new Error(`Stored configuration for ${manifest.id} is not valid JSON.`);
+      throw new CodedError(ERROR_CODES.CONFIGURATION_INVALID, `Stored configuration for ${manifest.id} is not valid JSON.`);
     }
     return Object.freeze({ ...values });
   }

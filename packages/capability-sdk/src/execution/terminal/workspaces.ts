@@ -1,12 +1,14 @@
 import { createTerminalCapability } from './index.ts';
 import { createNodeTerminalOperations, nodeTerminalOptions, type NodeTerminalOperations } from './node.ts';
 import type { CapabilityRunContext } from '../../index.ts';
+import { CodedError, ERROR_CODES } from '../../errors.ts';
+
 
 export type TerminalWorkspace = { ownerId: string; workspaceId: string };
 export function createTerminalWorkspaceRegistry() {
   const entries = new Map<string, NodeTerminalOperations>();
   const key = ({ ownerId, workspaceId }: TerminalWorkspace) => {
-    if (!ownerId || !workspaceId) throw new Error('A terminal workspace requires an owner and an ID.');
+    if (!ownerId || !workspaceId) throw new CodedError(ERROR_CODES.TERMINAL_OPERATION_FAILED, 'A terminal workspace requires an owner and an ID.');
     return JSON.stringify([ownerId, workspaceId]);
   };
   const workspace = (context: CapabilityRunContext): TerminalWorkspace => ({

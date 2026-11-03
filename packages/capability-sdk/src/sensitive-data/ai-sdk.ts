@@ -1,6 +1,8 @@
 import type { LanguageModelV4CallOptions, LanguageModelV4Prompt } from '@ai-sdk/provider';
 import type { SensitiveDataFilterConfig } from './config.ts';
 import type { SensitiveDataRedactor } from './client.ts';
+import { CodedError, ERROR_CODES } from '../errors.ts';
+
 
 type TextTransform = (value: string) => string;
 
@@ -134,7 +136,7 @@ export function createAiSdkSensitiveDataFilter(options: {
         options.onFailOpen?.(error);
         return callOptions;
       }
-      throw new Error('Sensitive-data filtering failed; the AI request was blocked.', { cause: error });
+      throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, 'Sensitive-data filtering failed; the AI request was blocked.', { cause: error });
     }
   };
 }

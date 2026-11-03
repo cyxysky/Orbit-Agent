@@ -1,3 +1,5 @@
+import { getErrorCode } from "../../../errors.ts";
+import { javascriptDiagnosticCode } from "../../../errors.ts";
 import { assertHtmlOfficeSource } from '../../office/html.ts';
 import { execFile } from 'node:child_process';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -6,6 +8,8 @@ import path from 'node:path';
 import ts from 'typescript';
 import { resolveLibreOfficePythonExecutable } from '../libreoffice.ts';
 import { isUnoStylePropertyInfoError, isUnoWorkerInternalError, resolveUnoProgramWorker } from './uno.ts';
+import { CodedError, ERROR_CODES } from '../../../errors.ts';
+
 
 export type OfficeProgramDiagnostic = {
   callColumn?: number;
@@ -37,7 +41,7 @@ function diagnosticSourceExcerpt(
   // Python syntax messages may explicitly identify the matching opening line.
   // Runtime tracebacks are handled separately so worker line numbers are never
   // mistaken for candidate-draft lines.
-  if (diagnostic.code === 'PYTHON_SYNTAX') {
+  if (diagnostic.code === ERROR_CODES.PYTHON_SYNTAX) {
     for (const match of diagnostic.message.matchAll(/\bline\s+(\d+)\b/gi)) {
       const line = Number(match[1]);
       if (Number.isInteger(line) && line > 0 && line <= sourceLines.length) focusLines.add(line);
@@ -84,35 +88,35 @@ function javascriptDiagnostics(source: string): OfficeProgramDiagnostic[] {
     reportDiagnostics: true,
   }).diagnostics || [];
   const diagnostics: OfficeProgramDiagnostic[] = syntaxDiagnostics.map((diagnostic: ts.Diagnostic) => ({
-    code: `JS${diagnostic.code}`,
+    code: javascriptDiagnosticCode(diagnostic.code),
     ...lineAndColumn(sourceFile, diagnostic.start),
     message: ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'),
     severity: 'error',
   }));
   if (!/export\s+(?:async\s+)?function\s+createDocument\s*\(\s*job\s*\)/m.test(source)) {
     diagnostics.push({
-      code: 'JAVASCRIPT_ENTRYPOINT_MISSING',
+      code: ERROR_CODES.JAVASCRIPT_ENTRYPOINT_MISSING,
       message: 'JavaScript Office source must export function createDocument(job).',
       severity: 'error',
     });
   }
   if (/\b(?:module\.exports|exports\.)/.test(source)) {
     diagnostics.push({
-      code: 'MIXED_MODULE_SYSTEM',
+      code: ERROR_CODES.MIXED_MODULE_SYSTEM,
       message: 'JavaScript Office drafts are ESM modules; do not mix module.exports/exports with export syntax.',
       severity: 'error',
     });
   }
   if (/\brequire\s*\(/.test(source)) {
     diagnostics.push({
-      code: 'COMMONJS_REQUIRE',
+      code: ERROR_CODES.COMMONJS_REQUIRE,
       message: 'JavaScript Office drafts run as ESM; use the libraries exposed on job instead of require().',
       severity: 'error',
     });
   }
   if (!/\b(?:await\s+)?(?:job\.)?writeOutput\s*\(|\.writeFile\s*\(\s*job\.outputPath\s*\)|storeAsURL\s*\(/m.test(source)) {
     diagnostics.push({
-      code: 'OUTPUT_WRITE_NOT_OBSERVED',
+      code: ERROR_CODES.OUTPUT_WRITE_NOT_OBSERVED,
       message: 'No definite write to job.outputPath/job.writeOutput was observed. Ensure createDocument writes the requested file.',
       severity: 'warning',
     });
@@ -123,7 +127,7 @@ function javascriptDiagnostics(source: string): OfficeProgramDiagnostic[] {
 async function pythonDiagnostics(source: string): Promise<OfficeProgramDiagnostic[]> {
   const executable = await resolveLibreOfficePythonExecutable();
   if (!executable) return [{
-    code: 'PYTHON_AST_UNAVAILABLE',
+    code: ERROR_CODES.PYTHON_AST_UNAVAILABLE,
     message: 'Python AST preflight is unavailable; the UNO worker will still compile and execute this source.',
     severity: 'warning',
   }];
@@ -705,7 +709,7 @@ async function pythonDiagnostics(source: string): Promise<OfficeProgramDiagnosti
     await writeFile(analysisPath, script, 'utf8');
     const output = await new Promise<string>((resolve, reject) => {
       execFile(executable, [analysisPath, sourcePath, workerPath || ''], { timeout: 15_000, windowsHide: true }, (error, stdout, stderr) => {
-        if (error) reject(new Error(String(stderr || error.message)));
+        if (error) reject(new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, String(stderr || error.message)));
         else resolve(stdout);
       });
     });
@@ -718,7 +722,7 @@ async function pythonDiagnostics(source: string): Promise<OfficeProgramDiagnosti
 export async function analyzeOfficeProgram(source: string, generator: 'javascript' | 'uno' | 'html') {
   if (generator === 'html') {
     try { assertHtmlOfficeSource(source); return { diagnostics: [] as OfficeProgramDiagnostic[], passed: true }; }
-    catch (error) { return { diagnostics: [{ code: 'HTML_SOURCE_INVALID', message: error instanceof Error ? error.message : String(error), severity: 'error' as const }], passed: false }; }
+    catch (error) { return { diagnostics: [{ code: getErrorCode(error, ERROR_CODES.HTML_SOURCE_INVALID), message: error instanceof Error ? error.message : String(error), severity: 'error' as const }], passed: false }; }
   }
   const rawDiagnostics = generator === 'javascript'
     ? javascriptDiagnostics(source)
@@ -736,14 +740,14 @@ export async function analyzeOfficeProgram(source: string, generator: 'javascrip
 export function diagnoseOfficeProgramRuntimeError(source: string, errorText: string): OfficeProgramDiagnostic[] {
   if (isUnoStylePropertyInfoError(errorText)) {
     return [{
-      code: 'UNO_STYLE_PROPERTY_INFO_MISSING',
+      code: ERROR_CODES.UNO_STYLE_PROPERTY_INFO_MISSING,
       target: 'worker.style.getPropertySetInfo()',
       message: 'Worker font initialization dereferenced empty style property metadata: getPropertySetInfo() returned None. This does NOT mean _new_document() returned None or that the UNO bridge failed to start. Source/API edits and repeated restarts do not repair this worker bug. Check validationEvidence before treating a historical traceback as current.\nOriginal error:\n' + errorText.trim(),
       severity: 'error',
     }];
   }
   if (isUnoWorkerInternalError(errorText)) {
-    return [{ code: 'UNO_WORKER_INTERNAL_ERROR', message: errorText.trim(), severity: 'error' }];
+    return [{ code: ERROR_CODES.UNO_WORKER_INTERNAL_ERROR, message: errorText.trim(), severity: 'error' }];
   }
   const structuredLayout = errorText.match(/__WEBPILOT_LAYOUT_DIAGNOSTICS__(\[[^\r\n]*\])/)?.[1];
   if (structuredLayout) {
@@ -795,19 +799,19 @@ export function diagnoseOfficeProgramRuntimeError(source: string, errorText: str
   const sourceLines = source.replace(/\r\n?/g, '\n').split('\n');
   const draftLines = draftTracebackLineNumbers(errorText, sourceLines.length);
   const line = draftLines.at(-1);
-  let code = 'UNO_RUNTIME_ERROR';
+  let code: string = ERROR_CODES.UNO_RUNTIME_ERROR;
   const contractCode = errorText.match(/\b(CHART_(?:DATA_ROLE|STYLE)_INVALID|PRESENTATION_(?:TABLE_CELL_OUT_OF_RANGE|ANIMATION_TARGET_INVALID|MASTER_SELECTOR_INVALID|CUSTOM_SHOW_INDEX_INVALID)):/)?.[1];
   if (contractCode) code = contractCode;
-  else if (/NameError:\s*name ['"][^'"]+['"] is not defined/i.test(errorText)) code = 'PYTHON_UNDEFINED_NAME';
-  else if (/IndexError:\s*(?:list|tuple) index out of range/i.test(errorText)) code = 'PYTHON_INDEX_OUT_OF_RANGE';
-  else if (/(?:Unable to connect to LibreOffice UNO|couldn'?t connect to (?:pipe|socket))/i.test(errorText)) code = 'UNO_BRIDGE_STARTUP';
-  else if (/LibreOffice could not reopen the generated document|Generated file does not reopen as /i.test(errorText)) code = 'OFFICE_ARTIFACT_REOPEN_FAILED';
-  else if (/(?:com\.sun\.star\.lang\.DisposedException|Binary URP bridge disposed|bridge disposed during call)/i.test(errorText)) code = 'UNO_BRIDGE_DISPOSED';
-  else if (/Presentation geometry (?:requires non-negative position and positive size|exceeds slide bounds)/i.test(errorText)) code = 'PRESENTATION_GEOMETRY_INVALID';
-  else if (/Presentation text cannot fit without becoming unreadable/i.test(errorText)) code = 'PRESENTATION_TEXT_OVERFLOW';
-  else if (/Duplicate elementId/i.test(errorText)) code = 'DUPLICATE_ELEMENT_ID';
-  else if (/AttributeError:.*has no attribute ['"](?:add_slide|bounds|content_box|grid|stack|mm|cm|inch|pt|text_height|estimate_text_box|add_text|add_text_box|add_card|add_header|add_footer|add_shape|add_connector|add_image|add_image_contain|add_native_table|add_bar_chart|add_line_chart|add_donut_chart|add_timeline)['"]/i.test(errorText)) code = 'FACADE_METHOD_ON_RAW_UNO_DOCUMENT';
-  else if (/create_document\(None\)|NoneType.*presentation/i.test(errorText)) code = 'DRAFT_ENTRYPOINT_CALLED_DIRECTLY';
+  else if (/NameError:\s*name ['"][^'"]+['"] is not defined/i.test(errorText)) code = ERROR_CODES.PYTHON_UNDEFINED_NAME;
+  else if (/IndexError:\s*(?:list|tuple) index out of range/i.test(errorText)) code = ERROR_CODES.PYTHON_INDEX_OUT_OF_RANGE;
+  else if (/(?:Unable to connect to LibreOffice UNO|couldn'?t connect to (?:pipe|socket))/i.test(errorText)) code = ERROR_CODES.UNO_BRIDGE_STARTUP;
+  else if (/LibreOffice could not reopen the generated document|Generated file does not reopen as /i.test(errorText)) code = ERROR_CODES.OFFICE_ARTIFACT_REOPEN_FAILED;
+  else if (/(?:com\.sun\.star\.lang\.DisposedException|Binary URP bridge disposed|bridge disposed during call)/i.test(errorText)) code = ERROR_CODES.UNO_BRIDGE_DISPOSED;
+  else if (/Presentation geometry (?:requires non-negative position and positive size|exceeds slide bounds)/i.test(errorText)) code = ERROR_CODES.PRESENTATION_GEOMETRY_INVALID;
+  else if (/Presentation text cannot fit without becoming unreadable/i.test(errorText)) code = ERROR_CODES.PRESENTATION_TEXT_OVERFLOW;
+  else if (/Duplicate elementId/i.test(errorText)) code = ERROR_CODES.DUPLICATE_ELEMENT_ID;
+  else if (/AttributeError:.*has no attribute ['"](?:add_slide|bounds|content_box|grid|stack|mm|cm|inch|pt|text_height|estimate_text_box|add_text|add_text_box|add_card|add_header|add_footer|add_shape|add_connector|add_image|add_image_contain|add_native_table|add_bar_chart|add_line_chart|add_donut_chart|add_timeline)['"]/i.test(errorText)) code = ERROR_CODES.FACADE_METHOD_ON_RAW_UNO_DOCUMENT;
+  else if (/create_document\(None\)|NoneType.*presentation/i.test(errorText)) code = ERROR_CODES.DRAFT_ENTRYPOINT_CALLED_DIRECTLY;
   const elementId = errorText.match(/elementId=['"]([^'"]+)['"]/i)?.[1];
   const diagnostic: OfficeProgramDiagnostic = {
     code,

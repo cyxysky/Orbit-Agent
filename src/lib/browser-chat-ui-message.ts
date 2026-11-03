@@ -9,6 +9,8 @@ import type {
   BrowserChatSubagentRecord,
   StepExecutionResult,
 } from '@/server/ai/schemas/runtime.schema';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 // Persist the envelope independently of installed packages, so one missing renderer
 // cannot prevent a whole historical automation run from loading.
@@ -71,7 +73,7 @@ export function browserChatToolPartFromStep(
       : tool.result ?? null };
   }
   if (tool.ok === false || tool.error) {
-    return { ...base, state: 'output-error', errorText: tool.error || tool.result || 'Tool execution failed.' };
+    return { ...base, state: ERROR_CODES.OUTPUT_ERROR, errorText: tool.error || tool.result || 'Tool execution failed.' };
   }
   return { ...base, state: 'input-available' };
 }

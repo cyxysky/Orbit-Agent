@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { readExcalidrawFont } from '../dist/chart/node.js';
+import { fromJsonSchema } from '@modelcontextprotocol/server';
 
 const mime = 'text/html;profile=mcp-app';
 const uri = 'ui://capability-sdk/visualization.html';
@@ -16,6 +17,8 @@ export async function createMcpVisualization({ tools, invoke, options = {} }) {
   if (!visualTools.size || options.enabled === false) return undefined;
   const template = await readFile(new URL('viewer.html', root), 'utf8');
   const views = new Map(); const byArtifact = new Map();
+  const exports = new Map();
+  const exportToolName = `capability_visualization_export${Object.hasOwn(tools,'capability_visualization_export')?'_'+randomBytes(4).toString('hex'):''}`;
   const serviceKey = randomBytes(24).toString('hex');
   let http; let origin; let starting; let closing = false;
 
@@ -55,10 +58,17 @@ export async function createMcpVisualization({ tools, invoke, options = {} }) {
     if (segments[1] === 'fonts' && req.method === 'GET') {
       const bytes = await readExcalidrawFont(segments.slice(1));
       if (!bytes) return json(res,404,{error:'Font not found'});
-      res.writeHead(200,{'content-type':'font/woff2','cache-control':'private, max-age=3600'});return res.end(bytes);
+      res.writeHead(200,{'content-type':'font/woff2','cache-control':'private, max-age=3600','access-control-allow-origin':'*'});return res.end(bytes);
     }
     const view = views.get(segments[1]);
     if (!view) return json(res,404,{error:'Preview expired; call chart/maps again'});
+    if (segments[2] === 'exports') {
+      const file=exports.get(segments[3]);
+      if(req.method==='GET' && segments.length===4 && file?.token===view.token && file.expires>Date.now()){
+        res.writeHead(200,{'content-type':file.type,'cache-control':'no-store','content-disposition':`attachment; filename="chart.${file.filename.split('.').at(-1)}"; filename*=UTF-8''${encodeURIComponent(file.filename)}`});return res.end(file.bytes);
+      }
+      return json(res,404,{error:'Export expired; export the chart again'});
+    }
     if (segments[2] === 'data' && req.method === 'GET') return json(res,200,await payload(view));
     if (segments[2] === 'data' && req.method === 'POST') {
       if (req.headers.origin !== origin || req.headers['content-type'] !== 'application/json') return json(res,403,{error:'Invalid preview request origin'});
@@ -78,18 +88,40 @@ export async function createMcpVisualization({ tools, invoke, options = {} }) {
   return {
     toolMeta(name) { return visualTools.has(name) ? {ui:{resourceUri:uri}} : {}; },
     register(server) {
+      // Apps without ui/download-file upload over MCP, never fetch loopback from
+      // the iframe (modern browsers require separate local-network permission).
+      server.registerTool(exportToolName,{
+        description:'Prepare a chart download from the visualization UI.',
+        inputSchema:fromJsonSchema({type:'object',additionalProperties:false,required:['token','filename','mimeType','base64'],properties:{
+          token:{type:'string',pattern:'^[a-f0-9]{48}$'},filename:{type:'string',minLength:1,maxLength:150},
+          mimeType:{type:'string',enum:['image/png','image/svg+xml','application/json','text/csv']},
+          base64:{type:'string',minLength:1,maxLength:8*1024*1024,pattern:'^[A-Za-z0-9+/]+={0,2}$'},
+        }}),_meta:{ui:{visibility:['app']}},
+      },async input=>{
+        const view=views.get(input.token);
+        if(!view?.previewUrl)return {isError:true,content:[{type:'text',text:'Browser preview unavailable; call chart again.'}]};
+        const bytes=Buffer.from(input.base64,'base64');
+        if(bytes.length>6*1024*1024)return {isError:true,content:[{type:'text',text:'Export exceeds 6 MiB; use the browser preview.'}]};
+        const key=randomBytes(24).toString('hex');
+        const filename=input.filename.replace(/[<>:"/\\|?*\x00-\x1f]/g,'_');
+        exports.set(key,{token:view.token,type:input.mimeType,filename,bytes,expires:Date.now()+600000});
+        for(const [id,file] of exports)if(file.expires<Date.now())exports.delete(id);
+        while(exports.size>8)exports.delete(exports.keys().next().value);
+        const url=`${view.previewUrl}/exports/${key}`;
+        return {content:[{type:'text',text:'Chart export ready.'}],structuredContent:{url}};
+      });
       server.registerResource('capability-visualization',uri,{mimeType:mime,description:'Interactive charts and maps'},async()=>({contents:[{
         uri,mimeType:mime,text:page({mode:'app',readOnly:options.readOnly===true}),
         _meta:{ui:{prefersBorder:true,csp:{
-          resourceDomains:['https://maps.googleapis.com','https://maps.gstatic.com','https://*.googleapis.com','https://*.gstatic.com','https://*.google.com','https://fonts.googleapis.com','https://fonts.gstatic.com',...(origin?[origin]:[])],
-          connectDomains:['https://*.googleapis.com','https://*.gstatic.com','https://*.google.com',...(origin?[origin]:[])],
+          resourceDomains:['https://esm.sh','https://maps.googleapis.com','https://maps.gstatic.com','https://*.googleapis.com','https://*.gstatic.com','https://*.google.com','https://fonts.googleapis.com','https://fonts.gstatic.com',...(origin?[origin]:[])],
+          connectDomains:['https://esm.sh','https://*.googleapis.com','https://*.gstatic.com','https://*.google.com',...(origin?[origin]:[])],
         }}}},]}));
     },
     async decorate(name,result) {
       const kind=visualTools.get(name);const id=kind==='chart'?result.data?.chartId:result.data?.mapId;
       if(!kind||!result.ok||!id)return {};
       const artifactKey=`${name}:${id}`;let view=byArtifact.get(artifactKey);
-      if(!view){view={kind,id,toolName:name,token:randomBytes(24).toString('hex')};views.set(view.token,view);byArtifact.set(artifactKey,view);}
+      if(!view){view={kind,id,toolName:name,exportToolName,token:randomBytes(24).toString('hex')};views.set(view.token,view);byArtifact.set(artifactKey,view);}
       if(views.size>200){const oldest=views.values().next().value;views.delete(oldest.token);byArtifact.delete(`${oldest.toolName}:${oldest.id}`);}
       if(options.preview!==false){await start();view.previewUrl=`${origin}/${serviceKey}/${view.token}`;view.assetPath=`${origin}/${serviceKey}/`;}
       const initial = kind==='chart' && result.data.chart ? {...view,record:result.data.chart} : await payload(view);
@@ -106,6 +138,6 @@ export async function createMcpVisualization({ tools, invoke, options = {} }) {
       return { _meta:{'capability/visualization':initial},
         content };
     },
-    async close(){closing=true;views.clear();byArtifact.clear();if(starting)await starting.catch(()=>{});if(http?.listening){http.closeAllConnections();await new Promise(resolve=>http.close(resolve));}},
+    async close(){closing=true;views.clear();byArtifact.clear();exports.clear();if(starting)await starting.catch(()=>{});if(http?.listening){http.closeAllConnections();await new Promise(resolve=>http.close(resolve));}},
   };
 }

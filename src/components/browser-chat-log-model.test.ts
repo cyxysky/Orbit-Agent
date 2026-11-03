@@ -55,7 +55,7 @@ test('summarizeBrowserChatLogs counts visible log categories', () => {
   ]);
 
   assert.deepEqual(summary, {
-    ai: 2,
+    ai: 3,
     context: 1,
     screenshot: 1,
     tool: 1,

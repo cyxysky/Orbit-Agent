@@ -23,6 +23,8 @@ import { CustomSelect } from '@/components/CustomSelect';
 import { useI18n } from '@/i18n/I18nProvider';
 import { readApiJson } from '@/lib/api-client';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 type IntegrationCategory = 'connector' | 'communication' | 'data';
 
@@ -158,10 +160,10 @@ async function readIntegrationTestResult(
 ) {
   if (!response.headers.get('content-type')?.includes('application/x-ndjson')) {
     const data = await readApiJson<{ result?: IntegrationTestResult }>(response, fallback);
-    if (!data.result) throw new Error(fallback);
+    if (!data.result) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, fallback);
     return data.result;
   }
-  if (!response.ok || !response.body) throw new Error(fallback);
+  if (!response.ok || !response.body) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, fallback);
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -171,7 +173,7 @@ async function readIntegrationTestResult(
     const event = JSON.parse(line) as IntegrationTestStreamEvent;
     if (event.type === 'progress') onProgress(event.progress.stage);
     if (event.type === 'result') result = event.result;
-    if (event.type === 'error') throw new Error(event.message || fallback);
+    if (event.type === 'error') throw new CodedError(ERROR_CODES.APPLICATION_ERROR, event.message || fallback);
   };
   while (true) {
     const { done, value } = await reader.read();
@@ -182,7 +184,7 @@ async function readIntegrationTestResult(
     if (done) break;
   }
   consume(buffer);
-  if (!result) throw new Error(fallback);
+  if (!result) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, fallback);
   return result;
 }
 

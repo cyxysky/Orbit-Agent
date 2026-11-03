@@ -4,6 +4,8 @@ import { type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type Ke
 import { ArrowLeft, ArrowRight, Check, Download, Globe, Loader2, Plus, RotateCw, X } from 'lucide-react';
 import { FloatingWindow } from '../../ui/floating-window.tsx';
 import { browserPreviewStyles } from './styles.ts';
+import { CodedError, ERROR_CODES } from '../../errors.ts';
+
 const identity = (text: string) => text;
 export type BrowserPreviewClient = {
   connect: (signal: AbortSignal) => Promise<{ url: string; transport?: 'image' | 'video' }>;
@@ -571,9 +573,9 @@ export function BrowserPreviewWindow({ onClose, client, translate: t = identity 
             if (event.data instanceof ArrayBuffer) {
               lastMediaAt = Date.now();
               const bytes = new Uint8Array(event.data);
-              if (bytes.byteLength < 4) throw new Error('Invalid binary frame');
+              if (bytes.byteLength < 4) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Invalid binary frame');
               const metadataLength = new DataView(event.data).getUint32(0, false);
-              if (metadataLength <= 0 || metadataLength + 4 > bytes.byteLength) throw new Error('Invalid binary metadata');
+              if (metadataLength <= 0 || metadataLength + 4 > bytes.byteLength) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Invalid binary metadata');
               const metadata = JSON.parse(new TextDecoder().decode(bytes.subarray(4, 4 + metadataLength))) as {
                 capturedAt?: string;
                 contentType?: string;
@@ -593,7 +595,7 @@ export function BrowserPreviewWindow({ onClose, client, translate: t = identity 
                 return;
               }
               if (metadata.type !== 'frame' || (metadata.contentType !== 'image/jpeg' && metadata.contentType !== 'image/png')) {
-                throw new Error('Unknown binary preview payload');
+                throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Unknown binary preview payload');
               }
               frameCountersRef.current.received += 1;
               const imageUrl = URL.createObjectURL(new Blob(
@@ -836,7 +838,7 @@ export function BrowserPreviewWindow({ onClose, client, translate: t = identity 
     if (!raw) return;
     try {
       const url = new URL(raw === 'about:blank' || /^[a-z][a-z\d+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`);
-      if (!['http:', 'https:'].includes(url.protocol) && url.href !== 'about:blank') throw new Error('unsupported');
+      if (!['http:', 'https:'].includes(url.protocol) && url.href !== 'about:blank') throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'unsupported');
       if (sendInput({ kind: 'browserControl', action: 'navigate', url: url.href })) {
         setAddressDraft(null);
         addressInputRef.current?.blur();
@@ -1099,7 +1101,7 @@ export function BrowserPreviewWindow({ onClose, client, translate: t = identity 
       for (const file of selected) {
         uploaded.push(await client.uploadFile(file));
       }
-      if (!uploaded.every((file) => file.path)) throw new Error('文件上传结果无效');
+      if (!uploaded.every((file) => file.path)) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, '文件上传结果无效');
       if (!sendInput({ controlId: nativeControl.controlId, files: uploaded, kind: 'files' })) {
         setNativeControlBusy(false);
       }

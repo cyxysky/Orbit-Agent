@@ -4,6 +4,8 @@ import { mediaRuntimeSkill } from './runtime-skill.ts';
 import { mediaCapabilitySettings } from './settings.ts';
 import type { MediaGenerationInput, MediaGenerationOperations } from './generation.ts';
 import { videoSceneSchema } from './video-project.ts';
+import { ERROR_CODES } from '../errors.ts';
+
 export * from './runtime-skill.ts';
 export * from './settings.ts';
 export * from './generation.ts';
@@ -83,7 +85,7 @@ export function createMediaTool(operations: MediaOperations, configuration: Capa
       try {
         context.abortSignal?.throwIfAborted();
         let data: unknown;
-        const unavailable = (name: string) => ({ ok: false as const, error: { code: 'media-operation-unavailable', message: `${name} is not configured.` } });
+        const unavailable = (name: string) => ({ ok: false as const, error: { code: ERROR_CODES.MEDIA_OPERATION_UNAVAILABLE, message: `${name} is not configured.` } });
         if (input.action === 'listModels') data = {
           models: await operations.listModels?.() || [],
           capabilities: { composeVideo: {
@@ -122,7 +124,7 @@ export function createMediaTool(operations: MediaOperations, configuration: Capa
         }
         return { ok: true, summary: `Media ${input.action} completed.`, data };
       } catch (error) {
-        return { ok: false, error: { code: context.abortSignal?.aborted ? 'media-operation-aborted' : 'media-operation-failed', message: error instanceof Error ? error.message : String(error), retryable: false } };
+        return { ok: false, error: { code: context.abortSignal?.aborted ? ERROR_CODES.MEDIA_OPERATION_ABORTED : ERROR_CODES.MEDIA_OPERATION_FAILED, message: error instanceof Error ? error.message : String(error), retryable: false } };
       }
     },
   });

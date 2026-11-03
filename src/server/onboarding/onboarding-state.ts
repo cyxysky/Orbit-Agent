@@ -20,6 +20,8 @@ import {
   resolveUnoProgramWorker,
 } from '@cjfclonedeep/capability-sdk/file/node';
 import { store } from '@/server/db/store';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 type OnboardingRow = {
   completed_steps_json: string;
@@ -131,7 +133,7 @@ export async function updateOnboardingState(userId: string, input: {
     completedSteps: current.completedSteps,
     status: 'in_progress',
   });
-  if (!input.step) throw new Error('complete_step requires a valid onboarding step.');
+  if (!input.step) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'complete_step requires a valid onboarding step.');
   const completedSteps = Array.from(new Set([...current.completedSteps, input.step]));
   return writeOnboardingState(userId, {
     completedSteps,

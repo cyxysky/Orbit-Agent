@@ -1,4 +1,6 @@
 import { timingSafeEqual } from 'node:crypto';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 const FALLBACK_APPLICATION_USER_ID = '1';
 
@@ -35,10 +37,10 @@ function trustedAuthenticationHeaders(request: Pick<Request, 'headers'>) {
 }
 
 export function requestApplicationPrincipal(request: Pick<Request, 'headers'>): ApplicationPrincipal {
-  if (!trustedAuthenticationHeaders(request)) throw new Error('Authentication required');
+  if (!trustedAuthenticationHeaders(request)) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Authentication required');
   const userId = String(request.headers.get('x-webpilot-identity-user-id') || '').trim();
   const username = String(request.headers.get('x-webpilot-identity-username') || '').trim();
-  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(userId) || !username) throw new Error('Authentication required');
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(userId) || !username) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Authentication required');
   return {
     userId: normalizeApplicationUserId(userId),
     username,

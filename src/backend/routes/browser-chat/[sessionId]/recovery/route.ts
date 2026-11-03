@@ -5,10 +5,12 @@ import { personalMemoryExtractionEnabled } from '@/server/ai/personal-memory';
 import { requestApplicationUserId } from '@/server/auth/user-context';
 import { apiError, apiJson, parseJsonRequest, ApiRequestError } from '@/server/http/api-request';
 import type { BrowserChatSessionRouteContext } from '@/server/http/browser-chat-route';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 async function sessionFor(request: Request, sessionId: string) {
   const session = await getBrowserChatSession(sessionId, requestApplicationUserId(request));
-  if (!session) throw new ApiRequestError('Session not found', { status: 404, code: 'not_found' });
+  if (!session) throw new ApiRequestError('Session not found', { status: 404, code: ERROR_CODES.NOT_FOUND });
   return session;
 }
 export async function GET(request: Request, context: BrowserChatSessionRouteContext) {
@@ -30,7 +32,7 @@ export async function POST(request: Request, context: BrowserChatSessionRouteCon
     action = input.action;
     const userId = String(requestApplicationUserId(request));
     if (input.action === 'memory-extract') {
-      if (session.busy) throw new ApiRequestError('请等待当前操作停止后提炼记忆。', { status: 409, code: 'busy' });
+      if (session.busy) throw new ApiRequestError('请等待当前操作停止后提炼记忆。', { status: 409, code: ERROR_CODES.BUSY });
       return apiJson(request, await requestBrowserChatMemoryExtraction(sessionId, userId));
     }
     await reviewMemoryProposal(sessionId, userId, input.id, input.approved);

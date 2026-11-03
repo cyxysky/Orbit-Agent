@@ -1,8 +1,11 @@
+import { getErrorCode } from "../../../errors.ts";
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import JSZip from 'jszip';
 import { PDFParse } from 'pdf-parse';
 import sharp from 'sharp';
+import { ERROR_CODES } from '../../../errors.ts';
+
 
 export type OfficeArtifactIssue = {
   callColumn?: number;
@@ -115,7 +118,7 @@ async function validateRelationships(zip: JSZip, issues: OfficeArtifactIssue[]) 
         : path.posix.normalize(path.posix.join(ownerDirectory, target));
       if (!zip.file(resolved)) {
         issues.push({
-          code: 'OFFICE_RELATIONSHIP_TARGET_MISSING',
+          code: ERROR_CODES.OFFICE_RELATIONSHIP_TARGET_MISSING,
           message: `${entry.name} points to missing package part ${resolved}.`,
           severity: 'error',
           target: entry.name,
@@ -131,12 +134,12 @@ async function validatePresentationPackage(zip: JSZip, issues: OfficeArtifactIss
   const slideWidth = Number(slideSize?.[1] || 0);
   const slideHeight = Number(slideSize?.[2] || 0);
   const slides = Object.values(zip.files).filter((entry) => !entry.dir && /^ppt\/slides\/slide\d+\.xml$/i.test(entry.name));
-  if (!slides.length) issues.push({ code: 'PPTX_NO_SLIDES', message: 'Presentation contains no slide parts.', severity: 'error', target: 'ppt/presentation.xml' });
+  if (!slides.length) issues.push({ code: ERROR_CODES.PPTX_NO_SLIDES, message: 'Presentation contains no slide parts.', severity: 'error', target: 'ppt/presentation.xml' });
   for (const slide of slides) {
     const xml = await slide.async('string');
     const ids = [...xml.matchAll(/<p:cNvPr\b[^>]*\bid="(\d+)"/gi)].map((match) => match[1]);
     const duplicate = ids.find((id, index) => ids.indexOf(id) !== index);
-    if (duplicate) issues.push({ code: 'PPTX_DUPLICATE_SHAPE_ID', message: `${slide.name} contains duplicate shape id ${duplicate}.`, severity: 'error', target: slide.name });
+    if (duplicate) issues.push({ code: ERROR_CODES.PPTX_DUPLICATE_SHAPE_ID, message: `${slide.name} contains duplicate shape id ${duplicate}.`, severity: 'error', target: slide.name });
     const shapeBlocks = [...xml.matchAll(/<p:(sp|pic|graphicFrame|cxnSp)\b[\s\S]*?<\/p:\1>/gi)].map((match) => match[0]);
     for (const block of shapeBlocks) {
       const objectName = block.match(/<p:cNvPr\b[^>]*\bname="([^"]+)"/i)?.[1];
@@ -145,7 +148,7 @@ async function validatePresentationPackage(zip: JSZip, issues: OfficeArtifactIss
         const rowHeights = [...block.matchAll(/<a:tr\b[^>]*\bh="(-?\d+)"/gi)].map((match) => Number(match[1]));
         if (!columnWidths.length || columnWidths.some((width) => width <= 0)) {
           issues.push(mappedIssue({
-            code: 'PPTX_TABLE_COLUMN_WIDTH_INVALID',
+            code: ERROR_CODES.PPTX_TABLE_COLUMN_WIDTH_INVALID,
             message: `${slide.name} contains a table with a missing or non-positive column width.`,
             severity: 'error',
             target: slide.name,
@@ -153,7 +156,7 @@ async function validatePresentationPackage(zip: JSZip, issues: OfficeArtifactIss
         }
         if (!rowHeights.length || rowHeights.some((height) => height <= 0)) {
           issues.push(mappedIssue({
-            code: 'PPTX_TABLE_ROW_HEIGHT_INVALID',
+            code: ERROR_CODES.PPTX_TABLE_ROW_HEIGHT_INVALID,
             message: `${slide.name} contains a table with a missing or non-positive row height.`,
             severity: 'error',
             target: slide.name,
@@ -165,7 +168,7 @@ async function validatePresentationPackage(zip: JSZip, issues: OfficeArtifactIss
       const [x, y, width, height] = transform.slice(1).map(Number);
       const nativeMediaObject = /<a:videoFile\b|<p14:media\b|ppaction:\/\/media/i.test(block);
       if (requireElementIds && !nativeMediaObject && (!objectName || !objectName.startsWith('wp_'))) {
-        issues.push({ code: 'PPTX_ELEMENT_ID_MISSING', message: `${slide.name} contains a generated object without a stable elementId marker.`, severity: 'error', target: slide.name });
+        issues.push({ code: ERROR_CODES.PPTX_ELEMENT_ID_MISSING, message: `${slide.name} contains a generated object without a stable elementId marker.`, severity: 'error', target: slide.name });
       }
       // DrawingML serializes a legal horizontal/vertical line with one zero
       // extent. Requiring both extents to be positive rejects chart axes,
@@ -176,7 +179,7 @@ async function validatePresentationPackage(zip: JSZip, issues: OfficeArtifactIss
       const invalidSize = isLine ? width < 0 || height < 0 || (width === 0 && height === 0) : width <= 0 || height <= 0;
       if (invalidSize || x < 0 || y < 0 || (slideWidth && x + width > slideWidth) || (slideHeight && y + height > slideHeight)) {
         issues.push(mappedIssue({
-          code: 'PPTX_OBJECT_OUT_OF_BOUNDS',
+          code: ERROR_CODES.PPTX_OBJECT_OUT_OF_BOUNDS,
           message: `${slide.name} contains invalid object bounds x=${x}, y=${y}, width=${width}, height=${height}.`,
           severity: 'error',
           target: slide.name,
@@ -193,39 +196,39 @@ async function validatePresentationPackage(zip: JSZip, issues: OfficeArtifactIss
         const mapped = elementMap.find((entry) => (
           entry.artifactName === name || entry.artifactName === duplicateBaseName
         ));
-        if (!mapped) issues.push({ code: 'PPTX_UNMAPPED_GENERATED_OBJECT', message: `${name} is embedded in ${slide.name} but absent from the source element map.`, severity: 'error', target: slide.name });
+        if (!mapped) issues.push({ code: ERROR_CODES.PPTX_UNMAPPED_GENERATED_OBJECT, message: `${name} is embedded in ${slide.name} but absent from the source element map.`, severity: 'error', target: slide.name });
       }
     }
   }
   const charts = Object.values(zip.files).filter((entry) => !entry.dir && /^ppt\/charts\/chart\d+\.xml$/i.test(entry.name));
   for (const chart of charts) {
     const xml = await chart.async('string');
-    if (!/<c:ser\b/i.test(xml)) issues.push({ code: 'PPTX_CHART_HAS_NO_SERIES', message: `${chart.name} contains no data series.`, severity: 'error', target: chart.name });
+    if (!/<c:ser\b/i.test(xml)) issues.push({ code: ERROR_CODES.PPTX_CHART_HAS_NO_SERIES, message: `${chart.name} contains no data series.`, severity: 'error', target: chart.name });
   }
 }
 
 async function validateWordPackage(zip: JSZip, issues: OfficeArtifactIssue[], elementMap: OfficeElementMapEntry[]) {
   const xml = await zip.file('word/document.xml')?.async('string') || '';
-  if (!/<w:body\b/i.test(xml)) issues.push({ code: 'DOCX_BODY_MISSING', message: 'word/document.xml has no document body.', severity: 'error', target: 'word/document.xml' });
-  if (!/<w:sectPr\b/i.test(xml)) issues.push({ code: 'DOCX_SECTION_PROPERTIES_MISSING', message: 'The document has no section properties; pagination is not deterministic.', severity: 'error', target: 'word/document.xml' });
+  if (!/<w:body\b/i.test(xml)) issues.push({ code: ERROR_CODES.DOCX_BODY_MISSING, message: 'word/document.xml has no document body.', severity: 'error', target: 'word/document.xml' });
+  if (!/<w:sectPr\b/i.test(xml)) issues.push({ code: ERROR_CODES.DOCX_SECTION_PROPERTIES_MISSING, message: 'The document has no section properties; pagination is not deterministic.', severity: 'error', target: 'word/document.xml' });
   for (const paragraph of xml.matchAll(/<w:p\b[\s\S]*?<\/w:p>/gi)) {
     const extent = paragraph[0].match(/<wp:extent\b[^>]*\bcx="(-?\d+)"[^>]*\bcy="(-?\d+)"/i);
     if (extent && (Number(extent[1]) <= 0 || Number(extent[2]) <= 0)) {
       const bookmarkName = paragraph[0].match(/<w:bookmarkStart\b[^>]*\bw:name="([^"]+)"/i)?.[1];
-      issues.push(mappedIssue({ code: 'DOCX_DRAWING_SIZE_INVALID', message: 'A DrawingML object has a non-positive extent.', severity: 'error', target: 'word/document.xml' }, elementMap, bookmarkName));
+      issues.push(mappedIssue({ code: ERROR_CODES.DOCX_DRAWING_SIZE_INVALID, message: 'A DrawingML object has a non-positive extent.', severity: 'error', target: 'word/document.xml' }, elementMap, bookmarkName));
     }
   }
   const bookmarks = [...xml.matchAll(/<w:bookmarkStart\b[^>]*\bw:name="([^"]+)"/gi)].map((match) => match[1]);
   const duplicate = bookmarks.find((name, index) => bookmarks.indexOf(name) !== index);
-  if (duplicate) issues.push({ code: 'DOCX_DUPLICATE_BOOKMARK', message: `Duplicate bookmark ${duplicate} breaks element mapping.`, severity: 'error', target: 'word/document.xml' });
+  if (duplicate) issues.push({ code: ERROR_CODES.DOCX_DUPLICATE_BOOKMARK, message: `Duplicate bookmark ${duplicate} breaks element mapping.`, severity: 'error', target: 'word/document.xml' });
 }
 
 async function validateSpreadsheetPackage(zip: JSZip, issues: OfficeArtifactIssue[]) {
   const workbook = await zip.file('xl/workbook.xml')?.async('string') || '';
   const names = [...workbook.matchAll(/<sheet\b[^>]*\bname="([^"]+)"/gi)].map((match) => match[1]);
-  if (!names.length) issues.push({ code: 'XLSX_NO_WORKSHEETS', message: 'Workbook contains no worksheets.', severity: 'error', target: 'xl/workbook.xml' });
+  if (!names.length) issues.push({ code: ERROR_CODES.XLSX_NO_WORKSHEETS, message: 'Workbook contains no worksheets.', severity: 'error', target: 'xl/workbook.xml' });
   const duplicate = names.find((name, index) => names.indexOf(name) !== index);
-  if (duplicate) issues.push({ code: 'XLSX_DUPLICATE_SHEET_NAME', message: `Workbook contains duplicate worksheet name ${duplicate}.`, severity: 'error', target: 'xl/workbook.xml' });
+  if (duplicate) issues.push({ code: ERROR_CODES.XLSX_DUPLICATE_SHEET_NAME, message: `Workbook contains duplicate worksheet name ${duplicate}.`, severity: 'error', target: 'xl/workbook.xml' });
   const worksheets = Object.values(zip.files).filter((entry) => !entry.dir && /^xl\/worksheets\/sheet\d+\.xml$/i.test(entry.name));
   for (const worksheet of worksheets) {
     const xml = await worksheet.async('string');
@@ -234,11 +237,11 @@ async function validateSpreadsheetPackage(zip: JSZip, issues: OfficeArtifactIssu
       && /<v>\s*#(?:NULL!|DIV\/0!|VALUE!|REF!|NAME\?|NUM!|N\/A|GETTING_DATA|SPILL!|CALC!|FIELD!|BLOCKED!|UNKNOWN!|CONNECT!)\s*<\/v>/i.test(match[2] || '')
     ));
     if (errorCells.length) {
-      issues.push({ code: 'XLSX_FORMULA_ERROR_LITERAL', message: `${worksheet.name} contains ${errorCells.length} visible spreadsheet error cell(s).`, severity: 'error', target: worksheet.name });
+      issues.push({ code: ERROR_CODES.XLSX_FORMULA_ERROR_LITERAL, message: `${worksheet.name} contains ${errorCells.length} visible spreadsheet error cell(s).`, severity: 'error', target: worksheet.name });
     }
     const dimensions = [...xml.matchAll(/<dimension\b[^>]*\bref="([^"]+)"/gi)].map((match) => match[1]);
     if (dimensions.some((value) => !/^\$?[A-Z]{1,3}\$?\d+(?::\$?[A-Z]{1,3}\$?\d+)?$/.test(value))) {
-      issues.push({ code: 'XLSX_DIMENSION_INVALID', message: `${worksheet.name} contains an invalid used-range dimension.`, severity: 'error', target: worksheet.name });
+      issues.push({ code: ERROR_CODES.XLSX_DIMENSION_INVALID, message: `${worksheet.name} contains an invalid used-range dimension.`, severity: 'error', target: worksheet.name });
     }
   }
 }
@@ -402,7 +405,7 @@ async function validatePreserveOnlyFeatures(
     const afterCount = Number(after[feature as keyof typeof after] || 0);
     if (Number(beforeCount) > afterCount) {
       issues.push({
-        code: 'OFFICE_PRESERVE_ONLY_FEATURE_LOST',
+        code: ERROR_CODES.OFFICE_PRESERVE_ONLY_FEATURE_LOST,
         message: `Existing-file edit lost preserve-only feature ${feature}: source=${beforeCount}, output=${afterCount}. LibreOffice may open this feature, but the high-level facade does not claim safe recreation.`,
         severity: 'error',
         target: feature,
@@ -415,17 +418,17 @@ async function validatePreserveOnlyFeatures(
 async function validatePdf(absolutePath: string, issues: OfficeArtifactIssue[]) {
   const buffer = await readFile(absolutePath);
   if (buffer.length < 64 || !buffer.subarray(0, 5).equals(Buffer.from('%PDF-'))) {
-    issues.push({ code: 'PDF_HEADER_INVALID', message: 'Output is not a readable PDF byte stream.', severity: 'error' });
+    issues.push({ code: ERROR_CODES.PDF_HEADER_INVALID, message: 'Output is not a readable PDF byte stream.', severity: 'error' });
     return { pages: 0, textCharacters: 0 };
   }
   const parser = new PDFParse({ data: buffer });
   try {
     const info = await parser.getInfo();
     const text = await parser.getText();
-    if (!info.total) issues.push({ code: 'PDF_HAS_NO_PAGES', message: 'PDF contains no pages.', severity: 'error' });
+    if (!info.total) issues.push({ code: ERROR_CODES.PDF_HAS_NO_PAGES, message: 'PDF contains no pages.', severity: 'error' });
     return { pages: info.total, textCharacters: text.text.length };
   } catch (error) {
-    issues.push({ code: 'PDF_PARSE_FAILED', message: `PDF parser could not reopen the output: ${error instanceof Error ? error.message : String(error)}`, severity: 'error' });
+    issues.push({ code: getErrorCode(error, ERROR_CODES.PDF_PARSE_FAILED), message: `PDF parser could not reopen the output: ${error instanceof Error ? error.message : String(error)}`, severity: 'error' });
     return { pages: 0, textCharacters: 0 };
   } finally {
     await parser.destroy();
@@ -454,7 +457,7 @@ export async function validateOfficeArtifact(input: {
   const zip = await JSZip.loadAsync(await readFile(input.absolutePath));
   const expectedEntry = expectedPackageEntry(extension)!;
   if (!zip.file(expectedEntry)) {
-    issues.push({ code: 'OFFICE_PACKAGE_ENTRY_MISSING', message: `Required package entry ${expectedEntry} is missing.`, severity: 'error' });
+    issues.push({ code: ERROR_CODES.OFFICE_PACKAGE_ENTRY_MISSING, message: `Required package entry ${expectedEntry} is missing.`, severity: 'error' });
   }
   const xmlEntries = Object.values(zip.files).filter((entry) => !entry.dir && /\.xml$/i.test(entry.name));
   const requestedFonts = new Set<string>();
@@ -491,7 +494,7 @@ export async function validateOfficeArtifact(input: {
       .filter((match) => /w:hRule="exact"/.test(match[1] || ''));
     if (floatingObjectCount) {
       issues.push({
-        code: 'DOCX_FLOATING_OBJECTS_REQUIRE_VISUAL_QA',
+        code: ERROR_CODES.DOCX_FLOATING_OBJECTS_REQUIRE_VISUAL_QA,
         message: `${floatingObjectCount} floating DrawingML object(s) were preserved. They are supported for freeform authoring but require visual confirmation because they do not participate in normal text flow.`,
         severity: 'warning',
         target: 'word/document.xml',
@@ -499,7 +502,7 @@ export async function validateOfficeArtifact(input: {
     }
     if (textFrameCount) {
       issues.push({
-        code: 'DOCX_TEXT_FRAMES_REQUIRE_VISUAL_QA',
+        code: ERROR_CODES.DOCX_TEXT_FRAMES_REQUIRE_VISUAL_QA,
         message: `${textFrameCount} positioned text frame(s) were preserved. Confirm their anchors, wrapping, and overlap in the rendered pages.`,
         severity: 'warning',
         target: 'word/document.xml',
@@ -507,7 +510,7 @@ export async function validateOfficeArtifact(input: {
     }
     if (fixedHeightRows.length) {
       issues.push({
-        code: 'DOCX_FIXED_TABLE_ROWS_REQUIRE_VISUAL_QA',
+        code: ERROR_CODES.DOCX_FIXED_TABLE_ROWS_REQUIRE_VISUAL_QA,
         message: `${fixedHeightRows.length} table row(s) use exact height. Confirm that wrapped text is not clipped after font substitution.`,
         severity: 'warning',
         target: 'word/document.xml',
@@ -520,7 +523,7 @@ export async function validateOfficeArtifact(input: {
     return normalized && ![...installed].some((candidate) => candidate.includes(normalized) || normalized.includes(candidate));
   });
   for (const font of missingFonts) {
-    issues.push({ code: 'FONT_NOT_FOUND', message: `Requested font "${font}" was not matched in the ${process.platform} font inventory; verify LibreOffice substitution.`, severity: 'warning', target: font });
+    issues.push({ code: ERROR_CODES.FONT_NOT_FOUND, message: `Requested font "${font}" was not matched in the ${process.platform} font inventory; verify LibreOffice substitution.`, severity: 'warning', target: font });
   }
   const prefix = mediaPrefix(extension)!;
   const media: Array<{ name: string; width?: number; height?: number; format?: string }> = [];
@@ -529,10 +532,10 @@ export async function validateOfficeArtifact(input: {
       const metadata = await sharp(await entry.async('nodebuffer'), { failOn: 'none' }).metadata();
       media.push({ name: entry.name, width: metadata.width, height: metadata.height, format: metadata.format });
       if (metadata.width && metadata.height && metadata.width * metadata.height > 40_000_000) {
-        issues.push({ code: 'OVERSIZED_EMBEDDED_IMAGE', message: `${entry.name} contains ${metadata.width}x${metadata.height} pixels and may unnecessarily increase file size.`, severity: 'warning', target: entry.name });
+        issues.push({ code: ERROR_CODES.OVERSIZED_EMBEDDED_IMAGE, message: `${entry.name} contains ${metadata.width}x${metadata.height} pixels and may unnecessarily increase file size.`, severity: 'warning', target: entry.name });
       }
     } catch {
-      issues.push({ code: 'UNREADABLE_EMBEDDED_IMAGE', message: `Embedded image ${entry.name} could not be decoded.`, severity: 'warning', target: entry.name });
+      issues.push({ code: ERROR_CODES.UNREADABLE_EMBEDDED_IMAGE, message: `Embedded image ${entry.name} could not be decoded.`, severity: 'warning', target: entry.name });
     }
   }
   // Calc cells, ranges, widths, merges, print settings and several other
@@ -578,7 +581,7 @@ export async function validateOfficeArtifact(input: {
       if (nonSerializedKinds.has(element.kind)) continue;
       if (element.artifactName && !searchableXml.includes(element.artifactName)) {
         issues.push(mappedIssue({
-          code: 'ELEMENT_MAPPING_NOT_EMBEDDED',
+          code: ERROR_CODES.ELEMENT_MAPPING_NOT_EMBEDDED,
           message: `elementId ${element.elementId} is registered in source but its artifact marker was not found after serialization.`,
           severity: input.requireElementIds ? 'error' : 'warning',
           target: element.artifactName,
@@ -609,9 +612,9 @@ export async function inspectRenderedPage(imagePath: string) {
     : 0;
   const issues: OfficeArtifactIssue[] = [];
   if (!metadata.width || !metadata.height) {
-    issues.push({ code: 'PAGE_IMAGE_EMPTY', message: 'Rendered page has no measurable dimensions.', severity: 'error' });
+    issues.push({ code: ERROR_CODES.PAGE_IMAGE_EMPTY, message: 'Rendered page has no measurable dimensions.', severity: 'error' });
   } else if (stats.isOpaque && dynamicRange < 4) {
-    issues.push({ code: 'PAGE_APPEARS_BLANK', message: 'Rendered page is nearly uniform and may be blank.', severity: 'warning' });
+    issues.push({ code: ERROR_CODES.PAGE_APPEARS_BLANK, message: 'Rendered page is nearly uniform and may be blank.', severity: 'warning' });
   }
   return { width: metadata.width, height: metadata.height, issues };
 }

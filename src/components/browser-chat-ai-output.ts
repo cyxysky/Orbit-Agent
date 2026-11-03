@@ -3,6 +3,8 @@ import type {
   BrowserChatAiOutputTool,
   StepExecutionResult,
 } from '@/server/ai/schemas/runtime.schema';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export {
   browserChatAiOutputViewFromResponse as aiOutputViewFromResponse,
@@ -196,7 +198,7 @@ export function buildAiCycleToolDetailMap(cycles: BrowserChatAiOutputCycle[], st
         error: parseError,
         ok: pendingExecution ? undefined : false,
         result: parseError,
-        ...(!aiTool.invalid && superseded ? { rawResult: { failureCategory: 'missing-tool-receipt', actual: parseError } } : {}),
+        ...(!aiTool.invalid && superseded ? { rawResult: { failureCategory: ERROR_CODES.MISSING_TOOL_RECEIPT, actual: parseError } } : {}),
       };
       const invalidStep: StepExecutionResult = {
         index: stepIndex,

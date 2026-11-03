@@ -7,6 +7,8 @@ import { artifactApiUrlFromRelative } from '@/lib/artifacts';
 import { normalizeApplicationUserId } from '@/server/auth/user-context';
 import { artifactsRoot } from '@/server/storage/paths';
 import { decodeFile, MAX_TOTAL_BYTES, relativeFile } from '../../../packages/capability-sdk/runtime/execution/files.cjs';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 /** Persist runner bytes before its disposable workspace disappears; never expose transport Base64 in run results. */
 export function withCodeSandboxArtifacts(executor: CodeSandboxExecutor, scope: { userId?: string; runId: string; root?: string }): CodeSandboxExecutor {
@@ -15,14 +17,14 @@ export function withCodeSandboxArtifacts(executor: CodeSandboxExecutor, scope: {
   const prefix = `uploads/${normalizeApplicationUserId(scope.userId)}/sandbox/${run}/`;
   const resolve = async (artifactId: string) => {
     relativeFile(artifactId);
-    if (!artifactId.startsWith(prefix)) throw new Error('Sandbox file does not belong to this run.');
+    if (!artifactId.startsWith(prefix)) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Sandbox file does not belong to this run.');
     const file = path.resolve(root, artifactId);
     const actual = await realpath(file);
     const scopedRoot = await realpath(path.join(root, prefix));
     const relative = path.relative(scopedRoot, actual);
-    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Invalid sandbox artifact path.');
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Invalid sandbox artifact path.');
     const info = await stat(actual);
-    if (!info.isFile() || info.size > 10 * 1024 * 1024) throw new Error('Invalid or oversized sandbox artifact.');
+    if (!info.isFile() || info.size > 10 * 1024 * 1024) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Invalid or oversized sandbox artifact.');
     return { file: actual, size: info.size };
   };
   const describe = (artifactId: string, size: number): CodeSandboxArtifact => ({
@@ -37,21 +39,21 @@ export function withCodeSandboxArtifacts(executor: CodeSandboxExecutor, scope: {
       let inputBytes = 0;
       for (const input of execution.artifactInputs || []) {
         relativeFile(input.path);
-        if (!input.path.startsWith('inputs/')) throw new Error('Mount saved files under inputs/.');
+        if (!input.path.startsWith('inputs/')) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Mount saved files under inputs/.');
         const { file, size } = await resolve(input.artifactId);
         inputBytes += size;
-        if (inputBytes > MAX_TOTAL_BYTES) throw new Error('Input files exceed 32 MB in total.');
+        if (inputBytes > MAX_TOTAL_BYTES) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Input files exceed 32 MB in total.');
         inputFiles.push({ path: input.path, base64: (await readFile(file, { signal: context.abortSignal })).toString('base64') });
       }
       const { artifactInputs: _artifactInputs, ...transport } = execution;
       const { files = [], ...result } = await executor.run({ ...transport, inputFiles }, context);
-      if (files.length > 16) throw new Error('Runner returned more than 16 files.');
+      if (files.length > 16) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Runner returned more than 16 files.');
       let outputBytes = 0;
       const decoded = files.map(file => {
         relativeFile(file.path);
         const bytes = decodeFile(file);
         outputBytes += bytes.length;
-        if (outputBytes > MAX_TOTAL_BYTES) throw new Error('Runner files exceed 32 MB in total.');
+        if (outputBytes > MAX_TOTAL_BYTES) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Runner files exceed 32 MB in total.');
         return { file, bytes };
       });
       const artifacts: CodeSandboxArtifact[] = [];

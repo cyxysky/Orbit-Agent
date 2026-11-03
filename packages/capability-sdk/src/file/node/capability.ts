@@ -1,3 +1,4 @@
+import { normalizeErrorCode } from "../../errors.ts";
 import type {
   CapabilityExecutionContext,
   CapabilityResult,
@@ -22,6 +23,8 @@ import {
   type FileGenerationProgress,
   type NodeFileWorkspaceHost,
 } from './workspace.ts';
+import { CodedError, ERROR_CODES } from '../../errors.ts';
+
 
 type ContextValue<T> = T | ((context: CapabilityRunContext) => T | Promise<T>);
 
@@ -85,7 +88,7 @@ export function fileOperationToCapabilityResult(
       ok: false,
       summary: result.summary,
       error: {
-        code: result.error?.code || fallbackErrorCode,
+        code: normalizeErrorCode(result.error?.code, normalizeErrorCode(fallbackErrorCode, ERROR_CODES.FILE_OPERATION_FAILED)),
         message: result.error?.message || result.actual,
         retryable: result.error?.retryable,
         details: data,
@@ -118,7 +121,7 @@ export function fileOperationToCapabilityResult(
 }
 
 function unavailable(message: string): CapabilityResult {
-  return { ok: false, error: { code: 'file-action-unavailable', message } };
+  return { ok: false, error: { code: ERROR_CODES.FILE_ACTION_UNAVAILABLE, message } };
 }
 
 function progressReporter(context: CapabilityExecutionContext) {
@@ -154,14 +157,14 @@ export async function createNodeFileOperations(
     nodeArtifactRelativePath(root, candidate);
     const absolutePath = await realpath(candidate);
     const relative = nodeArtifactRelativePath(root, absolutePath).relativePath;
-    if (!relative.startsWith(`${sanitizeNodeArtifactFileName(runId, 'adhoc')}/`)) throw new Error('Artifact does not belong to this run.');
+    if (!relative.startsWith(`${sanitizeNodeArtifactFileName(runId, 'adhoc')}/`)) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'Artifact does not belong to this run.');
     return absolutePath;
   };
 
   const file: FileCapabilityRuntimeOperations['file'] = {
     list: async () => fileOperationToCapabilityResult(
       await workspace.listOfficeDrafts({ runId }),
-      'file-list-failed',
+      ERROR_CODES.FILE_LIST_FAILED,
     ),
     readSource: async (input, context) => fileOperationToCapabilityResult(await workspace.readUnoDraft({
       abortSignal: context.abortSignal,
@@ -171,7 +174,7 @@ export async function createNodeFileOperations(
       startLine: input.startLine,
       endLine: input.endLine,
       includeDiagnostics: input.includeDiagnostics,
-    }), 'file-read-source-failed'),
+    }), ERROR_CODES.FILE_READ_SOURCE_FAILED),
     readContent: async (input, context) => {
       if (!options.readFile) {
         try {
@@ -187,18 +190,18 @@ export async function createNodeFileOperations(
             abortSignal: context.abortSignal, previewRoot: path.join(workspaceHost.artifactsRoot, sanitizeNodeArtifactFileName(runId, 'adhoc'), 'attachment-previews'),
             attachment: { id: input.artifactId || input.attachmentId!, name, path: absolutePath,
               type: fileFormatForName(name)?.mimeType || 'application/octet-stream', url: '' },
-          }), 'file-read-content-failed');
+          }), ERROR_CODES.FILE_READ_CONTENT_FAILED);
         } catch (error) {
-          return fileOperationToCapabilityResult({ ok: false, actual: error instanceof Error ? error.message : String(error) }, 'file-read-content-failed');
+          return fileOperationToCapabilityResult({ ok: false, actual: error instanceof Error ? error.message : String(error) }, ERROR_CODES.FILE_READ_CONTENT_FAILED);
         }
       }
       return fileOperationToCapabilityResult(await options.readFile({
         ...input, includeVisuals: input.includeVisuals === true,
-      }, context, runContext), 'file-read-content-failed');
+      }, context, runContext), ERROR_CODES.FILE_READ_CONTENT_FAILED);
     },
     write: async (input: FileToolInput, context) => fileOperationToCapabilityResult(
       await workspace.writeTextFileArtifact({ fileName: input.fileName, content: input.content, runId, abortSignal: context.abortSignal }),
-      'file-write-failed',
+      ERROR_CODES.FILE_WRITE_FAILED,
     ),
     download: async (input: FileToolInput, context) => fileOperationToCapabilityResult(
       await workspace.downloadFileArtifact({
@@ -210,7 +213,7 @@ export async function createNodeFileOperations(
         fileType: input.fileType,
         sourcePageUrl,
       }, { abortSignal: context.abortSignal }),
-      'file-download-failed',
+      ERROR_CODES.FILE_DOWNLOAD_FAILED,
     ),
     convert: async (input: FileToolInput, context) => fileOperationToCapabilityResult(
       await workspace.convertFileArtifact({
@@ -219,7 +222,7 @@ export async function createNodeFileOperations(
         fileName: input.fileName,
         includeVisualVerification,
       }, { abortSignal: context.abortSignal }),
-      'file-convert-failed',
+      ERROR_CODES.FILE_CONVERT_FAILED,
     ),
     plan: async (input: FileToolInput, context) => fileOperationToCapabilityResult(
       await workspace.planFileArtifact({
@@ -234,7 +237,7 @@ export async function createNodeFileOperations(
         sourceAttachmentId: input.sourceAttachmentId,
         attachmentBindings,
       }),
-      'file-plan-failed',
+      ERROR_CODES.FILE_PLAN_FAILED,
     ),
     unoApi: async (input: FileToolInput, context) => fileOperationToCapabilityResult(
       await workspace.getUnoApi({
@@ -246,7 +249,7 @@ export async function createNodeFileOperations(
         offset: input.offset,
         limit: input.limit,
       }),
-      'file-uno-api-failed',
+      ERROR_CODES.FILE_UNO_API_FAILED,
     ),
     jsApi: async (input: FileToolInput) => fileOperationToCapabilityResult(
       await workspace.getOfficeJsApi({
@@ -254,7 +257,7 @@ export async function createNodeFileOperations(
         documentId: input.documentId,
         documentType: input.documentType,
       }),
-      'file-js-api-failed',
+      ERROR_CODES.FILE_JS_API_FAILED,
     ),
     generate: async (input: FileToolInput, context) => fileOperationToCapabilityResult(
       await workspace.generateUnoFileArtifact({
@@ -268,7 +271,7 @@ export async function createNodeFileOperations(
         abortSignal: context.abortSignal,
         onProgress: progressReporter(context),
       }),
-      'file-generate-failed',
+      ERROR_CODES.FILE_GENERATE_FAILED,
     ),
     edit: async (input: FileToolInput, context) => fileOperationToCapabilityResult(
       await workspace.editUnoFileArtifact({
@@ -284,7 +287,7 @@ export async function createNodeFileOperations(
         abortSignal: context.abortSignal,
         onProgress: progressReporter(context),
       }),
-      'file-edit-failed',
+      ERROR_CODES.FILE_EDIT_FAILED,
     ),
     render: async (input: FileToolInput, context) => fileOperationToCapabilityResult(
       await workspace.renderFileArtifact({
@@ -295,7 +298,7 @@ export async function createNodeFileOperations(
         abortSignal: context.abortSignal,
         onProgress: progressReporter(context),
       }),
-      'file-render-failed',
+      ERROR_CODES.FILE_RENDER_FAILED,
     ),
   };
   file.read = (input, context) => input.documentId
@@ -313,7 +316,7 @@ export async function createNodeFileOperations(
       runId,
       artifactId: input.artifactId,
     });
-    if (!current.ok) return fileOperationToCapabilityResult(current, 'file-visual-version-failed');
+    if (!current.ok) return fileOperationToCapabilityResult(current, ERROR_CODES.FILE_VISUAL_VERSION_FAILED);
     context.abortSignal?.throwIfAborted();
     let visualResult: FileArtifactOperationResult;
     try {
@@ -327,7 +330,7 @@ export async function createNodeFileOperations(
         });
       }
     } catch (error) {
-      return fileOperationToCapabilityResult({ ok: false, actual: error instanceof Error ? error.message : String(error) }, 'file-visual-read-failed');
+      return fileOperationToCapabilityResult({ ok: false, actual: error instanceof Error ? error.message : String(error) }, ERROR_CODES.FILE_VISUAL_READ_FAILED);
     }
     context.abortSignal?.throwIfAborted();
     return fileOperationToCapabilityResult(await workspace.recordOfficeVisualQaProgress({
@@ -335,7 +338,7 @@ export async function createNodeFileOperations(
       artifactId: input.artifactId,
       action: input.action,
       result: visualResult,
-    }), 'file-visual-report-failed');
+    }), ERROR_CODES.FILE_VISUAL_REPORT_FAILED);
   }
 
   return {

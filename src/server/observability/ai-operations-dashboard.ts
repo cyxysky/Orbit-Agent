@@ -373,11 +373,11 @@ function boundedRangeDays(value: number) {
 }
 
 /** Keyset pages release raw tool results and logs as soon as they are counted. */
-async function* dashboardRows<T>(sql: string, parameters: unknown[], keys: string[]): AsyncGenerator<T> {
+async function* dashboardRows<T>(sql: string, parameters: unknown[], keys: string[]): AsyncGenerator<Awaited<T>> {
   let cursor: unknown[] | undefined;
   for (;;) {
     const comparison = keys.length === 1 ? `${keys[0]} > ?` : `(${keys.join(', ')}) > (${keys.map(() => '?').join(', ')})`;
-    const rows = await queryDatabase<T & Record<string, unknown>>(
+    const rows = await queryDatabase<Awaited<T> & Record<string, unknown>>(
       `${sql} ${cursor ? `AND ${comparison}` : ''} ORDER BY ${keys.join(', ')} LIMIT 8`,
       [...parameters, ...(cursor || [])],
     );

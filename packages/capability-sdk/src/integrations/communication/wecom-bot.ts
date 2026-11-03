@@ -1,6 +1,8 @@
 import { WSClient, type BaseMessage, type WsFrame } from '@wecom/aibot-node-sdk';
 import type { CommunicationMediaFormat, CommunicationMediaOperations } from './index.ts';
 import { CommunicationDeliveryError } from './index.ts';
+import { CodedError, ERROR_CODES } from '../../errors.ts';
+
 
 export const WECOM_BOT_RUNTIME_REVISION = 6;
 
@@ -100,8 +102,8 @@ export function createWeComBotConnection(input: { botId: string; secret: string 
     for (const listener of listeners) listener(message, frame.headers.req_id);
   });
   function connect() {
-    if (closed) throw new Error('机器人连接已关闭。');
-    if (displaced) throw new Error(error);
+    if (closed) throw new CodedError(ERROR_CODES.COMMUNICATION_OPERATION_FAILED, '机器人连接已关闭。');
+    if (displaced) throw new CodedError(ERROR_CODES.COMMUNICATION_OPERATION_FAILED, error);
     if (!started) { started = true; client.connect(); }
   }
   async function ready(signal?: AbortSignal) {
@@ -116,21 +118,21 @@ export function createWeComBotConnection(input: { botId: string; secret: string 
         failure ? reject(failure) : resolve();
       };
       const success = () => finish();
-      const fail = () => finish(new Error(error || '机器人认证失败。'));
-      const abort = () => finish(new Error('机器人操作已取消。'));
-      const timer = setTimeout(() => finish(new Error(error || '等待机器人连接超时。')), 20_000);
+      const fail = () => finish(new CodedError(ERROR_CODES.COMMUNICATION_OPERATION_FAILED, error || '机器人认证失败。'));
+      const abort = () => finish(new CodedError(ERROR_CODES.COMMUNICATION_OPERATION_FAILED, '机器人操作已取消。'));
+      const timer = setTimeout(() => finish(new CodedError(ERROR_CODES.COMMUNICATION_OPERATION_FAILED, error || '等待机器人连接超时。')), 20_000);
       client.once('authenticated', success);
       client.once('error', fail);
       signal?.addEventListener('abort', abort, { once: true });
-      try { connect(); } catch (error) { finish(error instanceof Error ? error : new Error(String(error))); }
+      try { connect(); } catch (error) { finish(error instanceof Error ? error : new CodedError(ERROR_CODES.COMMUNICATION_OPERATION_FAILED, String(error))); }
     });
   }
   const upload: CommunicationMediaOperations['upload'] = async (file, type, context) => {
     await ready(context.abortSignal);
-    if (!file.data.length || file.data.length > 50 * 1024 * 1024) throw new Error('企微媒体文件必须大于 0 字节且不超过 50 MB。');
+    if (!file.data.length || file.data.length > 50 * 1024 * 1024) throw new CodedError(ERROR_CODES.COMMUNICATION_OPERATION_FAILED, '企微媒体文件必须大于 0 字节且不超过 50 MB。');
     const result = await client.uploadMedia(Buffer.from(file.data), { type, filename: file.fileName });
     context.abortSignal?.throwIfAborted();
-    if (!result.media_id) throw new Error('企业微信上传未返回 media_id。');
+    if (!result.media_id) throw new CodedError(ERROR_CODES.COMMUNICATION_OPERATION_FAILED, '企业微信上传未返回 media_id。');
     return result.media_id;
   };
   function verify(frame: WsFrame) {
@@ -157,9 +159,9 @@ export function createWeComBotConnection(input: { botId: string; secret: string 
   return {
     connect, ready, upload,
     async download(attachment: WeComInboundAttachment) {
-      if (!/^https?:\/\//i.test(attachment.url)) throw new Error('企微附件未提供有效的下载地址，请重新发送。');
+      if (!/^https?:\/\//i.test(attachment.url)) throw new CodedError(ERROR_CODES.COMMUNICATION_OPERATION_FAILED, '企微附件未提供有效的下载地址，请重新发送。');
       try { return await client.downloadFile(attachment.url, attachment.aesKey); }
-      catch (cause) { throw new Error('企微附件下载或解密失败，请重新发送附件。', { cause }); }
+      catch (cause) { throw new CodedError(ERROR_CODES.COMMUNICATION_OPERATION_FAILED, '企微附件下载或解密失败，请重新发送附件。', { cause }); }
     },
     get status() { return { connected: authenticated, error, received, rejected, lastReceivedAt, lastMessageError }; },
     onMessage(listener: (message: WeComInboundMessage, requestId: string) => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },

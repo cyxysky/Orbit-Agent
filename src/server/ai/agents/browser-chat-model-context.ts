@@ -7,6 +7,8 @@ import { withoutRuntimePromptCacheMetadata, isRuntimePromptCacheMetadataMessage 
 import { parseContextSummary } from './runtime-semantic-summary';
 import { completeRuntimeModelToolChain } from './runtime-context-compression';
 import type { SubagentResultInbox } from './browser-chat-subagent-delivery';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export type BrowserChatModelContextCompression = {
   compressedAt: string;
@@ -78,7 +80,7 @@ export function browserChatActiveMessages(context: BrowserChatModelContext) {
 
 function contextMessages(records: Record<string, ModelMessage>, refs: string[]) {
   return refs.map(ref => {
-    if (!Object.hasOwn(records, ref)) throw new Error(`Missing browser-chat context record: ${ref}`);
+    if (!Object.hasOwn(records, ref)) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, `Missing browser-chat context record: ${ref}`);
     return records[ref];
   });
 }
@@ -127,7 +129,7 @@ export function normalizeBrowserChatModelMessages(value: unknown): ModelMessage[
   if (!Array.isArray(value)) return [];
   return value.flatMap((message, index) => {
     const parsed = modelMessageSchema.safeParse(message);
-    if (!parsed.success) throw new Error(`Invalid model context message at index ${index}: ${parsed.error.issues[0]?.message || 'invalid protocol'}`);
+    if (!parsed.success) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, `Invalid model context message at index ${index}: ${parsed.error.issues[0]?.message || 'invalid protocol'}`);
     const normalized = withoutPersistentBinaryParts(parsed.data);
     if (normalized.role === 'assistant' && typeof normalized.content === 'string') {
       const content = stripBrowserChatContextMarkers(normalized.content).trim();

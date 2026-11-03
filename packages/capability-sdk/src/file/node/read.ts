@@ -10,6 +10,8 @@ import { renderFilePreview } from './office/preview.ts';
 import { sha256NodeFile } from './artifacts.ts';
 import { createFileVisualIndex, fileVisualScreenshotId as screenshotId } from './visual-index.ts';
 import { extractFileTextInWorker, type FileTextSelection, type FileTextExtractionResult } from './text-extraction.ts';
+import { CodedError, ERROR_CODES } from '../../errors.ts';
+
 
 export type FileReadableAttachment = {
   id: string;
@@ -51,29 +53,29 @@ const visualQaDeckCheckNames = [
 ] as const;
 
 function assertVisualQaPageChecks(checks: OfficeVisualQaPageChecks | undefined, label: string) {
-  if (!checks || typeof checks !== 'object') throw new Error(`${label} requires all visual-quality checks`);
+  if (!checks || typeof checks !== 'object') throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `${label} requires all visual-quality checks`);
   const failed: string[] = [];
   for (const name of visualQaPageCheckNames) {
     const status = checks[name];
-    if (status !== 'passed' && status !== 'failed' && status !== 'not-applicable') throw new Error(`${label} requires check ${name}`);
-    if (status === 'not-applicable' && name !== 'chartTableLegibility' && name !== 'imageQuality') throw new Error(`${label} cannot mark ${name} not-applicable`);
+    if (status !== 'passed' && status !== 'failed' && status !== 'not-applicable') throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `${label} requires check ${name}`);
+    if (status === 'not-applicable' && name !== 'chartTableLegibility' && name !== 'imageQuality') throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `${label} cannot mark ${name} not-applicable`);
     if (status === 'failed') failed.push(name);
   }
   return failed;
 }
 
 function assertVisualQaDeckChecks(checks: OfficeVisualQaDeckChecks | undefined) {
-  if (!checks || typeof checks !== 'object') throw new Error('deckReview requires all cross-page consistency checks');
+  if (!checks || typeof checks !== 'object') throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'deckReview requires all cross-page consistency checks');
   const failed: string[] = [];
   for (const name of visualQaDeckCheckNames) {
     const status = checks[name];
-    if (status !== 'passed' && status !== 'failed') throw new Error(`deckReview requires check ${name}`);
+    if (status !== 'passed' && status !== 'failed') throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `deckReview requires check ${name}`);
     if (status === 'failed') failed.push(name);
   }
   for (const name of ['designIntent', 'compositionRhythm', 'contentConsistency', 'sourceTraceability'] as const) {
     const status = checks[name];
     if (status === undefined) continue;
-    if (status !== 'passed' && status !== 'failed') throw new Error(`deckReview has invalid check ${name}`);
+    if (status !== 'passed' && status !== 'failed') throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `deckReview has invalid check ${name}`);
     if (status === 'failed') failed.push(name);
   }
   return failed;
@@ -117,7 +119,7 @@ export function fileAttachmentMetadata(attachment: FileReadableAttachment) {
 async function extractAttachmentText(attachment: FileReadableAttachment, absolutePath?: string, reusableBuffer?: Buffer, selection: FileTextSelection & { abortSignal?: AbortSignal } = {}): Promise<FileTextExtractionResult> {
   const kind = attachmentKind(attachment);
   if (kind === 'image') {
-    if (!absolutePath) throw new Error('Could not locate the saved image artifact.');
+    if (!absolutePath) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'Could not locate the saved image artifact.');
     const metadata = await sharp(reusableBuffer || absolutePath, { failOn: 'none' }).metadata();
     const savedBytes = reusableBuffer?.byteLength ?? attachment.size ?? (await stat(absolutePath)).size;
     const rawWidth = metadata.width || 0;
@@ -137,7 +139,7 @@ async function extractAttachmentText(attachment: FileReadableAttachment, absolut
     ].join('\n') };
   }
   if (kind === 'tab') return { parser: 'tab', truncated: false, warnings: [], text: `[标签页引用：${attachment.sourceUrl || attachment.url || attachment.name}]` };
-  if (!absolutePath) throw new Error('无法定位文件，无法解析。');
+  if (!absolutePath) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, '无法定位文件，无法解析。');
   return extractFileTextInWorker({ extension: extensionOf(attachment), kind, path: absolutePath, ...selection });
 }
 
@@ -159,7 +161,7 @@ export async function readFileAttachment(input: FileTextSelection & {
     input.abortSignal?.throwIfAborted();
     const size = attachment.kind === 'tab' ? attachment.size : (await stat(input.absolutePath!)).size;
     const resolvedAttachment = size === attachment.size ? attachment : { ...attachment, size };
-    if (attachment.kind !== 'tab' && size === 0) throw new Error('文件内容为空，无法解析。');
+    if (attachment.kind !== 'tab' && size === 0) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, '文件内容为空，无法解析。');
     const kind = attachmentKind(resolvedAttachment);
     const buffer = input.includeVisuals && kind !== 'tab'
       ? await readFile(input.absolutePath!)
@@ -241,12 +243,12 @@ export async function readFileVisuals(input: {
 
   try {
     const metadata = await stat(input.absolutePath);
-    if (!metadata.size) throw new Error('artifact is empty');
+    if (!metadata.size) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'artifact is empty');
     if (request.action === 'report') {
       if (!request.reviews?.length) return { ok: false, actual: 'file action=visualReport requires at least one page review.' };
       const reviews = request.reviews.map((review) => {
         const pageNumber = screenshotPage(review.screenshotId);
-        if (!pageNumber) throw new Error(`invalid screenshotId in visual review: ${review.screenshotId}`);
+        if (!pageNumber) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `invalid screenshotId in visual review: ${review.screenshotId}`);
         const issues = (review.issues || []).map((issue) => ({
           type: String(issue.type || '').trim(),
           description: String(issue.description || '').trim(),
@@ -254,12 +256,12 @@ export async function readFileVisuals(input: {
           ...(issue.severity ? { severity: issue.severity } : {}),
         })).filter((issue) => issue.type && issue.description);
         const observation = String(review.observation || '').trim();
-        if (observation.length < 20) throw new Error(`review ${review.screenshotId} requires a concrete visual observation of at least 20 characters`);
+        if (observation.length < 20) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `review ${review.screenshotId} requires a concrete visual observation of at least 20 characters`);
         const failedChecks = assertVisualQaPageChecks(review.checks, `review ${review.screenshotId}`);
-        if (review.status === 'passed' && issues.length) throw new Error(`passed review ${review.screenshotId} cannot contain issues`);
-        if (review.status === 'failed' && !issues.length) throw new Error(`failed review ${review.screenshotId} requires at least one issue`);
-        if (review.status === 'passed' && failedChecks.length) throw new Error(`passed review ${review.screenshotId} cannot contain failed checks`);
-        if (review.status === 'failed' && !failedChecks.length) throw new Error(`failed review ${review.screenshotId} requires at least one failed check`);
+        if (review.status === 'passed' && issues.length) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `passed review ${review.screenshotId} cannot contain issues`);
+        if (review.status === 'failed' && !issues.length) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `failed review ${review.screenshotId} requires at least one issue`);
+        if (review.status === 'passed' && failedChecks.length) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `passed review ${review.screenshotId} cannot contain failed checks`);
+        if (review.status === 'failed' && !failedChecks.length) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `failed review ${review.screenshotId} requires at least one failed check`);
         return { screenshotId: review.screenshotId, pageNumber, status: review.status, observation, checks: review.checks, issues };
       });
       const deckReview = request.deckReview ? {
@@ -273,12 +275,12 @@ export async function readFileVisuals(input: {
           ...(issue.severity ? { severity: issue.severity } : {}),
         })).filter((issue) => issue.type && issue.description),
       } : undefined;
-      if (deckReview && deckReview.observation.length < 30) throw new Error('deckReview requires a concrete cross-page observation of at least 30 characters');
+      if (deckReview && deckReview.observation.length < 30) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'deckReview requires a concrete cross-page observation of at least 30 characters');
       const failedDeckChecks = deckReview ? assertVisualQaDeckChecks(deckReview.checks) : [];
-      if (deckReview?.status === 'passed' && deckReview.issues.length) throw new Error('passed deckReview cannot contain issues');
-      if (deckReview?.status === 'failed' && !deckReview.issues.length) throw new Error('failed deckReview requires at least one issue');
-      if (deckReview?.status === 'passed' && failedDeckChecks.length) throw new Error('passed deckReview cannot contain failed checks');
-      if (deckReview?.status === 'failed' && !failedDeckChecks.length) throw new Error('failed deckReview requires at least one failed check');
+      if (deckReview?.status === 'passed' && deckReview.issues.length) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'passed deckReview cannot contain issues');
+      if (deckReview?.status === 'failed' && !deckReview.issues.length) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'failed deckReview requires at least one issue');
+      if (deckReview?.status === 'passed' && failedDeckChecks.length) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'passed deckReview cannot contain failed checks');
+      if (deckReview?.status === 'failed' && !failedDeckChecks.length) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'failed deckReview requires at least one failed check');
       return {
         ok: true,
         actual: JSON.stringify({

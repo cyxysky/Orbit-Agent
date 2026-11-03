@@ -12,8 +12,8 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { BookOpen, FileText, Scissors, X } from 'lucide-react';
-import { novelProjectIdFromFile } from '@/lib/novel-editor';
+import { FileText, Scissors, X } from 'lucide-react';
+import { textDocumentIdFromFile } from '@/lib/text-editor';
 import type { VideoEditorHandle } from './VideoEditorPanel';
 import type { PreviewSource } from '@open-file-viewer/core';
 import { artifactContentType } from '@cjfclonedeep/capability-sdk/file/formats';
@@ -24,6 +24,8 @@ import { useTheme } from '@/theme/ThemeProvider';
 import { AppModal } from '@/components/ui/app-modal';
 import { FloatingWindow } from '@cjfclonedeep/capability-sdk/ui/floating-window';
 import '@/app/styles/creative-editors.css';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 function FilePreviewModuleLoading() {
   const { t } = useI18n();
@@ -38,7 +40,7 @@ const OpenFileViewerSurface = dynamic(
   },
 );
 const VideoEditorPanel = dynamic(() => import('./VideoEditorPanel').then(module => module.VideoEditorPanel), { ssr: false, loading: () => <CreativeEditorLoading label="正在加载视频编辑器" /> });
-const NovelEditorPanel = dynamic(() => import('./NovelEditorPanel').then(module => module.NovelEditorPanel), { ssr: false, loading: () => <CreativeEditorLoading label="正在加载小说编辑器" /> });
+const TextEditorPanel = dynamic(() => import('./TextEditorPanel').then(module => module.TextEditorPanel), { ssr: false, loading: () => <CreativeEditorLoading label="正在加载文本编辑器" /> });
 
 const FILE_EXTENSIONS = new Set([
   'pdf', 'doc', 'docx', 'docm', 'dot', 'dotx', 'dotm', 'rtf', 'odt',
@@ -46,7 +48,7 @@ const FILE_EXTENSIONS = new Set([
   'ppt', 'pptx', 'pptm', 'pps', 'ppsx', 'odp', 'ofd', 'epub', 'xps', 'oxps',
   'jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'jxl', 'svg', 'bmp', 'ico', 'tif', 'tiff', 'heic', 'heif',
   'mp4', 'webm', 'mov', 'mkv', 'avi', 'm3u8', 'flv', 'm2ts', 'mp3', 'wav', 'flac', 'aac', 'ogg', 'm4a', 'midi', 'mid',
-  'txt', 'md', 'markdown', 'json', 'jsonc', 'json5', 'ipynb', 'yaml', 'yml', 'toml', 'ini', 'xml', 'lrc',
+  'txt', 'md', 'markdown', 'html', 'htm', 'json', 'jsonc', 'json5', 'ipynb', 'yaml', 'yml', 'toml', 'ini', 'xml', 'lrc',
   'js', 'jsx', 'ts', 'tsx', 'vue', 'svelte', 'css', 'scss', 'less', 'py', 'go', 'rs', 'rb', 'swift', 'kt', 'java', 'c', 'h', 'cpp', 'hpp', 'cs', 'php', 'sh', 'sql', 'proto', 'hcl', 'tex', 'gv', 'http',
   'zip', 'rar', '7z', 'tar', 'gz', 'tgz', 'bz2', 'xz', 'eml', 'msg', 'mbox',
   'apk', 'bin', 'deb', 'dmg', 'exe', 'ipa', 'msi', 'pkg', 'rpm',
@@ -60,8 +62,8 @@ export type FilePreviewRequest = {
   fileName: string;
   mimeType?: string;
   source: PreviewSource | (() => Promise<PreviewSource>);
-  mode?: 'preview' | 'editVideo' | 'editNovel';
-  novelProjectId?: string;
+  mode?: 'preview' | 'editVideo' | 'editText';
+  textDocumentId?: string;
 };
 
 function filePreviewMimeType(fileName: string, mimeType?: string) {
@@ -112,7 +114,7 @@ export function FilePreviewProvider({ children }: { children: ReactNode }) {
   const [loadingSource, setLoadingSource] = useState(false);
   const [error, setError] = useState('');
   const [editingVideo, setEditingVideo] = useState(false);
-  const editingNovel = request?.mode === 'editNovel';
+  const editingText = request?.mode === 'editText';
   const editor = useRef<VideoEditorHandle>(null);
 
   const closeFilePreview = useCallback(async () => {
@@ -127,7 +129,7 @@ export function FilePreviewProvider({ children }: { children: ReactNode }) {
     try { await editor.current?.flush(); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); return; }
     setRequest({
       ...nextRequest,
-      ...(!nextRequest.mode && novelProjectIdFromFile(nextRequest.fileName) ? { mode: 'editNovel', novelProjectId: novelProjectIdFromFile(nextRequest.fileName) } : {}),
+      ...(!nextRequest.mode && textDocumentIdFromFile(nextRequest.fileName) ? { mode: 'editText', textDocumentId: textDocumentIdFromFile(nextRequest.fileName) } : {}),
       mimeType: filePreviewMimeType(nextRequest.fileName, nextRequest.mimeType),
     });
     setResolvedSource(typeof nextRequest.source === 'function' ? null : nextRequest.source);
@@ -192,11 +194,12 @@ export function FilePreviewProvider({ children }: { children: ReactNode }) {
     openFilePreview,
   }), [closeFilePreview, openFilePreview, request]);
 
-  const dialog = request && (editingNovel || editingVideo) ? (
-    <FloatingWindow title={editingNovel ? '小说书架 · 阅读与编辑' : '视频剪辑'} className={`creative-editor-window ${editingNovel ? 'novel-editor-window' : 'video-editor-window'}`} onClose={closeFilePreview}>
+  const dialog = request && (editingText || editingVideo) ? (
+    <FloatingWindow title={editingText ? '文本编辑器' : '视频剪辑'} className={`creative-editor-window ${editingText ? 'text-editor-window' : 'video-editor-window'}`} onClose={closeFilePreview}>
       <div className="creative-editor-body">
         {error ? <p role="alert" className="media-video-editor-error">{error}</p> : null}
-        {editingNovel ? <NovelEditorPanel key={request.novelProjectId || 'library'} projectId={request.novelProjectId} handleRef={editor} /> : null}
+        {editingText && loadingSource ? <CreativeEditorLoading label={t('正在读取文件')} /> : null}
+        {editingText && !loadingSource ? <TextEditorPanel key={request.textDocumentId || request.fileName} documentId={request.textDocumentId} importSourceUrl={!request.textDocumentId && typeof resolvedSource === 'string' ? resolvedSource || undefined : undefined} fileName={request.fileName} handleRef={editor} /> : null}
         {editingVideo && loadingSource ? <CreativeEditorLoading label={t('正在读取文件')} /> : null}
         {editingVideo && !loadingSource && typeof resolvedSource === 'string' ? <VideoEditorPanel key={resolvedSource} sourceUrl={resolvedSource} handleRef={editor} /> : null}
       </div>
@@ -205,16 +208,17 @@ export function FilePreviewProvider({ children }: { children: ReactNode }) {
     <AppModal
       ariaLabelledBy={titleId}
       backdropClassName="file-preview-overlay"
-      dialogClassName={`file-preview-dialog${editingVideo ? ' file-preview-video-editor-dialog' : ''}${editingNovel ? ' file-preview-novel-dialog' : ''}`}
+      dialogClassName={`file-preview-dialog${editingVideo ? ' file-preview-video-editor-dialog' : ''}`}
       onClose={closeFilePreview}
       size="preview"
     >
       <header className="ui-modal-header file-preview-header">
-        <span aria-hidden="true" className="file-preview-heading-icon">{editingNovel ? <BookOpen size={18} /> : <FileText size={18} />}</span>
+        <span aria-hidden="true" className="file-preview-heading-icon"><FileText size={18} /></span>
         <div className="file-preview-heading-copy">
-          <h2 id={titleId}>{editingNovel ? '小说工作台' : request.fileName}</h2>
-          <p>{editingNovel ? '阅读故事，打磨文字' : t(editingVideo ? '视频剪辑' : '文件预览')}</p>
+          <h2 id={titleId}>{request.fileName}</h2>
+          <p>{t(editingVideo ? '视频剪辑' : '文件预览')}</p>
         </div>
+        {typeof resolvedSource === 'string' && /\.(txt|md|markdown|html?)$/i.test(request.fileName) ? <button className="ui-button file-preview-edit-button" type="button" onClick={() => { setRequest({ ...request, mode: 'editText' }); setError(''); }}><FileText size={16} />编辑文本</button> : null}
         {typeof resolvedSource === 'string' && /\/api\/artifacts\//.test(resolvedSource) && /\.(mp4|webm|mov|mkv|avi)$/i.test(request.fileName) && !editingVideo ? (
           <button className="ui-button file-preview-edit-button" onClick={() => { setEditingVideo(true); setError(''); }} type="button"><Scissors size={16} />{t('剪辑视频')}</button>
         ) : null}
@@ -224,17 +228,16 @@ export function FilePreviewProvider({ children }: { children: ReactNode }) {
       </header>
       <div className="ui-modal-body file-preview-stage">
         {loadingSource ? <BeautifulLoadingState label={t('正在读取文件')} /> : null}
-        {!loadingSource && error && !editingVideo && !editingNovel ? (
+        {!loadingSource && error && !editingVideo ? (
           <div className="file-preview-error" role="alert">
             <FileText size={24} />
             <strong>{t('无法预览此文件')}</strong>
             <span>{error}</span>
           </div>
         ) : null}
-        {(editingVideo || editingNovel) && error ? <p role="alert" className="media-video-editor-error">{error}</p> : null}
-        {editingNovel ? <NovelEditorPanel key={request.novelProjectId || 'library'} projectId={request.novelProjectId} handleRef={editor} /> : null}
+        {editingVideo && error ? <p role="alert" className="media-video-editor-error">{error}</p> : null}
         {!loadingSource && editingVideo && typeof resolvedSource === 'string' ? <VideoEditorPanel key={resolvedSource} sourceUrl={resolvedSource} handleRef={editor} /> : null}
-        {!editingVideo && !editingNovel && !loadingSource && !error && resolvedSource !== null ? (
+        {!editingVideo && !loadingSource && !error && resolvedSource !== null ? (
           <OpenFileViewerSurface
             fileName={request.fileName}
             locale={language === 'en' ? 'en-US' : 'zh-CN'}
@@ -258,6 +261,6 @@ export function FilePreviewProvider({ children }: { children: ReactNode }) {
 
 export function useFilePreview() {
   const context = useContext(FilePreviewContext);
-  if (!context) throw new Error('useFilePreview must be used inside FilePreviewProvider');
+  if (!context) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'useFilePreview must be used inside FilePreviewProvider');
   return context;
 }

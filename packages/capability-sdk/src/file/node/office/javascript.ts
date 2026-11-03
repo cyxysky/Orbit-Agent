@@ -12,6 +12,8 @@ import {
   convertOfficeFileToPath,
   type LibreOfficeRuntimeOptions,
 } from '../libreoffice.ts';
+import { CodedError, ERROR_CODES } from '../../../errors.ts';
+
 
 const WORKER_IDLE_TIMEOUT_MS = Math.max(60_000, Number(process.env.OFFICE_WORKER_IDLE_TIMEOUT_MS) || 120_000);
 const WORKER_HARD_TIMEOUT_MS = Math.max(WORKER_IDLE_TIMEOUT_MS, Number(process.env.OFFICE_WORKER_HARD_TIMEOUT_MS) || 30 * 60_000);
@@ -19,7 +21,7 @@ const PROGRESS_PREFIX = '__WEBPILOT_PROGRESS__';
 const PROGRAM_ENTRYPOINT = /export\s+(?:async\s+)?function\s+createDocument\s*\(\s*job\s*\)/m;
 
 export function assertControlledOfficeJsProgram(sourceCode: string) {
-  if (!PROGRAM_ENTRYPOINT.test(sourceCode)) throw new Error('JavaScript Office source must export function createDocument(job).');
+  if (!PROGRAM_ENTRYPOINT.test(sourceCode)) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'JavaScript Office source must export function createDocument(job).');
 }
 
 export type OfficeJsRuntimeOptions = {
@@ -51,7 +53,7 @@ export async function resolveOfficeJsProgramWorker(
       // Continue through source and packaged locations.
     }
   }
-  throw new Error('JavaScript Office worker is missing from the application runtime.');
+  throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'JavaScript Office worker is missing from the application runtime.');
 }
 
 const officeJsQueue = new CapabilityTaskQueue({ concurrency: 2, maxQueued: 32, queueTimeoutMs: 120_000 });
@@ -69,7 +71,7 @@ function runWorker(
     let pending = '';
     const reset = () => {
       if (timer) clearTimeout(timer);
-      timer = setTimeout(() => idle.abort(new Error(`JavaScript Office worker made no progress for ${WORKER_IDLE_TIMEOUT_MS}ms.`)), WORKER_IDLE_TIMEOUT_MS);
+      timer = setTimeout(() => idle.abort(new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `JavaScript Office worker made no progress for ${WORKER_IDLE_TIMEOUT_MS}ms.`)), WORKER_IDLE_TIMEOUT_MS);
     };
     reset();
     try {
@@ -102,11 +104,11 @@ export async function generateOfficeJsProgramDocument(input: {
   runtime?: OfficeJsRuntimeOptions;
   onProgress?: (progress: { phase: string; message: string; current?: number; total?: number }) => void | Promise<void>;
 }) {
-  if (Boolean(input.sourceCode) === Boolean(input.sourcePath)) throw new Error('JavaScript Office generation requires exactly one sourceCode or sourcePath.');
+  if (Boolean(input.sourceCode) === Boolean(input.sourcePath)) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'JavaScript Office generation requires exactly one sourceCode or sourcePath.');
   const sourceCode = input.sourceCode ?? await readFile(input.sourcePath!, 'utf8');
   assertControlledOfficeJsProgram(sourceCode);
   const requestedExtension = path.extname(input.fileName).toLowerCase();
-  if (input.documentType !== 'spreadsheet' || requestedExtension !== '.xlsx') throw new Error('JavaScript program authoring is for XLSX only. Use HTML source for DOCX, PPTX and PDF.');
+  if (input.documentType !== 'spreadsheet' || requestedExtension !== '.xlsx') throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'JavaScript program authoring is for XLSX only. Use HTML source for DOCX, PPTX and PDF.');
   const outputExtension = '.xlsx';
   const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'webpilot-office-js-'));
   try {
@@ -140,7 +142,7 @@ export async function generateOfficeJsProgramDocument(input: {
       abortSignal: input.abortSignal,
       runtime: input.runtime?.libreOffice,
     });
-    if (!wrotePreview && !previewPdf) throw new Error('LibreOffice is required to reopen and preview JavaScript-generated Office files.');
+    if (!wrotePreview && !previewPdf) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'LibreOffice is required to reopen and preview JavaScript-generated Office files.');
     await input.onProgress?.({ phase: 'visual', message: '文档验证完成，预览已生成' });
     const deliveredPath = input.outputPath || authoredPath;
     return {

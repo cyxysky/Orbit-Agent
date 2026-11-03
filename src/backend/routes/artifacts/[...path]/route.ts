@@ -6,6 +6,8 @@ import { requestApplicationUserId } from '@/server/auth/user-context';
 import { resolveOwnedArtifact } from '@/server/storage/artifact-access';
 import { ApiRequestError, apiError, apiRequestId } from '@/server/http/api-request';
 import { artifactContentType } from '@cjfclonedeep/capability-sdk/file';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 type RouteContext = {
   params: Promise<{ path: string[] }>;
@@ -33,7 +35,7 @@ export async function GET(request: Request, context: RouteContext) {
     const filePath = await resolveOwnedArtifact(pathSegments || [], userId);
     const fileStat = await stat(/*turbopackIgnore: true*/ filePath);
     if (!fileStat.isFile()) {
-      throw new ApiRequestError('Artifact not found', { code: 'not_found', status: 404 });
+      throw new ApiRequestError('Artifact not found', { code: ERROR_CODES.NOT_FOUND, status: 404 });
     }
 
     const nativePreview = new URL(request.url).searchParams.get('preview') === 'pdf'
@@ -42,7 +44,7 @@ export async function GET(request: Request, context: RouteContext) {
     if (nativePreview) {
       const { readOfficePreviewPdf } = await import('@cjfclonedeep/capability-sdk/file/node/office');
       previewPdf = await readOfficePreviewPdf({ absolutePath: filePath, extension: path.extname(filePath) });
-      if (!previewPdf) throw new ApiRequestError('Presentation preview is unavailable', { code: 'preview_unavailable', status: 503 });
+      if (!previewPdf) throw new ApiRequestError('Presentation preview is unavailable', { code: ERROR_CODES.PREVIEW_UNAVAILABLE, status: 503 });
     }
     const contentType = previewPdf ? 'application/pdf' : artifactContentType(filePath);
     const size = previewPdf ? previewPdf.length : fileStat.size;
@@ -79,7 +81,7 @@ export async function GET(request: Request, context: RouteContext) {
     return new Response(body, { headers, status: range ? 206 : 200 });
   } catch (error) {
     return apiError(request, error, {
-      code: 'not_found',
+      code: ERROR_CODES.NOT_FOUND,
       fallback: 'Artifact not found',
       status: 404,
     });
@@ -91,7 +93,7 @@ export async function HEAD(request: Request, context: RouteContext) {
     const { path: pathSegments } = await context.params;
     const filePath = await resolveOwnedArtifact(pathSegments || [], requestApplicationUserId(request));
     const fileStat = await stat(filePath);
-    if (!fileStat.isFile()) throw new ApiRequestError('Artifact not found', { code: 'not_found', status: 404 });
+    if (!fileStat.isFile()) throw new ApiRequestError('Artifact not found', { code: ERROR_CODES.NOT_FOUND, status: 404 });
     return new Response(null, { headers: {
       'Content-Length': String(fileStat.size),
       'Content-Type': artifactContentType(filePath),
@@ -101,6 +103,6 @@ export async function HEAD(request: Request, context: RouteContext) {
       'x-request-id': apiRequestId(request),
     } });
   } catch (error) {
-    return apiError(request, error, { code: 'not_found', fallback: 'Artifact not found', status: 404 });
+    return apiError(request, error, { code: ERROR_CODES.NOT_FOUND, fallback: 'Artifact not found', status: 404 });
   }
 }

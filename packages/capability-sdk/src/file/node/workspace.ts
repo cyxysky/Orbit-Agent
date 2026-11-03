@@ -1,3 +1,5 @@
+import { getErrorCode } from "../../errors.ts";
+import { officeRuntimeDiagnosticCode, normalizeErrorCode } from "../../errors.ts";
 import { htmlOfficeGuidance } from '../office/html.ts';
 import { officeAuthoringGuidance } from './office-authoring.ts';
 import { compileOfficeBody } from './office-body.ts';
@@ -35,6 +37,8 @@ import { createFileVisualIndex } from './visual-index.ts';
 import { officeGenerationRuntimeFingerprint } from './office/runtime-fingerprint.ts';
 import { beginOfficeValidation, currentUnoWorkerDigest, officeValidationEvidence } from './office/validation-evidence.ts';
 import { officeDesignBriefSchema, officeDesignGuidance } from '../design-guidance.ts';
+import { CodedError, ERROR_CODES } from '../../errors.ts';
+
 
 function officeOperationWasInterrupted(error: unknown, abortSignal?: AbortSignal) {
   if (abortSignal?.aborted) return true;
@@ -227,7 +231,7 @@ function configuredOfficeGenerator(fileName: string, operation: 'create' | 'modi
   const extension = path.extname(fileName).toLowerCase();
   if (configured === 'javascript') {
     if (!javascriptOfficeExtensions.has(extension)) {
-      throw new Error('JavaScript Office generation supports .pptx, .docx, .xlsx, and PDF from HTML. Select UNO mode for binary Office or OpenDocument output.');
+      throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'JavaScript Office generation supports .pptx, .docx, .xlsx, and PDF from HTML. Select UNO mode for binary Office or OpenDocument output.');
     }
     return extension === '.xlsx' ? 'javascript' : 'html';
   }
@@ -254,15 +258,15 @@ async function plannedSourceDocument(input: PlanArtifactInput, assets: DocumentA
       : matchingBindings.length > 1
         ? 'multiple matching Office attachments are available; sourceAttachmentId is required'
         : 'no matching Office attachment is available';
-    throw new Error(`Existing-file modification requires a source Office attachment: ${reason}.`);
+    throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `Existing-file modification requires a source Office attachment: ${reason}.`);
   }
   const requestedExtension = path.extname(String(input.fileName || '')).toLowerCase();
   const sourceExtension = path.extname(binding.name).toLowerCase();
   if (requestedExtension !== sourceExtension) {
-    throw new Error(`Existing-file modification must preserve the source format (${sourceExtension}); requested output uses ${requestedExtension || 'no extension'}. Create a separate documentId for format conversion.`);
+    throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `Existing-file modification must preserve the source format (${sourceExtension}); requested output uses ${requestedExtension || 'no extension'}. Create a separate documentId for format conversion.`);
   }
   const asset = assets.find((item) => item.origin === 'attachment' && item.ref === binding.ref);
-  if (!asset) throw new Error('The selected source attachment could not be mounted into the document workspace.');
+  if (!asset) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'The selected source attachment could not be mounted into the document workspace.');
   return {
     operation: 'modify' as const,
     sourceDocument: {
@@ -426,7 +430,7 @@ async function resolveEditDocumentId(
   if (drafts.length === 1) return drafts[0].documentId;
 
   const candidates = drafts.map((draft) => draft.documentId).join(', ') || '(none)';
-  throw new Error(
+  throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED,
     `file action=edit could not infer documentId because this conversation has ${drafts.length} editable drafts: ${candidates}. `
     + 'Copy documentId from list or the latest readSource result; artifactId is not a source identity.',
   );
@@ -904,7 +908,7 @@ function assertOfficeValidationPassed(
 ) {
   if (validation.passed) return;
   const failed = diagnostics.filter((issue) => issue.severity === 'error');
-  const error = new Error(failed.map((issue) => issue.message).join('\n'));
+  const error = new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, failed.map((issue) => issue.message).join('\n'));
   Object.assign(error, { diagnostics: failed });
   throw error;
 }
@@ -999,7 +1003,7 @@ export function generatedVerificationIssues(diagnostics: unknown) {
       const primaryElement = (issue.elementId && elementById.get(issue.elementId))
         || (elementIds?.[0] ? elementById.get(elementIds[0]) : undefined);
       return {
-        code: `RUNTIME_${String(issue.type || 'LAYOUT').toUpperCase()}`,
+        code: officeRuntimeDiagnosticCode(issue.type),
         column: issue.column,
         elementId: issue.elementId,
         elementIds,
@@ -1039,7 +1043,7 @@ export function generatedRuntimeDiagnostics(diagnostics: unknown): OfficeProgram
   return candidate.filter((entry): entry is Record<string, unknown> => Boolean(
     entry && typeof entry === 'object' && typeof (entry as { message?: unknown }).message === 'string',
   )).map((entry) => ({
-    code: typeof entry.code === 'string' ? entry.code : 'UNO_RUNTIME_WARNING',
+    code: typeof entry.code === 'string' ? entry.code : ERROR_CODES.UNO_RUNTIME_WARNING,
     ...(typeof entry.callColumn === 'number' ? { callColumn: entry.callColumn } : {}),
     ...(typeof entry.callLine === 'number' ? { callLine: entry.callLine } : {}),
     ...(typeof entry.column === 'number' ? { column: entry.column } : {}),
@@ -1086,7 +1090,7 @@ function missingRequestedPresentationCapabilityDiagnostics(
   return requestedPresentationCapabilities(draft.intent)
     .filter(({ feature }) => (counts[feature] || 0) < 1)
     .map(({ label, feature }) => ({
-      code: 'UNO_REQUIRED_CAPABILITY_MISSING',
+      code: ERROR_CODES.UNO_REQUIRED_CAPABILITY_MISSING,
       severity: 'error' as const,
       message: (
         `The plan explicitly requires ${label}, but generated featureCounts.${feature}=0. `
@@ -1146,7 +1150,7 @@ async function generateValidatedDraftCandidate(input: {
   abortSignal?: AbortSignal;
   onProgress?: (progress: FileGenerationProgress) => void | Promise<void>;
 }): Promise<Omit<ValidatedDraftCandidate, 'validation'>> {
-  if (!input.draft.program) throw new Error(`Office draft ${input.draft.documentId} has no source yet; call action=generate first.`);
+  if (!input.draft.program) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `Office draft ${input.draft.documentId} has no source yet; call action=generate first.`);
   // Execute the candidate from an isolated source file. The committed
   // workspace is only replaced after every validation gate succeeds.
   await input.onProgress?.({ phase: 'assets', message: '正在同步文件素材' });
@@ -1164,7 +1168,7 @@ async function generateValidatedDraftCandidate(input: {
       if (!artifactMetadata.isFile() || metadata.artifactDigest !== await sha256File(cache.artifactPath)
         || (metadata.previewDigest && metadata.previewDigest !== await sha256File(cache.previewPath))
         || (input.draft.generator === 'uno' && !metadata.previewDigest)) {
-        throw new Error('Cached Office artifact or preview changed; regenerate the candidate.');
+        throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'Cached Office artifact or preview changed; regenerate the candidate.');
       }
       return {
         assets,
@@ -1224,7 +1228,7 @@ async function prepareValidatedDraft(input: {
   abortSignal?: AbortSignal;
   onProgress?: (progress: FileGenerationProgress) => void | Promise<void>;
 }): Promise<ValidatedDraftCandidate> {
-  if (!input.draft.program) throw new Error(`Office draft ${input.draft.documentId} has no source yet; call action=generate first.`);
+  if (!input.draft.program) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `Office draft ${input.draft.documentId} has no source yet; call action=generate first.`);
   try {
     await beginOfficeValidation(input.draft);
     input.draft.validationStatus = 'pending';
@@ -1245,7 +1249,7 @@ async function prepareValidatedDraft(input: {
     });
     input.draft.validationDiagnostics = staticDiagnostics;
     if (!staticAnalysis.passed) {
-      const error = new Error(staticDiagnostics
+      const error = new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, staticDiagnostics
         .filter((item) => item.severity === 'error')
         .map((item) => `${item.line || '?'}:${item.column || '?'} ${item.message}`)
         .join('\n'));
@@ -1363,7 +1367,7 @@ async function validateDraft(input: {
       '.doc', '.docx', '.odt', '.pdf', '.xls', '.xlsx', '.ods', '.ppt', '.pptx', '.odp',
     ].includes(candidate.generated.extension);
     if (needsOfficePreview && !candidate.generated.previewPath) {
-      throw new Error('LibreOffice UNO worker did not produce a PDF preview for draft validation.');
+      throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'LibreOffice UNO worker did not produce a PDF preview for draft validation.');
     }
     if (needsOfficePreview) await input.onProgress?.({ phase: 'visual', message: '正在生成验证预览' });
     const visualVerification = needsOfficePreview
@@ -1375,7 +1379,7 @@ async function validateDraft(input: {
         })
       : undefined;
     if (needsOfficePreview && (!visualVerification?.imagePaths.length || visualVerification.renderer !== 'pdf')) {
-      throw new Error(`visual quality gate failed: ${visualVerification?.warning || 'LibreOffice produced no page previews'}`);
+      throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `visual quality gate failed: ${visualVerification?.warning || 'LibreOffice produced no page previews'}`);
     }
     return {
       ok: true,
@@ -1414,7 +1418,7 @@ async function validateDraft(input: {
     return {
       ok: false,
       actual: JSON.stringify({
-        kind: workerFailure ? 'uno-infrastructure-error' : transientUnoFailure ? 'uno-infrastructure-retry' : 'uno-draft-validation',
+        kind: workerFailure ? ERROR_CODES.UNO_INFRASTRUCTURE_ERROR : transientUnoFailure ? 'uno-infrastructure-retry' : 'uno-draft-validation',
         ...(infrastructureFailure ? { sourceRepairRequired: false, sourceValidity: 'unverified', retryable: false, retryAfter: 'runtime-change-or-confirmed-recovery' } : {}),
         documentId: input.draft.documentId,
         sourceRead: { action: 'readSource', documentId: input.draft.documentId },
@@ -1455,11 +1459,11 @@ async function validateDraftSourceUnit(input: {
   const outputPath = path.join(directory, `.unit-${suffix}${extension}`);
   const previewPath = path.join(directory, `.unit-${suffix}.preview.pdf`);
   try {
-    if (!input.draft.program) throw new Error('The Office draft has no working source.');
+    if (!input.draft.program) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'The Office draft has no working source.');
     await beginOfficeValidation(input.draft, input.sourceUnitPath);
     const units = sourceUnitsForDraft(input.draft.program, input.draft);
     const unit = units.find((candidate) => candidate.path === input.sourceUnitPath);
-    if (!unit) throw new Error(`Office source unit ${input.sourceUnitPath} does not exist.`);
+    if (!unit) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `Office source unit ${input.sourceUnitPath} does not exist.`);
     const isolatedSource = isolateSourceUnit(input.draft.program, input.sourceUnitPath, input.draft.generator, units);
     await input.onProgress?.({ phase: 'unit-static-analysis', message: '正在检查整份文档的语法与 API 调用' });
     // Source-unit execution is an optimization only. Static preflight always
@@ -1467,7 +1471,7 @@ async function validateDraftSourceUnit(input: {
     // facade method, signature, and supported nested-argument diagnostic.
     const staticAnalysis = await analyzeOfficeProgram(input.draft.program, input.draft.generator || 'uno');
     if (!staticAnalysis.passed) {
-      const error = new Error(staticAnalysis.diagnostics.filter((item) => item.severity === 'error').map((item) => item.message).join('\n'));
+      const error = new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, staticAnalysis.diagnostics.filter((item) => item.severity === 'error').map((item) => item.message).join('\n'));
       Object.assign(error, { diagnostics: staticAnalysis.diagnostics });
       throw error;
     }
@@ -1583,7 +1587,7 @@ async function validateDraftSourceUnit(input: {
       return {
         ok: false,
         actual: JSON.stringify({
-          kind: workerFailure ? 'uno-infrastructure-error' : 'uno-infrastructure-retry',
+          kind: workerFailure ? ERROR_CODES.UNO_INFRASTRUCTURE_ERROR : 'uno-infrastructure-retry',
           sourceRepairRequired: false,
           sourceValidity: 'unverified',
           retryable: false,
@@ -1657,7 +1661,7 @@ async function renderDraft(input: {
     const candidate = await prepareValidatedDraft(input);
     const digest = sourceDigest(input.draft.program || '');
     if (input.draft.validatedSourceDigest !== digest) {
-      throw new Error('The working source has not passed validation and cannot be rendered. Continue editing the saved current source until validation passes.');
+      throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'The working source has not passed validation and cannot be rendered. Continue editing the saved current source until validation passes.');
     }
     input.draft.workflow = { state: 'rendering', checkpointAt: new Date().toISOString() };
     await saveDraft(input.runId, input.draft);
@@ -1673,7 +1677,7 @@ async function renderDraft(input: {
       '.doc', '.docx', '.odt', '.pdf', '.xls', '.xlsx', '.ods', '.ppt', '.pptx', '.odp',
     ].includes(candidate.generated.extension);
     if (needsOfficePreview && !candidate.generated.previewPath) {
-      throw new Error('LibreOffice UNO worker did not produce a PDF preview for visual verification.');
+      throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'LibreOffice UNO worker did not produce a PDF preview for visual verification.');
     }
     if (needsOfficePreview) await input.onProgress?.({ phase: 'visual', message: '正在生成逐页预览' });
     const visualVerification = needsOfficePreview
@@ -1689,7 +1693,7 @@ async function renderDraft(input: {
         || visualVerification.renderer !== 'pdf'
         || !Number.isSafeInteger(visualVerification.pageCount)
         || Number(visualVerification.pageCount) < 1)) {
-      throw new Error(`visual quality gate failed: ${visualVerification?.warning || 'LibreOffice produced no page previews'}`);
+      throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `visual quality gate failed: ${visualVerification?.warning || 'LibreOffice produced no page previews'}`);
     }
 
     // Only action=render publishes the already-validated candidate. Keep the
@@ -1805,7 +1809,7 @@ async function renderDraft(input: {
       return {
         ok: false,
         actual: JSON.stringify({
-          kind: workerFailure ? 'office-render-infrastructure-error' : 'office-render-infrastructure-retry',
+          kind: workerFailure ? ERROR_CODES.OFFICE_RENDER_INFRASTRUCTURE_ERROR : 'office-render-infrastructure-retry',
           sourceRepairRequired: false,
           sourceValidity: 'unverified',
           retryable: false,
@@ -1824,7 +1828,7 @@ async function renderDraft(input: {
       };
     }
     return { ok: false, actual: JSON.stringify({
-      kind: 'office-render-failure',
+      kind: ERROR_CODES.OFFICE_RENDER_FAILURE,
       documentId: input.draft.documentId,
       sourceDigest: sourceDigest(input.draft.program || ''),
       sourceUnchanged: true,
@@ -1854,7 +1858,7 @@ async function planFileArtifactUnlocked(input: PlanArtifactInput): Promise<FileA
     if (!input.documentType) return { ok: false, actual: 'file action=plan requires documentType.' };
     const designResult = input.design === undefined ? undefined : officeDesignBriefSchema.safeParse(input.design);
     if (designResult && !designResult.success) return { ok: false, actual: JSON.stringify({
-      kind: 'document-design-invalid', code: 'DESIGN_BRIEF_INVALID', saved: false,
+      kind: ERROR_CODES.DOCUMENT_DESIGN_INVALID, code: ERROR_CODES.DESIGN_BRIEF_INVALID, saved: false,
       documentId, issues: designResult.error.issues.map((issue) => ({ field: `design.${issue.path.join('.')}`, message: issue.message })),
       instruction: 'Correct only the initial design brief in plan. No source or file was changed.',
     }) };
@@ -2040,7 +2044,7 @@ async function editUnoFileArtifactUnlocked(input: EditUnoProgramInput): Promise<
     }
     if (hasReplacements && (!Array.isArray(input.replacements) || input.replacements.some((item) => !item || typeof item.oldText !== 'string' || typeof item.newText !== 'string'))) {
       return { ok: false, actual: JSON.stringify({
-        kind: 'uno-draft-patch-conflict', code: 'PATCH_INPUT_REJECTED', editStatus: 'rejected',
+        kind: ERROR_CODES.UNO_DRAFT_PATCH_CONFLICT, code: ERROR_CODES.PATCH_INPUT_REJECTED, editStatus: 'rejected',
         documentId, changed: false, saved: false, patchBaseDigest: draftDigest,
         error: 'replacements must be an array of literal oldText/newText string pairs. No source was changed.',
       }) };
@@ -2053,7 +2057,7 @@ async function editUnoFileArtifactUnlocked(input: EditUnoProgramInput): Promise<
     const receipt = persistedDraft.lastSourceEdit;
     if (receipt?.requestDigest === requestDigest && receipt.afterDigest === draftDigest) {
       return { ok: persistedDraft.validationStatus !== 'failed', actual: JSON.stringify({
-        kind: 'uno-draft-patch-no-changes', code: 'EDIT_REPLAY_CONFIRMED', editStatus: 'already-applied',
+        kind: 'uno-draft-patch-no-changes', code: ERROR_CODES.EDIT_REPLAY_CONFIRMED, editStatus: 'already-applied',
         documentId, changed: false, saved: true, patchBaseDigest: draftDigest, sourceUnitPath: requestedPath,
         patchHunks: { applied: 0, alreadyApplied: receipt.totalHunks, failed: [], blocked: [], total: receipt.totalHunks },
         validationStatus: persistedDraft.validationStatus || 'pending',
@@ -2063,7 +2067,7 @@ async function editUnoFileArtifactUnlocked(input: EditUnoProgramInput): Promise<
     }
     if (requestedPath && !requestedUnit) {
       return { ok: false, actual: JSON.stringify({
-        kind: 'uno-draft-patch-conflict', code: 'SOURCE_UNIT_NOT_FOUND', editStatus: 'rejected',
+        kind: ERROR_CODES.UNO_DRAFT_PATCH_CONFLICT, code: ERROR_CODES.SOURCE_UNIT_NOT_FOUND, editStatus: 'rejected',
         documentId, changed: false, saved: false, patchBaseDigest: draftDigest,
         error: `Unknown source unit ${requestedPath}. Read the current source index; do not guess a path.`,
         nextAction: { action: 'readSource', documentId },
@@ -2077,7 +2081,7 @@ async function editUnoFileArtifactUnlocked(input: EditUnoProgramInput): Promise<
     } catch (error) {
       const errorText = error instanceof Error ? error.message : String(error);
       return { ok: false, actual: JSON.stringify({
-        kind: 'uno-draft-patch-conflict', code: 'PATCH_INPUT_REJECTED', editStatus: 'rejected', documentId,
+        kind: ERROR_CODES.UNO_DRAFT_PATCH_CONFLICT, code: getErrorCode(error, ERROR_CODES.PATCH_INPUT_REJECTED), editStatus: 'rejected', documentId,
         changed: false, saved: false, patchBaseDigest: draftDigest, error: errorText,
         recoverySuggestion: 'No source was changed. Correct the edit format or size using the source already in context; readSource only if the exact target is missing.',
       }) };
@@ -2086,8 +2090,8 @@ async function editUnoFileArtifactUnlocked(input: EditUnoProgramInput): Promise<
       return {
         ok: false,
         actual: JSON.stringify({
-          kind: 'uno-draft-patch-conflict',
-          code: 'PATCH_ATOMIC_CONFLICT',
+          kind: ERROR_CODES.UNO_DRAFT_PATCH_CONFLICT,
+          code: ERROR_CODES.PATCH_ATOMIC_CONFLICT,
           editStatus: 'rejected', changed: false, saved: false, patchBaseDigest: draftDigest,
           documentId,
           sourceUnitPath: requestedUnit?.path,
@@ -2116,7 +2120,7 @@ async function editUnoFileArtifactUnlocked(input: EditUnoProgramInput): Promise<
         ok: patchResult.failedHunks.length === 0 && persistedDraft.validationStatus !== 'failed',
         actual: JSON.stringify({
           kind: 'uno-draft-patch-no-changes',
-          code: 'PATCH_NO_CHANGES',
+          code: ERROR_CODES.PATCH_NO_CHANGES,
           editStatus: 'no-change',
           documentId,
           fileName: draft.fileName,
@@ -2314,8 +2318,7 @@ function structuredOperationErrorCode(data: unknown, fallback: string) {
   const candidate = data && typeof data === 'object' && !Array.isArray(data)
     ? (data as { code?: unknown }).code
     : undefined;
-  if (typeof candidate !== 'string' || !/^[A-Za-z][A-Za-z0-9_.-]{0,127}$/.test(candidate)) return fallback;
-  return candidate.trim().toLowerCase().replace(/[_.]+/g, '-');
+  return normalizeErrorCode(candidate, normalizeErrorCode(fallback, ERROR_CODES.FILE_OPERATION_FAILED));
 }
 
 function structuredFileOperationResult(
@@ -2360,20 +2363,20 @@ export function createNodeFileWorkspace(options: NodeFileWorkspaceHost) {
     artifactsRoot: host.artifactsRoot,
     writeTextFileArtifact: (input: NodeFileWriteInput) => writeTextFileArtifact(host, input),
     syncDocumentAssets: bindNodeFileWorkspaceOperation(host, syncDocumentAssets),
-    downloadFileArtifact: bindNodeFileWorkspaceResultOperation(host, downloadFileArtifact, 'file-download-failed'),
-    convertFileArtifact: bindNodeFileWorkspaceResultOperation(host, convertFileArtifact, 'file-convert-failed'),
+    downloadFileArtifact: bindNodeFileWorkspaceResultOperation(host, downloadFileArtifact, ERROR_CODES.FILE_DOWNLOAD_FAILED),
+    convertFileArtifact: bindNodeFileWorkspaceResultOperation(host, convertFileArtifact, ERROR_CODES.FILE_CONVERT_FAILED),
     listOfficeDraftCatalog: bindNodeFileWorkspaceOperation(host, listOfficeDraftCatalog),
-    listOfficeDrafts: bindNodeFileWorkspaceResultOperation(host, listOfficeDrafts, 'file-list-failed'),
+    listOfficeDrafts: bindNodeFileWorkspaceResultOperation(host, listOfficeDrafts, ERROR_CODES.FILE_LIST_FAILED),
     officeDraftCatalogForPrompt: bindNodeFileWorkspaceOperation(host, officeDraftCatalogForPrompt),
-    getUnoApi: bindNodeFileWorkspaceResultOperation(host, getUnoApi, 'file-uno-api-failed'),
-    getOfficeJsApi: bindNodeFileWorkspaceResultOperation(host, getOfficeJsApi, 'file-js-api-failed'),
-    verifyCurrentUnoRenderedArtifact: bindNodeFileWorkspaceResultOperation(host, verifyCurrentUnoRenderedArtifact, 'file-visual-version-failed'),
-    recordOfficeVisualQaProgress: bindNodeFileWorkspaceResultOperation(host, recordOfficeVisualQaProgress, 'file-visual-report-failed'),
-    readUnoDraft: bindNodeFileWorkspaceResultOperation(host, readUnoDraft, 'file-read-failed'),
-    planFileArtifact: bindNodeFileWorkspaceResultOperation(host, planFileArtifact, 'file-plan-failed'),
-    generateUnoFileArtifact: bindNodeFileWorkspaceResultOperation(host, generateUnoFileArtifact, 'file-generate-failed'),
-    editUnoFileArtifact: bindNodeFileWorkspaceResultOperation(host, editUnoFileArtifact, 'file-edit-failed'),
-    renderFileArtifact: bindNodeFileWorkspaceResultOperation(host, renderFileArtifact, 'file-render-failed'),
+    getUnoApi: bindNodeFileWorkspaceResultOperation(host, getUnoApi, ERROR_CODES.FILE_UNO_API_FAILED),
+    getOfficeJsApi: bindNodeFileWorkspaceResultOperation(host, getOfficeJsApi, ERROR_CODES.FILE_JS_API_FAILED),
+    verifyCurrentUnoRenderedArtifact: bindNodeFileWorkspaceResultOperation(host, verifyCurrentUnoRenderedArtifact, ERROR_CODES.FILE_VISUAL_VERSION_FAILED),
+    recordOfficeVisualQaProgress: bindNodeFileWorkspaceResultOperation(host, recordOfficeVisualQaProgress, ERROR_CODES.FILE_VISUAL_REPORT_FAILED),
+    readUnoDraft: bindNodeFileWorkspaceResultOperation(host, readUnoDraft, ERROR_CODES.FILE_READ_FAILED),
+    planFileArtifact: bindNodeFileWorkspaceResultOperation(host, planFileArtifact, ERROR_CODES.FILE_PLAN_FAILED),
+    generateUnoFileArtifact: bindNodeFileWorkspaceResultOperation(host, generateUnoFileArtifact, ERROR_CODES.FILE_GENERATE_FAILED),
+    editUnoFileArtifact: bindNodeFileWorkspaceResultOperation(host, editUnoFileArtifact, ERROR_CODES.FILE_EDIT_FAILED),
+    renderFileArtifact: bindNodeFileWorkspaceResultOperation(host, renderFileArtifact, ERROR_CODES.FILE_RENDER_FAILED),
     async health() {
       const [download, conversion] = await Promise.all([
         host.downloader.health(),

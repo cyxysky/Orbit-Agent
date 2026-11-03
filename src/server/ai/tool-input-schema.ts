@@ -1,4 +1,6 @@
 import type { LanguageModelV4CallOptions } from '@ai-sdk/provider';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export function normalizeToolInputSchemas(options: LanguageModelV4CallOptions): LanguageModelV4CallOptions {
   if (!options.tools?.length) return options;
@@ -9,7 +11,7 @@ export function normalizeToolInputSchemas(options: LanguageModelV4CallOptions): 
       const schema = tool.inputSchema;
       if (!schema || typeof schema !== 'object' || Array.isArray(schema)
         || (schema.type !== undefined && schema.type !== 'object')) {
-        const error = new Error(`Invalid schema for function '${tool.name}': tool input schema must have an object root.`);
+        const error = new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, `Invalid schema for function '${tool.name}': tool input schema must have an object root.`);
         error.name = 'AI_InvalidToolInputSchemaError';
         throw error;
       }

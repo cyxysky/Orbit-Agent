@@ -1,3 +1,5 @@
+
+import { CodedError, ERROR_CODES } from '../../errors.ts';
 /**
  * A session-local CDP endpoint. Playwright's browser-wide auto-attach waits for
  * every renderer, including hung pages owned by other conversations. Discover
@@ -12,13 +14,13 @@ export async function createBrowserCodeCdpScope(input: {
 }) {
   const { WebSocket, WebSocketServer } = input.websocketModule;
   const allowed = new Set(input.targetIds);
-  if (!allowed.size) throw new Error('browserCode CDP scope requires an owned page.');
+  if (!allowed.size) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'browserCode CDP scope requires an owned page.');
   let endpoint = input.endpoint;
   if (/^https?:/i.test(endpoint)) {
     const response = await fetch(`${endpoint.replace(/\/$/, '')}/json/version`, {
       signal: AbortSignal.timeout(input.timeoutMs),
     });
-    if (!response.ok) throw new Error(`CDP endpoint discovery failed: HTTP ${response.status}.`);
+    if (!response.ok) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `CDP endpoint discovery failed: HTTP ${response.status}.`);
     endpoint = String((await response.json() as { webSocketDebuggerUrl?: string }).webSocketDebuggerUrl || '');
   }
   const upstream = new WebSocket(endpoint, { handshakeTimeout: input.timeoutMs });
@@ -47,7 +49,7 @@ export async function createBrowserCodeCdpScope(input: {
     closed = true;
     for (const request of pending.values()) {
       clearTimeout(request.timer);
-      request.reject(new Error('browserCode scoped CDP connection closed.'));
+      request.reject(new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'browserCode scoped CDP connection closed.'));
     }
     pending.clear();
     client?.terminate();
@@ -60,11 +62,11 @@ export async function createBrowserCodeCdpScope(input: {
     socket.send(JSON.stringify(message));
   };
   const request = (method: string, params: Payload) => new Promise<Payload>((resolve, reject) => {
-    if (closed) { reject(new Error('browserCode scoped CDP connection closed.')); return; }
+    if (closed) { reject(new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'browserCode scoped CDP connection closed.')); return; }
     const id = --commandId;
     const timer = setTimeout(() => {
       pending.delete(id);
-      reject(new Error(`Scoped CDP ${method} timed out after ${input.timeoutMs}ms.`));
+      reject(new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `Scoped CDP ${method} timed out after ${input.timeoutMs}ms.`));
     }, input.timeoutMs);
     pending.set(id, { resolve, reject, timer });
     send(upstream, { id, method, params });
@@ -95,7 +97,7 @@ export async function createBrowserCodeCdpScope(input: {
       if (!item) return;
       pending.delete(message.id);
       clearTimeout(item.timer);
-      if (message.error) item.reject(new Error(message.error.message));
+      if (message.error) item.reject(new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, message.error.message));
       else item.resolve(message.result || {});
       return;
     }
@@ -171,16 +173,16 @@ export async function createBrowserCodeCdpScope(input: {
       new Promise<void>((resolve, reject) => {
         upstream.once('open', resolve);
         upstream.once('error', reject);
-        upstream.once('close', () => reject(new Error('Scoped CDP upstream closed during startup.')));
+        upstream.once('close', () => reject(new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Scoped CDP upstream closed during startup.')));
       }),
       new Promise<void>((resolve, reject) => {
         server.once('listening', resolve);
         server.once('error', reject);
       }),
     ]);
-    if (closed) throw new Error('Scoped CDP connection closed during startup.');
+    if (closed) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Scoped CDP connection closed during startup.');
     const address = server.address();
-    if (!address || typeof address === 'string') throw new Error('Scoped CDP listener has no port.');
+    if (!address || typeof address === 'string') throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Scoped CDP listener has no port.');
     return { endpoint: `ws://127.0.0.1:${address.port}${route}`, targetIds: () => [...allowed], updateTargets, close };
   } catch (error) {
     close();

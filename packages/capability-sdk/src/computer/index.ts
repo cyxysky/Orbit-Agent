@@ -1,3 +1,4 @@
+import { getErrorCode } from "../errors.ts";
 import { z } from 'zod';
 import {
   defineCapabilityInput,
@@ -11,6 +12,8 @@ import {
 } from '../index.ts';
 import { computerRuntimeSkill } from './runtime-skill.ts';
 import { computerCapabilitySettings } from './settings.ts';
+import { CodedError, ERROR_CODES } from '../errors.ts';
+
 
 export * from './runtime-skill.ts';
 export * from './settings.ts';
@@ -227,7 +230,7 @@ export function createComputerTool(
         return {
           ok: false,
           error: {
-            code: 'computer-disabled',
+            code: ERROR_CODES.COMPUTER_DISABLED,
             message: 'Computer control is disabled by host configuration.',
           },
         };
@@ -235,13 +238,13 @@ export function createComputerTool(
 
       try {
         if (input.action === 'click' && !latestObservation) {
-          throw new Error('Click requires a fresh successful observe result first.');
+          throw new CodedError(ERROR_CODES.COMPUTER_OPERATION_FAILED, 'Click requires a fresh successful observe result first.');
         }
         const selectedElement = input.action === 'click' && input.elementId
           ? latestObservation?.elements.get(input.elementId)
           : undefined;
         if (input.action === 'click' && input.elementId && !selectedElement) {
-          throw new Error(`Element '${input.elementId}' is not present in the latest screenshot observation.`);
+          throw new CodedError(ERROR_CODES.COMPUTER_OPERATION_FAILED, `Element '${input.elementId}' is not present in the latest screenshot observation.`);
         }
         const clickPoint = input.action === 'click'
           ? selectedElement?.center || { x: input.x!, y: input.y! }
@@ -255,7 +258,7 @@ export function createComputerTool(
             || clickPoint.y >= latestObservation.height
           )
         ) {
-          throw new Error(
+          throw new CodedError(ERROR_CODES.COMPUTER_OPERATION_FAILED,
             `Click pixel (${clickPoint.x}, ${clickPoint.y}) is outside the latest screenshot ${latestObservation.width}x${latestObservation.height}.`,
           );
         }
@@ -284,6 +287,8 @@ export function createComputerTool(
             300000,
           ),
         };
+        // A failed action may still change the desktop. Never reuse its previous screenshot.
+        latestObservation = undefined;
         const rawData = await driver.execute(driverInput, context);
         const observation = rawData as ComputerObservation;
         const width = positiveDimension(observation.width);
@@ -296,8 +301,6 @@ export function createComputerTool(
             height,
             elements: new Map(elements.map((element) => [element.id, element])),
           };
-        } else if (input.action !== 'observe') {
-          latestObservation = undefined;
         }
         const data = {
           ...rawData,
@@ -326,7 +329,7 @@ export function createComputerTool(
         return {
           ok: false,
           error: {
-            code: 'computer-operation-failed',
+            code: getErrorCode(error, ERROR_CODES.COMPUTER_OPERATION_FAILED),
             message: error instanceof Error ? error.message : String(error),
           },
         };

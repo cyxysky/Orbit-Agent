@@ -3,6 +3,8 @@ import { normalizeApplicationUserId } from '@/server/auth/user-context';
 import { executeDatabase, queryDatabase, queryDatabaseOne, runDatabaseTransaction, type DatabaseExecutor } from '@/server/db/database';
 import { queueDatabaseWrite, type DatabaseWriteStatement } from '@/server/storage/database-write-queue';
 import { decryptCredentialSecret, encryptCredentialSecret } from './credential-master-key';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export type LoginAccountStatus = 'active' | 'disabled';
 
@@ -90,20 +92,20 @@ export function normalizeLoginAccountUserId(value: unknown) {
 
 export function normalizeLoginAccountDomain(value: unknown) {
   const raw = typeof value === 'string' ? value.trim() : '';
-  if (!raw) throw new Error('账号域名不能为空');
+  if (!raw) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '账号域名不能为空');
   try {
     const parsed = new URL(raw.includes('://') ? raw : `https://${raw}`);
     const hostname = parsed.hostname.toLowerCase().replace(/\.$/, '');
-    if (!hostname) throw new Error('missing hostname');
+    if (!hostname) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'missing hostname');
     return hostname;
   } catch {
-    throw new Error('账号域名格式无效');
+    throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '账号域名格式无效');
   }
 }
 
 function normalizeUsername(value: unknown) {
   const username = typeof value === 'string' ? value.trim() : '';
-  if (!username) throw new Error('登录账号不能为空');
+  if (!username) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '登录账号不能为空');
   return username;
 }
 
@@ -121,13 +123,13 @@ function normalizeLoginUrl(value: unknown, domain: string) {
   const raw = typeof value === 'string' ? value.trim() : '';
   try {
     const parsed = new URL(raw || `https://${domain}/`);
-    if (!/^https?:$/.test(parsed.protocol)) throw new Error('unsupported protocol');
+    if (!/^https?:$/.test(parsed.protocol)) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'unsupported protocol');
     if (normalizeLoginAccountDomain(parsed.hostname) !== domain) {
-      throw new Error('domain mismatch');
+      throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'domain mismatch');
     }
     return parsed.toString();
   } catch {
-    throw new Error('登录地址必须是与账号域名一致的 http(s) 地址');
+    throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '登录地址必须是与账号域名一致的 http(s) 地址');
   }
 }
 
@@ -142,12 +144,12 @@ function passwordAad(input: Pick<LoginAccountRow, 'id' | 'user_id' | 'domain' | 
 }
 
 function encryptPassword(password: string, identity: Pick<LoginAccountRow, 'id' | 'user_id' | 'domain' | 'username'>) {
-  if (!password) throw new Error('登录密码不能为空');
+  if (!password) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '登录密码不能为空');
   return encryptCredentialSecret(password, passwordAad(identity));
 }
 
 function decryptPassword(row: LoginAccountRow) {
-  if (!row.password_envelope) throw new Error('账号没有可用的登录密码');
+  if (!row.password_envelope) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '账号没有可用的登录密码');
   return decryptCredentialSecret({
     aad: passwordAad(row),
     envelope: row.password_envelope,
@@ -272,7 +274,7 @@ export async function createLoginAccount(input: CreateLoginAccountInput) {
     ]);
   } catch (error) {
     if (/unique|duplicate/i.test(error instanceof Error ? error.message : String(error))) {
-      throw new Error('该域名和登录账号已经存在');
+      throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '该域名和登录账号已经存在');
     }
     throw error;
   }
@@ -328,7 +330,7 @@ export async function updateLoginAccount(id: string, input: UpdateLoginAccountIn
       ], database);
     } catch (error) {
       if (/unique|duplicate/i.test(error instanceof Error ? error.message : String(error))) {
-        throw new Error('该域名和登录账号已经存在');
+        throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '该域名和登录账号已经存在');
       }
       throw error;
     }

@@ -1,6 +1,8 @@
 import { requestApplicationPrincipal } from '@/server/auth/user-context';
 import { ApiRequestError } from '@/server/http/api-request';
 import { requestHasAdminSettingsAccess } from '@/server/settings/admin-settings-access';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 type DebugRouteEnvironment = NodeJS.ProcessEnv & {
   NODE_ENV?: string;
@@ -16,12 +18,12 @@ export function debugRoutesEnabled(environment: DebugRouteEnvironment = process.
 
 export function requireDebugRouteAccess(request: Request) {
   if (!debugRoutesEnabled()) {
-    throw new ApiRequestError('Not found', { code: 'not_found', status: 404 });
+    throw new ApiRequestError('Not found', { code: ERROR_CODES.NOT_FOUND, status: 404 });
   }
   requestApplicationPrincipal(request);
   if (!requestHasAdminSettingsAccess(request)) {
     throw new ApiRequestError('Administrator access is required', {
-      code: 'admin_access_required',
+      code: ERROR_CODES.ADMIN_ACCESS_REQUIRED,
       status: 401,
     });
   }

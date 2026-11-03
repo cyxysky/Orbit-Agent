@@ -16,6 +16,8 @@ import { InitialBackendSchema1788307200000 } from './migrations/1788307200000-in
 import { BrowserChatContextRecords1788566400000 } from './migrations/1788566400000-browser-chat-context-records';
 import { RuntimeReadIndexes1788652800000 } from './migrations/1788652800000-runtime-read-indexes';
 import { PersonalMemoryReceipts1789084800000 } from './migrations/1789084800000-personal-memory-receipts';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export type DatabaseDriver = 'postgres' | 'sqlite';
 export type DatabaseExecutor = DataSource | EntityManager | QueryRunner;
@@ -39,7 +41,7 @@ function configuredDriver(): DatabaseDriver {
     : 'sqlite';
   if (configured === 'postgres' || configured === 'postgresql' || configured === 'pg') return 'postgres';
   if (configured === 'sqlite') return 'sqlite';
-  throw new Error(`Unsupported DATABASE_DRIVER: ${configured}. Use sqlite or postgres.`);
+  throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED, `Unsupported DATABASE_DRIVER: ${configured}. Use sqlite or postgres.`);
 }
 
 export function databaseDriver(): DatabaseDriver {
@@ -68,7 +70,7 @@ function dataSourceIdentity() {
   const driver = configuredDriver();
   if (driver === 'sqlite') return `sqlite:${sqliteDatabasePath()}`;
   const url = String(process.env.DATABASE_URL || '').trim();
-  if (!url) throw new Error('DATABASE_URL is required when DATABASE_DRIVER=postgres.');
+  if (!url) throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED, 'DATABASE_URL is required when DATABASE_DRIVER=postgres.');
   return `postgres:${url}`;
 }
 
@@ -83,7 +85,7 @@ function dataSourceOptions(): DataSourceOptions {
   };
   if (driver === 'postgres') {
     const url = String(process.env.DATABASE_URL || '').trim();
-    if (!url) throw new Error('DATABASE_URL is required when DATABASE_DRIVER=postgres.');
+    if (!url) throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED, 'DATABASE_URL is required when DATABASE_DRIVER=postgres.');
     return {
       ...common,
       type: 'postgres',

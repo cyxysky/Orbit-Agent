@@ -7,6 +7,8 @@ import { useI18n } from '@/i18n/I18nProvider';
 import { readApiJson } from '@/lib/api-client';
 import { subscribeRealtimeRefresh } from '@/lib/realtime-refresh';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 type BrowserChatRuntimeStateEntry = {
   key: string;
@@ -42,7 +44,7 @@ async function copyText(value: string) {
     textarea.select();
     const copied = document.execCommand('copy');
     textarea.remove();
-    if (!copied) throw new Error('Copy failed');
+    if (!copied) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Copy failed');
   }
 }
 

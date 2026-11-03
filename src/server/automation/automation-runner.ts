@@ -30,6 +30,8 @@ import type {
   AutomationRunTrigger,
   UpdateAutomationRunInput,
 } from './automation.schema';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export type EnqueueAutomationCaseRunInput = {
   caseId: string;
@@ -55,6 +57,8 @@ type ActiveRunExecution = {
 const activeRunExecutions = new Map<string, ActiveRunExecution>();
 
 class AutomationRunCancelledError extends Error {
+  readonly code: import("@cjfclonedeep/capability-sdk").ErrorCode = ERROR_CODES.AUTOMATION_RUN_CANCELLED;
+
   constructor(message = 'Automation run was cancelled.') {
     super(message);
     this.name = 'AutomationRunCancelledError';
@@ -62,6 +66,8 @@ class AutomationRunCancelledError extends Error {
 }
 
 class AutomationRunLeaseLostError extends Error {
+  readonly code: import("@cjfclonedeep/capability-sdk").ErrorCode = ERROR_CODES.AUTOMATION_RUN_LEASE_LOST;
+
   constructor(message = 'Automation run lease was lost to another worker.') {
     super(message);
     this.name = 'AutomationRunLeaseLostError';
@@ -166,7 +172,7 @@ function logEntry(level: 'debug' | 'info' | 'warn' | 'error', message: string, d
 
 function throwIfAborted(signal?: AbortSignal) {
   if (!signal?.aborted) return;
-  throw signal.reason instanceof Error ? signal.reason : new Error('Automation run was cancelled.');
+  throw signal.reason instanceof Error ? signal.reason : new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Automation run was cancelled.');
 }
 
 async function throwIfRunCannotContinue(
@@ -195,7 +201,7 @@ async function persistRunProgress(
     steps,
     ...(entry ? { appendLog: [entry] } : {}),
   }, run.userId, leaseOwner);
-  if (!transition) throw new Error('Automation run disappeared while persisting progress.');
+  if (!transition) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Automation run disappeared while persisting progress.');
   if (!transition.updated) {
     if (transition.run.status === 'cancelled') {
       throw new AutomationRunCancelledError();
@@ -227,14 +233,14 @@ async function executeAutomationRunNow(runId: string, options: ExecuteAutomation
   await store.applyRuntimeEnv();
   const requestedUserId = options.userId === undefined ? undefined : userId(options.userId);
   const initialRun = await getAutomationRun(runId, requestedUserId);
-  if (!initialRun) throw new Error('Automation run not found.');
+  if (!initialRun) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Automation run not found.');
   const automationCase = await getAutomationCase(initialRun.caseId, initialRun.userId);
-  if (!automationCase) throw new Error('Automation case not found.');
+  if (!automationCase) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Automation case not found.');
 
   const owner = options.leaseOwner?.trim() || `automation-runner:${process.pid}:${randomUUID()}`;
   const leaseTtlMs = Math.max(60_000, Math.floor(options.leaseTtlMs || 60 * 60_000));
   const claimedRun = await claimAutomationRunLease(initialRun.id, owner, leaseTtlMs, initialRun.userId);
-  if (!claimedRun) throw new Error('Automation run is already claimed by another runner.');
+  if (!claimedRun) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Automation run is already claimed by another runner.');
 
   const stepRecords: AutomationRunStepRecord[] = [];
   let browser: BrowserSession | undefined;
@@ -300,7 +306,7 @@ async function executeAutomationRunNow(runId: string, options: ExecuteAutomation
       claimedRun.userId,
       owner,
     );
-    if (!runningTransition) throw new Error('Automation run disappeared before execution started.');
+    if (!runningTransition) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Automation run disappeared before execution started.');
     run = runningTransition.run;
     if (!runningTransition.updated) {
       if (run.status === 'cancelled') throw new AutomationRunCancelledError();
@@ -382,7 +388,7 @@ async function executeAutomationRunNow(runId: string, options: ExecuteAutomation
       run.userId,
       owner,
     );
-    if (!completion) throw new Error('Automation run disappeared while saving the task result.');
+    if (!completion) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Automation run disappeared while saving the task result.');
     run = completion.run;
     if (!completion.updated && run.status === 'cancelled') {
       throw new AutomationRunCancelledError();
@@ -428,7 +434,7 @@ async function executeAutomationRunNow(runId: string, options: ExecuteAutomation
 export async function enqueueAutomationCaseRun(input: EnqueueAutomationCaseRunInput): Promise<AutomationRunRecord> {
   const normalizedUserId = userId(input.userId);
   const automationCase = await getAutomationCase(input.caseId, normalizedUserId);
-  if (!automationCase) throw new Error('Automation case not found.');
+  if (!automationCase) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Automation case not found.');
   const run = await createAutomationRun({
     userId: automationCase.userId,
     caseId: automationCase.id,

@@ -1,5 +1,7 @@
 import { databaseDriver, sqliteDatabasePath, queryDatabase } from '@/server/db/database';
 import type { DatabaseWriteStatement } from './database-write-queue';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 type ContextView = {
   recordIds?: string[]; history?: string[]; active?: string[]; backgroundRef?: string; continuationSummary?: string;
@@ -73,7 +75,7 @@ export async function hydrateBrowserChatContextSnapshot<T>(sessionId: string, sn
       .filter((ref): ref is string => Boolean(ref));
   });
   const missing = referenced.find((id) => !Object.hasOwn(records, id));
-  if (missing) throw new Error(`Missing durable browser-chat context record: ${missing}`);
+  if (missing) throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED, `Missing durable browser-chat context record: ${missing}`);
   const { externalRecords: _external, recordIds: _recordIds, ...index } = context;
   void _external; void _recordIds;
   const restored = { ...snapshot, modelContext: { ...index, records } };

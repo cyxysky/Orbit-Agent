@@ -4,6 +4,8 @@ import type { ResponseRenderContext } from '@cjfclonedeep/capability-sdk/respons
 import { responseRegistry } from '@/lib/response-registry';
 import { subscribeRealtimeRefresh } from '@/lib/realtime-refresh';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export function createResponseContext(input: Pick<ResponseRenderContext, 'locale' | 'translate' | 'renderMarkdown'> & {
   sessionId?: string; automationRunId?: string;
@@ -15,11 +17,11 @@ export function createResponseContext(input: Pick<ResponseRenderContext, 'locale
   return {
     ...input, identity: scope, readOnly: Boolean(input.automationRunId),
     async request<T>(block: Parameters<ResponseRenderContext['request']>[0], operation: string, value?: unknown, signal?: AbortSignal): Promise<T> {
-      if (!scope) throw new Error('内容缺少所属会话。');
+      if (!scope) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '内容缺少所属会话。');
       const response = await fetch(endpoint, { method: 'POST', credentials: 'same-origin', signal,
         headers: { 'content-type': 'application/json' }, body: JSON.stringify({ block, operation, ...(value === undefined ? {} : { input: value }) }) });
       const payload = await response.json() as { data?: T; error?: string };
-      if (!response.ok || !('data' in payload)) throw Object.assign(new Error(payload.error || '内容加载失败。'), { status: response.status });
+      if (!response.ok || !('data' in payload)) throw Object.assign(new CodedError(ERROR_CODES.APPLICATION_ERROR, payload.error || '内容加载失败。'), { status: response.status });
       return payload.data as T;
     },
     subscribe(block, refresh) {

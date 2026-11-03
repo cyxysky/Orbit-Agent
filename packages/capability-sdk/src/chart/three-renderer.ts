@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { normalizeThreeChartOption, threeChartBounds } from './three-core.ts';
 import { defaultChartTranslate, type ChartTranslate } from './i18n.ts';
+import { CodedError, ERROR_CODES } from '../errors.ts';
+
 
 export type ChartSurface = { dispose(): void; resize(): void; png(): Promise<string>; svg?(): string; reset?(): void };
 const palette = ['#2563eb', '#0d9488', '#f59e0b', '#a855f7', '#e11d48', '#0284c7'];
@@ -155,7 +157,7 @@ export function createThreeChart(surface: HTMLDivElement, input: Record<string, 
       const ratio = renderer.getPixelRatio();
       const width = renderer.domElement.width;
       const layout = document.createElement('canvas').getContext('2d');
-      if (!layout) throw new Error('浏览器无法导出 PNG。');
+      if (!layout) throw new CodedError(ERROR_CODES.CHART_OPERATION_FAILED, '浏览器无法导出 PNG。');
       layout.font = `${12 * ratio}px sans-serif`;
       let x = 12 * ratio, row = 0;
       const items = option.series.map((series, index) => {
@@ -167,7 +169,7 @@ export function createThreeChart(surface: HTMLDivElement, input: Record<string, 
       });
       const header = (row + 1) * 24 * ratio + 8 * ratio;
       canvas.width = width; canvas.height = renderer.domElement.height + header;
-      const ctx = canvas.getContext('2d'); if (!ctx) throw new Error('浏览器无法导出 PNG。');
+      const ctx = canvas.getContext('2d'); if (!ctx) throw new CodedError(ERROR_CODES.CHART_OPERATION_FAILED, '浏览器无法导出 PNG。');
       ctx.fillStyle = option.background || '#ffffff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(renderer.domElement, 0, header); ctx.font = layout.font; ctx.textBaseline = 'middle';
       const textColor = new THREE.Color(option.background || '#ffffff').getHSL({ h: 0, s: 0, l: 0 }).l < 0.45 ? '#e2e8f0' : '#334155';

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { BookOpen, ChartNoAxesCombined, Check, ChevronDown, CircleHelp, CodeXml, Database, Files, Globe2, GripVertical, Image, MapPin, MessageSquareText, Monitor, Plug, Search, SlidersHorizontal, SquareTerminal, X, type LucideIcon } from 'lucide-react';
+import { BookOpen, ChartNoAxesCombined, Check, ChevronDown, CircleHelp, CodeXml, Database, Files, FileText, Globe2, GripVertical, Image, MapPin, MessageSquareText, Monitor, Plug, Search, SlidersHorizontal, SquareTerminal, X, type LucideIcon } from 'lucide-react';
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -12,11 +12,13 @@ import { useI18n } from '@/i18n/I18nProvider';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 import { normalizeDisabledBrowserChatTools, type BrowserChatToolHelp } from '@/lib/browser-chat-tools';
 import { readBrowserChatToolPreferences, saveBrowserChatToolPreferences } from '@/lib/browser-chat-tool-preferences';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 const toolIcons: Record<string, LucideIcon> = {
   browser: Globe2, file: Files, chart: ChartNoAxesCombined, maps: MapPin,
   codeSandbox: CodeXml, connectors: Plug, knowledge: BookOpen, data: Database,
-  media: Image, communication: MessageSquareText, terminal: SquareTerminal, computer: Monitor,
+  media: Image, textEditor: FileText, communication: MessageSquareText, terminal: SquareTerminal, computer: Monitor,
 };
 
 function SortableToolRow({ tool, enabled, disabled, onToggle }: {
@@ -90,16 +92,18 @@ export function BrowserChatToolsHelp({ userId, sessionId, disabledTools, onChang
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; clearTimeout(timer.current); }; }, []);
   useEffect(() => { setOrder(readBrowserChatToolPreferences(userId).order); }, [userId]);
   useEffect(() => {
-    if (!open || tools) return;
+    if (!open) return;
     const controller = new AbortController();
-    void fetch(withWebPilotBasePath('/api/browser-chat/tools'), { signal: controller.signal })
+    setTools(undefined); setError('');
+    void fetch(withWebPilotBasePath('/api/browser-chat/tools'), { signal: controller.signal, cache: 'no-store' })
       .then(async (response) => {
         const payload = await response.json();
-        if (!response.ok || !Array.isArray(payload.tools)) throw new Error(payload.error || '无法读取工具说明');
+        controller.signal.throwIfAborted();
+        if (!response.ok || !Array.isArray(payload.tools)) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, payload.error || '无法读取工具说明');
         setTools(payload.tools); setError('');
       }).catch((reason) => { if (!controller.signal.aborted) setError(reason.message); });
     return () => controller.abort();
-  }, [open, tools]);
+  }, [open]);
   async function toggle(name: string) {
     if (busy || savingRef.current) return;
     savingRef.current = true;
@@ -112,7 +116,7 @@ export function BrowserChatToolsHelp({ userId, sessionId, disabledTools, onChang
           method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ disabledTools: next }),
         });
         const payload = await response.json();
-        if (!response.ok) throw new Error(payload.error || '无法保存工具设置');
+        if (!response.ok) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, payload.error || '无法保存工具设置');
         next = normalizeDisabledBrowserChatTools(payload.disabledTools);
       }
       if (mounted.current) onChange(next);

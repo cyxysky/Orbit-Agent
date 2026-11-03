@@ -1,4 +1,6 @@
 import type { CapabilityExecutionContext, CapabilityProgressEvent, ResolvedCapabilityTool } from './index.ts';
+import { CodedError, ERROR_CODES } from './errors.ts';
+
 
 export type CapabilityExecutionPolicyOptions = {
   authorize?(permissions: readonly string[], tool: ResolvedCapabilityTool, context: CapabilityExecutionContext): void | Promise<void>;
@@ -15,7 +17,7 @@ export function createCapabilityExecutor(options: CapabilityExecutionPolicyOptio
       await options.authorize?.(tool.tool.policy?.permissions || [], tool, context);
       const prerequisite = tool.tool.policy?.prerequisite;
       if (prerequisite) {
-        if (!options.prerequisite) throw new Error(`No host handler for prerequisite: ${prerequisite}.`);
+        if (!options.prerequisite) throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, `No host handler for prerequisite: ${prerequisite}.`);
         await options.prerequisite(prerequisite, tool, context);
       }
       context.abortSignal?.throwIfAborted();

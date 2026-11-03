@@ -1,5 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { CapabilityTaskQueue } from '../../index.ts';
+import { CodedError, ERROR_CODES } from '../../errors.ts';
+
 
 /** One transaction includes preparation, browser work and observation/cleanup. */
 export class BrowserSessionScheduler {
@@ -10,7 +12,7 @@ export class BrowserSessionScheduler {
     const parent = this.scope.getStore();
     if (parent) {
       parent.signal.throwIfAborted();
-      if (!parent.active) return Promise.reject(new Error('Browser operation has already finished.'));
+      if (!parent.active) return Promise.reject(new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Browser operation has already finished.'));
       return operation(parent.signal);
     }
     return this.queue.run(async (signal) => {
@@ -21,7 +23,7 @@ export class BrowserSessionScheduler {
   }
 
   async cancelAndDrain() {
-    this.queue.cancel(new Error('Browser session is closing.'));
+    this.queue.cancel(new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Browser session is closing.'));
     if (!this.scope.getStore()?.active) await this.queue.idle();
   }
 }

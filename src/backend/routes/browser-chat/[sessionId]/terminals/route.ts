@@ -4,6 +4,8 @@ import { queryDatabaseOne } from '@/server/db/database';
 import { requestApplicationUserId } from '@/server/auth/user-context';
 import { ApiRequestError, apiError } from '@/server/http/api-request';
 import type { BrowserChatSessionRouteContext } from '@/server/http/browser-chat-route';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 async function authorizedManager(request: Request, context: BrowserChatSessionRouteContext) {
   const { sessionId } = await context.params;
@@ -11,7 +13,7 @@ async function authorizedManager(request: Request, context: BrowserChatSessionRo
   const session = await queryDatabaseOne<{ status: string }>(
     'SELECT status FROM browser_chat_session WHERE id = ? AND user_id = ?', [sessionId, userId],
   );
-  if (!session) throw new ApiRequestError('对话不存在。', { code: 'not_found', status: 404 });
+  if (!session) throw new ApiRequestError('对话不存在。', { code: ERROR_CODES.NOT_FOUND, status: 404 });
   return { manager: conversationTerminals.get({ runId: sessionId, userId, configuration: process.env }),
     closed: session.status === 'closed' };
 }

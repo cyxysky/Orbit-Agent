@@ -1,10 +1,12 @@
 import type { ModelMessage } from 'ai';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 type ToolResult = Extract<Extract<ModelMessage, { role: 'tool' }>['content'][number], { type: 'tool-result' }>;
 function isInterruptedPlaceholder(part: ToolResult) {
   const output = part.output;
   if (output.type !== 'error-json' || !output.value || typeof output.value !== 'object' || Array.isArray(output.value)) return false;
-  if (output.value.code === 'interrupted-tool-outcome' && output.value.hostGenerated === true) return true;
+  if (output.value.code === ERROR_CODES.INTERRUPTED_TOOL_OUTCOME && output.value.hostGenerated === true) return true;
   // Durable journals written before the host marker was added used this exact
   // envelope. Do not mistake arbitrary tool errors for repair placeholders.
   return output.value.next === 'Inspect current state and make a new decision. This receipt does not establish business success; the previous call is not replayed.'
@@ -31,7 +33,7 @@ export function completeRuntimeModelToolChain(messages: ModelMessage[]) {
     const callIds = modelMessageToolCallIds(message);
     if (callIds.size) {
       const calls = Array.isArray(message.content) ? message.content.filter(part => part.type === 'tool-call') : [];
-      if (calls.length !== callIds.size) throw new Error('Duplicate tool call IDs in a model decision.');
+      if (calls.length !== callIds.size) throw new CodedError(ERROR_CODES.CONTEXT_READ_FAILED, 'Duplicate tool call IDs in a model decision.');
       const callNames = new Map(calls.map(part => [part.toolCallId, part.toolName]));
       let nextIndex = index + 1;
       while (messages[nextIndex]?.role === 'tool') nextIndex++;
@@ -77,7 +79,7 @@ export function completeRuntimeModelToolChain(messages: ModelMessage[]) {
         const missing = assistantContent.flatMap(part => part.type === 'tool-call' && !resultIds.has(part.toolCallId) ? [{
           type: 'tool-result' as const, toolCallId: part.toolCallId, toolName: part.toolName,
           output: { type: 'error-json' as const, value: {
-            code: 'interrupted-tool-outcome', hostGenerated: true, outcome: 'unknown',
+            code: ERROR_CODES.INTERRUPTED_TOOL_OUTCOME, hostGenerated: true, outcome: 'unknown',
             safeToRetry: false, requiresStateRefresh: true,
             message: 'No durable result exists for this call. It may have executed. Inspect current state or query the operation receipt before deciding whether to retry; do not replay the whole batch.',
           } },

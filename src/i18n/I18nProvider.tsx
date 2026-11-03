@@ -11,6 +11,8 @@ import {
 } from 'react';
 import { normalizeLanguage, type Language } from '@/i18n/language';
 import { translateText } from '@/i18n/translations';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 const STORAGE_KEY = 'webpilotqa.language';
 const COOKIE_KEY = 'WEBPILOTQA_LANGUAGE';
@@ -61,6 +63,6 @@ export function I18nProvider({ children }: { children: ReactNode }) {
 
 export function useI18n() {
   const context = useContext(I18nContext);
-  if (!context) throw new Error('useI18n must be used inside I18nProvider');
+  if (!context) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'useI18n must be used inside I18nProvider');
   return context;
 }

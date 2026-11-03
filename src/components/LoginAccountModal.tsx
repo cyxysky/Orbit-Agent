@@ -7,6 +7,8 @@ import { readApiJson } from '@/lib/api-client';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 import { AppInput } from '@/components/ui/app-input';
 import { AppModal } from '@/components/ui/app-modal';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export type LoginAccountMetadata = {
   id: string;
@@ -101,7 +103,7 @@ export function LoginAccountModal({
         body: JSON.stringify(body),
       });
       const data = await readApiJson<{ account?: LoginAccountMetadata }>(response, t(account ? '更新账号失败' : '保存账号失败'));
-      if (!data.account) throw new Error(t('后台没有返回账号信息'));
+      if (!data.account) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, t('后台没有返回账号信息'));
       setPassword('');
       onSaved(data.account);
       onClose();

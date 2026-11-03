@@ -1,0 +1,24 @@
+name: Check SDK
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  typecheck:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      CAPABILITY_SKIP_RUNTIME_INSTALL: '1'
+      FFMPEG_SKIP_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.16.0'
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: node install.mjs --dry-run --clients cursor --project ./example-tools

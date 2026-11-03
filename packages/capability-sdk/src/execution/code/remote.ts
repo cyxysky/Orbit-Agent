@@ -1,17 +1,20 @@
 import { CodeSandboxRunnerError, createCodeSandboxCapability, type CodeSandboxExecutor, type CodeSandboxExecution, type CodeSandboxExecutionResult } from './index.ts';
 import type { CapabilityRunContext } from '../../index.ts';
+import { readBoundedResponseText } from '../../http.ts';
+import { CodedError, ERROR_CODES } from '../../errors.ts';
+
 
 type RemoteResult = CodeSandboxExecutionResult & { error?: string };
 
 function runnerUrl(value: string) {
   const url = new URL(value);
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('Code Sandbox runner URL must use HTTP or HTTPS.');
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new CodedError(ERROR_CODES.CODE_EXECUTION_ERROR, 'Code Sandbox runner URL must use HTTP or HTTPS.');
   return url.href.replace(/\/$/, '');
 }
 
-async function readJson(response: Response) {
-  const text = await response.text();
-  try { return JSON.parse(text) as unknown; } catch { throw new Error(text.slice(0, 2_000) || `Runner returned HTTP ${response.status}.`); }
+async function readJson(response: Response, maxBytes = 8_000_000) {
+  const text = await readBoundedResponseText(response, maxBytes);
+  try { return JSON.parse(text) as unknown; } catch { throw new CodedError(ERROR_CODES.CODE_EXECUTION_ERROR, text.slice(0, 2_000) || `Runner returned HTTP ${response.status}.`); }
 }
 
 function connectionError(error: unknown, baseUrl: string, healthCheck = false) {
@@ -35,7 +38,7 @@ function connectionError(error: unknown, baseUrl: string, healthCheck = false) {
   const execution = healthCheck ? '健康检查未提交代码执行请求。'
     : notDispatched ? '本次请求未送达 Runner，代码未通过本次请求执行。修复连接后可重新提交，请勿在配置未变时反复重试。'
       : '连接中断，无法确认远端代码是否已执行；请先核实任务状态，勿自动重复提交。';
-  return new CodeSandboxRunnerError('code-sandbox-runner-unavailable',
+  return new CodeSandboxRunnerError(ERROR_CODES.CODE_SANDBOX_RUNNER_UNAVAILABLE,
     `无法连接代码沙箱 Runner ${new URL(baseUrl).origin}${detail}。${guidance}${execution}`,
     { cause: error });
 }
@@ -61,11 +64,19 @@ export function createHttpCodeSandboxExecutor(input: {
         });
       } catch (error) {
         if (context.abortSignal?.aborted) throw context.abortSignal.reason;
-        if (signal.aborted) throw new CodeSandboxRunnerError('code-sandbox-runner-timeout', '等待代码沙箱 Runner 响应超时，远端任务状态未知，请勿自动重试。', { cause: error });
+        if (signal.aborted) throw new CodeSandboxRunnerError(ERROR_CODES.CODE_SANDBOX_RUNNER_TIMEOUT, '等待代码沙箱 Runner 响应超时，远端任务状态未知，请勿自动重试。', { cause: error });
         throw connectionError(error, baseUrl);
       }
-      const payload = await readJson(response) as RemoteResult;
-      if (!response.ok || payload.error) throw new Error(payload.error || `Runner returned HTTP ${response.status}.`);
+      let payload: RemoteResult;
+      try {
+        // 32 MiB of artifact bytes expands to about 43 MiB in base64, plus logs and metadata.
+        payload = await readJson(response, 48 * 1024 * 1024) as RemoteResult;
+      } catch (error) {
+        if (context.abortSignal?.aborted) throw context.abortSignal.reason;
+        if (signal.aborted) throw new CodeSandboxRunnerError(ERROR_CODES.CODE_SANDBOX_RUNNER_TIMEOUT, '等待代码沙箱 Runner 响应超时，远端任务状态未知，请勿自动重试。', { cause: error });
+        throw error;
+      }
+      if (!response.ok || payload.error) throw new CodedError(ERROR_CODES.CODE_EXECUTION_ERROR, payload.error || `Runner returned HTTP ${response.status}.`);
       return payload;
     },
     async health() {

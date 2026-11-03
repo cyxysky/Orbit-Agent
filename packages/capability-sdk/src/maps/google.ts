@@ -1,6 +1,9 @@
+import { mapsHttpErrorCode } from "../errors.ts";
 import { z } from 'zod';
 import { readBoundedResponseText, type CapabilityConfiguration } from '../index.ts';
 import { coordinateSchema, decodePolyline, MapsError, mapsUrl, safeGoogleMapsUrl, type MapRequest, type MapView, type MapWaypoint } from './core.ts';
+import { ERROR_CODES } from '../errors.ts';
+
 
 export type GoogleMapsOptions = {
   configuration: CapabilityConfiguration;
@@ -19,7 +22,7 @@ export function createGoogleMapsClient(options: GoogleMapsOptions) {
   const key = String(options.configuration.GOOGLE_MAPS_SERVER_KEY || '').trim();
   const languageCode = options.configuration.GOOGLE_MAPS_LANGUAGE || 'zh-CN';
   async function request(kind: 'search' | 'route', body: unknown, mask: string, signal?: AbortSignal) {
-    if (!key) throw new MapsError('maps-not-configured', '请在设置 → 工具能力 → 地图中配置 Google 地图服务端 Key，并启用 Places API (New) 和 Routes API。请勿重复重试。');
+    if (!key) throw new MapsError(ERROR_CODES.MAPS_NOT_CONFIGURED, '请在设置 → 工具能力 → 地图中配置 Google 地图服务端 Key，并启用 Places API (New) 和 Routes API。请勿重复重试。');
     signal?.throwIfAborted();
     await options.reserveRequest(kind, signal);
     const abortSignal = AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(20000)]);
@@ -32,15 +35,15 @@ export function createGoogleMapsClient(options: GoogleMapsOptions) {
       });
     } catch {
       signal?.throwIfAborted();
-      throw new MapsError('maps-network-failed', '无法连接 Google Maps API 或请求超时，请检查服务端网络。请求可能已计费，不会自动重试。');
+      throw new MapsError(ERROR_CODES.MAPS_NETWORK_FAILED, '无法连接 Google Maps API 或请求超时，请检查服务端网络。请求可能已计费，不会自动重试。');
     }
     if (!response.ok) {
       await response.body?.cancel();
       const explanation = response.status === 403 || response.status === 401 ? '请检查 API 是否启用、结算账户、Key 权限和 IP 限制。' : response.status === 429 ? '调用配额或速率已达到限制。' : response.status === 400 ? '地点或路线参数无效，请修正输入。' : '服务暂时不可用。';
-      throw new MapsError(`maps-http-${response.status}`, `Google Maps 请求失败（HTTP ${response.status}）。${explanation} 请勿原样重复重试。`);
+      throw new MapsError(mapsHttpErrorCode(response.status), `Google Maps 请求失败（HTTP ${response.status}）。${explanation} 请勿原样重复重试。`);
     }
     try { return JSON.parse(await readBoundedResponseText(response, 2 * 1024 * 1024)); }
-    catch { throw new MapsError('maps-invalid-response', 'Google Maps 返回了无效或过大的数据。'); }
+    catch { throw new MapsError(ERROR_CODES.MAPS_INVALID_RESPONSE, 'Google Maps 返回了无效或过大的数据。'); }
   }
   return {
     async resolve(input: MapRequest, signal?: AbortSignal): Promise<MapView> {
@@ -62,9 +65,9 @@ export function createGoogleMapsClient(options: GoogleMapsOptions) {
         computeAlternativeRoutes: false, languageCode, units: 'METRIC', polylineQuality: 'OVERVIEW', polylineEncoding: 'ENCODED_POLYLINE',
       }, 'routes.distanceMeters,routes.duration,routes.polyline.encodedPolyline,routes.warnings', signal));
       const route = data.routes[0];
-      if (!route) throw new MapsError('maps-no-route', '未找到可用路线，请检查起终点或选择其他出行方式。');
+      if (!route) throw new MapsError(ERROR_CODES.MAPS_NO_ROUTE, '未找到可用路线，请检查起终点或选择其他出行方式。');
       const path = decodePolyline(route.polyline.encodedPolyline);
-      if (path.length < 2) throw new MapsError('maps-no-route', '返回的路线没有可显示的路径。');
+      if (path.length < 2) throw new MapsError(ERROR_CODES.MAPS_NO_ROUTE, '返回的路线没有可显示的路径。');
       return { places: [], markers: [{ position: path[0], label: '起点' }, { position: path[path.length - 1], label: '终点' }], googleMapsUrl,
         route: { path, distanceMeters: route.distanceMeters, durationSeconds: Number.parseFloat(route.duration), warnings: route.warnings || [], travelMode: input.travelMode } };
     },

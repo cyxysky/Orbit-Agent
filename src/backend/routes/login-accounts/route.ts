@@ -3,6 +3,8 @@ import { createLoginAccount, listLoginAccounts } from '@/server/credentials/logi
 import { requestApplicationUserId } from '@/server/auth/user-context';
 import { ApiRequestError, apiError, apiJson, parseJsonRequest } from '@/server/http/api-request';
 import { idempotencyFingerprint, runIdempotentJson } from '@/server/http/idempotency';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 
 const createSchema = z.object({
@@ -19,7 +21,7 @@ function accountError(error: unknown) {
   if (error instanceof ApiRequestError) return error;
   const message = error instanceof Error ? error.message : '登录账号操作失败';
   return new ApiRequestError(message, {
-    code: /已存在|already exists/i.test(message) ? 'account_already_exists' : 'account_operation_failed',
+    code: /已存在|already exists/i.test(message) ? ERROR_CODES.ACCOUNT_ALREADY_EXISTS : ERROR_CODES.ACCOUNT_OPERATION_FAILED,
     status: /已存在|already exists/i.test(message) ? 409 : 400,
   });
 }

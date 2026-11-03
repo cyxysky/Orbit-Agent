@@ -3,12 +3,14 @@ import { runtimeMetricsSnapshot } from '@/server/observability/runtime-observabi
 import { databaseWriteQueueSnapshot } from '@/server/storage/database-write-queue';
 import { fileTextExtractionPoolSnapshot } from '@/server/capabilities/webpilot-file-observability';
 import { requestHasAdminSettingsAccess } from '@/server/settings/admin-settings-access';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 
 export async function GET(request: Request) {
   try {
     if (!requestHasAdminSettingsAccess(request)) {
-      throw new ApiRequestError('Administrator access is required', { code: 'admin_access_required', status: 401 });
+      throw new ApiRequestError('Administrator access is required', { code: ERROR_CODES.ADMIN_ACCESS_REQUIRED, status: 401 });
     }
     return apiJson(request, {
       metrics: runtimeMetricsSnapshot(),

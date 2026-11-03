@@ -11,6 +11,8 @@ import { ApiRequestError } from '@/server/http/api-request';
 import { artifactPath } from './paths';
 import { readReferencedUploadPaths } from './database-record-store';
 import { enforceUserUploadQuota } from './upload-artifact-lifecycle';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export function uploadMaxBytes() {
   const configured = Number(process.env.WEBPILOT_UPLOAD_MAX_BYTES || 50 * 1024 * 1024);
@@ -34,7 +36,7 @@ export async function storeUploadedFile(input: { userId: string; name: string; t
   const limiter = new Transform({
     transform(chunk: Buffer, _encoding, callback) {
       bytes += chunk.length;
-      callback(bytes > maxBytes ? new ApiRequestError('Upload is too large', { code: 'payload_too_large', status: 413 }) : null, chunk);
+      callback(bytes > maxBytes ? new ApiRequestError('Upload is too large', { code: ERROR_CODES.PAYLOAD_TOO_LARGE, status: 413 }) : null, chunk);
     },
   });
   await mkdir(dir, { recursive: true });
@@ -42,7 +44,7 @@ export async function storeUploadedFile(input: { userId: string; name: string; t
     await pipeline(input.source, limiter, createWriteStream(filePath, { flags: 'wx', mode: 0o600 }));
     if (!bytes) throw new ApiRequestError('File must not be empty');
     const quota = await enforceUserUploadQuota(userId, await readReferencedUploadPaths(userId), { protectedPath: filePath });
-    if (quota.overQuota) throw new ApiRequestError('Upload storage quota exceeded', { code: 'storage_quota_exceeded', status: 413 });
+    if (quota.overQuota) throw new ApiRequestError('Upload storage quota exceeded', { code: ERROR_CODES.STORAGE_QUOTA_EXCEEDED, status: 413 });
     return { fileId, imageId: type.startsWith('image/') ? fileId : undefined,
       path: relativePath, url: artifactApiUrlFromRelative(relativePath), name, type, size: bytes };
   } catch (error) {

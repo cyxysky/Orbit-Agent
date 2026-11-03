@@ -1,5 +1,7 @@
 # Orbit
 
+The tool layer is available independently as [Capability SDK](https://github.com/cyxysky/capability-sdk), with MCP/native integration and standalone Windows/Linux installers. The independent repository and release preparation are documented in [maintainer notes](packages/capability-sdk/RELEASING.zh-CN.md).
+
 Local MCP tools can be installed and registered without starting Orbit: run `install-mcp.cmd` on Windows or `npm run mcp:setup`. Preview with `install-mcp.cmd --dry-run` or `npm run mcp:setup -- --dry-run`. See the [one-command setup guide](packages/capability-sdk/SETUP.zh-CN.md) for supported clients, independent SDK installation and configuration scopes.
 
 An agent workspace with a Next.js UI, an independent Node.js API, and a separate Agent execution process, with capabilities for browsers, files, code, knowledge, data, and connected tools.

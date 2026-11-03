@@ -15,6 +15,8 @@ import {
   BrowserPreviewVideoEncoder,
   browserPreviewVideoDimensions,
 } from './video-encoder.ts';
+import { CodedError, ERROR_CODES } from '../../errors.ts';
+
 
 
 type BrowserPreviewTransport = 'image' | 'video';
@@ -830,7 +832,7 @@ function resetSession(sessionId: string, userId?: string, onReset?: () => void):
 }
 
 async function ensureBrowserPreviewWebSocketServer(): Promise<BrowserPreviewWebSocketInfo> {
-  if (closed) throw new Error('Browser preview server is closed.');
+  if (closed) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Browser preview server is closed.');
   const current = state();
   if (
     current.server

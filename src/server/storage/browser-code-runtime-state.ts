@@ -8,6 +8,8 @@
 } from "@/server/db/database";
 
 import { publishBrowserChatRuntimeRecordsChanged } from "./browser-chat-runtime-record-refresh";
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export const BROWSER_CODE_RUNTIME_STATE_MAX_KEYS = 100;
 export const BROWSER_CODE_RUNTIME_STATE_MAX_KEY_CHARS = 120;
@@ -43,7 +45,7 @@ type RuntimeStateRow = {
 
 function inputRecord(value: unknown, name: string) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`${name} must be an object.`);
+    throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED, `${name} must be an object.`);
   }
   return value as Record<string, unknown>;
 }
@@ -54,7 +56,7 @@ function rejectUnknownFields(
   allowed: string[],
 ) {
   const unknown = Object.keys(record).find((key) => !allowed.includes(key));
-  if (unknown) throw new Error(`${name} has unsupported field: ${unknown}.`);
+  if (unknown) throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED, `${name} has unsupported field: ${unknown}.`);
 }
 
 function normalizedSessionId(value: unknown) {
@@ -64,7 +66,7 @@ function normalizedSessionId(value: unknown) {
     sessionId.length > 240 ||
     /[\u0000-\u001f\u007f]/.test(sessionId)
   ) {
-    throw new Error(
+    throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED,
       "agent.state is unavailable because the browser conversation state scope is invalid.",
     );
   }
@@ -78,7 +80,7 @@ function normalizedKey(value: unknown, name = "agent.state key") {
     key.length > BROWSER_CODE_RUNTIME_STATE_MAX_KEY_CHARS ||
     /[\u0000-\u001f\u007f]/.test(key)
   ) {
-    throw new Error(
+    throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED,
       `${name} must be 1-${BROWSER_CODE_RUNTIME_STATE_MAX_KEY_CHARS} printable characters.`,
     );
   }
@@ -92,7 +94,7 @@ function normalizedPrefix(value: unknown) {
     value.length > BROWSER_CODE_RUNTIME_STATE_MAX_KEY_CHARS ||
     /[\u0000-\u001f\u007f]/.test(value)
   ) {
-    throw new Error(
+    throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED,
       `agent.state prefix must contain at most ${BROWSER_CODE_RUNTIME_STATE_MAX_KEY_CHARS} printable characters.`,
     );
   }
@@ -107,7 +109,7 @@ function optionalRevision(value: unknown) {
     revision < 0 ||
     revision > Number.MAX_SAFE_INTEGER
   ) {
-    throw new Error(
+    throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED,
       "agent.state expectedRevision must be a non-negative safe integer.",
     );
   }
@@ -122,7 +124,7 @@ function optionalTtlMs(value: unknown) {
     ttlMs < 1_000 ||
     ttlMs > BROWSER_CODE_RUNTIME_STATE_MAX_TTL_MS
   ) {
-    throw new Error(
+    throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED,
       `agent.state ttlMs must be an integer between 1000 and ${BROWSER_CODE_RUNTIME_STATE_MAX_TTL_MS}.`,
     );
   }
@@ -133,21 +135,21 @@ function serializeRuntimeStateValue(value: unknown) {
   const seen = new WeakSet<object>();
   const visit = (item: unknown, depth: number): void => {
     if (depth > 30)
-      throw new Error(
+      throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED,
         "agent.state value exceeds the maximum nesting depth of 30.",
       );
     if (item === null || typeof item === "string" || typeof item === "boolean")
       return;
     if (typeof item === "number") {
       if (!Number.isFinite(item))
-        throw new Error("agent.state value numbers must be finite.");
+        throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED, "agent.state value numbers must be finite.");
       return;
     }
     if (typeof item !== "object") {
-      throw new Error("agent.state value must contain only JSON-safe values.");
+      throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED, "agent.state value must contain only JSON-safe values.");
     }
     if (seen.has(item))
-      throw new Error(
+      throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED,
         "agent.state value must not contain circular references.",
       );
     seen.add(item);
@@ -156,7 +158,7 @@ function serializeRuntimeStateValue(value: unknown) {
     } else {
       const prototype = Object.getPrototypeOf(item);
       if (prototype !== Object.prototype && prototype !== null) {
-        throw new Error(
+        throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED,
           "agent.state value objects must be plain JSON records.",
         );
       }
@@ -168,12 +170,12 @@ function serializeRuntimeStateValue(value: unknown) {
   visit(value, 0);
   const serialized = JSON.stringify(value);
   if (serialized === undefined)
-    throw new Error("agent.state value must be JSON-serializable.");
+    throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED, "agent.state value must be JSON-serializable.");
   if (
     Buffer.byteLength(serialized, "utf8") >
     BROWSER_CODE_RUNTIME_STATE_MAX_VALUE_BYTES
   ) {
-    throw new Error(
+    throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED,
       `agent.state values are limited to ${BROWSER_CODE_RUNTIME_STATE_MAX_VALUE_BYTES} UTF-8 bytes. ` +
         "Store images and large text as workspace artifact files, not Base64 conversation state.",
     );
@@ -183,7 +185,7 @@ function serializeRuntimeStateValue(value: unknown) {
       serialized,
     ) || /"data:[^;"]+;base64,[A-Za-z0-9+/=]{65536,}"/i.test(serialized);
   if (oversizedBase64) {
-    throw new Error(
+    throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED,
       "agent.state must not store large Base64 payloads. Save the bytes as a workspace artifact file and store only its asset name.",
     );
   }
@@ -278,7 +280,7 @@ export async function executeBrowserCodeRuntimeStateOperation(
       "ttlMs",
     ]);
     if (!Object.prototype.hasOwnProperty.call(input, "value")) {
-      throw new Error("agent.state.set input requires value.");
+      throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED, "agent.state.set input requires value.");
     }
     const key = normalizedKey(input.key);
     const valueJson = serializeRuntimeStateValue(input.value);
@@ -292,7 +294,7 @@ export async function executeBrowserCodeRuntimeStateOperation(
         expectedRevision !== undefined &&
         expectedRevision !== currentRevision
       ) {
-        throw new Error(
+        throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED,
           `agent.state revision conflict for key ${JSON.stringify(key)}: expected ${expectedRevision}, current ${currentRevision}.`,
         );
       }
@@ -303,7 +305,7 @@ export async function executeBrowserCodeRuntimeStateOperation(
       `, [sessionId, runtimeStateNamespace], database);
       const keyCount = Number(aggregate?.key_count) || 0;
       if (!existing && keyCount >= BROWSER_CODE_RUNTIME_STATE_MAX_KEYS) {
-        throw new Error(
+        throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED,
           `agent.state stores at most ${BROWSER_CODE_RUNTIME_STATE_MAX_KEYS} keys per conversation.`,
         );
       }
@@ -355,7 +357,7 @@ export async function executeBrowserCodeRuntimeStateOperation(
         expectedRevision !== undefined &&
         expectedRevision !== currentRevision
       ) {
-        throw new Error(
+        throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED,
           `agent.state revision conflict for key ${JSON.stringify(key)}: expected ${expectedRevision}, current ${currentRevision}.`,
         );
       }
@@ -383,7 +385,7 @@ export async function executeBrowserCodeRuntimeStateOperation(
       requestedLimit < 1 ||
       requestedLimit > BROWSER_CODE_RUNTIME_STATE_MAX_KEYS
     ) {
-      throw new Error(
+      throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED,
         `agent.state list limit must be an integer between 1 and ${BROWSER_CODE_RUNTIME_STATE_MAX_KEYS}.`,
       );
     }
@@ -428,7 +430,7 @@ export async function executeBrowserCodeRuntimeStateOperation(
     return result;
   }
 
-  throw new Error(
+  throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED,
     `Unsupported agent.state action: ${String(operation.action)}.`,
   );
 }

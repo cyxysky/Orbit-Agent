@@ -6,6 +6,8 @@ import type { Browser, BrowserContext, BrowserContextOptions, BrowserServer, Bro
 import { boundedPositiveIntegerEnv, cdpEndpointForPort, cdpPortFromEndpoint, clearManagedBrowserProfileCaches, type BrowserRuntimeEnvironment } from './browser-session-runtime.ts';
 import { type BrowserCodeConnection } from './browser-code-runner.ts';
 import { unknownErrorMessage } from './browser-session-diagnostics.ts';
+import { CodedError, ERROR_CODES } from '../../errors.ts';
+
 
 export type BrowserOwnership = 'launched' | 'connected' | 'persistent' | 'shared';
 
@@ -81,7 +83,7 @@ export async function availableLoopbackPort() {
   });
   const address = server.address();
   await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-  if (!address || typeof address === 'string') throw new Error('Unable to allocate a browserCode CDP port.');
+  if (!address || typeof address === 'string') throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Unable to allocate a browserCode CDP port.');
   return address.port;
 }
 
@@ -192,7 +194,7 @@ export async function tcpEndpointIsListening(endpoint: string) {
     socket.setTimeout(600);
     socket.once('connect', () => finish(true));
     socket.once('error', () => finish(false));
-    socket.once('timeout', () => finish(false));
+    socket.once(ERROR_CODES.TIMEOUT, () => finish(false));
   });
 }
 
@@ -257,7 +259,7 @@ export function externalChromiumExecutablePath(chromium: BrowserType, launchOpti
   const explicit = typeof launchOptions.executablePath === 'string' ? launchOptions.executablePath.trim() : '';
   if (explicit) return explicit;
   if (launchOptions.channel) {
-    throw new Error('BROWSER_CHANNEL cannot be used with automatic tab-group reuse unless AI_WEB_TEST_CHROMIUM_EXECUTABLE_PATH points to the browser executable.');
+    throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'BROWSER_CHANNEL cannot be used with automatic tab-group reuse unless AI_WEB_TEST_CHROMIUM_EXECUTABLE_PATH points to the browser executable.');
   }
   return chromium.executablePath();
 }
@@ -286,7 +288,7 @@ export async function connectOrLaunchPersistentBrowserOverCdp(input: {
   if (existing) return existing;
 
   const port = cdpPortFromEndpoint(input.endpoint);
-  if (!port) throw new Error(`Automatic tab-group browser reuse needs a CDP port endpoint, got: ${input.endpoint || '[empty]'}`);
+  if (!port) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `Automatic tab-group browser reuse needs a CDP port endpoint, got: ${input.endpoint || '[empty]'}`);
   const timeoutMs = boundedPositiveIntegerEnv('BROWSER_CDP_LAUNCH_TIMEOUT_MS', 15_000, 3_000, 120_000, input.environment);
 
   if (await tcpEndpointIsListening(input.endpoint)) {
@@ -297,7 +299,7 @@ export async function connectOrLaunchPersistentBrowserOverCdp(input: {
       await sleep(250);
     }
     const windowsDiagnostics = await windowsPersistentChromeDiagnostics(input.userDataDir, port);
-    throw new Error([
+    throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, [
       `The expected Chrome CDP port ${input.endpoint} is already listening but did not complete a Playwright CDP handshake.`,
       `profile=${input.userDataDir}`,
       connectErrors.length ? `cdpConnectErrors=${JSON.stringify(connectErrors.slice(-3))}` : '',
@@ -339,7 +341,7 @@ export async function connectOrLaunchPersistentBrowserOverCdp(input: {
     });
   } catch (error) {
     await launchLogHandle?.close().catch(() => undefined);
-    throw new Error(`Failed to launch test Chrome for tab-group reuse: ${unknownErrorMessage(error)}`);
+    throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, `Failed to launch test Chrome for tab-group reuse: ${unknownErrorMessage(error)}`);
   }
   await launchLogHandle?.close().catch(() => undefined);
   child.once('error', (error) => {
@@ -367,7 +369,7 @@ export async function connectOrLaunchPersistentBrowserOverCdp(input: {
       .then((content) => content.slice(launchLogOffset).trim().slice(-4_000))
       .catch(() => ''),
   ]);
-  throw new Error([
+  throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, [
     `Failed to connect to persistent test Chrome at ${input.endpoint}.`,
     `profile=${input.userDataDir}`,
     `executable=${executablePath}`,
@@ -491,7 +493,7 @@ export async function acquireSharedBrowser(input: {
   sharedBrowserState.idleTimer = undefined;
   const key = input.runtimeKey ? `runtime:${runtimeKey}` : sharedBrowserKey(input);
   if (sharedBrowserState.key && sharedBrowserState.key !== key && sharedBrowserState.refCount > 0) {
-    throw new Error('A shared browser is already running with different launch settings. Stop active runs or set BROWSER_SHARED_TABS=false.');
+    throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'A shared browser is already running with different launch settings. Stop active runs or set BROWSER_SHARED_TABS=false.');
   }
   if (sharedBrowserState.key && sharedBrowserState.key !== key && sharedBrowserState.refCount === 0) {
     await closeIdleSharedBrowser(runtimeKey, sharedBrowserState, true);
@@ -544,7 +546,7 @@ export async function acquireSharedBrowser(input: {
           });
           if (retryConnected) return retryConnected;
           if (input.reconnectCdpEndpoint && isPersistentProfileAlreadyOpenError(error)) {
-            throw new Error([
+            throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, [
               '无法接管上一次的浏览器 tab 组：该 persistent profile 已经被一个旧浏览器进程占用，但旧进程没有可连接的 CDP 端口。',
               `profile=${input.userDataDir}`,
               `expectedCdp=${input.reconnectCdpEndpoint}`,
@@ -567,7 +569,7 @@ export async function acquireSharedBrowser(input: {
         if (lease.ownership === 'persistent') await lease.context.close().catch(() => undefined);
         else await lease.browser?.close().catch(() => undefined);
         if ('browserServer' in lease) await lease.browserServer?.close().catch(() => undefined);
-        throw new Error('Shared browser initialization was superseded.');
+        throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Shared browser initialization was superseded.');
       }
       sharedBrowserState.browser = lease.browser;
       sharedBrowserState.browserServer = 'browserServer' in lease ? lease.browserServer : undefined;

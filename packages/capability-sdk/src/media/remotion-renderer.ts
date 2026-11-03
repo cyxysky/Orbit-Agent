@@ -9,6 +9,8 @@ import { mediaToolInput, type MediaArtifact, type MediaOperations } from './inde
 import { videoCompositionMetadata } from './video-composition.tsx';
 import { readManagedRuntime } from '../runtime.ts';
 import type { CapabilityExecutionContext } from '../index.ts';
+import { CodedError, ERROR_CODES } from '../errors.ts';
+
 
 type Options = {
   resolveSource(sourceRef: string, context: CapabilityExecutionContext): Promise<string>;
@@ -27,7 +29,7 @@ function compositionPath() {
   ];
   try { candidates.push(hostRequire.resolve('@cjfclonedeep/capability-sdk/media/video-composition')); } catch { /* Source checkout. */ }
   const found = candidates.find(file => existsSync(file));
-  if (!found) throw new Error('Remotion composition is missing from the media package.');
+  if (!found) throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, 'Remotion composition is missing from the media package.');
   return found;
 }
 
@@ -40,7 +42,7 @@ export function createRemotionVideoComposer(options: Options): NonNullable<Media
     const signal = context.abortSignal ? AbortSignal.any([controller.signal, context.abortSignal]) : controller.signal;
     const execution = { ...context, abortSignal: signal };
     const { cancel, cancelSignal } = makeCancelSignal();
-    const timeout = setTimeout(() => controller.abort(new Error('Remotion video render timed out. Reduce the resolution or increase the media render timeout.')), options.timeoutMs || 900_000);
+    const timeout = setTimeout(() => controller.abort(new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, 'Remotion video render timed out. Reduce the resolution or increase the media render timeout.')), options.timeoutMs || 900_000);
     const stop = () => cancel();
     signal.addEventListener('abort', stop, { once: true });
     let browser: Awaited<ReturnType<typeof openBrowser>> | undefined;
@@ -57,9 +59,9 @@ export function createRemotionVideoComposer(options: Options): NonNullable<Media
         signal.throwIfAborted();
         const source = await options.resolveSource(ref, execution);
         const info = await stat(source);
-        if (!info.isFile() || info.size > 512 * 1024 * 1024) throw new Error('A video source must be a file no larger than 512 MB.');
+        if (!info.isFile() || info.size > 512 * 1024 * 1024) throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, 'A video source must be a file no larger than 512 MB.');
         const extension = path.extname(source).toLowerCase();
-        if (!/^\.[a-z0-9]{1,10}$/.test(extension)) throw new Error('Invalid video asset extension.');
+        if (!/^\.[a-z0-9]{1,10}$/.test(extension)) throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, 'Invalid video asset extension.');
         const name = `asset-${assets.size}${extension}`;
         await copyFile(source, path.join(publicDir, name));
         signal.throwIfAborted();
@@ -74,7 +76,7 @@ export function createRemotionVideoComposer(options: Options): NonNullable<Media
           const match = typeof probe === 'string' ? probe.match(/Duration:\s*(\d+):(\d+):([\d.]+)/) : undefined;
           const duration = match ? Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3])
             : Number((probe as { format?: { duration?: string } } | undefined)?.format?.duration);
-          if (Number.isFinite(duration) && (scene.trimStart || 0) + scene.duration > duration + 0.05) throw new Error('A scene extends beyond its source video. Reduce trimStart or duration.');
+          if (Number.isFinite(duration) && (scene.trimStart || 0) + scene.duration > duration + 0.05) throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, 'A scene extends beyond its source video. Reduce trimStart or duration.');
         }
         scenes.push({ ...scene, sourceRef: await asset(scene.sourceRef) });
         await report(`正在准备 Remotion 素材 ${scenes.length}/${request.scenes.length}`, scenes.length, request.scenes.length);

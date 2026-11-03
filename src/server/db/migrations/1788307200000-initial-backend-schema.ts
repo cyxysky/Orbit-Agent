@@ -1,4 +1,6 @@
 import type { MigrationInterface, QueryRunner } from 'typeorm';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 const statements = [
   `CREATE TABLE IF NOT EXISTS app_config (
@@ -225,6 +227,6 @@ export class InitialBackendSchema1788307200000 implements MigrationInterface {
   }
 
   async down(): Promise<void> {
-    throw new Error('The initial backend schema is irreversible.');
+    throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED, 'The initial backend schema is irreversible.');
   }
 }

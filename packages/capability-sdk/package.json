@@ -1,7 +1,15 @@
 {
   "name": "@cjfclonedeep/capability-sdk",
   "version": "0.3.0",
-  "description": "Capability SDK with all tools, structured responses, AI SDK/MCP adapters and automatic Windows/Linux runtime setup.",
+  "license": "MIT",
+  "description": "Give existing agents browser, Office, terminal, code, charts and knowledge tools through one SDK or MCP server.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cyxysky/capability-sdk.git"
+  },
+  "homepage": "https://github.com/cyxysky/capability-sdk#readme",
+  "bugs": { "url": "https://github.com/cyxysky/capability-sdk/issues" },
+  "keywords": ["agent", "tools", "mcp", "browser", "office", "automation", "typescript"],
   "type": "module",
   "sideEffects": [
     "**/*.css"
@@ -11,8 +19,14 @@
     "runtime",
     "scripts",
     "docs",
+    "examples",
     "licenses",
     "mcp-config.schema.json",
+    "LICENSE",
+    "install.mjs",
+    "install.ps1",
+    "install.sh",
+    "install.cmd",
     "*.md"
   ],
   "exports": {
@@ -29,17 +43,17 @@
       "types": "./dist/media/video-project.d.ts",
       "import": "./dist/media/video-project.js"
     },
-    "./novel": {
-      "types": "./dist/novel/index.d.ts",
-      "import": "./dist/novel/index.js"
+    "./text-editor": {
+      "types": "./dist/text-editor/index.d.ts",
+      "import": "./dist/text-editor/index.js"
     },
-    "./novel/node": {
-      "types": "./dist/novel/node.d.ts",
-      "import": "./dist/novel/node.js"
+    "./text-editor/node": {
+      "types": "./dist/text-editor/node.d.ts",
+      "import": "./dist/text-editor/node.js"
     },
-    "./novel/runtime-skill": {
-      "types": "./dist/novel/runtime-skill.d.ts",
-      "import": "./dist/novel/runtime-skill.js"
+    "./text-editor/runtime-skill": {
+      "types": "./dist/text-editor/runtime-skill.d.ts",
+      "import": "./dist/text-editor/runtime-skill.js"
     },
     "./openai": {
       "types": "./scripts/openai.d.mts",
@@ -495,6 +509,9 @@
     }
   },
   "scripts": {
+    "typecheck": "tsc -p tsconfig.build.json --noEmit",
+    "setup": "node install.mjs",
+    "export-repository": "node scripts/export-repository.mjs",
     "build": "tsc -p tsconfig.build.json && node scripts/copy-ui-assets.mjs",
     "prepack": "npm run build && npm run bundle-ui",
     "bundle-ui": "node scripts/bundle-ui.mjs",
@@ -508,6 +525,10 @@
     "node": ">=22.16"
   },
   "devDependencies": {
+    "@types/node": "^22.16.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/three": "^0.185.0",
     "@modelcontextprotocol/ext-apps": "2.0.0",
     "@types/ws": "^8.18.1",
     "esbuild": "^0.28.0"
@@ -516,12 +537,12 @@
     "access": "public"
   },
   "dependencies": {
-    "@ai-sdk/alibaba": "^2.0.30",
-    "@ai-sdk/google": "^4.0.40",
-    "@ai-sdk/openai": "^4.0.37",
-    "@ai-sdk/openai-compatible": "^3.0.29",
-    "@ai-sdk/provider": "^4.0.7",
-    "@ai-sdk/xai": "^4.0.34",
+    "@ai-sdk/alibaba": "2.0.30",
+    "@ai-sdk/google": "4.0.40",
+    "@ai-sdk/openai": "4.0.37",
+    "@ai-sdk/openai-compatible": "3.0.29",
+    "@ai-sdk/provider": "4.0.7",
+    "@ai-sdk/xai": "4.0.34",
     "@codemirror/commands": "^6.11.0",
     "@codemirror/lang-json": "^6.0.2",
     "@codemirror/language": "^6.12.4",
@@ -539,8 +560,8 @@
     "@xterm/xterm": "^6.0.0",
     "@xzdarcy/react-timeline-editor": "1.0.0",
     "acorn": "^8.16.0",
-    "ai": "^7.0.59",
-    "ai-sdk-provider-codex-cli": "^2.1.2",
+    "ai": "7.0.59",
+    "ai-sdk-provider-codex-cli": "2.1.2",
     "codemirror": "^6.0.2",
     "docx": "^9.7.1",
     "echarts": ">=6.0.0 <7",
@@ -567,6 +588,7 @@
     "zod": "^4.4.3"
   },
   "bin": {
+    "capability-install": "install.mjs",
     "capability-mcp": "scripts/mcp.mjs",
     "capability-setup": "scripts/setup.mjs",
     "webpilot-browser-mcp": "dist/browser/bin/mcp.js",

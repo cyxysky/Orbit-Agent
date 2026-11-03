@@ -1,3 +1,5 @@
+import { getErrorCode } from "../../errors.ts";
+import { terminalCommandErrorCode } from "../../errors.ts";
 import { z } from 'zod';
 import {
   createCapabilityRuntime, defineCapabilityInput, defineCapabilityTool,
@@ -7,6 +9,8 @@ import {
 import { terminalRuntimeSkill } from './runtime-skill.ts';
 import { terminalCapabilitySettings } from './settings.ts';
 import type { TerminalGeometry } from './geometry.ts';
+import { ERROR_CODES } from '../../errors.ts';
+
 export * from './runtime-skill.ts';
 export * from './settings.ts';
 export * from './geometry.ts';
@@ -79,19 +83,19 @@ export function createTerminalTool(operations: TerminalOperations, configuration
     policy: { concurrency: 'parallel', permissions: terminalCapabilityManifest.permissions },
     async execute(input, context) {
       if (configuration.AGENT_TERMINAL_ENABLED !== 'true') {
-        return { ok: false, error: { code: 'terminal-disabled', message: 'Local terminal is disabled in host settings.' } };
+        return { ok: false, error: { code: ERROR_CODES.TERMINAL_DISABLED, message: 'Local terminal is disabled in host settings.' } };
       }
       try {
         const data = await operations.execute(input, context);
         const command = data.terminal?.command;
         if ((input.action === 'run' || input.action === 'wait') && command && ['failed', 'timed_out', 'interrupted'].includes(command.status)) {
-          return { ok: false, error: { code: `terminal-${command.status}`,
+          return { ok: false, error: { code: terminalCommandErrorCode(command.status),
             message: `Command ${command.status} (exit ${command.exitCode ?? 'unknown'}). See terminal state in details.`, details: data } };
         }
         return { ok: true, summary: data.terminal ? `Terminal ${data.terminal.name}: ${data.terminal.status}.` : 'Terminal management completed.', data };
       } catch (error) {
         context.abortSignal?.throwIfAborted();
-        return { ok: false, error: { code: 'terminal-operation-failed', message: error instanceof Error ? error.message : String(error) } };
+        return { ok: false, error: { code: getErrorCode(error, ERROR_CODES.TERMINAL_OPERATION_FAILED), message: error instanceof Error ? error.message : String(error) } };
       }
     },
   });

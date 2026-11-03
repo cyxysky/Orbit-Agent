@@ -1,4 +1,6 @@
 import { asRecord } from '@/lib/unknown-value';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 type ValidationIssue = {
   code?: string;
@@ -85,19 +87,19 @@ function officeSourceDiagnostic(value: unknown): OfficeSourceDiagnostic | undefi
 
 function officeSourceFailureLabel(code: string | undefined) {
   switch (code) {
-    case 'PRESENTATION_OVERLAP':
+    case ERROR_CODES.PRESENTATION_OVERLAP:
       return '布局重叠';
-    case 'PRESENTATION_TEXT_OVERFLOW':
+    case ERROR_CODES.PRESENTATION_TEXT_OVERFLOW:
       return '文本溢出';
-    case 'PRESENTATION_GEOMETRY_INVALID':
+    case ERROR_CODES.PRESENTATION_GEOMETRY_INVALID:
       return '几何边界错误';
-    case 'UNO_RUNTIME_ERROR':
-    case 'UNO_BRIDGE_STARTUP':
-    case 'UNO_BRIDGE_DISPOSED':
+    case ERROR_CODES.UNO_RUNTIME_ERROR:
+    case ERROR_CODES.UNO_BRIDGE_STARTUP:
+    case ERROR_CODES.UNO_BRIDGE_DISPOSED:
       return 'UNO 运行错误';
-    case 'PYTHON_SYNTAX':
-    case 'JAVASCRIPT_SYNTAX':
-    case 'JS1005':
+    case ERROR_CODES.PYTHON_SYNTAX:
+    case ERROR_CODES.JAVASCRIPT_SYNTAX:
+    case ERROR_CODES.JS1005:
       return '语法错误';
     default:
       return '校验错误';
@@ -118,7 +120,7 @@ export function browserChatToolOutcomeLabel(value: unknown) {
     if (data.status === 'limited') return '已压缩，保留必要内容';
   }
   if (record?.outcome === 'not-executed' || (typeof value === 'string' && value.startsWith('未执行：'))) return '未执行';
-  if (record?.failureCategory === 'missing-tool-receipt') return '无执行记录';
+  if (record?.failureCategory === ERROR_CODES.MISSING_TOOL_RECEIPT) return '无执行记录';
   const failure = officeSourceValidationFailure(value);
   if (!failure) return undefined;
   if (failure.validation === 'failed' || failure.validationStatus === 'failed') {
@@ -141,7 +143,36 @@ export function browserChatSkippedActionLabel(value: unknown) {
 
 export function browserChatToolFailureSummary(value: unknown) {
   const failure = officeSourceValidationFailure(value);
-  if (!failure) return undefined;
+  if (!failure) {
+    const root = asRecord(typeof value === 'string' ? parsedJsonValue(value) : value);
+    if (root?.ok !== false) return undefined;
+    const seen = new WeakSet<object>();
+    const reason = (current: unknown, depth = 0): string | undefined => {
+      if (depth > 7 || current == null) return undefined;
+      if (typeof current === 'string') {
+        const parsed = parsedJsonValue(current);
+        return parsed === undefined ? current.trim() || undefined : reason(parsed, depth + 1);
+      }
+      if (Array.isArray(current)) {
+        const reasons = current.flatMap(item => {
+          const text = reason(item, depth + 1);
+          const path = asRecord(item)?.path;
+          return text ? [`${Array.isArray(path) && path.length ? `${path.join('.')}：` : ''}${text}`] : [];
+        });
+        return reasons.join('；') || undefined;
+      }
+      const record = asRecord(current);
+      if (!record || seen.has(record)) return undefined;
+      seen.add(record);
+      // Prefer errors inside SDK envelopes over their generic operation summary.
+      for (const key of ['executionError', 'error', 'message', 'cause', 'data', 'result', 'actual', 'summary']) {
+        const text = reason(record[key], depth + 1);
+        if (text) return text;
+      }
+      return undefined;
+    };
+    return reason(root);
+  }
   if (failure.editStatus === 'partial-patch-applied' && failure.validation !== 'failed' && failure.validationStatus !== 'failed') {
     return '部分修改已保存；请读取当前源码和新版本摘要，仅修复返回的冲突项。';
   }

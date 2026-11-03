@@ -18,6 +18,8 @@ import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 import { browserChatOrderedResponseParts, normalizeBrowserChatMarkdown, remarkBrowserChatCjkStrong, remarkBrowserChatArtifactLinks } from './browser-chat-markdown';
 import { browserChatHtmlSchema, rehypeBrowserChatSvgReferences } from './browser-chat-html';
 import { createResponseContext } from './response-context';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export type BrowserChatExportSnapshot = Pick<BrowserChatSessionSnapshot, 'id' | 'title' | 'messages' | 'steps' | 'subagents'> & { exportedAt: string };
 type Asset = { id: string; name: string; mime: string; data: string; bytes: number };
@@ -33,7 +35,7 @@ function blobData(blob: Blob, signal: AbortSignal) {
     const abort = () => { reader.abort(); reject(signal.reason); };
     signal.addEventListener('abort', abort, { once: true });
     reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(new Error('无法读取导出资源。'));
+    reader.onerror = () => reject(new CodedError(ERROR_CODES.APPLICATION_ERROR, '无法读取导出资源。'));
     reader.onloadend = () => signal.removeEventListener('abort', abort);
     reader.readAsDataURL(blob);
   });
@@ -46,14 +48,14 @@ class ExportAssets {
   constructor(readonly signal: AbortSignal) {}
   key(value: string) {
     const url = new URL(value, window.location.href);
-    if (!['http:', 'https:', 'data:', 'blob:'].includes(url.protocol)) throw new Error('资源地址无效。');
+    if (!['http:', 'https:', 'data:', 'blob:'].includes(url.protocol)) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '资源地址无效。');
     if (url.pathname.includes('/api/artifacts/')) url.searchParams.delete('download');
     url.hash = '';
     return url.href;
   }
   async add(blob: Blob, name: string): Promise<Asset> {
     this.signal.throwIfAborted();
-    if (this.bytes + blob.size > maxAssetBytes) throw new Error('附件总大小超过单个 HTML 导出的 256 MB 上限。');
+    if (this.bytes + blob.size > maxAssetBytes) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '附件总大小超过单个 HTML 导出的 256 MB 上限。');
     this.bytes += blob.size;
     const asset = { id: `asset-${this.assets.size + 1}`, name: safeName(name), mime: blob.type || 'application/octet-stream', data: await blobData(blob, this.signal), bytes: blob.size };
     this.assets.set(asset.id, asset);
@@ -67,14 +69,14 @@ class ExportAssets {
     const label = name || (['data:', 'blob:'].includes(url.protocol) ? 'image' : decodeURIComponent(url.pathname.split('/').at(-1) || 'file'));
     try {
       const response = await fetch(key, { signal: AbortSignal.any([this.signal, AbortSignal.timeout(60_000)]), credentials: url.origin === window.location.origin ? 'same-origin' : 'omit' });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      if (this.bytes + Number(response.headers.get('content-length') || 0) > maxAssetBytes) throw new Error('资源过大，超出 256 MB 导出上限');
+      if (!response.ok) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, `HTTP ${response.status}`);
+      if (this.bytes + Number(response.headers.get('content-length') || 0) > maxAssetBytes) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '资源过大，超出 256 MB 导出上限');
       const asset = await this.add(await response.blob(), label);
       this.urls.set(key, asset);
       return asset;
     } catch (error) {
       this.signal.throwIfAborted();
-      throw new Error(`无法内嵌“${label}”：${error instanceof Error ? error.message : String(error)}。未生成不完整的导出文件。`);
+      throw new CodedError(ERROR_CODES.APPLICATION_ERROR, `无法内嵌“${label}”：${error instanceof Error ? error.message : String(error)}。未生成不完整的导出文件。`);
     }
   }
   link(asset: Asset, label = asset.name) {
@@ -86,7 +88,7 @@ class ExportAssets {
         const value = element.getAttribute(name);
         if (!value) continue;
         const asset = await this.read(value);
-        if (element.tagName === 'IMG' && !asset.mime.startsWith('image/')) throw new Error(`图片 ${asset.name} 返回了非图片内容。`);
+        if (element.tagName === 'IMG' && !asset.mime.startsWith('image/')) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, `图片 ${asset.name} 返回了非图片内容。`);
         element.setAttribute(name, asset.data);
       }
       element.removeAttribute('srcset'); element.removeAttribute('loading');
@@ -177,13 +179,13 @@ export async function buildBrowserChatExport(snapshot: BrowserChatExportSnapshot
       const file = await assets.add(new Blob([JSON.stringify({ record, view }, null, 2)], { type: 'application/json' }), `${record.title}.json`);
       return `<section><h3>${escapeExportHtml(record.title)}</h3><p>地图地点与路线数据已保存；在线底图需联网查看。</p><ul>${view.places.map(place => `<li>${escapeExportHtml(place.name)} — ${escapeExportHtml(place.address)}</li>`).join('')}${view.markers.map(marker => `<li>${escapeExportHtml(marker.label)} (${marker.position.lat}, ${marker.position.lng})</li>`).join('')}</ul>${view.route ? `<p>${view.route.distanceMeters} m · ${view.route.durationSeconds} s</p>` : ''}${assets.link(file, '下载地图数据')} · <a href="${escapeExportHtml(defaultUrlTransform(view.googleMapsUrl))}" target="_blank" rel="noreferrer">查看在线地图</a></section>`;
     }
-    throw new Error(`暂不支持导出内容类型 ${value.type}，未生成不完整的文件。`);
+    throw new CodedError(ERROR_CODES.APPLICATION_ERROR, `暂不支持导出内容类型 ${value.type}，未生成不完整的文件。`);
   }
   async function fileList(files: BrowserChatArtifactSummary[]) {
     const items: string[] = [];
     for (const file of files) {
       const url = browserChatArtifactOpenUrl(file);
-      if (!url) throw new Error(`文件“${file.fileName}”缺少可读取的地址。`);
+      if (!url) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, `文件“${file.fileName}”缺少可读取的地址。`);
       options.onProgress('正在内嵌图片和文件…');
       const asset = await assets.read(url, file.fileName);
       const media = asset.mime.startsWith('image/') ? `<img src="${asset.data}" alt="${escapeExportHtml(file.title || file.fileName)}">`
@@ -242,7 +244,7 @@ export async function buildBrowserChatExport(snapshot: BrowserChatExportSnapshot
 export async function exportBrowserChatHtml(options: { sessionId: string; locale: string; signal: AbortSignal; onProgress: (text: string) => void }) {
   const response = await fetch(withWebPilotBasePath(`/api/browser-chat/${encodeURIComponent(options.sessionId)}/export`), { cache: 'no-store', signal: options.signal });
   const snapshot = await response.json();
-  if (!response.ok) throw new Error((typeof snapshot.error === 'string' ? snapshot.error : snapshot.error?.message) || '读取完整对话失败');
+  if (!response.ok) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, (typeof snapshot.error === 'string' ? snapshot.error : snapshot.error?.message) || '读取完整对话失败');
   const html = await buildBrowserChatExport(snapshot, options);
   options.signal.throwIfAborted();
   const url = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }));

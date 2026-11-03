@@ -1,10 +1,12 @@
 import { Readable } from 'node:stream';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export function webRequest(incoming: IncomingMessage, outgoing: ServerResponse) {
   const controller = new AbortController();
-  const abort = () => controller.abort(new Error('HTTP client disconnected'));
-  incoming.once('aborted', abort);
+  const abort = () => controller.abort(new CodedError(ERROR_CODES.HTTP_CLIENT_DISCONNECTED, 'HTTP client disconnected'));
+  incoming.once(ERROR_CODES.ABORTED, abort);
   outgoing.once('close', () => { if (!outgoing.writableFinished) abort(); });
   const headers = new Headers();
   for (let i = 0; i < incoming.rawHeaders.length; i += 2) headers.append(incoming.rawHeaders[i], incoming.rawHeaders[i + 1]);
@@ -62,7 +64,7 @@ export function createRouter(entries: RouteEntry[]) {
       if (!match) continue;
       const params: Record<string, string | string[]> = {};
       try { route.keys.forEach((key, i) => { params[key] = route.path.includes(`[...${key}]`) ? match[i + 1].split('/').map(decodeURIComponent) : decodeURIComponent(match[i + 1]); }); }
-      catch { return Response.json({ error: 'Invalid URL encoding' }, { status: 400 }); }
+      catch { return Response.json({ code: ERROR_CODES.INVALID_URL_ENCODING, error: 'Invalid URL encoding' }, { status: 400 }); }
       const routeModule = await route.load();
       const method = request.method === 'HEAD' && !routeModule.HEAD ? 'GET' : request.method;
       const handler = routeModule[method];
@@ -70,11 +72,11 @@ export function createRouter(entries: RouteEntry[]) {
       if (routeModule.GET && !routeModule.HEAD) allow.push('HEAD');
       if (!routeModule.OPTIONS) allow.push('OPTIONS');
       if (request.method === 'OPTIONS' && !handler) return new Response(null, { status: 204, headers: { Allow: allow.join(', ') } });
-      if (typeof handler !== 'function') return Response.json({ error: 'Method Not Allowed' }, { status: 405, headers: { Allow: allow.join(', ') } });
+      if (typeof handler !== 'function') return Response.json({ code: ERROR_CODES.METHOD_NOT_ALLOWED, error: 'Method Not Allowed' }, { status: 405, headers: { Allow: allow.join(', ') } });
       const result = await handler(request, { params: Promise.resolve(params) });
-      if (!(result instanceof Response)) throw new Error(`Route ${route.path} did not return a Response`);
+      if (!(result instanceof Response)) throw new CodedError(ERROR_CODES.HTTP_REQUEST_FAILED, `Route ${route.path} did not return a Response`);
       return result;
     }
-    return Response.json({ error: 'Not Found' }, { status: 404 });
+    return Response.json({ code: ERROR_CODES.NOT_FOUND, error: 'Not Found' }, { status: 404 });
   };
 }

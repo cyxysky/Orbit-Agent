@@ -6,6 +6,8 @@ import { Popover } from '@heroui/react/popover';
 import { ArrowRight, Brain, Check, CircleAlert, Loader2, Sparkles, X } from 'lucide-react';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 import { ExpandableActionLabel } from '@/components/ui/expandable-action-label';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 type MemoryProposal = { id: string; items: Array<{ key: string; value: string; status: string; evidence?: string[]; applicability?: { when: string }; expiresAt?: string }> };
 type MemoryJob = { id: string; status: string; attempts: number; error?: string; result?: {
@@ -37,7 +39,7 @@ export function BrowserChatRecoveryPanel({ sessionId, busy }: { sessionId: strin
       try {
         const response = await fetch(url, { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]), cache: 'no-store' });
         const data = await response.json();
-        if (!response.ok) throw new Error(data.error?.message || data.error || '无法读取记忆候选');
+        if (!response.ok) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, data.error?.message || data.error || '无法读取记忆候选');
         if (!controller.signal.aborted) {
           setCandidates(data.candidates || []); setJobs(data.jobs || []);
           setExtractionEnabled(data.extractionEnabled !== false); setLoadError('');
@@ -62,12 +64,12 @@ export function BrowserChatRecoveryPanel({ sessionId, busy }: { sessionId: strin
     try {
       const response = await fetch(url, { method: 'POST', signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(proposal ? { action: 'memory-review', id: proposal.id, approved } : { action: 'memory-extract' }) });
       const result = await response.json();
-      if (!response.ok) throw new Error(result.error?.message || result.error || '记忆操作失败');
+      if (!response.ok) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, result.error?.message || result.error || '记忆操作失败');
       if (!controller.signal.aborted && proposal) setCandidates(current => current.filter(item => item.id !== proposal.id));
       if (!controller.signal.aborted && result.jobId) setSelectedJobId(result.jobId);
       const latest = await fetch(url, { signal, cache: 'no-store' });
       const data = await latest.json();
-      if (!latest.ok) throw new Error(data.error?.message || data.error || '无法刷新记忆候选');
+      if (!latest.ok) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, data.error?.message || data.error || '无法刷新记忆候选');
       if (!controller.signal.aborted) { setCandidates(data.candidates || []); setJobs(data.jobs || []); }
     } catch (error) { if (!controller.signal.aborted) setError(error instanceof Error ? error.message : String(error)); }
     finally {

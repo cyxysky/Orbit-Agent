@@ -3,6 +3,8 @@ import { redactSensitiveTexts } from '@/server/capabilities/sensitive-data';
 import { store } from '@/server/db/store';
 import { ApiRequestError, apiError, apiJson, parseJsonRequest } from '@/server/http/api-request';
 import { requestHasAdminSettingsAccess } from '@/server/settings/admin-settings-access';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 const testRequestSchema = z.object({
   text: z.string().min(1).max(200_000),
@@ -11,7 +13,7 @@ const testRequestSchema = z.object({
 export async function POST(request: Request) {
   try {
     if (!requestHasAdminSettingsAccess(request)) {
-      throw new ApiRequestError('请先输入管理员设置密码。', { code: 'admin_access_required', status: 401 });
+      throw new ApiRequestError('请先输入管理员设置密码。', { code: ERROR_CODES.ADMIN_ACCESS_REQUIRED, status: 401 });
     }
     const body = await parseJsonRequest(request, testRequestSchema, { maxBytes: 256 * 1024 });
     await store.applyRuntimeEnv();

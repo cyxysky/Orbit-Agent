@@ -2,6 +2,8 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { DEFAULT_THEME_COLOR, deriveThemePalette, normalizeThemeColor } from './palette';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 const MODE_STORAGE_KEY = 'webpilotqa.themeMode';
 const COLOR_STORAGE_KEY = 'webpilotqa.themeColor';
@@ -77,6 +79,6 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
 export function useTheme() {
   const context = useContext(ThemeContext);
-  if (!context) throw new Error('useTheme must be used inside ThemeProvider');
+  if (!context) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'useTheme must be used inside ThemeProvider');
   return context;
 }

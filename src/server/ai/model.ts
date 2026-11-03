@@ -12,6 +12,8 @@ import { ensureAiSdkTelemetryRegistered } from '@/server/ai/ai-sdk-telemetry';
 import { filterSensitiveData } from '@/server/capabilities/sensitive-data';
 import { normalizeToolInputSchemas } from '@/server/ai/tool-input-schema';
 import { normalizeRuntimeCacheUsage } from '@/server/ai/agents/runtime-prompt-cache';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 ensureAiSdkTelemetryRegistered();
 
@@ -165,7 +167,7 @@ function openAiCompatibleModel(
   return lazyLanguageModel(provider, modelId, async (sessionId) => {
     const baseURL = optionalEnvironmentValue(baseUrlEnvironmentName) || defaultBaseURL;
     if (!baseURL) {
-      throw new Error(`${provider} has no Base URL. Configure the complete OpenAI-compatible /v1 endpoint in model settings.`);
+      throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, `${provider} has no Base URL. Configure the complete OpenAI-compatible /v1 endpoint in model settings.`);
     }
     const extraRequestParameters = extraOpenAICompatibleRequestParameters(extraRequestParametersEnvironmentName);
     if (/minimax/i.test(`${modelId} ${baseURL}`)) {

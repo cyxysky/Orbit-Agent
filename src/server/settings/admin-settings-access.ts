@@ -1,4 +1,6 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 const ADMIN_SETTINGS_ACCESS_TOKEN_LIFETIME_MS = 4 * 60 * 60 * 1000;
 const ADMIN_SETTINGS_ACCESS_TOKEN_VERSION = 1;
@@ -57,7 +59,7 @@ export function createAdminSettingsAccessToken(
   now = Date.now(),
 ) {
   if (!adminSettingsPasswordConfigured(env)) {
-    throw new Error('WEBPILOT_ADMIN_SETTINGS_PASSWORD is not configured.');
+    throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'WEBPILOT_ADMIN_SETTINGS_PASSWORD is not configured.');
   }
   const payload: AdminSettingsAccessTokenPayload = {
     expiresAt: now + ADMIN_SETTINGS_ACCESS_TOKEN_LIFETIME_MS,

@@ -1,7 +1,10 @@
+import { getErrorCode } from "../../../errors.ts";
 import { constants } from 'node:fs';
 import { access, readFile } from 'node:fs/promises';
 import { PDFParse } from 'pdf-parse';
 import type { OfficeArtifactIssue } from './validation.ts';
+import { ERROR_CODES } from '../../../errors.ts';
+
 
 export type OfficeRendererResult = {
   available: boolean;
@@ -40,10 +43,10 @@ export async function validateOfficeRendererMatrix(input: {
       libreOffice.summary = await pdfSummary(input.libreOfficePdfPath);
     } catch (error) {
       libreOffice.status = 'failed';
-      issues.push({ code: 'LIBREOFFICE_RENDER_FAILED', message: `LibreOffice PDF verification failed: ${error instanceof Error ? error.message : String(error)}`, severity: 'error' });
+      issues.push({ code: getErrorCode(error, ERROR_CODES.LIBREOFFICE_RENDER_FAILED), message: `LibreOffice PDF verification failed: ${error instanceof Error ? error.message : String(error)}`, severity: 'error' });
     }
   } else {
-    issues.push({ code: 'LIBREOFFICE_RENDERER_UNAVAILABLE', message: 'LibreOffice did not provide a PDF renderer result.', severity: 'error' });
+    issues.push({ code: ERROR_CODES.LIBREOFFICE_RENDERER_UNAVAILABLE, message: 'LibreOffice did not provide a PDF renderer result.', severity: 'error' });
   }
 
   return {

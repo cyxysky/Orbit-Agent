@@ -1,6 +1,8 @@
 import { deleteQueuedBrowserChatMessage } from '@/server/ai/agents/browser-chat.service';
 import { ApiRequestError, apiError, apiJson } from '@/server/http/api-request';
 import { requestApplicationUserId } from '@/server/auth/user-context';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 
 type RouteContext = {
@@ -16,7 +18,7 @@ export async function DELETE(request: Request, context: RouteContext) {
       requestApplicationUserId(request),
     );
     if (!session) {
-      throw new ApiRequestError('Browser chat session not found', { code: 'not_found', status: 404 });
+      throw new ApiRequestError('Browser chat session not found', { code: ERROR_CODES.NOT_FOUND, status: 404 });
     }
     return apiJson(request, { session });
   } catch (error) {

@@ -234,7 +234,10 @@ async function installModels(cache, python) {
     models[key] = path.join(cache, 'models', key);
     log(`Preparing model ${repository}`);
     await run(python, ['-c', 'from huggingface_hub import snapshot_download; import sys; snapshot_download(repo_id=sys.argv[1], local_dir=sys.argv[2], allow_patterns=["*.json", "*.txt", "*.py", "*.model", "*.safetensors", "pytorch_model*.bin", "LICENSE*", "README.md"])', repository, models[key]], {
-      timeout: 2 * 60 * 60_000, env: { ...process.env, HF_HOME: path.join(cache, 'huggingface'), HF_HUB_CACHE: process.env.HF_HUB_CACHE || path.join(cache, 'huggingface', 'hub'), HF_XET_CACHE: path.join(cache, 'huggingface', 'xet') },
+      // The optional Xet transport can stall before writing any bytes behind
+      // some proxies. HTTP supports resuming downloads and works through the
+      // same proxy path as metadata requests. Users can opt into Xet with 0.
+      timeout: 2 * 60 * 60_000, env: { ...process.env, HF_HOME: path.join(cache, 'huggingface'), HF_HUB_CACHE: process.env.HF_HUB_CACHE || path.join(cache, 'huggingface', 'hub'), HF_XET_CACHE: path.join(cache, 'huggingface', 'xet'), HF_HUB_DISABLE_XET: process.env.HF_HUB_DISABLE_XET ?? '1' },
     });
   }
   return models;

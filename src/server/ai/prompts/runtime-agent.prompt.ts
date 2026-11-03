@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { browserInteractionSchema } from '../agents/runtime-browser-interaction';
 import type { BrowserChatInteractionMode } from '@/lib/browser-chat-interaction-mode';
 import { contextReadDescription, contextReadInputSchema } from '../agents/runtime-context-assembler';
-import { novelToolInput } from '@cjfclonedeep/capability-sdk/novel';
+import { textEditorInput } from '@cjfclonedeep/capability-sdk/text-editor';
 import { mediaToolInput } from '@cjfclonedeep/capability-sdk/media';
 export function currentRuntimeTimePromptLine(now = new Date()) {
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
@@ -28,7 +28,7 @@ export function buildCodexObjectPrompt(
     prompt,
     '',
     browserEnabled ? `Current browser params schema: ${JSON.stringify(z.toJSONSchema(browserInteractionSchema(browserMode)))}` : '',
-    allowedTypes.includes('novel') ? `Current novel params schema: ${JSON.stringify(novelToolInput.jsonSchema)}` : '',
+    allowedTypes.includes('textEditor') ? `Current textEditor params schema: ${JSON.stringify(textEditorInput.jsonSchema)}` : '',
     allowedTypes.includes('media') ? `Current media params schema: ${JSON.stringify(mediaToolInput.jsonSchema)}` : '',
     'Codex local mode uses action objects because native function calling is unavailable. Each listed type executes the corresponding real tool.',
     '- Return exactly one object per step: { "type": string, "message"?: string, "params": object }. The next step receives its result. Keep optional message and user-facing reasons in Chinese.',

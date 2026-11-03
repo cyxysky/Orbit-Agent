@@ -1,4 +1,6 @@
 import type { TerminalEvent, TerminalResult, TerminalToolInput } from './index.ts';
+import { CodedError, ERROR_CODES } from '../../errors.ts';
+
 export type TerminalClientEvent = TerminalEvent | { type: 'snapshot'; terminals: TerminalResult[]; enabled: boolean } | { type: 'heartbeat' };
 export type TerminalConnection = { status: 'connecting' | 'connected' | 'reconnecting' | 'error'; error?: string };
 export interface TerminalClient {
@@ -20,7 +22,7 @@ export function createHttpTerminalClient(url: string): TerminalClient {
     const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input),
       ...(input.action === 'write' || input.action === 'resize' ? { signal: AbortSignal.timeout(10000) } : {}) });
     const data = await response.json();
-    if (!response.ok) throw new Error(errorMessage(data, 'Terminal operation failed.'));
+    if (!response.ok) throw new CodedError(ERROR_CODES.TERMINAL_OPERATION_FAILED, errorMessage(data, 'Terminal operation failed.'));
     return data;
   };
   const discard = (queue: Queue, error: unknown) => {
@@ -87,9 +89,9 @@ export function createHttpTerminalClient(url: string): TerminalClient {
         });
       }
       if (input.action === 'write') {
-        if (!input.input.length || input.input.length > 100000) throw new Error('Terminal input must contain between 1 and 100000 characters.');
+        if (!input.input.length || input.input.length > 100000) throw new CodedError(ERROR_CODES.TERMINAL_OPERATION_FAILED, 'Terminal input must contain between 1 and 100000 characters.');
         const queue = inputs.get(input.terminalId) || { entries: [], chars: 0 };
-        if (queue.chars + input.input.length > 200000 || queue.entries.length >= 2048) throw new Error('Terminal input is arriving faster than it can be sent.');
+        if (queue.chars + input.input.length > 200000 || queue.entries.length >= 2048) throw new CodedError(ERROR_CODES.TERMINAL_OPERATION_FAILED, 'Terminal input is arriving faster than it can be sent.');
         inputs.set(input.terminalId, queue);
         return new Promise<TerminalResult>((resolve, reject) => {
           queue.entries.push({ request: input, resolve, reject }); queue.chars += input.input.length;
@@ -128,7 +130,7 @@ export function createHttpTerminalClient(url: string): TerminalClient {
         let deadline: ReturnType<typeof setTimeout> | undefined;
         const armDeadline = (ms: number) => {
           clearTimeout(deadline);
-          deadline = setTimeout(() => controller.abort(new Error('终端连接超时，请重试。')), ms);
+          deadline = setTimeout(() => controller.abort(new CodedError(ERROR_CODES.TERMINAL_OPERATION_FAILED, '终端连接超时，请重试。')), ms);
         };
         let retryable = true;
         let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
@@ -141,17 +143,17 @@ export function createHttpTerminalClient(url: string): TerminalClient {
           if (!response.ok) {
             retryable = response.status >= 500 || [408, 429].includes(response.status);
             const data = await response.json().catch(() => ({}));
-            throw new Error(errorMessage(data, `终端连接失败（HTTP ${response.status}）`));
+            throw new CodedError(ERROR_CODES.TERMINAL_OPERATION_FAILED, errorMessage(data, `终端连接失败（HTTP ${response.status}）`));
           }
           if (!response.headers.get('content-type')?.includes('text/event-stream') || !response.body) {
             retryable = false;
-            throw new Error('终端接口未返回实时数据流，请检查连接。');
+            throw new CodedError(ERROR_CODES.TERMINAL_OPERATION_FAILED, '终端接口未返回实时数据流，请检查连接。');
           }
           reader = response.body.getReader();
           const decoder = new TextDecoder(); let buffer = '';
           while (!stopped) {
             const { value, done } = await reader.read();
-            if (done) throw new Error('终端连接已断开，正在重新连接。');
+            if (done) throw new CodedError(ERROR_CODES.TERMINAL_OPERATION_FAILED, '终端连接已断开，正在重新连接。');
             armDeadline(45000);
             buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/g, '\n');
             let boundary: number;

@@ -16,6 +16,8 @@ import {
   requestOrigin,
 } from '@/server/embed/browser-chat-embed';
 import { parseJsonRequest } from '@/server/http/api-request';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 
 const initSchema = z.object({
@@ -48,7 +50,7 @@ export async function POST(request: Request) {
       requestedSessionId,
     );
     const session = initialSessionId ? await readBrowserChatSessionPage(initialSessionId, userId) : undefined;
-    if (requestedSessionId && !session) throw new Error('Browser chat session not found');
+    if (requestedSessionId && !session) throw new CodedError(ERROR_CODES.HTTP_REQUEST_FAILED, 'Browser chat session not found');
     const ttlSeconds = Number.isFinite(Number(body.tokenTtlSeconds))
       ? Number(body.tokenTtlSeconds)
       : undefined;

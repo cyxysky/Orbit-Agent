@@ -1,3 +1,5 @@
+
+import { CodedError, ERROR_CODES } from '../../errors.ts';
 /** Public authoring contract; independent of Node and browser packages. */
 export const htmlOfficeGuidance = {
   sourceLanguage: 'html',
@@ -23,7 +25,7 @@ export const htmlOfficeGuidance = {
 
 export function assertHtmlOfficeSource(source: string) {
   if (!/^\s*<!doctype\s+html\s*>/i.test(source) || !/<html[\s>]/i.test(source) || !/<body[\s>]/i.test(source) || !/<\/html\s*>\s*$/i.test(source)) {
-    throw new Error('HTML generation requires a complete <!doctype html><html>...<body>...</body></html> document in program.');
+    throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'HTML generation requires a complete <!doctype html><html>...<body>...</body></html> document in program.');
   }
-  if (/<(?:script|iframe|object|embed|canvas|video|audio|form)\b/i.test(source)) throw new Error('HTML documents must be static: script, iframe, object, embed, canvas, media and form elements are not supported.');
+  if (/<(?:script|iframe|object|embed|canvas|video|audio|form)\b/i.test(source)) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'HTML documents must be static: script, iframe, object, embed, canvas, media and form elements are not supported.');
 }

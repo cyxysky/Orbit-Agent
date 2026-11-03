@@ -1,4 +1,6 @@
 import type { CapabilityInputSchema, JsonSchema } from './index.ts';
+import { CodedError, ERROR_CODES } from './errors.ts';
+
 
 export type ResponseBlock<T = Record<string, unknown>> = { type: string; params: T };
 export type ResponseCompletion = {
@@ -32,7 +34,7 @@ export function defineResponseType<T extends Record<string, unknown>>(definition
 }
 
 function object(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Expected an object.');
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, 'Expected an object.');
   return value as Record<string, unknown>;
 }
 
@@ -41,7 +43,7 @@ export class ResponseRegistry {
 
   register(definitions: readonly ResponseDefinition[]) {
     for (const definition of definitions) {
-      if (!definition.type.trim() || this.#definitions.has(definition.type)) throw new Error(`Duplicate or empty response type: ${definition.type}`);
+      if (!definition.type.trim() || this.#definitions.has(definition.type)) throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, `Duplicate or empty response type: ${definition.type}`);
       for (const example of definition.examples || []) definition.params.parse(example);
       this.#definitions.set(definition.type, definition);
     }
@@ -60,31 +62,31 @@ export class ResponseRegistry {
   }
   require(type: string) {
     const definition = this.get(type);
-    if (!definition) throw new Error(`Unknown response type: ${type}`);
+    if (!definition) throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, `Unknown response type: ${type}`);
     return definition;
   }
 
   parse(value: unknown): ResponseBlock {
     const block = object(value);
     const extra = Object.keys(block).filter(key => key !== 'type' && key !== 'params');
-    if (extra.length || typeof block.type !== 'string') throw new Error(`Response blocks require {type, params}; put content fields inside params.${extra.length ? ` Unexpected fields: ${extra.join(', ')}.` : ' Missing string type.'}`);
+    if (extra.length || typeof block.type !== 'string') throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, `Response blocks require {type, params}; put content fields inside params.${extra.length ? ` Unexpected fields: ${extra.join(', ')}.` : ' Missing string type.'}`);
     return { type: block.type, params: this.require(block.type).params.parse(block.params) };
   }
 
   parseResponse(value: unknown): StructuredResponse {
     const response = object(value);
-    if (Object.keys(response).some(key => key !== 'status' && key !== 'blocks' && key !== 'completion')) throw new Error('Unknown response field.');
+    if (Object.keys(response).some(key => key !== 'status' && key !== 'blocks' && key !== 'completion')) throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, 'Unknown response field.');
     const status = response.status;
-    if (status !== 'passed' && status !== 'failed' && status !== 'blocked') throw new Error('Invalid response status.');
-    if (!Array.isArray(response.blocks) || !response.blocks.length || response.blocks.length > 64) throw new Error('Expected 1 to 64 response blocks.');
+    if (status !== 'passed' && status !== 'failed' && status !== 'blocked') throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, 'Invalid response status.');
+    if (!Array.isArray(response.blocks) || !response.blocks.length || response.blocks.length > 64) throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, 'Expected 1 to 64 response blocks.');
     let completion: ResponseCompletion | undefined;
     if (response.completion !== undefined) {
       const declared = object(response.completion);
-      if (Object.keys(declared).some(key => key !== 'complete' && key !== 'remainingWork')) throw new Error('Unknown completion field.');
-      if (typeof declared.complete !== 'boolean') throw new Error('completion.complete must be a boolean.');
+      if (Object.keys(declared).some(key => key !== 'complete' && key !== 'remainingWork')) throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, 'Unknown completion field.');
+      if (typeof declared.complete !== 'boolean') throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, 'completion.complete must be a boolean.');
       if (!Array.isArray(declared.remainingWork) || declared.remainingWork.length > 64
         || declared.remainingWork.some(item => typeof item !== 'string' || !item.trim() || item.length > 500)) {
-        throw new Error('completion.remainingWork must be an array of at most 64 nonempty strings.');
+        throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, 'completion.remainingWork must be an array of at most 64 nonempty strings.');
       }
       completion = {
         complete: declared.complete,
@@ -96,7 +98,7 @@ export class ResponseRegistry {
       try { return [this.parse(block)]; }
       catch (error) { errors.push(`blocks.${index}: ${error instanceof Error ? error.message : String(error)}`); return []; }
     });
-    if (errors.length) throw new Error(errors.join('\n'));
+    if (errors.length) throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, errors.join('\n'));
     return { status, ...(completion ? { completion } : {}), blocks };
   }
 
@@ -124,7 +126,7 @@ export class ResponseRegistry {
         for (const [key, content] of Object.entries(block)) {
           if (key === 'type' || key === 'params') continue;
           if (Object.hasOwn(params, key) && JSON.stringify(canonical(params[key])) !== JSON.stringify(canonical(content))) {
-            throw new Error(`Conflicting response field: ${key}`);
+            throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, `Conflicting response field: ${key}`);
           }
           params[key] = content;
         }
@@ -330,7 +332,7 @@ export class ResponseSession {
   /** Normal completion requires an accepted final tool call; hosts may report interruption/failure. */
   finish(fallback: { status?: StructuredResponse['status']; blocks?: readonly ResponseBlock[] } = {}): StructuredResponse {
     if (!this.#explicit && fallback.status !== 'failed' && fallback.status !== 'blocked') {
-      throw new Error('A successful response requires an accepted finalResponse call.');
+      throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, 'A successful response requires an accepted finalResponse call.');
     }
     return {
       status: this.#explicit?.status ?? fallback.status ?? 'passed',
@@ -353,6 +355,8 @@ function relocateSchema(schema: JsonSchema, root: string): JsonSchema {
 export type ResponseExport = { format: 'markdown'; body: string } | { format: 'image'; artifactId: string };
 export type ResponseServerContext = { scopeId: string; userId: string; readOnly: boolean; signal?: AbortSignal };
 export class ResponseOperationError extends Error {
+  readonly code: import("./errors.ts").ErrorCode = ERROR_CODES.RESPONSE_OPERATION_FAILED;
+
   constructor(message: string, readonly status = 400) { super(message); }
 }
 export interface ResponseHandler<T = Record<string, unknown>> {
@@ -369,15 +373,15 @@ export class ResponseHandlerRegistry {
   constructor(readonly definitions: ResponseRegistry) {}
   register(handlers: readonly ResponseHandler[]) {
     for (const handler of handlers) {
-      if (this.definitions.require(handler.definition.type) !== handler.definition) throw new Error(`Mismatched response definition: ${handler.definition.type}`);
-      if (this.#handlers.has(handler.definition.type)) throw new Error(`Duplicate response handler: ${handler.definition.type}`);
+      if (this.definitions.require(handler.definition.type) !== handler.definition) throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, `Mismatched response definition: ${handler.definition.type}`);
+      if (this.#handlers.has(handler.definition.type)) throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, `Duplicate response handler: ${handler.definition.type}`);
       this.#handlers.set(handler.definition.type, handler);
     }
     return this;
   }
   assertComplete() {
     for (const definition of this.definitions.definitions()) {
-      if (definition.resource && !this.#handlers.has(definition.type)) throw new Error(`Missing response resource handler: ${definition.type}`);
+      if (definition.resource && !this.#handlers.has(definition.type)) throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, `Missing response resource handler: ${definition.type}`);
     }
     return this;
   }

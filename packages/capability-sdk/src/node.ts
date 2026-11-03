@@ -1,6 +1,8 @@
 import { mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
+import { CodedError, ERROR_CODES } from './errors.ts';
+
 export { runCapabilityProcess, type CapabilityProcessOptions } from './process.ts';
 
 /** Local persistent stores own their connection. Never point this at an application database. */
@@ -14,7 +16,7 @@ export function createCapabilityDocumentDatabase<T extends { id: string; updated
   let closed = false;
   const directory = path.resolve(input.directory);
   function database() {
-    if (closed) throw new Error('Capability store has been disposed.');
+    if (closed) throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED, 'Capability store has been disposed.');
     if (connection) return connection;
     mkdirSync(directory, { recursive: true });
     const { DatabaseSync } = process.getBuiltinModule('node:sqlite') as typeof import('node:sqlite');

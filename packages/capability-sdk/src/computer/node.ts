@@ -9,6 +9,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createComputerCapability, type ComputerDriver } from './index.ts';
 import type { CapabilityRunContext } from '../index.ts';
+import { CodedError, ERROR_CODES } from '../errors.ts';
+
 
 const COMPUTER_PATH = '/v1/computer';
 const MAX_REQUEST_BYTES = 256 * 1024;
@@ -49,7 +51,7 @@ function safeSegment(value: unknown, fallback: string) {
 
 function disabledDriver(message: string): ComputerDriver {
   return {
-    async execute() { throw new Error(message); },
+    async execute() { throw new CodedError(ERROR_CODES.COMPUTER_OPERATION_FAILED, message); },
     async health() { return { status: 'needs-runtime', message }; },
   };
 }
@@ -71,7 +73,7 @@ function readJsonRequest(request: IncomingMessage) {
     request.on('data', (chunk: Buffer) => {
       size += chunk.length;
       if (size > MAX_REQUEST_BYTES) {
-        reject(new Error('Computer driver request is too large.'));
+        reject(new CodedError(ERROR_CODES.COMPUTER_OPERATION_FAILED, 'Computer driver request is too large.'));
         request.destroy();
         return;
       }
@@ -81,14 +83,14 @@ function readJsonRequest(request: IncomingMessage) {
       try {
         const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
         const payload = record(parsed);
-        if (!payload) throw new Error('Computer driver request must be a JSON object.');
+        if (!payload) throw new CodedError(ERROR_CODES.COMPUTER_OPERATION_FAILED, 'Computer driver request must be a JSON object.');
         resolve(payload);
       } catch (error) {
         reject(error);
       }
     });
     request.once('error', reject);
-    request.once('aborted', () => reject(new Error('Computer request cancelled.')));
+    request.once(ERROR_CODES.ABORTED, () => reject(new CodedError(ERROR_CODES.COMPUTER_OPERATION_FAILED, 'Computer request cancelled.')));
   });
 }
 
@@ -108,7 +110,7 @@ function windowsDriverScriptPath() {
     fileURLToPath(new URL(`../../runtime/computer/${fileName}`, import.meta.url)),
   ].filter(Boolean);
   const scriptPath = candidates.find((candidate) => existsSync(candidate));
-  if (!scriptPath) throw new Error('The bundled Windows computer driver runtime is missing.');
+  if (!scriptPath) throw new CodedError(ERROR_CODES.COMPUTER_OPERATION_FAILED, 'The bundled Windows computer driver runtime is missing.');
   return scriptPath;
 }
 
@@ -116,7 +118,7 @@ async function executeWindowsAction(input: Record<string, unknown>, signal: Abor
   signal.throwIfAborted();
   const action = String(input.action || '').trim();
   if (!['observe', 'launch', 'click', 'type', 'key', 'scroll', 'wait'].includes(action)) {
-    throw new Error(`Unsupported computer action: ${action || '(empty)'}.`);
+    throw new CodedError(ERROR_CODES.COMPUTER_OPERATION_FAILED, `Unsupported computer action: ${action || '(empty)'}.`);
   }
   const timeoutMs = Math.min(300_000, Math.max(1_000, Number(input.timeoutMs) || 30_000));
   const capture = action === 'observe';
@@ -147,7 +149,7 @@ async function executeWindowsAction(input: Record<string, unknown>, signal: Abor
     const result = record(JSON.parse(lines.at(-1) || '{}')) || {};
     if (screenshotPath) {
       const screenshot = await readFile(screenshotPath);
-      if (screenshot.length > MAX_SCREENSHOT_BYTES) throw new Error('Computer screenshot exceeds the 32 MiB limit.');
+      if (screenshot.length > MAX_SCREENSHOT_BYTES) throw new CodedError(ERROR_CODES.COMPUTER_OPERATION_FAILED, 'Computer screenshot exceeds the 32 MiB limit.');
       return {
         ...result,
         mediaType: 'image/png',
@@ -161,7 +163,7 @@ async function executeWindowsAction(input: Record<string, unknown>, signal: Abor
       .filter((value): value is string => typeof value === 'string')
       .join('\n');
     if (/CopyFromScreen|handle is invalid|句柄无效/i.test(details)) {
-      throw new Error(
+      throw new CodedError(ERROR_CODES.COMPUTER_OPERATION_FAILED,
         'Windows is locked or showing a secure desktop, so screenshots are unavailable. Unlock the desktop manually, then retry observe.',
       );
     }
@@ -173,13 +175,13 @@ async function executeWindowsAction(input: Record<string, unknown>, signal: Abor
 
 async function startBuiltInWindowsDriverService(): Promise<BuiltInDriverService> {
   if (process.platform !== 'win32') {
-    throw new Error('The built-in computer driver is available only on Windows.');
+    throw new CodedError(ERROR_CODES.COMPUTER_OPERATION_FAILED, 'The built-in computer driver is available only on Windows.');
   }
   const authorization = `Bearer ${randomBytes(32).toString('base64url')}`;
   let queue = Promise.resolve<unknown>(undefined);
   let pendingCount = 0;
   const serial = <T>(operation: () => Promise<T>) => {
-    if (pendingCount >= 32) throw new Error('Computer driver queue is full.');
+    if (pendingCount >= 32) throw new CodedError(ERROR_CODES.COMPUTER_OPERATION_FAILED, 'Computer driver queue is full.');
     pendingCount++;
     const pending = queue.then(operation, operation).finally(() => { pendingCount--; });
     queue = pending.then(() => undefined, () => undefined);
@@ -207,15 +209,15 @@ async function startBuiltInWindowsDriverService(): Promise<BuiltInDriverService>
         return;
       }
       const controller = new AbortController();
-      const cancel = () => { if (!response.writableEnded) controller.abort(new Error('Computer request cancelled.')); };
-      request.once('aborted', cancel);
+      const cancel = () => { if (!response.writableEnded) controller.abort(new CodedError(ERROR_CODES.COMPUTER_OPERATION_FAILED, 'Computer request cancelled.')); };
+      request.once(ERROR_CODES.ABORTED, cancel);
       response.once('close', cancel);
       try {
         const payload = await readJsonRequest(request);
         const result = await serial(() => executeWindowsAction(payload, controller.signal));
         if (!response.destroyed) json(response, 200, result);
       } finally {
-        request.off('aborted', cancel); response.off('close', cancel);
+        request.off(ERROR_CODES.ABORTED, cancel); response.off('close', cancel);
       }
     })().catch((error) => {
       if (response.destroyed) return;
@@ -236,7 +238,7 @@ async function startBuiltInWindowsDriverService(): Promise<BuiltInDriverService>
   const address = server.address();
   if (!address || typeof address === 'string') {
     server.close();
-    throw new Error('Unable to resolve the built-in computer driver address.');
+    throw new CodedError(ERROR_CODES.COMPUTER_OPERATION_FAILED, 'Unable to resolve the built-in computer driver address.');
   }
   return {
     authorization,
@@ -281,11 +283,11 @@ async function resolveContextValue<T>(value: ContextValue<T> | undefined, contex
 function screenshotBuffer(value: unknown) {
   if (typeof value !== 'string' || !value.trim()) return undefined;
   const base64 = value.trim().replace(/^data:image\/(?:png|jpeg);base64,/i, '');
-  if (base64.length > Math.ceil(MAX_SCREENSHOT_BYTES / 3) * 4) throw new Error('Computer screenshot exceeds its size limit.');
-  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) throw new Error('Computer driver returned invalid screenshot base64.');
+  if (base64.length > Math.ceil(MAX_SCREENSHOT_BYTES / 3) * 4) throw new CodedError(ERROR_CODES.COMPUTER_OPERATION_FAILED, 'Computer screenshot exceeds its size limit.');
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) throw new CodedError(ERROR_CODES.COMPUTER_OPERATION_FAILED, 'Computer driver returned invalid screenshot base64.');
   const buffer = Buffer.from(base64, 'base64');
   if (!buffer.length || buffer.length > MAX_SCREENSHOT_BYTES) {
-    throw new Error('Computer driver returned an empty or oversized screenshot.');
+    throw new CodedError(ERROR_CODES.COMPUTER_OPERATION_FAILED, 'Computer driver returned an empty or oversized screenshot.');
   }
   return buffer;
 }
@@ -327,7 +329,7 @@ function jpegDimensions(buffer: Buffer) {
 
 function screenshotDimensions(buffer: Buffer, mediaType: 'image/jpeg' | 'image/png') {
   const dimensions = mediaType === 'image/jpeg' ? jpegDimensions(buffer) : pngDimensions(buffer);
-  if (!dimensions) throw new Error(`Computer driver returned an invalid ${mediaType} screenshot.`);
+  if (!dimensions) throw new CodedError(ERROR_CODES.COMPUTER_OPERATION_FAILED, `Computer driver returned an invalid ${mediaType} screenshot.`);
   return dimensions;
 }
 
@@ -386,7 +388,7 @@ export function createRemoteComputerDriver(input: {
         body: JSON.stringify(action),
       });
       const text = await readBoundedResponseText(response, 48 * 1024 * 1024);
-      if (!response.ok) throw new Error(`Computer driver returned HTTP ${response.status}: ${text.slice(0, 1000)}`);
+      if (!response.ok) throw new CodedError(ERROR_CODES.COMPUTER_OPERATION_FAILED, `Computer driver returned HTTP ${response.status}: ${text.slice(0, 1000)}`);
       return JSON.parse(text) as Record<string, unknown>;
     },
     async health() {

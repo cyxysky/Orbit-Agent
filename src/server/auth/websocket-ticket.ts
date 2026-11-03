@@ -1,5 +1,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { executeDatabase, queryDatabase, queryDatabaseOne, runDatabaseTransaction } from '@/server/db/database';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export type WebSocketTicketScope = 'browser-preview' | 'realtime-refresh';
 
@@ -59,7 +61,7 @@ export async function createWebSocketTicket(input: {
   userId: string;
 }) {
   const origin = normalizedOrigin(input.origin);
-  if (!origin) throw new Error('A valid WebSocket origin is required');
+  if (!origin) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'A valid WebSocket origin is required');
   const token = randomBytes(32).toString('base64url');
   const createdAt = nowIso();
   const expiresAt = new Date(Date.now() + ticketLifetimeMs()).toISOString();

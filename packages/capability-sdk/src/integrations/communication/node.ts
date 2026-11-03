@@ -1,6 +1,7 @@
 export { createWeComBotConnection, normalizeWeComInboundMessage, WECOM_BOT_RUNTIME_REVISION, type WeComBotConnection, type WeComInboundMessage, type WeComInboundAttachment } from './wecom-bot.ts';
 import { randomUUID } from 'node:crypto';
 import { createCapabilityDocumentDatabase } from '../../node.ts';
+import { readBoundedResponseText } from '../../http.ts';
 import type { AgentConnector } from '../connectors/index.ts';
 import type { CapabilityExecutionContext, CapabilityRunContext } from '../../index.ts';
 export { createWeComMessageArguments, validateWeComMessageContent } from './wecom.ts';
@@ -13,6 +14,8 @@ import {
   type CommunicationDraftStore,
   type CommunicationTarget,
 } from './index.ts';
+import { CodedError, ERROR_CODES } from '../../errors.ts';
+
 
 const allTargetKinds = ['user', 'group', 'department', 'email', 'address'] as const;
 const allContentFormats = ['text', 'markdown'] as const;
@@ -66,9 +69,9 @@ export function createJsonWebhookChannel(input: {
           metadata: draft.metadata,
         }),
       });
-      const text = await response.text();
+      const text = await readBoundedResponseText(response);
       const body = responseBody(text);
-      if (!response.ok) throw new Error(`Webhook returned HTTP ${response.status}: ${text.slice(0, 1_000)}`);
+      if (!response.ok) throw new CodedError(ERROR_CODES.COMMUNICATION_OPERATION_FAILED, `Webhook returned HTTP ${response.status}: ${text.slice(0, 1_000)}`);
       if (input.verifyResponse) {
         await input.verifyResponse(response, body);
       } else {
@@ -201,7 +204,7 @@ export function createConnectorCommunicationChannel(input: {
           ? await input.resolveTargets(requestedTargets, draft, context)
           : requestedTargets;
         const targets = [...new Map(resolvedTargets.map((target) => [JSON.stringify([target.transport, target.kind, target.id]), target])).values()];
-        if (!targets.length) throw new Error(`Channel ${input.id} requires a message target.`);
+        if (!targets.length) throw new CodedError(ERROR_CODES.COMMUNICATION_OPERATION_FAILED, `Channel ${input.id} requires a message target.`);
         const deliveryIds: string[] = [];
         const deliveries: Array<{ target: CommunicationTarget; result: unknown }> = [];
         for (const target of targets) {
@@ -212,7 +215,7 @@ export function createConnectorCommunicationChannel(input: {
           const result = await input.connector.call(input.operationId, args, context);
           await input.verifyResult?.(result, target);
           const resultError = connectorResultError(result);
-          if (resultError) throw new Error(resultError);
+          if (resultError) throw new CodedError(ERROR_CODES.COMMUNICATION_OPERATION_FAILED, resultError);
           accepted = true;
           const deliveryId = input.resolveDeliveryId?.(result, target) || deliveryIdFromResult(result);
           if (deliveryId) deliveryIds.push(deliveryId);
@@ -254,7 +257,7 @@ export function createFileCommunicationDraftStore(input: { directory: string }):
     directory: input.directory, filename: 'drafts.db', legacyFilename: 'drafts.json',
     readLegacy(value) {
       const file = value as { version?: number; drafts?: CommunicationDraft[] };
-      if (file.version !== 2 || !Array.isArray(file.drafts)) throw new Error('Invalid legacy communication store.');
+      if (file.version !== 2 || !Array.isArray(file.drafts)) throw new CodedError(ERROR_CODES.COMMUNICATION_OPERATION_FAILED, 'Invalid legacy communication store.');
       return file.drafts;
     },
   });
@@ -268,7 +271,7 @@ export function createFileCommunicationDraftStore(input: { directory: string }):
     async claimDelivery(id) {
       return store.transaction(() => {
         const draft = store.get(id);
-        if (!draft) throw new Error(`Unknown draft: ${id}.`);
+        if (!draft) throw new CodedError(ERROR_CODES.COMMUNICATION_OPERATION_FAILED, `Unknown draft: ${id}.`);
         const claimed = !draft.delivery || draft.delivery.status === 'failed';
         if (claimed) {
           draft.delivery = { status: 'sending', updatedAt: new Date().toISOString() };
@@ -280,7 +283,7 @@ export function createFileCommunicationDraftStore(input: { directory: string }):
     async finishDelivery(id, delivery) {
       store.transaction(() => {
         const draft = store.get(id);
-        if (!draft) throw new Error(`Unknown draft: ${id}.`);
+        if (!draft) throw new CodedError(ERROR_CODES.COMMUNICATION_OPERATION_FAILED, `Unknown draft: ${id}.`);
         draft.delivery = delivery;
         store.save(draft);
       });

@@ -10,13 +10,15 @@ import { CreativeEditorLoading } from './CreativeEditorLoading';
 import { buttonVariants } from '@heroui/react/button';
 import { creativeEditorControls } from './creative-editor-controls';
 import { Check, Download, Film, LoaderCircle, Save, X } from 'lucide-react';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export type VideoEditorHandle = { flush(): Promise<void> };
 type ProjectResponse = { project: VideoProject; artifact?: { url?: string; downloadUrl?: string; fileName?: string } };
 async function projectRequest(body: unknown, signal?: AbortSignal): Promise<ProjectResponse> {
   const response = await fetch(withWebPilotBasePath('/api/media/video-projects'), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal });
   const result = await response.json();
-  if (!response.ok) throw new Error(result.error || '视频工程处理失败');
+  if (!response.ok) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, result.error || '视频工程处理失败');
   return result;
 }
 function readDuration(file: File): Promise<number> {
@@ -24,9 +26,9 @@ function readDuration(file: File): Promise<number> {
     const element = document.createElement(file.type.startsWith('audio/') ? 'audio' : 'video');
     const url = URL.createObjectURL(file);
     const cleanup = () => { clearTimeout(timer); element.onloadedmetadata = null; element.onerror = null; element.removeAttribute('src'); element.load(); URL.revokeObjectURL(url); };
-    const timer = setTimeout(() => { cleanup(); reject(new Error('无法读取素材时长，请尝试 MP4 或 MP3 文件。')); }, 15_000);
-    element.onloadedmetadata = () => { const duration = element.duration; cleanup(); if (Number.isFinite(duration) && duration > 0) resolve(duration); else reject(new Error('素材时长无效')); };
-    element.onerror = () => { cleanup(); reject(new Error('浏览器无法读取此素材，请转换为 MP4 或 MP3。')); };
+    const timer = setTimeout(() => { cleanup(); reject(new CodedError(ERROR_CODES.APPLICATION_ERROR, '无法读取素材时长，请尝试 MP4 或 MP3 文件。')); }, 15_000);
+    element.onloadedmetadata = () => { const duration = element.duration; cleanup(); if (Number.isFinite(duration) && duration > 0) resolve(duration); else reject(new CodedError(ERROR_CODES.APPLICATION_ERROR, '素材时长无效')); };
+    element.onerror = () => { cleanup(); reject(new CodedError(ERROR_CODES.APPLICATION_ERROR, '浏览器无法读取此素材，请转换为 MP4 或 MP3。')); };
     element.preload = 'metadata'; element.src = url;
   });
 }
@@ -92,7 +94,7 @@ export function VideoEditorPanel({ sourceUrl, handleRef }: { sourceUrl: string; 
     return () => clearTimeout(timer);
   }, [draft, save]);
   useImperativeHandle(handleRef, () => ({ async flush() {
-    if (pendingRender.current || importing) throw new Error('请等待导出或素材导入完成后关闭，也可以先取消导出。');
+    if (pendingRender.current || importing) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '请等待导出或素材导入完成后关闭，也可以先取消导出。');
     await save();
   } }), [save, importing]);
 
@@ -115,13 +117,13 @@ export function VideoEditorPanel({ sourceUrl, handleRef }: { sourceUrl: string; 
     try {
       const kind = importKind.current;
       const replacing = currentDraft.current.scenes.find(scene => scene.id === replaceScene.current);
-      if (kind === 'visual' && !replacing && (currentDraft.current.scenes.length >= 60 || videoDuration(currentDraft.current) > 599.9)) throw new Error('分镜或总时长已达上限，请先缩短或删除现有片段。');
-      if (kind === 'audio' ? !file.type.startsWith('audio/') : !/^(image|video)\//.test(file.type)) throw new Error('请选择支持的图片、视频或音频文件。');
+      if (kind === 'visual' && !replacing && (currentDraft.current.scenes.length >= 60 || videoDuration(currentDraft.current) > 599.9)) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '分镜或总时长已达上限，请先缩短或删除现有片段。');
+      if (kind === 'audio' ? !file.type.startsWith('audio/') : !/^(image|video)\//.test(file.type)) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '请选择支持的图片、视频或音频文件。');
       const duration = file.type.startsWith('image/') ? 3 : await readDuration(file);
       const form = new FormData(); form.append('file', file);
       const response = await fetch(withWebPilotBasePath('/api/uploads'), { method: 'POST', body: form });
       const result = await response.json();
-      if (!response.ok || !result.url) throw new Error(result.error || '素材上传失败');
+      if (!response.ok || !result.url) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, result.error || '素材上传失败');
       const current = currentDraft.current;
       const scene: VideoEditDocument['scenes'][number] = { id: replacing?.id || `scene_${crypto.randomUUID()}`, label: file.name.slice(0, 200), sourceRef: result.url,
         kind: file.type.startsWith('video/') ? 'video' : 'image', trimStart: 0,

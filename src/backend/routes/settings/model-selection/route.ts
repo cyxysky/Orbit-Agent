@@ -7,6 +7,8 @@ import { store } from '@/server/db/store';
 import { ApiRequestError, apiError, apiJson, parseJsonRequest } from '@/server/http/api-request';
 import { idempotencyFingerprint, runIdempotentJson } from '@/server/http/idempotency';
 import { readModelSettingsState } from '@/server/settings/settings-snapshot';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 
 const selectionSchema = z.object({
@@ -44,7 +46,7 @@ export async function POST(request: Request) {
       const definition = modelProviderDefinition(selection.provider);
       const currentProvider = saved?.providers?.[selection.provider];
       if (currentProvider?.enabled !== true) {
-        throw new ApiRequestError('该模型服务商尚未启用。', { code: 'model_provider_disabled', status: 400 });
+        throw new ApiRequestError('该模型服务商尚未启用。', { code: ERROR_CODES.MODEL_PROVIDER_DISABLED, status: 400 });
       }
       const valid = modelsForProvider(saved, selection.provider).includes(selection.model);
       if (!valid) throw new ApiRequestError('所选模型不存在或尚未启用。', { status: 400 });

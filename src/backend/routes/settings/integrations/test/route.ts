@@ -11,6 +11,8 @@ import {
 } from '@/server/integrations/external-integration-drivers';
 import { ApiRequestError, apiError, apiJson, parseJsonRequest } from '@/server/http/api-request';
 import { requestHasAdminSettingsAccess } from '@/server/settings/admin-settings-access';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 const configurationSchema = z.record(z.string().max(100), z.string().max(20_000)).refine(
   (value) => Object.keys(value).length <= 50,
@@ -28,7 +30,7 @@ const testSchema = z.object({
 
 function requireAdmin(request: Request) {
   if (!requestHasAdminSettingsAccess(request)) {
-    throw new ApiRequestError('请先输入管理员设置密码。', { code: 'admin_access_required', status: 401 });
+    throw new ApiRequestError('请先输入管理员设置密码。', { code: ERROR_CODES.ADMIN_ACCESS_REQUIRED, status: 401 });
   }
 }
 
@@ -45,7 +47,7 @@ function streamIntegrationTest(request: Request, candidate: ResolvedExternalInte
           stream.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
         } catch {
           closed = true;
-          controller.abort(new Error('集成测试连接已关闭。'));
+          controller.abort(new CodedError(ERROR_CODES.HTTP_REQUEST_FAILED, '集成测试连接已关闭。'));
         }
       };
       void testExternalIntegration(candidate, timeout, signal, (progress) => {
@@ -67,7 +69,7 @@ function streamIntegrationTest(request: Request, candidate: ResolvedExternalInte
       });
     },
     cancel() {
-      controller.abort(new Error('集成测试已取消。'));
+      controller.abort(new CodedError(ERROR_CODES.HTTP_REQUEST_FAILED, '集成测试已取消。'));
     },
   }), {
     headers: {
@@ -85,7 +87,7 @@ export async function POST(request: Request) {
     const body = await parseJsonRequest(request, testSchema, { maxBytes: 128 * 1024 });
     const existing = body.id ? await resolveExternalIntegration(body.id) : undefined;
     if (body.id && !existing) {
-      throw new ApiRequestError('外部集成不存在。', { code: 'integration_not_found', status: 404 });
+      throw new ApiRequestError('外部集成不存在。', { code: ERROR_CODES.INTEGRATION_NOT_FOUND, status: 404 });
     }
     const configuration = resolveExternalIntegrationConfiguration({
       driverId: body.driverId,
@@ -116,7 +118,7 @@ export async function POST(request: Request) {
     const reported = error instanceof ApiRequestError
       ? error
       : new ApiRequestError(error instanceof Error ? error.message.slice(0, 1_000) : '测试外部集成失败', {
-        code: 'integration_test_failed',
+        code: ERROR_CODES.INTEGRATION_TEST_FAILED,
       });
     return apiError(request, reported, { fallback: '测试外部集成失败' });
   }

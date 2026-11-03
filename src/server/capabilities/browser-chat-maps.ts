@@ -4,11 +4,13 @@ import { artifactPath, appDataRoot } from '@/server/storage/paths';
 import path from 'node:path';
 import { capabilityResultToBrowserActionResult } from './browser-chat-result';
 import type { CapabilityConfiguration } from '@cjfclonedeep/capability-sdk';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 function mapScope(runId: string) {
   if (/^automation_run_[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(runId)) return runId;
   const id = runId.match(/^(chat_[a-f0-9]{12})(?:_|$)/i)?.[1];
-  if (!id) throw new Error('Maps require a valid session run id.');
+  if (!id) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Maps require a valid session run id.');
   return id;
 }
 export function browserChatMapStore(runId: string) { return createFileSystemMapStore(artifactPath(mapScope(runId), 'maps')); }
@@ -31,7 +33,7 @@ export async function resolveBrowserChatMap(runId: string, mapId: string, signal
   if (!record) return undefined;
   const configuration = mapConfiguration();
   const browserKey = configuration.GOOGLE_MAPS_BROWSER_KEY?.trim();
-  if (!browserKey) throw new MapsError('maps-not-configured', '请在设置 → 工具能力 → 地图中配置 Google 地图浏览器 Key。');
+  if (!browserKey) throw new MapsError(ERROR_CODES.MAPS_NOT_CONFIGURED, '请在设置 → 工具能力 → 地图中配置 Google 地图浏览器 Key。');
   const view = await createGoogleMapsClient(clientOptions(configuration)).resolve(record.request, signal);
   return { record, view, browserKey, language: configuration.GOOGLE_MAPS_LANGUAGE || 'zh-CN' };
 }

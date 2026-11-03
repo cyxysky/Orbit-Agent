@@ -1,7 +1,7 @@
 // Self-contained styles for the portable React entry point, including its modal.
 export const chartStyles = `
 .capability-chart-interactive.capability-chart-interactive{position:relative;display:block;min-width:0;margin:12px 0;padding:0;border:1px solid #e2e7ef;border-radius:14px;background:#fff;color:#253149;overflow:visible;font:14px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 1px 3px #18243805}
-.capability-chart-interactive:fullscreen{box-sizing:border-box;width:100%;height:100%;max-width:none;margin:0;padding:16px;display:flex;flex-direction:column;overflow:auto;background:#fff;border:0;border-radius:0}
+.capability-chart-interactive.capability-chart-interactive:is(:fullscreen,[data-fullscreen=true]){box-sizing:border-box;width:100%;height:100%;min-height:0;max-width:none;margin:0;padding:0;display:flex;flex-direction:column;overflow:auto;background:#fff;border:0;border-radius:0}
 :where(.capability-chart-interactive,.capability-chart-dialog) button,:where(.capability-chart-interactive) summary{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:7px;margin:0;border:0;border-radius:7px;background:transparent;color:#59677d;font:500 13px/1.4 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;letter-spacing:normal;text-transform:none;cursor:pointer;transition:background .15s,color .15s,box-shadow .15s}
 :where(.capability-chart-interactive,.capability-chart-dialog) button:disabled{opacity:.4;cursor:default}
 :where(.capability-chart-interactive,.capability-chart-dialog) :is(button,input,textarea,summary):focus-visible{outline:2px solid #5477ed;outline-offset:2px}
@@ -17,7 +17,7 @@ export const chartStyles = `
 .capability-chart-view-button[aria-pressed=true]{color:#3b57bf;background:#e8edfc}
 .capability-chart-action-divider{width:1px;height:14px;background:#dfe5ee;margin:0 3px}
 .capability-chart-viewport{position:relative;width:100%;min-height:240px;flex-shrink:0}
-.capability-chart-interactive:fullscreen .capability-chart-viewport{height:auto!important;flex:1 0 340px;min-height:340px}
+.capability-chart-interactive:is(:fullscreen,[data-fullscreen=true]) .capability-chart-viewport{height:auto!important;flex:1 1 0;min-height:0}
 .capability-chart-render-surface{position:relative;width:100%;height:100%;overflow:hidden}
 .capability-chart-render-surface>canvas{display:block;touch-action:none}
 .capability-chart-download{position:relative;z-index:5}
@@ -31,7 +31,7 @@ export const chartStyles = `
 .capability-chart-download-menu button:hover:not(:disabled){background:#f3f6fb}
 .capability-chart-download-menu button>span:not(.capability-chart-icon-slot){flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .capability-chart-download-menu small{font-size:10px;font-weight:500;color:#8b97aa}
-.capability-chart-hint,.capability-chart-message{padding:8px 16px;margin:0;color:#8590a2;font-size:12px;font-weight:400}
+.capability-chart-hint,.capability-chart-message{padding:8px 16px;margin:0;color:#8590a2;font-size:12px;font-weight:400;flex-shrink:0}
 .capability-chart-interactive [role=alert]{color:#b42318;overflow-wrap:anywhere}
 .capability-chart-dialog{box-sizing:border-box;width:min(920px,calc(100vw - 48px));height:min(640px,calc(100dvh - 64px));max-width:none;max-height:calc(100dvh - 64px);margin:auto;padding:0;overflow:hidden;border:1px solid #e4e8ef;border-radius:18px;background:#fff;color:#29364c;font:400 13px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 28px 90px #0a163b33,0 4px 16px #0a163b10}
 .capability-chart-dialog[open]{display:flex;flex-direction:column;animation:capability-chart-dialog-in .16s ease-out}
@@ -56,7 +56,7 @@ export const chartStyles = `
 .capability-chart-edit-status.is-dirty{color:#9b8055}
 .capability-chart-edit-status.is-dirty:before{content:'';width:5px;height:5px;border-radius:50%;background:#d8a354}
 .capability-chart-editor-body{display:flex;flex:1;min-height:0;overflow:hidden}
-.capability-chart-data-nav{width:196px;flex:none;overflow:auto;padding:18px 10px;background:#fafbfe;border-right:1px solid #edf0f5}
+.capability-chart-data-nav{display:block;width:196px;flex:none;margin:0;overflow:auto;padding:18px 10px;background:#fafbfe;border-right:1px solid #edf0f5}
 .capability-chart-data-nav>p{display:flex;align-items:center;gap:6px;margin:0 10px 12px!important;letter-spacing:.02em}
 .capability-chart-data-nav>p>span{font-size:10px;padding:0 5px;background:#e9edf4;color:#7f8ba0;border-radius:4px}
 .capability-chart-data-nav>button{display:flex;justify-content:flex-start;text-align:left;gap:10px;width:100%;padding:11px 10px;margin:0 0 4px;border-radius:8px;color:#8a96aa}

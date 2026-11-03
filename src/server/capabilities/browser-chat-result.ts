@@ -1,6 +1,8 @@
 import type { CapabilityResult } from '@cjfclonedeep/capability-sdk';
 import { browserOperationSummary } from '@cjfclonedeep/capability-sdk/browser';
 import type { BrowserActionResult } from '@cjfclonedeep/capability-sdk/browser/node';
+import { ERROR_CODES, normalizeErrorCode, withErrorCode } from '@cjfclonedeep/capability-sdk';
+
 
 type BrowserActionResultEnvelope = {
   runtime: 'webpilot.browser-action-result' | 'webpilot.browser-operation';
@@ -26,7 +28,7 @@ export function browserActionResultToCapabilityResult(
     return {
       ok: false,
       error: {
-        code: result.failureCategory || 'browser-action-failed',
+        code: normalizeErrorCode(result.failureCategory, ERROR_CODES.BROWSER_ACTION_FAILED),
         message: browserOperationSummary(result),
         details: envelope,
       },
@@ -43,7 +45,7 @@ export function capabilityResultToBrowserActionResult(
   result: CapabilityResult,
 ): BrowserActionResult {
   if (!result.ok) {
-    return browserActionEnvelope(result.error.details) || {
+    return withErrorCode(browserActionEnvelope(result.error.details) || {
       ok: false,
       // Preserve structured diagnostics such as terminal exit codes and stderr.
       // The browser-specific envelope above still retains its native format.
@@ -51,7 +53,7 @@ export function capabilityResultToBrowserActionResult(
         ? result.error.message
         : JSON.stringify({ ok: false, error: result.error }, null, 2),
       failureCategory: result.error.code,
-    };
+    }, result.error.code);
   }
   const browserResult = browserActionEnvelope(result.data);
   if (browserResult) return browserResult;

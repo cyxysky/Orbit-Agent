@@ -6,6 +6,8 @@ import { AppInput } from './app-input';
 import { useI18n } from '@/i18n/I18nProvider';
 import { maskSecret, type SettingsSecretSource } from '@/lib/secret-input';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export function SecretInput({ value, onChange, label, placeholder, storedPreview, source, headers, disabled }: {
   value: string;
@@ -44,7 +46,7 @@ export function SecretInput({ value, onChange, label, placeholder, storedPreview
       method: 'POST', headers: requestHeaders, body: JSON.stringify(source), cache: 'no-store', signal,
     });
     const data = await response.json();
-    if (!response.ok) throw new Error(data.error?.message || t('读取密钥失败'));
+    if (!response.ok) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, data.error?.message || t('读取密钥失败'));
     return String(data.value || '');
   }
   async function act(action: 'reveal' | 'copy') {

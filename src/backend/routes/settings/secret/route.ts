@@ -5,6 +5,8 @@ import { ApiRequestError, apiError, apiJson, parseJsonRequest } from '@/server/h
 import { requestHasAdminSettingsAccess } from '@/server/settings/admin-settings-access';
 import { resolveExternalIntegration } from '@/server/integrations/external-integration-vault';
 import { externalIntegrationDriver } from '@/server/integrations/external-integration-drivers';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 const sourceSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('provider'), provider: z.string().min(1).max(200) }).strict(),
@@ -15,7 +17,7 @@ const sourceSchema = z.discriminatedUnion('kind', [
 export async function POST(request: Request) {
   try {
     if (!requestHasAdminSettingsAccess(request)) {
-      throw new ApiRequestError('请先输入管理员设置密码。', { code: 'admin_access_required', status: 401 });
+      throw new ApiRequestError('请先输入管理员设置密码。', { code: ERROR_CODES.ADMIN_ACCESS_REQUIRED, status: 401 });
     }
     const source = await parseJsonRequest(request, sourceSchema, { maxBytes: 2048 });
     let value: string | undefined;

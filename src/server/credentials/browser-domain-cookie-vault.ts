@@ -1,6 +1,8 @@
 import { normalizeApplicationUserId } from '@/server/auth/user-context';
 import { executeDatabase, queryDatabase } from '@/server/db/database';
 import { decryptCredentialSecret, encryptCredentialSecret } from './credential-master-key';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export type BrowserDomainCookie = {
   name: string;
@@ -51,7 +53,7 @@ function decryptCookie(row: CookieRow) {
 
 export function normalizeBrowserCookieDomain(value: unknown) {
   const domain = String(value ?? '').trim().toLowerCase().replace(/^\./, '');
-  if (!domain || domain.length > 253) throw new Error('Cookie 域名无效');
+  if (!domain || domain.length > 253) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Cookie 域名无效');
   if (domain === 'localhost') return domain;
   const isIpv4 = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(domain)
     && domain.split('.').every((part) => Number(part) <= 255);
@@ -61,7 +63,7 @@ export function normalizeBrowserCookieDomain(value: unknown) {
     && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label)
   ));
   if (!isIpv4 && !isHostname) {
-    throw new Error('Cookie 域名必须是不带协议、端口和路径的有效主机名');
+    throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Cookie 域名必须是不带协议、端口和路径的有效主机名');
   }
   return domain;
 }
@@ -78,16 +80,16 @@ export function parseBrowserCookieHeader(value: string, domainValue: unknown): B
     const rawName = (separator >= 0 ? segment.slice(0, separator) : segment).trim();
     const name = rawName.startsWith('$') ? rawName.slice(1) : rawName;
     if (!name || cookieAttributeNames.has(name.toLowerCase())) continue;
-    if (separator < 1 || !cookieNamePattern.test(name)) throw new Error(`Cookie 名称无效：${name || '[empty]'}`);
+    if (separator < 1 || !cookieNamePattern.test(name)) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, `Cookie 名称无效：${name || '[empty]'}`);
     let cookieValue = segment.slice(separator + 1).trim();
     if (cookieValue.startsWith('"') && cookieValue.endsWith('"') && cookieValue.length >= 2) {
       cookieValue = cookieValue.slice(1, -1);
     }
-    if (/[\u0000-\u001F\u007F;]/.test(cookieValue)) throw new Error(`Cookie 值无效：${name}`);
+    if (/[\u0000-\u001F\u007F;]/.test(cookieValue)) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, `Cookie 值无效：${name}`);
     cookies.set(name, { name, value: cookieValue, url: cookieUrl });
-    if (cookies.size > 200) throw new Error('Cookie 数量不能超过 200 个');
+    if (cookies.size > 200) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Cookie 数量不能超过 200 个');
   }
-  if (!cookies.size) throw new Error('没有找到可注入的 Cookie');
+  if (!cookies.size) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '没有找到可注入的 Cookie');
   return [...cookies.values()];
 }
 

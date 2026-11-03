@@ -7,6 +7,8 @@ import { ConfirmDeleteModal } from '@/components/ConfirmDeleteModal';
 import { useI18n } from '@/i18n/I18nProvider';
 import { DataTable, type DataTableColumn } from '@/components/ui/data-table';
 import { ExpandableActionLabel } from '@/components/ui/expandable-action-label';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 type ManagementDataTableFilterType = 'datetime' | 'number' | 'select' | 'text';
 
@@ -97,7 +99,7 @@ export function ManagementDataTable<T>({
         const current = items.find(item => getId(item) === id);
         if (!current) { toggleSelection([id], false); continue; }
         try {
-          if (canDeleteItem && !canDeleteItem(current)) throw new Error(t('只读'));
+          if (canDeleteItem && !canDeleteItem(current)) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, t('只读'));
           await onDeleteItem(current);
           toggleSelection([id], false);
         } catch (error) {

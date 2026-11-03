@@ -1,4 +1,4 @@
-import { jsonSchema, tool, type ToolExecutionOptions, type ToolSet } from 'ai';
+import { jsonSchema, tool, type Tool, type ToolExecutionOptions, type ToolSet } from 'ai';
 import {
   mountCapabilities,
   type CapabilitySkillInstructionMode,
@@ -15,6 +15,8 @@ import {
   type CapabilityRunSnapshot,
   type ResolvedCapabilityTool,
 } from '../../index.ts';
+import { CodedAggregateError, CodedError, ERROR_CODES, toCodedError, withErrorCode } from '../../errors.ts';
+
 
 export {
   EnvironmentCapabilityConfigStore,
@@ -59,7 +61,7 @@ function inputSchema(resolvedTool: ResolvedCapabilityTool) {
       } catch (error) {
         return {
           success: false as const,
-          error: error instanceof Error ? error : new Error(String(error)),
+          error: toCodedError(error, ERROR_CODES.VALIDATION_FAILED),
         };
       }
     },
@@ -76,12 +78,12 @@ function createSkillTool(
     inputSchema: jsonSchema(capabilitySkillReadJsonSchema(snapshot.skills.map((skill) => skill.id)), {
       validate(value) {
         if (!value || typeof value !== 'object' || Array.isArray(value)) {
-          return { success: false as const, error: new Error('Skill input must be an object.') };
+          return { success: false as const, error: new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, 'Skill input must be an object.') };
         }
         const input = value as Record<string, unknown>;
         const skillId = typeof input.skillId === 'string' ? input.skillId.trim() : '';
         if (input.action !== 'read' || !byId.has(skillId)) {
-          return { success: false as const, error: new Error(`Unknown Capability Skill: ${skillId || '(empty)'}.`) };
+          return { success: false as const, error: new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, `Unknown Capability Skill: ${skillId || '(empty)'}.`) };
         }
         return {
           success: true as const,
@@ -142,7 +144,7 @@ export function toAISDKToolSet(
   if (skillMode === 'lazy' && snapshot.skills.length && options.skills?.includeTool !== false) {
     const toolName = options.skills?.toolName || 'skill';
     if (entries.some(([name]) => name === toolName)) {
-      throw new Error(`Capability Skill tool name collides with an existing tool: ${toolName}.`);
+      throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, `Capability Skill tool name collides with an existing tool: ${toolName}.`);
     }
     entries.push([toolName, createSkillTool(snapshot, loadedSkillIds)]);
   }
@@ -172,7 +174,7 @@ export type MountedAISDKCapabilities = Omit<MountedCapabilities, 'tools'> & {
 export function createAISDKResponseTool(session: ResponseSession, options: {
   description?: string;
   onAccept?: (response: StructuredResponse, execution: ToolExecutionOptions<unknown>) => Promise<unknown>;
-} = {}) {
+} = {}): Tool<StructuredResponse, unknown> {
   const input = session.registry.input();
   return tool({
     description: [options.description || 'Deliver the final ordered response. Do not call other tools after this.',
@@ -180,16 +182,23 @@ export function createAISDKResponseTool(session: ResponseSession, options: {
     inputSchema: jsonSchema<StructuredResponse>(input.jsonSchema, {
       validate(value) {
         try { return { success: true, value: input.parse(value) }; }
-        catch (error) { return { success: false, error: error instanceof Error ? error : new Error(String(error)) }; }
+        catch (error) { return { success: false, error: toCodedError(error, ERROR_CODES.VALIDATION_FAILED) }; }
       },
     }),
     execute: async (value, execution) => {
-      const response = input.parse(value);
-      const result = options.onAccept ? await options.onAccept(response, execution)
-        : { accepted: true, blockCount: response.blocks.length };
-      if (result && typeof result === 'object' && 'accepted' in result && result.accepted === false) return result;
-      session.accept(response);
-      return result;
+      try {
+        const response = input.parse(value);
+        const result = options.onAccept ? await options.onAccept(response, execution)
+          : { accepted: true, blockCount: response.blocks.length };
+        if (result && typeof result === 'object' && 'accepted' in result && result.accepted === false) {
+          return withErrorCode(result, ERROR_CODES.RESPONSE_OPERATION_FAILED);
+        }
+        session.accept(response);
+        return result;
+      } catch (error) {
+        if (execution.abortSignal?.aborted && error === execution.abortSignal.reason) throw error;
+        throw toCodedError(error, ERROR_CODES.RESPONSE_OPERATION_FAILED);
+      }
     },
   });
 }
@@ -205,7 +214,7 @@ export async function mountAISDKCapabilities(
     const tools = toAISDKToolSet(mounted, { ...options.adapter, skills, responseSession });
     const hasResponses = mounted.responses.definitions().length > 0;
     if (hasResponses) {
-      if (tools.finalResponse) throw new Error('Capability tool name collides with finalResponse.');
+      if (tools.finalResponse) throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, 'Capability tool name collides with finalResponse.');
       tools.finalResponse = createAISDKResponseTool(responseSession);
     }
     const stopWhen = hasResponses ? [() => responseSession.accepted] : [];
@@ -235,7 +244,7 @@ export async function mountAISDKCapabilities(
     });
   } catch (error) {
     try { await mounted.dispose(); }
-    catch (cleanupError) { throw new AggregateError([error, cleanupError], 'AI SDK mount and cleanup failed.', { cause: error }); }
+    catch (cleanupError) { throw new CodedAggregateError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, [error, cleanupError], 'AI SDK mount and cleanup failed.', { cause: error }); }
     throw error;
   }
 }

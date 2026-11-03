@@ -16,6 +16,8 @@ import { requestHasAdminSettingsAccess } from '@/server/settings/admin-settings-
 import { readModelSettingsState } from '@/server/settings/settings-snapshot';
 import { normalizeModelProvider } from '@/lib/model-selection';
 import { providerMediaSettingsSchema } from '@cjfclonedeep/capability-sdk/media/model-settings';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 const modelBodySchema = z.record(z.string(), z.unknown());
 
@@ -38,7 +40,7 @@ function normalizeExtraRequestParameters(value: unknown) {
 
 function requireAdmin(request: Request) {
   if (!requestHasAdminSettingsAccess(request)) {
-    throw new ApiRequestError('请先输入管理员设置密码。', { code: 'admin_access_required', status: 401 });
+    throw new ApiRequestError('请先输入管理员设置密码。', { code: ERROR_CODES.ADMIN_ACCESS_REQUIRED, status: 401 });
   }
 }
 

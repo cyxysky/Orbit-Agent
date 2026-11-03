@@ -1,4 +1,6 @@
 import { spawn } from 'node:child_process';
+import { CodedError, ERROR_CODES } from '../errors.ts';
+
 
 // A separate process makes CPU-heavy native SQLite queries cancellable as well.
 const worker = `
@@ -36,11 +38,11 @@ export function querySqliteFile(input: {
     let stdout = '', stderr = '', failure: Error | undefined;
     child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
     const stop = (error: Error) => { failure ||= error; child.kill('SIGKILL'); };
-    const abort = () => stop(input.signal?.reason instanceof Error ? input.signal.reason : new Error('Data query cancelled.'));
-    const timer = setTimeout(() => stop(new Error(`Data query exceeded ${input.timeoutMs}ms.`)), input.timeoutMs);
+    const abort = () => stop(input.signal?.reason instanceof Error ? input.signal.reason : new CodedError(ERROR_CODES.DATA_OPERATION_FAILED, 'Data query cancelled.'));
+    const timer = setTimeout(() => stop(new CodedError(ERROR_CODES.DATA_OPERATION_FAILED, `Data query exceeded ${input.timeoutMs}ms.`)), input.timeoutMs);
     input.signal?.addEventListener('abort', abort, { once: true });
     child.stdout.on('data', (chunk: string) => {
-      if (stdout.length + chunk.length > 8_000_000) stop(new Error('Data query result exceeds 8 MB; select fewer or smaller columns.'));
+      if (stdout.length + chunk.length > 8_000_000) stop(new CodedError(ERROR_CODES.DATA_OPERATION_FAILED, 'Data query result exceeds 8 MB; select fewer or smaller columns.'));
       else stdout += chunk;
     });
     child.stderr.on('data', (chunk: string) => { stderr = (stderr + chunk).slice(-4000); });
@@ -48,7 +50,7 @@ export function querySqliteFile(input: {
     child.stdin.on('error', (error) => { failure ||= error; });
     child.once('close', (code) => {
       clearTimeout(timer); input.signal?.removeEventListener('abort', abort);
-      if (failure || code !== 0) { reject(failure || new Error(stderr || `SQLite query exited with ${code}.`)); return; }
+      if (failure || code !== 0) { reject(failure || new CodedError(ERROR_CODES.DATA_OPERATION_FAILED, stderr || `SQLite query exited with ${code}.`)); return; }
       try { resolve(JSON.parse(stdout) as unknown[]); } catch (error) { reject(error); }
     });
     child.stdin.end(JSON.stringify(input));

@@ -1,6 +1,8 @@
 import { requireAiOperationsAdmin } from '@/server/auth/ai-operations-admin';
 import { ApiRequestError, apiError, apiJson } from '@/server/http/api-request';
 import { readAiOperationsDashboard } from '@/server/observability/ai-operations-dashboard';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 
 function rangeDays(request: Request) {
@@ -9,7 +11,7 @@ function rangeDays(request: Request) {
   const value = Number(requested);
   if (value === 7 || value === 30 || value === 90) return value;
   throw new ApiRequestError('Supported ranges are 7, 30, and 90 days.', {
-    code: 'invalid_ai_operations_range',
+    code: ERROR_CODES.INVALID_AI_OPERATIONS_RANGE,
     status: 400,
   });
 }
@@ -19,7 +21,7 @@ function trendUserId(request: Request) {
   if (!value) return undefined;
   if (value.length <= 128) return value;
   throw new ApiRequestError('The trend user id is too long.', {
-    code: 'invalid_ai_operations_user_id',
+    code: ERROR_CODES.INVALID_AI_OPERATIONS_USER_ID,
     status: 400,
   });
 }

@@ -5,7 +5,7 @@
 All tool capabilities and their npm dependencies. Import the subpath for the capability you need.
 
 ```sh
-npm install @cjfclonedeep/capability-sdk@0.2.1
+npm install @cjfclonedeep/capability-sdk
 ```
 
 All npm dependencies are included. The root exposes contracts and execution without eagerly importing tool implementations or framework adapters. Normal npm installation also prepares the supported Windows/Linux execution runtimes through postinstall. [Runtime](RUNTIME.md)
@@ -43,4 +43,4 @@ serveTerminalMcpStdio({
 });
 ```
 
-These entrypoints target version 0.2.1. Earlier separately published packages remain separate releases. To migrate source imports, replace the old package with its new subpath; install package roots, never subpaths.
+These are the current source entrypoints; use a matching prepared release. Unified setup requires 0.3.1 or later. Earlier separately published packages remain separate releases. To migrate source imports, replace the old package with its new subpath; install package roots, never subpaths.

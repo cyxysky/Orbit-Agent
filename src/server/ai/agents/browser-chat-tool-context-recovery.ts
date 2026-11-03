@@ -1,4 +1,6 @@
 import type { AiToolContextSnapshot, StepExecutionResult } from '@/server/ai/schemas/runtime.schema';
+import { browserChatRequestContextStatsFromDebugRecord } from './browser-chat-context-usage';
+import { calibrateRuntimeRequestContext, runtimeProviderInputTokens } from './runtime-context-budget';
 
 type RequestLog = { id?: string; phase: string; time?: string; messageId?: string; details?: unknown };
 const record = (value: unknown): Record<string, unknown> | undefined => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
@@ -7,25 +9,41 @@ const count = (value: unknown) => typeof value === 'number' && Number.isFinite(v
 /** Repair the legacy raw-history estimate from actual, adjacent request logs.
  * This is a read projection; the original logs and persisted tool evidence stay intact. */
 export function recoverBrowserChatToolContext(steps: readonly StepExecutionResult[], logs: readonly RequestLog[]): StepExecutionResult[] {
+  const payload = (log: RequestLog) => {
+    try { const parsed = record(typeof log.details === 'string' ? JSON.parse(log.details) : log.details); return record(parsed?.value) || parsed; }
+    catch { return; }
+  };
+  const inputs = new Map(logs.flatMap(log => {
+    const value = payload(log);
+    const total = runtimeProviderInputTokens(value?.aiOutput);
+    return log.phase === 'ai:runtime:response' && typeof value?.modelRequestId === 'string' && total !== undefined
+      ? [[value.modelRequestId, total] as const] : [];
+  }));
   const requests = logs.flatMap((log) => {
     if (log.phase !== 'ai:runtime:request' || !log.time) return [];
     try {
       const parsed = record(typeof log.details === 'string' ? JSON.parse(log.details) : log.details);
       const payload = record(parsed?.value) || parsed;
-      const stats = record(payload?.aiInputTokens);
+      let stats = payload ? browserChatRequestContextStatsFromDebugRecord(payload, 256000) : undefined;
+      const modelRequestId = typeof payload?.modelRequestId === 'string' ? payload.modelRequestId : undefined;
+      const actual = modelRequestId ? inputs.get(modelRequestId) : undefined;
+      if (stats && actual !== undefined) stats = calibrateRuntimeRequestContext(stats, actual);
       const total = count(stats?.estimatedTotalTokens);
       const time = Date.parse(log.time);
       if (total === undefined || !Number.isFinite(time)) return [];
       const snapshot: AiToolContextSnapshot = {
-        requestId: `request-log:${log.id || log.time}`, requestCreatedAt: log.time,
+        requestId: modelRequestId || `request-log:${log.id || log.time}`, requestCreatedAt: log.time,
         estimatedTotalTokens: total, estimatedTextTokens: count(stats?.estimatedTextTokens),
         estimatedToolSchemaTokens: count(stats?.estimatedToolSchemaTokens), estimatedImageTokens: count(stats?.estimatedImageTokens),
         imageCount: count(stats?.imageCount), method: typeof stats?.method === 'string' ? stats.method : undefined,
       };
-      return [{ time, log, snapshot }];
+      return [{ time, log, snapshot, modelRequestId }];
     } catch { return []; }
   }).sort((a, b) => a.time - b.time);
   const originIndex = (before: AiToolContextSnapshot, messageId?: string) => {
+    const exact = requests.findIndex(request => request.modelRequestId === before.requestId && request.modelRequestId
+      && (!messageId || request.log.messageId === messageId));
+    if (exact >= 0) return exact;
     const time = Date.parse(before.requestCreatedAt || '');
     if (!Number.isFinite(time)) return -1;
     const index = requests.findIndex((request) => request.time >= time && (!messageId || request.log.messageId === messageId));
@@ -36,15 +54,19 @@ export function recoverBrowserChatToolContext(steps: readonly StepExecutionResul
   for (const step of steps) for (const tool of step.tools || []) {
     if (!tool.contextBefore?.requestId) continue;
     const index = originIndex(tool.contextBefore, step.messageId);
-    if (index >= 0) requests[index].snapshot = { ...requests[index].snapshot,
+    if (index >= 0 && !requests[index].modelRequestId) requests[index].snapshot = { ...requests[index].snapshot,
       requestId: tool.contextBefore.requestId, requestCreatedAt: tool.contextBefore.requestCreatedAt };
   }
   return steps.map((step) => ({ ...step, tools: step.tools?.map((tool) => {
-    if (tool.name === 'contextCompression' || !tool.contextBefore?.requestId
-      || tool.contextAfter?.requestId) return tool;
+    if (tool.name === 'contextCompression' || !tool.contextBefore?.requestId) return tool;
     const index = originIndex(tool.contextBefore, step.messageId);
+    const before = index >= 0 && requests[index].modelRequestId ? requests[index].snapshot : tool.contextBefore;
+    if (tool.contextAfter?.requestId) {
+      const after = requests.find(request => request.modelRequestId === tool.contextAfter?.requestId);
+      return before === tool.contextBefore && !after ? tool : { ...tool, contextBefore: before, contextAfter: after?.snapshot || tool.contextAfter };
+    }
     const next = index >= 0 ? requests[index + 1] : undefined;
-    if (!next || next.log.messageId !== requests[index].log.messageId) return tool;
-    return { ...tool, contextAfter: next.snapshot };
+    if (!next || next.log.messageId !== requests[index].log.messageId) return before === tool.contextBefore ? tool : { ...tool, contextBefore: before };
+    return { ...tool, contextBefore: before, contextAfter: next.snapshot };
   }) }));
 }

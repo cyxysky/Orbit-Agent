@@ -1,7 +1,11 @@
 import { ResponseRegistry } from './response.ts';
+import { withErrorCode, toCodedError } from './errors.ts';
+export * from './errors.ts';
 export * from './response.ts';
 import type { ResponseBlock, ResponseDefinition } from './response.ts';
 import { disposeOnce } from './execution.ts';
+import { CodedAggregateError, CodedError, ERROR_CODES } from './errors.ts';
+
 export { CapabilityTaskQueue, type CapabilityTaskOptions } from './task-queue.ts';
 export { readBoundedResponseText } from './http.ts';
 export { createCapabilityExecutor, disposeOnce, type CapabilityExecutionPolicyOptions } from './execution.ts';
@@ -30,7 +34,7 @@ export type CapabilityResult<TData = unknown> =
       summary?: string;
       content?: CapabilityContent[];
       error: {
-        code: string;
+        code: import('./errors.ts').ErrorCode;
         message: string;
         retryable?: boolean;
         details?: unknown;
@@ -205,8 +209,8 @@ export class CapabilityRegistry {
 
   register(provider: CapabilityProvider) {
     const id = provider.manifest.id.trim();
-    if (!id) throw new Error('Capability manifest id is required.');
-    if (this.#providers.has(id)) throw new Error(`Capability ${id} is already registered.`);
+    if (!id) throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, 'Capability manifest id is required.');
+    if (this.#providers.has(id)) throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, `Capability ${id} is already registered.`);
     this.#responses.register(provider.manifest.responses || []);
     this.#providers.set(id, provider);
     return this;
@@ -232,7 +236,7 @@ export class CapabilityRegistry {
     const lifetime = new AbortController();
     const abortSignal = input.context.abortSignal ? AbortSignal.any([input.context.abortSignal, lifetime.signal]) : lifetime.signal;
     const dispose = disposeOnce(async () => {
-      lifetime.abort(new Error('Capability run disposed.'));
+      lifetime.abort(new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, 'Capability run disposed.'));
       await Promise.allSettled([...activeInvocations]);
       const errors: unknown[] = [];
       // Providers may depend on resources mounted before them.
@@ -240,7 +244,7 @@ export class CapabilityRegistry {
         try { await runtime.dispose(); } catch (error) { errors.push(error); }
       }
       if (errors.length) {
-        const error = new AggregateError(errors, 'Capability resource cleanup failed.');
+        const error = new CodedAggregateError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, errors, 'Capability resource cleanup failed.');
         if (input.onDisposeError) input.onDisposeError(error);
         else throw error;
       }
@@ -258,7 +262,7 @@ export class CapabilityRegistry {
         manifests.push(manifest);
         for (const skill of manifest.skills || []) {
           const owner = skillOwners.get(skill.id);
-          if (owner) throw new Error(`Capability Skill id collision for ${skill.id}: ${owner} and ${manifest.id}.`);
+          if (owner) throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, `Capability Skill id collision for ${skill.id}: ${owner} and ${manifest.id}.`);
           skillOwners.set(skill.id, manifest.id);
           skills.push(skill);
         }
@@ -267,7 +271,7 @@ export class CapabilityRegistry {
           if (!publicName || (input.allowedToolNames && !input.allowedToolNames.has(publicName))) continue;
           const existing = tools[publicName];
           if (existing) {
-            throw new Error(`Capability tool name collision for ${publicName}: ${existing.capabilityId} and ${manifest.id}.`);
+            throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, `Capability tool name collision for ${publicName}: ${existing.capabilityId} and ${manifest.id}.`);
           }
           tools[publicName] = Object.freeze({
             capabilityId: manifest.id,
@@ -301,7 +305,7 @@ export class CapabilityRegistry {
       });
     } catch (error) {
       try { await dispose(); } catch (cleanupError) {
-        throw new AggregateError([error, cleanupError], 'Capability mounting and cleanup failed.', { cause: error });
+        throw new CodedAggregateError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, [error, cleanupError], 'Capability mounting and cleanup failed.', { cause: error });
       }
       throw error;
     }
@@ -312,13 +316,30 @@ export function defineCapabilityInput<TInput>(
   jsonSchema: JsonSchema,
   parse: (value: unknown) => TInput,
 ): CapabilityInputSchema<TInput> {
-  return Object.freeze({ jsonSchema: Object.freeze({ ...jsonSchema }), parse });
+  return Object.freeze({
+    jsonSchema: Object.freeze({ ...jsonSchema }),
+    parse(value: unknown) {
+      try { return parse(value); }
+      catch (error) { throw toCodedError(error, ERROR_CODES.VALIDATION_FAILED); }
+    },
+  });
 }
 
 export function defineCapabilityTool<TInput, TData>(
   definition: CapabilityTool<TInput, TData>,
 ): CapabilityTool<TInput, TData> {
-  return Object.freeze(definition);
+  return Object.freeze({
+    ...definition,
+    async execute(input: TInput, context: CapabilityExecutionContext) {
+      try {
+        return withErrorCode(await definition.execute(input, context), ERROR_CODES.CAPABILITY_EXECUTION_FAILED);
+      } catch (error) {
+        // Cancellation retains the caller's exact reason and normal lifecycle handling.
+        if (context.abortSignal?.aborted) throw context.abortSignal.reason;
+        throw toCodedError(error, ERROR_CODES.CAPABILITY_EXECUTION_FAILED);
+      }
+    },
+  });
 }
 
 export type JsonRecord = Record<string, unknown>;
@@ -405,7 +426,7 @@ export function raceWithAbort<T>(
   if (!signal) return Promise.resolve(operation);
   const abortError = () => signal.reason instanceof Error
     ? signal.reason
-    : new Error('Operation aborted.');
+    : new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, 'Operation aborted.');
   if (signal.aborted) return Promise.reject(abortError());
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => {

@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import { createCapabilityDocumentDatabase } from '../node.ts';
 import { createKnowledgeCapability, type KnowledgeDocument, type KnowledgeSearchHit, type KnowledgeStore } from './index.ts';
 import type { CapabilityRunContext } from '../index.ts';
+import { CodedError, ERROR_CODES } from '../errors.ts';
+
 
 function tokens(value: string) {
   const words = value.toLowerCase().match(/[\p{L}\p{N}_-]+/gu) || [];
@@ -17,7 +19,7 @@ export function createFileKnowledgeStore(input: { directory: string }): Knowledg
     directory: input.directory, filename: 'knowledge.db', legacyFilename: 'knowledge.json',
     readLegacy(value) {
       const file = value as { version?: number; documents?: KnowledgeDocument[] };
-      if (file.version !== 1 || !Array.isArray(file.documents)) throw new Error('Invalid legacy knowledge store.');
+      if (file.version !== 1 || !Array.isArray(file.documents)) throw new CodedError(ERROR_CODES.KNOWLEDGE_OPERATION_FAILED, 'Invalid legacy knowledge store.');
       return file.documents;
     },
   });

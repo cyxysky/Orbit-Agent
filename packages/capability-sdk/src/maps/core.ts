@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { ERROR_CODES } from '../errors.ts';
+
 
 export const coordinateSchema = z.object({ lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180) }).strict();
 export const waypointSchema = z.object({
@@ -29,7 +31,7 @@ export interface MapStore {
   read(mapId: string): Promise<MapRecord | undefined>;
 }
 export class MapsError extends Error {
-  constructor(public readonly code: string, message: string) { super(message); this.name = 'MapsError'; }
+  constructor(public readonly code: import('../errors.ts').ErrorCode, message: string) { super(message); this.name = 'MapsError'; }
 }
 export function mapsUrl(request: MapRequest) {
   const params = new URLSearchParams({ api: '1' });
@@ -49,14 +51,14 @@ export function safeGoogleMapsUrl(value: unknown, fallback: string) {
   return fallback;
 }
 export function decodePolyline(encoded: string): Coordinate[] {
-  if (encoded.length > 200000) throw new MapsError('maps-invalid-response', '路线数据过大。');
+  if (encoded.length > 200000) throw new MapsError(ERROR_CODES.MAPS_INVALID_RESPONSE, '路线数据过大。');
   const points: Coordinate[] = []; let offset = 0, lat = 0, lng = 0;
   const next = () => {
     let result = 0, shift = 0, value: number;
     do {
-      if (offset >= encoded.length || shift > 30) throw new MapsError('maps-invalid-response', '路线编码无效。');
+      if (offset >= encoded.length || shift > 30) throw new MapsError(ERROR_CODES.MAPS_INVALID_RESPONSE, '路线编码无效。');
       value = encoded.charCodeAt(offset++) - 63;
-      if (value < 0 || value > 63) throw new MapsError('maps-invalid-response', '路线编码无效。');
+      if (value < 0 || value > 63) throw new MapsError(ERROR_CODES.MAPS_INVALID_RESPONSE, '路线编码无效。');
       result |= (value & 31) << shift; shift += 5;
     } while (value >= 32);
     return result & 1 ? ~(result >>> 1) : result >>> 1;

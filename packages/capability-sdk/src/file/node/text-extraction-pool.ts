@@ -7,6 +7,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CapabilityTaskQueue } from '../../index.ts';
 import { readUnoDocument } from './office/uno.ts';
+import { CodedError, ERROR_CODES } from '../../errors.ts';
+
 
 export type NodeFileTextExtractionObserver = {
   incrementMetric?: (name: string, labels?: Record<string, string>) => void;
@@ -69,7 +71,7 @@ function workerPath() {
     path.join(process.cwd(), 'node_modules/@cjfclonedeep/capability-sdk/runtime/file', relative),
   ];
   const found = candidates.find((candidate) => candidate && existsSync(candidate));
-  if (!found) throw new Error('File text extraction worker is missing from the package runtime.');
+  if (!found) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'File text extraction worker is missing from the package runtime.');
   return found;
 }
 async function parse(input: FileTextExtractionInput, digest: string, signal: AbortSignal): Promise<FileTextExtractionResult> {
@@ -116,13 +118,13 @@ async function parse(input: FileTextExtractionInput, digest: string, signal: Abo
         settled = true; cleanup();
         if (error) reject(error); else resolve(text || '');
       };
-      const abort = () => finish(signal.reason instanceof Error ? signal.reason : new Error('File extraction aborted.'));
+      const abort = () => finish(signal.reason instanceof Error ? signal.reason : new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'File extraction aborted.'));
       const failure = (error: Error) => finish(error);
-      const exited = (code: number) => finish(new Error(`File extraction worker exited (${code}).`));
+      const exited = (code: number) => finish(new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `File extraction worker exited (${code}).`));
       const message = (result: { id: number; ok: boolean; value?: string; error?: string }) => {
         if (result.id !== id) return;
         reusable = true;
-        finish(result.ok ? undefined : new Error(result.error || 'File extraction failed.'), result.value);
+        finish(result.ok ? undefined : new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, result.error || 'File extraction failed.'), result.value);
       };
       signal.addEventListener('abort', abort, { once: true });
       current.worker.on('message', message);
@@ -146,16 +148,16 @@ async function parse(input: FileTextExtractionInput, digest: string, signal: Abo
 
 /** Offsets are deliberately absent from the cache key: subsequent text pages reuse extraction. */
 export function extractFileTextInWorker(input: FileTextExtractionInput): Promise<FileTextExtractionResult> {
-  if (disposing) return Promise.reject(new Error('File extraction pool is being disposed.'));
+  if (disposing) return Promise.reject(new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'File extraction pool is being disposed.'));
   const started = performance.now();
   const pending = queue.run(async (signal) => {
     const maxBytes = integer('CPU_WORKER_MAX_FILE_BYTES', 128 * 1024 * 1024, 1024, 1024 * 1024 * 1024);
-    if ((await stat(input.path)).size > maxBytes) throw new Error(`File exceeds the ${maxBytes} byte extraction limit.`);
+    if ((await stat(input.path)).size > maxBytes) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `File exceeds the ${maxBytes} byte extraction limit.`);
     const hash = createHash('sha256');
     let bytes = 0;
     for await (const chunk of createReadStream(input.path, { signal })) {
       bytes += (chunk as Buffer).length;
-      if (bytes > maxBytes) throw new Error(`File exceeds the ${maxBytes} byte extraction limit.`);
+      if (bytes > maxBytes) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `File exceeds the ${maxBytes} byte extraction limit.`);
       hash.update(chunk as Buffer);
     }
     signal.throwIfAborted();
@@ -193,7 +195,7 @@ export function extractFileTextInWorker(input: FileTextExtractionInput): Promise
 export function nodeFileTextExtractionPoolSnapshot() { return { ...queue.snapshot(), workers: slots.size, cached: cache.size, cacheBytes }; }
 export function disposeNodeFileTextExtractionPool(): Promise<void> {
   if (disposing) return disposing;
-  queue.cancel(new Error('File text extraction pool disposed.'));
+  queue.cancel(new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'File text extraction pool disposed.'));
   disposing = (async () => {
     await queue.idle();
     await Promise.allSettled([...slots].map(retire));

@@ -54,6 +54,8 @@ import { AppInput } from '@/components/ui/app-input';
 import { AppModal } from '@/components/ui/app-modal';
 import { BrowserChatOrderedResponse, BrowserChatAutomationRunIdContext } from '@/components/BrowserChatMarkdown';
 import { browserChatFinalBlockSchema, browserChatFinalBlocksToParts, type BrowserChatFinalBlock } from '@/lib/browser-chat-ui-message';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 type AutomationFrequency = 'daily' | 'weekly';
 type AutomationRunStatus = 'queued' | 'running' | 'passed' | 'failed' | 'blocked' | 'interrupted';
@@ -842,7 +844,7 @@ export function AutomationWorkspace({
     if (targetUrl) {
       try {
         const parsed = new URL(targetUrl);
-        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error();
+        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new CodedError(ERROR_CODES.APPLICATION_ERROR);
       } catch {
         setFormError(t('目标网址需要是完整的 http:// 或 https:// 地址。'));
         return;

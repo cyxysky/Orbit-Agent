@@ -6,11 +6,13 @@ import { normalizeApplicationUserId } from '@/server/auth/user-context';
 import type { BrowserChatSessionSnapshot } from '@/server/ai/agents/browser-chat.service';
 import { readBrowserChatSessionHeader } from './browser-chat-history-store';
 import { artifactsRoot } from './paths';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 /** Resolve an existing artifact using the same owner boundary as artifact downloads. */
 export async function resolveOwnedArtifact(segments: string[], userId: string | undefined) {
   if (!segments.length || segments.some(segment => !segment || segment === '.' || segment === '..' || /[\\/:\0]/.test(segment))) {
-    throw new Error('Invalid artifact path.');
+    throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED, 'Invalid artifact path.');
   }
   const ownerId = normalizeApplicationUserId(userId);
   let owned = ownerId === normalizeApplicationUserId(undefined);
@@ -20,13 +22,13 @@ export async function resolveOwnedArtifact(segments: string[], userId: string | 
     const session = await readBrowserChatSessionHeader<BrowserChatSessionSnapshot>(segments[0]);
     owned = Boolean(session && normalizeApplicationUserId(session.userId) === ownerId);
   }
-  if (!owned) throw new Error('Artifact not found.');
+  if (!owned) throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED, 'Artifact not found.');
   const root = await realpath(artifactsRoot());
   const requestedPath = path.resolve(root, ...segments);
   const filePath = await realpath(requestedPath);
   const relative = path.relative(root, filePath);
-  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Invalid artifact path.');
-  if (path.relative(requestedPath, filePath)) throw new Error('Artifact links are not supported.');
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED, 'Invalid artifact path.');
+  if (path.relative(requestedPath, filePath)) throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED, 'Artifact links are not supported.');
   return filePath;
 }
 
@@ -35,7 +37,7 @@ export function communicationArtifactReader(userId: string | undefined): Communi
     execution.abortSignal?.throwIfAborted();
     const source = await resolveOwnedArtifact(artifactId.split('/'), userId);
     const info = await stat(source);
-    if (!info.isFile() || !info.size || info.size > 50 * 1024 * 1024) throw new Error('发送的媒体文件必须大于 0 字节且不超过 50 MB。');
+    if (!info.isFile() || !info.size || info.size > 50 * 1024 * 1024) throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED, '发送的媒体文件必须大于 0 字节且不超过 50 MB。');
     return { fileName: path.basename(source), mediaType: artifactContentType(source), data: await readFile(source, { signal: execution.abortSignal }) };
   };
 }

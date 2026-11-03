@@ -2,6 +2,8 @@ import { enqueueAutomationCaseRun } from '@/server/automation/automation-runner'
 import { requestApplicationUserId } from '@/server/auth/user-context';
 import { ApiRequestError, apiError, apiJson } from '@/server/http/api-request';
 import { idempotencyFingerprint, runIdempotentJson } from '@/server/http/idempotency';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 
 type RouteContext = { params: Promise<{ caseId: string }> };
@@ -21,7 +23,7 @@ export async function POST(request: Request, context: RouteContext) {
   } catch (error) {
     const message = error instanceof Error ? error.message : '';
     return apiError(request, /not found/i.test(message)
-      ? new ApiRequestError('自动化用例不存在', { code: 'not_found', status: 404 })
+      ? new ApiRequestError('自动化用例不存在', { code: ERROR_CODES.NOT_FOUND, status: 404 })
       : error, { fallback: '启动自动化运行失败' });
   }
 }

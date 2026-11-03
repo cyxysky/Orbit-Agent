@@ -1,6 +1,8 @@
 'use client';
 
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export type RealtimeRefreshEvent = {
   type: 'refresh';
@@ -56,7 +58,7 @@ async function refreshWebSocketUrl() {
   const endpoint = withWebPilotBasePath('/api/realtime/ws');
   const response = await fetch(endpoint, { cache: 'no-store', method: 'POST' });
   const data = await response.json();
-  if (!response.ok || typeof data.url !== 'string') throw new Error(data.error || 'Realtime WebSocket is unavailable');
+  if (!response.ok || typeof data.url !== 'string') throw new CodedError(ERROR_CODES.APPLICATION_ERROR, data.error || 'Realtime WebSocket is unavailable');
   return data.url as string;
 }
 

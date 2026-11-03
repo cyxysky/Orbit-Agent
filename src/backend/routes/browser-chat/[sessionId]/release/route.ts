@@ -2,6 +2,8 @@ import { releaseBrowserChatSessionRuntime } from '@/server/ai/agents/browser-cha
 import { requestApplicationUserId } from '@/server/auth/user-context';
 import { ApiRequestError, apiError, apiJson } from '@/server/http/api-request';
 import type { BrowserChatSessionRouteContext } from '@/server/http/browser-chat-route';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 
 export async function POST(request: Request, context: BrowserChatSessionRouteContext) {
@@ -12,7 +14,7 @@ export async function POST(request: Request, context: BrowserChatSessionRouteCon
       requestApplicationUserId(request),
     );
     if (!released) {
-      throw new ApiRequestError('Browser chat session not found', { code: 'not_found', status: 404 });
+      throw new ApiRequestError('Browser chat session not found', { code: ERROR_CODES.NOT_FOUND, status: 404 });
     }
     return apiJson(request, { released: true });
   } catch (error) {

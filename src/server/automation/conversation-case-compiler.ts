@@ -1,5 +1,7 @@
 import type { BrowserChatMessage, BrowserChatSessionSnapshot } from '@/server/ai/agents/browser-chat.service';
 import type { CreateAutomationCaseInput } from './automation.schema';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 export type ConversationMessagesCaseCompilerInput = {
   session: BrowserChatSessionSnapshot;
@@ -24,11 +26,11 @@ function precedingUserMessage(messages: BrowserChatMessage[], assistantIndex: nu
 /** Save task intent and operating guidance, never executable tool recordings. */
 export function compileConversationMessagesCase(input: ConversationMessagesCaseCompilerInput): CompiledConversationCase {
   const requestedIds = [...new Set(input.assistantMessageIds.map((item) => item.trim()).filter(Boolean))];
-  if (!requestedIds.length) throw new Error('Select at least one assistant message to compile.');
+  if (!requestedIds.length) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Select at least one assistant message to compile.');
   const requested = new Set(requestedIds);
   const selected = input.session.messages.filter((message) => message.role === 'assistant' && requested.has(message.id));
-  if (selected.length !== requestedIds.length) throw new Error('One or more selected assistant messages were not found in the browser-chat session.');
-  if (selected.some((message) => message.status === 'running')) throw new Error('Wait for all selected assistant messages to finish before compiling a task.');
+  if (selected.length !== requestedIds.length) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'One or more selected assistant messages were not found in the browser-chat session.');
+  if (selected.some((message) => message.status === 'running')) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Wait for all selected assistant messages to finish before compiling a task.');
 
   const sourceMessageIds: string[] = [];
   const instructions: string[] = [];
@@ -48,7 +50,7 @@ export function compileConversationMessagesCase(input: ConversationMessagesCaseC
       if (text(step.expected)) criteria.push(text(step.expected));
     }
   });
-  if (!instructions.length) throw new Error('Selected messages have no task instruction to reuse.');
+  if (!instructions.length) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Selected messages have no task instruction to reuse.');
   const numbered = (lines: string[]) => [...new Set(lines)].map((line, index) => `${index + 1}. ${line}`).join('\n');
   return {
     userId: String(input.userId ?? input.session.userId ?? '1').trim() || '1',

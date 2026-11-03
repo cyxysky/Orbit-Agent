@@ -1,3 +1,4 @@
+import { getErrorCode, normalizeErrorCode } from "../errors.ts";
 import { browserRuntimeSkill } from './runtime-skill.ts';
 import { validateBrowserVisualInput } from './interaction-schema.ts';
 import { browserSessionCommandShape, executeBrowserSessionOperation, type BrowserSessionCommand } from './node/interaction.ts';
@@ -18,12 +19,14 @@ import {
   type CapabilityRunContext,
 } from '../index.ts';
 import { z } from 'zod';
-import { browserOperationSummary } from './index.ts';
+import { browserOperationSummary, browserCodeDescription } from './index.ts';
 import {
   BrowserSession,
   type BrowserActionResult,
   type BrowserSessionOptions,
 } from './node/browser-session.ts';
+import { ERROR_CODES } from '../errors.ts';
+
 
 const browserSessionId = z.string().uuid();
 const browserParser = z.object({
@@ -77,7 +80,7 @@ async function browserResult(
         ok: false,
         content,
         error: {
-          code: result.failureCategory || 'browser-operation-failed',
+          code: normalizeErrorCode(result.failureCategory, ERROR_CODES.BROWSER_OPERATION_FAILED),
           message: browserOperationSummary(result),
           details: data,
         },
@@ -107,7 +110,7 @@ export class BrowserMcpSessionManager {
       return {
         ok: false,
         error: {
-          code: 'browser-session-capacity-reached',
+          code: ERROR_CODES.BROWSER_SESSION_CAPACITY_REACHED,
           message: `This MCP server allows at most ${this.#maxSessions} open browser sessions. Close one before opening another.`,
         },
       };
@@ -152,7 +155,7 @@ export class BrowserMcpSessionManager {
       return {
         ok: false,
         error: {
-          code: 'browser-open-failed',
+          code: getErrorCode(error, ERROR_CODES.BROWSER_OPEN_FAILED),
           message: error instanceof Error ? error.message : String(error),
         },
       };
@@ -167,7 +170,7 @@ export class BrowserMcpSessionManager {
       if (input.action === 'images') {
         const requested = input.imageIds || [];
         const missing = requested.filter(id => !managed.observations.has(id));
-        if (missing.length) return {ok:false,error:{code:'browser-image-not-found',message:'Unknown or expired image IDs: '+missing.join(', ')}};
+        if (missing.length) return {ok:false,error:{code:ERROR_CODES.BROWSER_IMAGE_NOT_FOUND,message:'Unknown or expired image IDs: '+missing.join(', ')}};
         const latest = [...managed.observations.values()].at(-1);
         const images = [...new Set([...requested, ...(latest?.id ? [latest.id] : [])])].map(id => managed.observations.get(id)!);
         return browserResult(input.browserSessionId!, {ok:true, actual:'Selected browser image evidence; only the latest observation can authorize interaction.',
@@ -251,7 +254,7 @@ export class BrowserMcpSessionManager {
     return {
       ok: false,
       error: {
-        code: 'browser-session-not-found',
+        code: ERROR_CODES.BROWSER_SESSION_NOT_FOUND,
         message: `Browser session ${id} does not exist or is already closed. Call browser with action="open" first.`,
       },
     };
@@ -308,7 +311,7 @@ export function createBrowserMcpCapability(options: BrowserMcpOptions = {}): Cap
         tools: {
           browser: defineCapabilityTool({
             name: 'browser',
-            description: 'Browser sessions with open/close, code, state (AX), snapshot (interactive DOM), navigate, tabs, observe, act, images, dismissSurface and waitForHumanVerification. All except open require browserSessionId. Inspect returned postActionState and actual image content. dismissSurface clicks (0,0) for option popups; use explicit Close/Cancel first for dialogs and verify closureConfirmed.',
+            description: 'Browser sessions with open/close, code, state (AX), snapshot (interactive DOM), navigate, tabs, observe, act, images, dismissSurface and waitForHumanVerification. All except open require browserSessionId. Inspect returned postActionState and actual image content. dismissSurface clicks (0,0) for option popups; use explicit Close/Cancel first for dialogs and verify closureConfirmed. ' + browserCodeDescription,
             input: browserInput,
             execute: (value, execution) => {
               switch (value.action) {

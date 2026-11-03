@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 import { browserInteractionSkill } from './runtime-browser-interaction';
 import type { BrowserActionResult } from '@cjfclonedeep/capability-sdk/browser/node';
 import type { CapabilitySkill } from '@cjfclonedeep/capability-sdk';
@@ -14,13 +15,13 @@ import { dataCapabilityManifest } from '@cjfclonedeep/capability-sdk/data';
 import { terminalCapabilityManifest } from '@cjfclonedeep/capability-sdk/execution/terminal';
 import { knowledgeCapabilityManifest } from '@cjfclonedeep/capability-sdk/knowledge';
 import { mediaCapabilityManifest } from '@cjfclonedeep/capability-sdk/media';
-import { novelCapabilityManifest } from '@cjfclonedeep/capability-sdk/novel';
+import { textEditorCapabilityManifest } from '@cjfclonedeep/capability-sdk/text-editor';
 import { subagentRuntimeSkill } from './subagent-runtime-skill';
 import { fileToolSourceOutputMarker } from './browser-chat-file-model-output';
 
 function manifestRuntimeSkill(manifest: { id: string; skills?: readonly CapabilitySkill[] }) {
   const skill = manifest.skills?.[0];
-  if (!skill) throw new Error(`Capability ${manifest.id} does not export a runtime Skill.`);
+  if (!skill) throw new CodedError(ERROR_CODES.SKILL_UNAVAILABLE, `Capability ${manifest.id} does not export a runtime Skill.`);
   return skill;
 }
 
@@ -35,7 +36,7 @@ const capabilityRuntimeSkills = [
   knowledgeCapabilityManifest,
   dataCapabilityManifest,
   mediaCapabilityManifest,
-  novelCapabilityManifest,
+  textEditorCapabilityManifest,
   communicationCapabilityManifest,
   terminalCapabilityManifest,
   computerCapabilityManifest,

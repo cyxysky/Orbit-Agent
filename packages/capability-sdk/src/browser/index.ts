@@ -12,12 +12,22 @@ import {
 } from '../index.ts';
 import { browserCapabilitySettings } from './settings.ts';
 import { browserRuntimeSkill, browserRuntimeReferenceSkills, browserInteractiveQaSkill } from './runtime-skill.ts';
+import { ERROR_CODES, normalizeErrorCode } from '../errors.ts';
+
 
 export * from './output-settings.ts';
 export * from './interaction-schema.ts';
 export * from './runtime-skill.ts';
 export * from './settings.ts';
 export * from './session-group.ts';
+
+export const browserCodeDescription = 'action=code executes JavaScript with top-level await in a persistent Node.js Playwright runtime. page, context, browser and tab are already provided: use page directly; never initialize it from window.__page or redeclare these bindings. document, window and DOMParser are unavailable in the outer cell; use them inside a browser-side callback such as page.evaluate. Correct: var info = await page.evaluate(() => ({ title: document.title, url: window.location.href })); nodeRepl.write(info); Incorrect: const page = window.__page; document.querySelector(...). An evaluate callback runs in the page and cannot capture Node variables, page or nodeRepl; pass values using its second argument, return JSON-safe data, then call nodeRepl.write outside the callback. Use nodeRepl.write(value) for results (top-level return is also supported). Prefer var for bindings reused across cells. Bare fetch runs on the Node host without browser cookies; for an observed browser-authenticated HTTP API use context.request.get(url), check response.ok(), then await response.json()/text(). If document/window is not defined, move the DOM read into page.evaluate instead of retrying the same outer-cell code.';
+
+export const browserCodeInputExamples = [
+  { action: 'code' as const, reason: 'Read the current page URL and title', code: 'nodeRepl.write({ url: page.url(), title: await page.title() });' },
+  { action: 'code' as const, reason: 'Read the observed page heading and viewport', code: "var info = await page.evaluate(() => ({ title: document.title, heading: document.querySelector('h1')?.innerText || '', viewportWidth: window.innerWidth })); nodeRepl.write(info);" },
+  { action: 'code' as const, reason: 'Read text from an observed selector with an explicit length limit', code: "var selector = 'main'; var text = await page.evaluate(({ selector, limit }) => { var element = document.querySelector(selector); if (!element) throw new Error('Observed selector did not match: ' + selector); return element.innerText.slice(0, limit); }, { selector, limit: 3000 }); nodeRepl.write({ url: page.url(), text });" },
+];
 
 const reason = z.string().trim().min(1).max(300);
 const recoveryReview = z.string().min(1).max(6000).optional().describe('After a browser failure: concise Markdown with observed screenshot state, evidence-based cause (label uncertainty), changed recovery action, verification and prevention rule. Put review here, not in assistant narrative. Only claim images actually received.');
@@ -63,7 +73,7 @@ const browserParser = z.object({
   observationMode: z.enum(['replace', 'append', 'keep-pair']).optional().describe('After code: replace old screenshots, append a continuous observation, or keep a before/after pair. Host bounds history and preserves the current observation.'),
   recoveryReview,
   code: z.string().min(1).max(40_000).optional().describe(
-    'Required only when action=code. JavaScript executed in the persistent Playwright runtime.',
+    browserCodeDescription,
   ),
   maxOutputChars: z.number().int().min(1_000).optional().describe('Optional explicit output limit. Code returns the complete result when omitted. State supports scope, frame, selector, query and nextCursor continuation, with a maximum page size of 200000 characters.'),
   maxMs: z.number().int().min(1_000).max(30 * 60_000).optional().describe('Optional only when action=waitForHumanVerification.'),
@@ -136,7 +146,7 @@ export type BrowserOperationResult = {
   failureCategory?: string;
   referenceImagePath?: string;
   referenceImagePaths?: string[];
-  browserObservation?: { width?: number; height?: number; surfaceId?: string; visualHash?: string; id?: string; domEpoch?: number; actionable?: boolean; retention?: 'replace' | 'append' | 'keep-pair'; disabledReason?: 'automatic-screenshot-disabled' | 'model-image-input-unavailable'; status: 'available' | 'unavailable' | 'disabled'; path?: string; url?: string; capturedAt?: string; error?: string };
+  browserObservation?: { width?: number; height?: number; surfaceId?: string; visualHash?: string; id?: string; domEpoch?: number; actionable?: boolean; retention?: 'replace' | 'append' | 'keep-pair'; disabledReason?: typeof ERROR_CODES.AUTOMATIC_SCREENSHOT_DISABLED | typeof ERROR_CODES.MODEL_IMAGE_INPUT_UNAVAILABLE; status: 'available' | 'unavailable' | 'disabled'; path?: string; url?: string; capturedAt?: string; error?: string };
   [key: string]: unknown;
 };
 
@@ -163,7 +173,7 @@ export function browserOperationToCapabilityResult(
       ok: false,
       content,
       error: {
-        code: result.failureCategory || 'browser-operation-failed',
+        code: normalizeErrorCode(result.failureCategory, ERROR_CODES.BROWSER_OPERATION_FAILED),
         message: browserOperationSummary(result),
         details: envelope,
       },
@@ -218,10 +228,10 @@ export function createBrowserTools(operations: BrowserCapabilityOperations): Cap
   return Object.freeze({
     [browserCapabilityToolNames.browser]: defineCapabilityTool<BrowserToolInput, unknown>({
       name: browserCapabilityToolNames.browser,
-      description: 'Execute one bounded Playwright JavaScript cell, read scoped browser state with cursor continuation, or pause for human verification. State accepts scope/frame/selector/query; pass nextCursor as cursor to continue the same capture. The action field is authoritative and unrelated fields are discarded before validation.',
+      description: 'Execute one bounded Playwright JavaScript cell, read scoped browser state with cursor continuation, or pause for human verification. State accepts scope/frame/selector/query; pass nextCursor as cursor to continue the same capture. The action field is authoritative and unrelated fields are discarded before validation. ' + browserCodeDescription,
       input: browserToolInput,
       inputExamples: [
-        { action: 'code', reason: 'Read the current page URL and title', code: 'nodeRepl.write({ url: page.url(), title: await page.title() })' },
+        ...browserCodeInputExamples,
         { action: 'state', reason: 'Read the current top-level browser state once' },
         { action: 'waitForHumanVerification', reason: 'Wait for the user to complete verification', maxMs: 180_000 },
       ],

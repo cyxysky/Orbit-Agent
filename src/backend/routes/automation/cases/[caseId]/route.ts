@@ -3,6 +3,8 @@ import { ApiRequestError, apiError, apiJson, parseJsonRequest } from '@/server/h
 import { idempotencyFingerprint, runIdempotentJson } from '@/server/http/idempotency';
 import { deleteAutomationCase, getAutomationCase, updateAutomationCase } from '@/server/storage/automation-store';
 import { automationTaskUpdateSchema } from '@/server/automation/automation.schema';
+import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+
 
 
 type RouteContext = { params: Promise<{ caseId: string }> };
@@ -11,7 +13,7 @@ export async function GET(request: Request, context: RouteContext) {
   try {
     const { caseId } = await context.params;
     const automationCase = await getAutomationCase(caseId, requestApplicationUserId(request));
-    if (!automationCase) throw new ApiRequestError('自动化用例不存在', { code: 'not_found', status: 404 });
+    if (!automationCase) throw new ApiRequestError('自动化用例不存在', { code: ERROR_CODES.NOT_FOUND, status: 404 });
     if (new URL(request.url).searchParams.get('download') === '1') {
       return apiJson(request, automationCase, {
         headers: { 'Content-Disposition': `attachment; filename="automation-case-${automationCase.id}.json"` },
@@ -29,7 +31,7 @@ export async function PATCH(request: Request, context: RouteContext) {
     const userId = requestApplicationUserId(request);
     const patch = await parseJsonRequest(request, automationTaskUpdateSchema, { maxBytes: 1024 * 1024 });
     const automationCase = await updateAutomationCase(caseId, userId, patch);
-    if (!automationCase) throw new ApiRequestError('自动化任务不存在', { code: 'not_found', status: 404 });
+    if (!automationCase) throw new ApiRequestError('自动化任务不存在', { code: ERROR_CODES.NOT_FOUND, status: 404 });
     return apiJson(request, { ok: true, case: automationCase, automationCase });
   } catch (error) {
     return apiError(request, error, { fallback: '保存自动化任务失败' });
@@ -47,7 +49,7 @@ export async function DELETE(request: Request, context: RouteContext) {
     }, async () => {
       const automationCase = await getAutomationCase(caseId, userId);
       if (!automationCase || !await deleteAutomationCase(caseId, userId)) {
-        throw new ApiRequestError('自动化用例不存在', { code: 'not_found', status: 404 });
+        throw new ApiRequestError('自动化用例不存在', { code: ERROR_CODES.NOT_FOUND, status: 404 });
       }
       return apiJson(request, { ok: true, deleted: { id: automationCase.id }, case: automationCase, automationCase });
     });

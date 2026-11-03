@@ -2,6 +2,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { access } from 'node:fs/promises';
 import path from 'node:path';
+import { CodedError, ERROR_CODES } from '../../errors.ts';
+
 
 export type NodeArtifactKind = 'download' | 'generated';
 
@@ -51,7 +53,7 @@ export function nodeArtifactRelativePath(
   const absolutePath = path.resolve(candidatePath);
   const relativePath = path.relative(root, absolutePath).replace(/\\/g, '/');
   if (!relativePath || relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
-    throw new Error(errorMessage);
+    throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, errorMessage);
   }
   return { absolutePath, relativePath };
 }

@@ -109,17 +109,46 @@ For wide or repetitive tables, return the fields needed for the current question
 
 - Each cell has a total time budget (90 seconds by default), including preparation, page operations and waits. Split repeated form submissions into small cells; persist confirmed record IDs in agent.state after each save. After a timeout, inspect the live result before repeating writes: earlier operations may have completed even though the cell returned no result.
 
-browser action=code accepts ordinary JavaScript with top-level await. The bindings \`page\`, \`context\`, \`browser\`, and \`tab\` already exist; do not import Playwright.
+browser action=code accepts ordinary JavaScript with top-level await in a Node.js Playwright runtime, not inside the web page. The bindings \`page\`, \`context\`, \`browser\`, and \`tab\` already exist; use them directly without importing Playwright or redeclaring them. Never write \`const page = window.__page\`. DOM globals (\`document\`, \`window\`, \`DOMParser\`) are unavailable in the outer cell and are available inside \`page.evaluate(() => ...)\`. Read DOM state there, or use locators. The evaluate callback executes in the page: it cannot capture outer Node variables or use \`page\` or \`nodeRepl\`. Pass required values as the second evaluate argument, return JSON-safe evidence, and write it from the outer cell. A \`ReferenceError: document/window is not defined\` means a DOM access ran in the outer Node cell; move it into evaluate before retrying. Bare \`fetch\` runs on the Node host and does not share the page's origin or browser cookies. For a browser-authenticated HTTP API established by current evidence, use \`var response = await context.request.get(observedApiUrl);\` followed by \`await response.json()\` or \`await response.text()\`; check \`response.ok()\` before treating the body as evidence.
 
-- Top-level bindings persist between cells only while the current JavaScript kernel remains alive. Prefer \`var\` for short-lived reusable bindings or use a fresh name in each cell; redeclaring the same top-level \`let\` or \`const\` can fail. Use \`agent.state\` for anything needed after a kernel recycle or in a later turn.
+- Top-level \`var\` bindings persist between cells only while the current JavaScript kernel remains alive; \`let\` and \`const\` are local to the cell's block. Prefer \`var\` for reusable bindings. Use \`agent.state\` for anything needed after a kernel recycle or in a later turn.
 - Do not wrap the cell in an async function, module, export, IIFE, or Markdown fence.
-- Call \`nodeRepl.write(value): void\` to return compact JSON-safe evidence. Zero writes returns \`null\`; one write returns that value; multiple writes return an array in write order.
+- Call \`nodeRepl.write(value): void\` to return compact JSON-safe evidence. One write returns that value; multiple writes return an array in write order. A top-level \`return value\` writes the value and ends the cell, including when it follows top-level await. If there are no writes, the final expression's resolved value is returned; no value returns \`null\`. Explicit writes take precedence over an expression's implicit value. Never mutate the page DOM to expose a result.
 - Call \`await nodeRepl.emitImage(value, options?): Promise<{ bytes, index, mimeType }>\` with a screenshot Buffer, Uint8Array, or base64 image data URL. Supported types are PNG, JPEG, and WebP. Explicitly emitted images are saved as artifacts and attached to the next model request as reference evidence; the automatic final viewport is the single current browser observation.
 - \`console.log/info/warn/error\` are diagnostics, not the cell result.
 - Let failed operations throw. Do not catch an exception and write \`{ ok: false }\`; a top-level result object with \`ok: false\` is treated as a failed tool result. If reporting an observed negative fact rather than an execution failure, use a domain key such as \`{ available: false }\` or \`{ matched: false }\`.
 - Return primitives and small plain objects. Convert complex Playwright objects to selected strings/numbers/booleans before writing them; do not serialize Page, Locator, Response, request, or DOM object graphs.
 
+Read DOM and browser globals inside evaluate, then return the result from the outer cell:
+
+\`\`\`js
+var info = await page.evaluate(() => ({
+  title: document.title,
+  heading: document.querySelector('h1')?.innerText || '',
+  viewportWidth: window.innerWidth,
+}));
+nodeRepl.write({ url: page.url(), ...info });
+\`\`\`
+
+Pass Node-side values explicitly into evaluate (the selector is illustrative):
+
+\`\`\`js
+var selector = 'main';
+var text = await page.evaluate(({ selector, limit }) => {
+  var element = document.querySelector(selector);
+  if (!element) throw new Error('Observed selector did not match: ' + selector);
+  return element.innerText.slice(0, limit);
+}, { selector, limit: 3000 });
+nodeRepl.write({ url: page.url(), text });
+\`\`\`
+
 Minimal current-state read:
+
+\`\`\`js
+nodeRepl.write({ url: page.url(), title: await page.title() });
+\`\`\`
+
+Broader state read when tab and surface context is needed:
 
 \`\`\`js
 var state = {

@@ -1,3 +1,5 @@
+
+import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 export function apiErrorMessage(data: unknown, fallback: string) {
   if (data && typeof data === 'object' && !Array.isArray(data)) {
     const error = (data as Record<string, unknown>).error;
@@ -10,6 +12,6 @@ export function apiErrorMessage(data: unknown, fallback: string) {
 
 export async function readApiJson<T = Record<string, unknown>>(response: Response, fallback: string): Promise<T> {
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(apiErrorMessage(data, fallback));
+  if (!response.ok) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, apiErrorMessage(data, fallback));
   return data as T;
 }

@@ -66,9 +66,9 @@ export async function createLocalProviders({ projectRoot, stateDirectory, groups
     },
     async media() {
       const { createNodeMediaCapability, createFfmpegMediaOperations } = await import('../dist/media/node.js');
-      return createNodeMediaCapability({ createOperations: () => createFfmpegMediaOperations({
-        timeoutMs: config.tools?.media?.timeoutMs ?? Number(process.env.AGENT_MEDIA_TIMEOUT_MS || 120000),
-        async resolveSource(sourceRef) {
+      const { createLocalMediaGeneration } = await import('./mcp-media.mjs');
+      const settings=config.tools?.media || {};
+      async function resolveSource(sourceRef) {
           if (/^[a-z][a-z\d+.-]*:\/\//i.test(sourceRef) && !sourceRef.startsWith('file://')) {
             throw new Error('Media sourceRef must be a local file path or file:// URL. Download remote media first.');
           }
@@ -76,7 +76,11 @@ export async function createLocalProviders({ projectRoot, stateDirectory, groups
             ? fileURLToPath(sourceRef) : path.resolve(projectRoot, sourceRef));
           if (!(await stat(filename)).isFile()) throw new Error('Media sourceRef must point to a file.');
           return filename;
-        },
+      }
+      const generation=await createLocalMediaGeneration({projectRoot,artifactsRoot,settings,resolveSource});
+      return createNodeMediaCapability({ createOperations: () => ({...createFfmpegMediaOperations({
+        timeoutMs: settings.timeoutMs ?? Number(process.env.AGENT_MEDIA_TIMEOUT_MS || 120000),
+        resolveSource,
         async publishArtifact(filename) {
           const artifactId = randomUUID();
           const directory = path.join(artifactsRoot, 'media', artifactId);
@@ -86,7 +90,7 @@ export async function createLocalProviders({ projectRoot, stateDirectory, groups
           return { artifactId, fileName: path.basename(target), mediaType: 'image/jpeg',
             url: pathToFileURL(target).href, downloadUrl: pathToFileURL(target).href };
         },
-      }) });
+      }),...generation}) });
     },
     async computer() {
       if (process.platform !== 'win32' && !(config.tools?.computer?.endpoint ?? process.env.AGENT_COMPUTER_ENDPOINT)) {
