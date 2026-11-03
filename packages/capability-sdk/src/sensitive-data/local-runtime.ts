@@ -73,8 +73,6 @@ export function localGlinerPythonCandidates(projectRoot = process.cwd(), configu
     configuredPath ? path.resolve(configuredPath) : '',
     readManagedSensitiveDataRuntime()?.python || '',
     ...bundledGlinerRuntimeDirectories(projectRoot).map((runtimeRoot) => path.join(runtimeRoot, 'python', executable)),
-    path.resolve(projectRoot, '.venv-gliner', process.platform === 'win32' ? 'Scripts' : 'bin', executable),
-    path.resolve(projectRoot, '..', '.venv-gliner', process.platform === 'win32' ? 'Scripts' : 'bin', executable),
   ].filter(Boolean))];
 }
 
@@ -211,7 +209,7 @@ async function startManagedSidecar(
     throw new Error('Local sensitive-data models are not installed. Open Settings → Security & privacy → Local sensitive-data runtime and click Download.');
   }
   const modelCacheDirectory = String(process.env.GLINER_MODEL_CACHE_DIR || '').trim()
-    || path.join(runtimeDirectory(), 'huggingface');
+    || path.join(runtimeDirectory(), 'sensitive-data', 'huggingface');
   console.log(`[gliner-local] Starting ${pythonCommand} on ${url.hostname}:${port}.`);
   const child = spawn(pythonCommand, [
     '-m',

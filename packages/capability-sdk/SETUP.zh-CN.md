@@ -1,5 +1,7 @@
 # 一键安装工具与配置 MCP
 
+
+默认运行环境不包含脱敏推理依赖及模型权重。需要时再执行 `npx capability-runtime install sensitive-data` 或使用设置页下载，详见[运行环境](RUNTIME.zh-CN.md)。
 本入口随当前源码提供；旧版已安装包需要升级到包含 `scripts/setup.mjs` 的发布包。需要 Node.js >=22.16 和 npm，无需启动 Orbit。自动安装运行环境支持 Windows x64，以及 Ubuntu 22.04/24.04、Debian 12/13 的 x64/arm64。
 
 ## 在本仓库运行

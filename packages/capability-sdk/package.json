@@ -499,6 +499,7 @@
     "prepack": "npm run build && npm run bundle-ui",
     "bundle-ui": "node scripts/bundle-ui.mjs",
     "install-runtime": "node scripts/runtime.cjs install",
+    "install-sensitive-data": "node scripts/runtime.cjs install sensitive-data",
     "start-runtime": "node scripts/sensitive-data/start-runtime.cjs",
     "bundle-runtime": "node scripts/sensitive-data/prepare-runtime.cjs",
     "postinstall": "node scripts/runtime.cjs install",

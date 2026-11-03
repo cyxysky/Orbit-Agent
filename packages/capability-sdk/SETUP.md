@@ -1,5 +1,7 @@
 # Install local tools and configure MCP clients
 
+
+The default runtime setup excludes optional sensitive-data inference dependencies and model weights. Install them only when needed with `npx capability-runtime install sensitive-data`; see [runtime setup](RUNTIME.md).
 Requires Node.js >=22.16 and npm. This installer ships with the current source; older installed SDKs must be upgraded to a prepared release containing `scripts/setup.mjs`. See [the Chinese guide](SETUP.zh-CN.md) for full details and configuration paths.
 
 From the Orbit repository, run `install-mcp.cmd` on Windows, or:

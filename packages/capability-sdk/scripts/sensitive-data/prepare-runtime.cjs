@@ -3,7 +3,7 @@ const { createHash } = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
-const { readManagedRuntime } = require('../../runtime/managed/layout.cjs');
+const { readManagedSensitiveDataRuntime } = require('../../runtime/managed/layout.cjs');
 const {
   assertSensitiveDataRuntime,
   preparedSensitiveDataRuntimeRoot,
@@ -18,7 +18,6 @@ const serviceAppPath = path.join(serviceRoot, 'app.py');
 const serviceBoundariesPath = path.join(serviceRoot, 'entity_boundaries.py');
 const serviceCandidateResolutionPath = path.join(serviceRoot, 'candidate_resolution.py');
 const serviceDeterministicSpansPath = path.join(serviceRoot, 'deterministic_spans.py');
-const defaultVirtualPython = readManagedRuntime()?.python || path.join(hostRoot, '.venv-gliner', 'Scripts', 'python.exe');
 const bundleFormatVersion = 3;
 
 const environmentPath = path.join(hostRoot, '.env');
@@ -115,8 +114,10 @@ function main() {
   if (process.platform !== 'win32' || process.arch !== 'x64') {
     throw new Error('The self-contained GLiNER bundle can currently only be built on 64-bit Windows. Docker builds create their Linux runtime separately.');
   }
-  const sourcePython = path.resolve(String(process.env.GLINER_BUNDLE_PYTHON_PATH || defaultVirtualPython).trim());
-  if (!fs.existsSync(sourcePython)) {
+  const configuredPython = String(process.env.GLINER_BUNDLE_PYTHON_PATH || readManagedSensitiveDataRuntime()?.python || '').trim();
+  if (!configuredPython) throw new Error('Sensitive-data runtime is not installed. Run "npm run sensitive-data:install" first.');
+  const sourcePython = path.resolve(configuredPython);
+  if (!fs.existsSync(sourcePython) || !fs.statSync(sourcePython).isFile()) {
     throw new Error(`GLiNER build Python was not found: ${sourcePython}. Run "npm run sensitive-data:install" first or set GLINER_BUNDLE_PYTHON_PATH.`);
   }
   const python = pythonInformation(sourcePython);

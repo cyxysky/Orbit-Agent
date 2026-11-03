@@ -2,10 +2,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { copyProductionRuntime, copyServerRuntime } = require('./server-package-layout');
-const {
-  assertSensitiveDataRuntime,
-  copySensitiveDataRuntime,
-} = require('../packages/capability-sdk/scripts/sensitive-data/runtime-layout.cjs');
 
 const root = path.resolve(__dirname, '..');
 const outputRoot = path.join(root, 'dist-desktop');
@@ -21,7 +17,6 @@ fs.rmSync(outputRoot, { recursive: true, force: true });
 const productionPackagePaths = copyProductionRuntime(root, serverOutput);
 copyInto(path.join(root, 'public'), path.join(serverOutput, 'public'));
 const serverRuntimeFiles = copyServerRuntime(root, serverOutput);
-copySensitiveDataRuntime(path.join(serverOutput, 'sensitive-data-runtime'));
 copyInto(
   path.join(root, 'packages', 'capability-sdk', 'runtime', 'file'),
   path.join(serverOutput, 'capability-runtime', 'file'),
@@ -47,6 +42,5 @@ if (
 ) {
   throw new Error('The complete production runtime required by the Orbit custom server was not found. Run npm run build before packaging.');
 }
-assertSensitiveDataRuntime(path.join(serverOutput, 'sensitive-data-runtime'));
 
 console.log(`Prepared desktop server with ${productionPackagePaths.length} package directories and ${serverRuntimeFiles.length} custom server files at ${serverOutput}`);

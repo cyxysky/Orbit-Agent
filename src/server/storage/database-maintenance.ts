@@ -1,4 +1,4 @@
-import { mkdir, readdir, rm } from 'node:fs/promises';
+import { mkdir, readdir, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { databaseDriver, getDatabase, queryDatabase } from '@/server/db/database';
 import { structuredLog } from '@/server/observability/runtime-observability';
@@ -7,11 +7,6 @@ import { appDataRoot } from './paths';
 const runtimeState = ((globalThis as typeof globalThis & {
   __databaseMaintenanceState?: { running?: Promise<void>; timer?: ReturnType<typeof setInterval> };
 }).__databaseMaintenanceState ??= {});
-
-function backupRetentionCount() {
-  const value = Number(process.env.SQLITE_BACKUP_RETENTION_COUNT || 7);
-  return Number.isFinite(value) ? Math.max(1, Math.min(30, Math.floor(value))) : 7;
-}
 
 function sqliteCompactionFreeRatio() {
   const value = Number(process.env.SQLITE_COMPACTION_FREE_RATIO || 0.3);
@@ -72,14 +67,24 @@ export async function createDatabaseBackup() {
   await mkdir(directory, { recursive: true });
   const timestamp = new Date().toISOString().replaceAll(':', '-').replaceAll('.', '-');
   const target = path.join(directory, `webpilot-${timestamp}-${process.pid}.db`);
+  const temporary = `${target}.partial`;
   const dataSource = await getDatabase();
   const connection = (dataSource.driver as unknown as { databaseConnection?: { backup?: (target: string) => Promise<void> } }).databaseConnection;
   if (!connection?.backup) throw new Error('The active SQLite driver does not expose backup().');
-  await connection.backup(target);
-  const backups = (await readdir(directory, { withFileTypes: true }))
-    .filter((entry) => entry.isFile() && /^webpilot-.*\.db$/i.test(entry.name))
+  try {
+    await connection.backup(temporary);
+    await rename(temporary, target);
+  } catch (error) {
+    await rm(temporary, { force: true });
+    throw error;
+  }
+  const files = (await readdir(directory, { withFileTypes: true }))
+    .filter((entry) => entry.isFile() && /^webpilot-.*\.db(?:-shm|-wal)?$/i.test(entry.name));
+  const backups = files.filter((entry) => entry.name.endsWith('.db'))
     .sort((a, b) => b.name.localeCompare(a.name));
-  await Promise.all(backups.slice(backupRetentionCount()).map((entry) => rm(path.join(directory, entry.name), { force: true })));
+  const latest = backups[0]?.name;
+  await Promise.all(files.filter((entry) => entry.name !== latest && entry.name !== `${latest}-shm` && entry.name !== `${latest}-wal`)
+    .map((entry) => rm(path.join(directory, entry.name), { force: true })));
   return target;
 }
 

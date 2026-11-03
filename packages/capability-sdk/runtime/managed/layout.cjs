@@ -5,15 +5,24 @@ function runtimeDirectory(environment = process.env) {
   return path.resolve(environment.CAPABILITY_RUNTIME_HOME || path.join(process.cwd(), '.capability-sdk', `${process.platform}-${process.arch}`));
 }
 
+// Manifests store paths relative to their own runtime directory. Consumers receive
+// validated absolute paths so no tool has to know how the SDK was installed.
+function resolveRuntimePath(directory, filename) {
+  if (typeof filename !== 'string' || !filename.trim()) return undefined;
+  const resolved = path.resolve(directory, filename);
+  const relative = path.relative(directory, resolved);
+  if (!relative || relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative) || !fs.existsSync(resolved)) return undefined;
+  return resolved;
+}
+
 function readManagedRuntime(environment = process.env) {
   try {
     const value = JSON.parse(fs.readFileSync(path.join(runtimeDirectory(environment), 'runtime.json'), 'utf8'));
     if (value.format !== 2 || value.platform !== process.platform || value.arch !== process.arch || value.status !== 'ready') return undefined;
     const directory = runtimeDirectory(environment);
-    for (const filename of [value.python, value.libreoffice, value.unoPython, value.chromium, value.ffmpeg, ...Object.values(value.models || {})]) {
-      if (typeof filename !== 'string' || !path.isAbsolute(filename)) return undefined;
-      const relative = path.relative(directory, filename);
-      if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return undefined;
+    for (const key of ['python', 'libreoffice', 'unoPython', 'chromium', 'ffmpeg']) {
+      value[key] = resolveRuntimePath(directory, value[key]);
+      if (!value[key]) return undefined;
     }
     return value;
   } catch { return undefined; }
@@ -32,12 +41,13 @@ function readManagedSensitiveDataRuntime(environment = process.env) {
   try {
     value = JSON.parse(fs.readFileSync(path.join(directory, 'sensitive-data.json'), 'utf8'));
     if (value.format !== 1 || value.platform !== process.platform || value.arch !== process.arch || value.status !== 'ready') return undefined;
-  } catch { value = readManagedRuntime(environment); }
+  } catch { return undefined; }
   if (!value) return undefined;
-  for (const filename of [value.python, ...Object.values(value.models || {})]) {
-    if (typeof filename !== 'string' || !path.isAbsolute(filename)) return undefined;
-    const relative = path.relative(directory, filename);
-    if (!relative || relative.startsWith('..') || path.isAbsolute(relative) || !fs.existsSync(filename)) return undefined;
+  value.python = resolveRuntimePath(directory, value.python);
+  if (!value.python) return undefined;
+  for (const key of Object.keys(value.models || {})) {
+    value.models[key] = resolveRuntimePath(directory, value.models[key]);
+    if (!value.models[key]) return undefined;
   }
   for (const key of ['gliner', 'chinese', 'pii']) {
     const model = value.models?.[key];

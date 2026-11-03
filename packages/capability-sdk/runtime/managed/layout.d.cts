@@ -9,10 +9,12 @@ export type ManagedRuntime = {
   unoPython: string;
   chromium: string;
   ffmpeg: string;
-  models: { gliner: string; chinese: string; pii: string };
 };
 export function runtimeDirectory(environment?: Readonly<Record<string, string | undefined>>): string;
 export function readManagedRuntime(environment?: Readonly<Record<string, string | undefined>>): ManagedRuntime | undefined;
-export type ManagedSensitiveDataRuntime = Pick<ManagedRuntime, 'platform' | 'arch' | 'status' | 'fingerprint' | 'python' | 'models'> & { format: 1 | 2 };
+export type ManagedSensitiveDataRuntime = Pick<ManagedRuntime, 'platform' | 'arch' | 'status' | 'fingerprint' | 'python'> & {
+  format: 1;
+  models: { gliner: string; chinese: string; pii: string };
+};
 export function readManagedSensitiveDataRuntime(environment?: Readonly<Record<string, string | undefined>>): ManagedSensitiveDataRuntime | undefined;
 export function managedModelDirectory(key: 'gliner' | 'chinese' | 'pii', requested?: string, environment?: Readonly<Record<string, string | undefined>>): string;

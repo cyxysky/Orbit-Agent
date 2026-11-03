@@ -257,40 +257,6 @@ function packagedLibreOfficeExecutable() {
   return fs.existsSync(executablePath) ? executablePath : '';
 }
 
-function packagedGlinerEnvironment(serverDir) {
-  if (!app.isPackaged) return {};
-  const runtimeRoot = path.join(serverDir, 'sensitive-data-runtime');
-  const pythonPath = path.join(runtimeRoot, 'python', 'python.exe');
-  const serviceDir = path.join(runtimeRoot, 'service');
-  const modelDir = path.join(runtimeRoot, 'models', 'gliner2');
-  const chineseNerModelDir = path.join(runtimeRoot, 'models', 'chinese-roberta');
-  const piiModelDir = path.join(runtimeRoot, 'models', 'liquid-pii');
-  for (const requiredPath of [
-    pythonPath,
-    path.join(serviceDir, 'app.py'),
-    path.join(serviceDir, 'candidate_resolution.py'),
-    path.join(serviceDir, 'entity_boundaries.py'),
-    path.join(modelDir, 'config.json'),
-    path.join(chineseNerModelDir, 'config.json'),
-    path.join(piiModelDir, 'config.json'),
-  ]) {
-    if (!fs.existsSync(requiredPath)) throw new Error(`Packaged GLiNER runtime is missing: ${requiredPath}`);
-  }
-  return {
-    AI_SENSITIVE_DATA_FILTER_ENABLED: 'true',
-    AI_SENSITIVE_DATA_FILTER_FAILURE_MODE: 'closed',
-    GLINER_BATCH_SIZE: '8',
-    GLINER_CHINESE_NER_MODEL_BUNDLE_DIR: chineseNerModelDir,
-    GLINER_DEVICE: 'cpu',
-    GLINER_MODEL_BUNDLE_DIR: modelDir,
-    GLINER_PII_MODEL_BUNDLE_DIR: piiModelDir,
-    GLINER_PYTHON_PATH: pythonPath,
-    GLINER_RUNTIME_MODE: 'local',
-    GLINER_SERVICE_DIR: serviceDir,
-    GLINER_SERVICE_URL: 'http://127.0.0.1:18001',
-  };
-}
-
 function embeddedBrowserPlaceholderUrl() {
   const html = [
     '<!doctype html>',
@@ -2499,7 +2465,6 @@ async function startServer(appDataDir) {
   const browserProfileDir = ensureDir(path.join(appDataDir, 'browser-profile'));
   const env = {
     ...process.env,
-    ...packagedGlinerEnvironment(serverDir),
     AI_WEB_TEST_BROWSER_PROFILE_DIR: process.env.AI_WEB_TEST_BROWSER_PROFILE_DIR || browserProfileDir,
     AI_WEB_TEST_FORCE_PLAYWRIGHT_BROWSER: app.isPackaged ? 'true' : process.env.AI_WEB_TEST_FORCE_PLAYWRIGHT_BROWSER,
     AI_WEB_TEST_CHROMIUM_EXECUTABLE_PATH: packagedChromiumExecutable(),

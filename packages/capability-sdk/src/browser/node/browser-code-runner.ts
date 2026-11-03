@@ -370,7 +370,7 @@ type PendingExecution = {
 const maxDiagnosticChars = 4_000;
 const defaultBrowserCodeKernelReadyTimeoutMs = 10_000;
 const defaultBrowserCodeExecutionTimeoutMs = 90_000;
-export const BROWSER_CODE_KERNEL_RUNTIME_REVISION = 59;
+export const BROWSER_CODE_KERNEL_RUNTIME_REVISION = 60;
 
 function boundedInteger(value: unknown, fallback: number, min: number, max: number) {
   const parsed = typeof value === 'number' ? value : Number(value);
@@ -1347,27 +1347,11 @@ function browserCodeKernelMain() {
     const candidateSet = skipVisibleFilter
       ? originalCandidate
       : originalCandidate.filter({ visible: true });
-    // Locator factories resolve live. A menu or form field may mount after its
-    // trigger returns; preserve the normal bounded Playwright wait before
-    // evaluating uniqueness and actionability. Waiting never sends input.
-    if (await candidateSet.count() === 0) {
-      try {
-        await candidateSet.first().waitFor({
-          state: skipVisibleFilter ? 'attached' : 'visible',
-          timeout: browserCodeActionTimeoutMs,
-        });
-      } catch (error) {
-        if (!(error instanceof Error) || error.name !== 'TimeoutError') throw error;
-      }
-    }
-    const originalCount = await originalCandidate.count();
-    const zeroMatchDiagnostics = originalCount === 0
-      ? await zeroMatchCandidateDiagnostics(originalCandidate)
-      : '';
-    // Playwright visibility ignores opacity. A newly mounted dialog can have a
-    // box while its finite entrance animation still makes input imperceptible.
-    // Wait without altering styles; static hiding is still rejected below.
-    await settleKernelTask(candidateSet.evaluateAll(async elements => {
+    // The animation query already resolves the visible candidates. Return its
+    // cardinality instead of issuing a separate Locator.count(): Patchright
+    // enumerates remote DOM handles for count(), even for an nth() locator.
+    // Keep the later actionability query live after animations or a rerender.
+    const waitForTargetRendering = () => settleKernelTask(candidateSet.evaluateAll(async elements => {
       const animations = new Set<Animation>();
       for (const element of elements) {
         let current: Element | null = element;
@@ -1380,7 +1364,23 @@ function browserCodeKernelMain() {
         }
       }
       await Promise.all([...animations].map(animation => animation.finished.catch(() => undefined)));
+      return elements.length;
     }), browserCodeActionTimeoutMs, 'target rendering animations');
+    const rendering = await waitForTargetRendering();
+    if (rendering.ok && rendering.value === 0) {
+      // A dependent menu or field may mount after the previous action returns.
+      // Preserve bounded native waiting without sending input, then sample the
+      // newly mounted target's animations before checking actionability.
+      try {
+        await candidateSet.first().waitFor({
+          state: skipVisibleFilter ? 'attached' : 'visible',
+          timeout: browserCodeActionTimeoutMs,
+        });
+      } catch (error) {
+        if (!(error instanceof Error) || error.name !== 'TimeoutError') throw error;
+      }
+      await waitForTargetRendering();
+    }
     let results = await candidateSet.evaluateAll((elements, operation) => {
       const runtime = (window as Window & { __aiDomRuntime?: { actionability?: (
         element: Element, options?: { action?: string },
@@ -1573,6 +1573,12 @@ function browserCodeKernelMain() {
       .map((result, index) => result.ok ? index : -1)
       .filter((index) => index >= 0);
     if (actionableIndices.length !== 1) {
+      // Full-selector counts and nearby-control diagnostics are only needed
+      // for a rejected input; keep them off every successful action's path.
+      const originalCount = await originalCandidate.count();
+      const zeroMatchDiagnostics = originalCount === 0
+        ? await zeroMatchCandidateDiagnostics(originalCandidate)
+        : '';
       const visibilityStage = skipVisibleFilter
         ? `${results.length} candidates entered the file-input exception path`
         : `${results.length} passed automatic visible filtering`;

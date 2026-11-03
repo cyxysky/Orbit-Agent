@@ -2,23 +2,16 @@
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
-const { readManagedRuntime, managedModelDirectory, runtimeDirectory } = require('../../runtime/managed/layout.cjs');
+const { readManagedSensitiveDataRuntime, managedModelDirectory, runtimeDirectory } = require('../../runtime/managed/layout.cjs');
 
 const packageRoot = path.resolve(__dirname, '..', '..');
 const hostRoot = process.cwd();
 const environmentPath = path.join(hostRoot, '.env');
 if (fs.existsSync(environmentPath)) process.loadEnvFile(environmentPath);
 
-const virtualPython = path.join(
-  hostRoot,
-  '.venv-gliner',
-  process.platform === 'win32' ? 'Scripts' : 'bin',
-  process.platform === 'win32' ? 'python.exe' : 'python',
-);
 const configuredPython = String(process.env.GLINER_PYTHON_PATH || '').trim();
-const pythonCommand = configuredPython || readManagedRuntime()?.python || (fs.existsSync(virtualPython)
-  ? virtualPython
-  : process.platform === 'win32' ? 'python' : 'python3');
+const pythonCommand = configuredPython || readManagedSensitiveDataRuntime()?.python;
+if (!pythonCommand) throw new Error('Sensitive-data runtime is not installed. Run npm run sensitive-data:install first.');
 const endpoint = new URL(process.env.GLINER_SERVICE_URL || 'http://127.0.0.1:18001');
 const configuredModelName = String(process.env.GLINER_MODEL || '').trim();
 const modelName = !configuredModelName || configuredModelName === 'urchade/gliner_multi-v2.1'
@@ -44,11 +37,11 @@ const child = spawn(pythonCommand, [
     GLINER_MODEL: managedModelDirectory('gliner', modelName) || modelName,
     GLINER_CHINESE_NER_MODEL: managedModelDirectory('chinese', process.env.GLINER_CHINESE_NER_MODEL) || process.env.GLINER_CHINESE_NER_MODEL,
     GLINER_PII_MODEL: managedModelDirectory('pii', process.env.GLINER_PII_MODEL) || process.env.GLINER_PII_MODEL,
-    HF_HOME: process.env.HF_HOME || path.join(runtimeDirectory(), 'huggingface'),
-    HF_HUB_CACHE: process.env.HF_HUB_CACHE || path.join(runtimeDirectory(), 'huggingface', 'hub'),
-    HF_MODULES_CACHE: process.env.HF_MODULES_CACHE || path.join(runtimeDirectory(), 'huggingface', 'modules'),
-    HF_XET_CACHE: process.env.HF_XET_CACHE || path.join(runtimeDirectory(), 'huggingface', 'xet'),
-    TRANSFORMERS_CACHE: process.env.TRANSFORMERS_CACHE || path.join(runtimeDirectory(), 'huggingface', 'hub'),
+    HF_HOME: process.env.HF_HOME || path.join(runtimeDirectory(), 'sensitive-data', 'huggingface'),
+    HF_HUB_CACHE: process.env.HF_HUB_CACHE || path.join(runtimeDirectory(), 'sensitive-data', 'huggingface', 'hub'),
+    HF_MODULES_CACHE: process.env.HF_MODULES_CACHE || path.join(runtimeDirectory(), 'sensitive-data', 'huggingface', 'modules'),
+    HF_XET_CACHE: process.env.HF_XET_CACHE || path.join(runtimeDirectory(), 'sensitive-data', 'huggingface', 'xet'),
+    TRANSFORMERS_CACHE: process.env.TRANSFORMERS_CACHE || path.join(runtimeDirectory(), 'sensitive-data', 'huggingface', 'hub'),
   },
   stdio: 'inherit',
   windowsHide: true,

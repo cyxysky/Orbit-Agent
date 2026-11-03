@@ -1,9 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { createRequire } = require('node:module');
-const {
-  assertSensitiveDataRuntime,
-} = require('../packages/capability-sdk/scripts/sensitive-data/runtime-layout.cjs');
+const { readManagedRuntime } = require('../packages/capability-sdk/runtime/managed/layout.cjs');
 
 function findBrowserRevisionDir(executablePath) {
   let dir = path.dirname(executablePath);
@@ -17,7 +15,7 @@ function findBrowserRevisionDir(executablePath) {
 
 function copyPlaywrightChromium(context) {
   const { chromium } = require('patchright');
-  const executablePath = chromium.executablePath();
+  const executablePath = process.env.AI_WEB_TEST_CHROMIUM_EXECUTABLE_PATH?.trim() || readManagedRuntime()?.chromium || chromium.executablePath();
   if (!fs.existsSync(executablePath)) {
     throw new Error(`Patchright Chromium executable was not found: ${executablePath}. Run "npx patchright install chromium" before packaging.`);
   }
@@ -37,8 +35,10 @@ function copyPlaywrightChromium(context) {
 }
 
 function findLibreOfficeRoot() {
+  const managed = readManagedRuntime();
   const candidates = [
     process.env.LIBREOFFICE_BUNDLE_DIR,
+    managed?.libreoffice && path.resolve(path.dirname(managed.libreoffice), '..'),
     process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'LibreOffice'),
     process.env['ProgramFiles(x86)'] && path.join(process.env['ProgramFiles(x86)'], 'LibreOffice'),
   ].filter(Boolean);
@@ -96,7 +96,6 @@ exports.default = async function afterPack(context) {
   fs.cpSync(source, target, { recursive: true });
 
   assertPackagedServerRuntime(path.join(context.appOutDir, 'resources', 'server'));
-  assertSensitiveDataRuntime(path.join(context.appOutDir, 'resources', 'server', 'sensitive-data-runtime'));
 
   copyPlaywrightChromium(context);
   copyLibreOffice(context);
