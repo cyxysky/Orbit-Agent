@@ -16,7 +16,7 @@ import { repairFileArtifactDownloadLinks } from '@/server/capabilities/browser-c
 import { browserChatCapabilityResult } from '@/lib/browser-chat-capability-result';
 import { currentRuntimeTimePromptLine } from '@/server/ai/prompts/runtime-agent.prompt';
 import { effectiveDisabledCapabilityTools } from './runtime-tool-catalog';
-import { isToolCapabilityEnabled } from '@/lib/tool-capability-settings';
+import { isRuntimeToolEnabled } from '@/server/runtime/self-bootstrap-policy';
 import { hiddenRuntimeSkillIdsInModelContext } from './hidden-runtime-skills';
 import { createRuntimeContextReadTool, runtimeContextMessageRef, type RuntimeContextManifest } from './runtime-context-assembler';
 import { serializableBrowserChatModelMessages } from './browser-chat-model-context';
@@ -271,7 +271,7 @@ export async function executeAppServerBrowserTurn(input: Input, host: AppServerB
   // Global switches control registration; session preferences remain dispatch restrictions.
   const definitions: ToolSet = Object.fromEntries(Object.entries({
     ...mount.tools, ...input.memoryTools, contextRead: createRuntimeContextReadTool(() => records),
-  }).filter(([name]) => isToolCapabilityEnabled(name, runtimeConfiguration())));
+  }).filter(([name]) => isRuntimeToolEnabled(name, runtimeConfiguration())));
   let runtime: Awaited<ReturnType<typeof openCodexAppServer>> | undefined;
   let lastText = '';
   let finalText = '';
@@ -322,7 +322,7 @@ export async function executeAppServerBrowserTurn(input: Input, host: AppServerB
     let developerInstructions = [host.prompt(input), browserInteractionInstructions(normalizeBrowserChatInteractionMode(input.browserInteractionMode)),
       'Use only the tools in the orbit namespace. The host owns browser sessions, credentials, approvals and artifacts. Do not use built-in shell, patch, browser, web search, local file or child-agent tools to bypass host tools.',
       'The Codex runtime owns conversation history and context compaction. Use contextRead only to retrieve archived evidence. Complete through finalResponse; after an accepted finalResponse or a pending human-input tool, stop immediately.',
-      `Current globally or session-disabled tools: ${JSON.stringify([...disabled])}. These tools cannot be executed even if they occur in the thread's fixed catalogue.`,
+      `Tools unavailable under deployment permissions, global settings or session preferences: ${JSON.stringify([...disabled])}. These tools cannot be executed even if they occur in the thread's fixed catalogue.`,
     ].join('\n\n');
     const updatedCatalogue = binding && binding.toolsHash !== toolsHash;
     if (binding && updatedCatalogue) {
@@ -467,7 +467,7 @@ export async function executeAppServerBrowserTurn(input: Input, host: AppServerB
         const definition = call.namespace === 'orbit' ? definitions[name] : undefined;
         const validation = definition ? await asSchema(definition.inputSchema).validate?.(call.arguments) : undefined;
         const args = validation?.success ? validation.value : call.arguments;
-        const rejection = !definition?.execute || disabled.has(name) || !isToolCapabilityEnabled(name, runtimeConfiguration()) || accepted || pauseRequested
+        const rejection = !definition?.execute || disabled.has(name) || !isRuntimeToolEnabled(name, runtimeConfiguration()) || accepted || pauseRequested
           ? 'This tool is unavailable in the current host scope. No action was executed.'
           : validation && !validation.success ? `Invalid tool arguments: ${validation.error}` : undefined;
         const item = { id: call.callId, type: 'dynamicToolCall', tool: name, arguments: args };
@@ -486,7 +486,7 @@ export async function executeAppServerBrowserTurn(input: Input, host: AppServerB
           if (rejection) value = { ok: false, outcome: 'not-executed', actual: rejection,
             ...(validation && !validation.success ? { error: codexRuntimeError(validation.error) } : {}) };
           else if (!await host.approve(name, args)) value = { ok: false, outcome: 'not-executed', actual: 'Host denied this action.' };
-          else if (!isToolCapabilityEnabled(name, runtimeConfiguration())) value = { ok: false, outcome: 'not-executed', actual: 'This tool has been disabled globally. No action was executed.' };
+          else if (!isRuntimeToolEnabled(name, runtimeConfiguration())) value = { ok: false, outcome: 'not-executed', actual: 'This tool is unavailable under the deployment permissions or tool settings. No action was executed.' };
           else {
             assertActive(); await journal.begin(call.callId);
             value = await definition!.execute!(args, { toolCallId: call.callId, messages: [], abortSignal: signal, context: undefined });

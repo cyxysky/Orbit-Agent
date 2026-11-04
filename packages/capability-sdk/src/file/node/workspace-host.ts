@@ -6,6 +6,7 @@ import { createNodeFileConverter, type NodeFileConverter } from './convert.ts';
 import { createNodeFileDownloader, type NodeFileDownloader } from './download.ts';
 import { type NodeArtifactUrlResolver } from './artifacts.ts';
 import type { renderFilePreview, FilePreviewResult } from './office/preview.ts';
+import { CodedError, ERROR_CODES } from '../../errors.ts';
 
 export type NodeFileWorkspaceHost = {
   artifactsRoot: string;
@@ -14,12 +15,15 @@ export type NodeFileWorkspaceHost = {
   converter?: NodeFileConverter;
   downloader?: NodeFileDownloader;
   officeGenerationMode?: 'auto' | 'javascript' | 'uno';
+  /** Deployment permission for authored Python/JavaScript, independent of user configuration. */
+  allowLocalProgramExecution?: boolean;
   renderPreview?: (input: Parameters<typeof renderFilePreview>[0]) => Promise<FilePreviewResult>;
 };
 
 export type ResolvedNodeFileWorkspaceHost = Required<Pick<NodeFileWorkspaceHost, 'artifactsRoot' | 'converter' | 'downloader' | 'renderPreview'>> & {
   artifactUrl: NodeArtifactUrlResolver;
   officeGenerationMode: 'auto' | 'javascript' | 'uno';
+  allowLocalProgramExecution: boolean;
   dispose(): Promise<void>;
 };
 
@@ -52,6 +56,7 @@ export function resolveNodeFileWorkspaceHost(options: NodeFileWorkspaceHost): Re
     converter,
     downloader,
     officeGenerationMode,
+    allowLocalProgramExecution: options.allowLocalProgramExecution !== false,
     renderPreview,
     async dispose() {
       await Promise.all([
@@ -75,6 +80,13 @@ export function currentNodeFileWorkspaceHost() {
     defaultNodeFileWorkspaceHost = resolveNodeFileWorkspaceHost({ artifactsRoot });
   }
   return defaultNodeFileWorkspaceHost;
+}
+
+export function assertOfficeProgramExecutionAllowed(generator: 'html' | 'javascript' | 'uno' | undefined) {
+  if (!currentNodeFileWorkspaceHost().allowLocalProgramExecution && generator !== 'html') {
+    throw new CodedError(ERROR_CODES.FILE_ACTION_UNAVAILABLE,
+      'Local Python/JavaScript document execution is disabled by the host. Create static HTML documents or use an independent remote sandbox for scripted Office generation.');
+  }
 }
 
 export async function disposeDefaultNodeFileWorkspace() {

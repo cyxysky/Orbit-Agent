@@ -3,6 +3,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const http = require('node:http');
 const { setTimeout: delay } = require('node:timers/promises');
+const { selfBootstrapEnabled } = require('./self-bootstrap-policy.cjs');
 
 function retryableProbeError(error) {
   return ['ECONNRESET', 'ETIMEDOUT', 'EPIPE', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT'].includes(error?.code);
@@ -36,6 +37,7 @@ function probeRunner(url, token) {
 }
 
 function managedRunnerUrl(environment) {
+  if (!selfBootstrapEnabled()) return undefined;
   if (environment.AGENT_CODE_SANDBOX_ENABLED !== 'true'
     || (environment.AGENT_CODE_SANDBOX_BACKEND || 'remote') !== 'remote') return undefined;
   let url;

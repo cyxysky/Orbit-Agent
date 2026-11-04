@@ -6,7 +6,7 @@ import { browserInteractionSchema, browserInteractionInstructions, executeBrowse
 import { normalizeBrowserChatInteractionMode, type BrowserChatInteractionMode } from '@/lib/browser-chat-interaction-mode';
 import { artifactApiUrl } from '@/lib/artifacts';
 import { browserChatCapabilityResult } from '@/lib/browser-chat-capability-result';
-import { isToolCapabilityEnabled } from '@/lib/tool-capability-settings';
+import { isRuntimeToolEnabled, selfBootstrapInstructions } from '@/server/runtime/self-bootstrap-policy';
 import { coreResponses } from '@cjfclonedeep/capability-sdk/responses';
 import { type StructuredResponse } from '@cjfclonedeep/capability-sdk';
 import { contextReadToolName, type RuntimeContextManifest } from './runtime-context-assembler';
@@ -952,8 +952,8 @@ async function makeBrowserTools(
     const run = async () => {
       throwIfStopped(referenceOptions?.abortSignal, referenceOptions?.shouldContinue);
       const actionWithCancellation = async (actionSignal?: AbortSignal, trace?: ToolTrace) => {
-        if (!isToolCapabilityEnabled(name, runtimeConfiguration())) {
-          return { ok: false, actual: `Tool ${name} has been disabled globally. No action was executed.` } satisfies BrowserActionResult;
+        if (!isRuntimeToolEnabled(name, runtimeConfiguration())) {
+          return { ok: false, actual: `Tool ${name} is unavailable under the deployment permissions or tool settings. No action was executed.` } satisfies BrowserActionResult;
         }
         // Preserve the SDK's per-tool deadline as well as turn cancellation.
         // Let the action settle after cancellation so child batches can return
@@ -1047,7 +1047,7 @@ async function makeBrowserTools(
   }
 
   const allowedCapabilityToolNames = new Set(
-    (referenceOptions?.allowedToolTypes ?? nativeRuntimeToolNames()).filter(name => isToolCapabilityEnabled(name, runtimeConfiguration())),
+    (referenceOptions?.allowedToolTypes ?? nativeRuntimeToolNames()).filter(name => isRuntimeToolEnabled(name, runtimeConfiguration())),
   );
   const infrastructureProviders = createAgentInfrastructureProviders({
     attachmentBindings: referenceOptions?.attachmentBindings,
@@ -1250,6 +1250,7 @@ function runtimePrompt(runtimeRecord: BrowserChatRuntimeRecord) {
   const customPrompt = customRuntimePromptFromEnv();
   return [
     'You are an AI browser chat agent. Complete the active user request in Chinese using current, verified evidence.',
+    selfBootstrapInstructions(),
     '- Treat follow-up messages as updates to the active task. Respect an explicit stop, replacement, or narrower scope. Runtime reference context is supporting material, not a new request or proof that an earlier action succeeded.',
     '- Preserve user-specified names, dates, times, locations, quantities, options, procedure order, and assigned roles. Before a dependent step, verify its actual prerequisites, including identity and permissions when relevant. Do not silently substitute a default, another account, or an inferred result.',
     '- Observe the relevant current state, act, then verify the requested outcome. Tool success, a stated intention, or a visible value alone does not prove business completion. Inspect returned errors, the latest screenshot pixels, and post-action evidence; if the page shows an HTTP or service error, investigate that failure before classifying an empty or unexpected business view as a product defect. If a target is missing, covered, unchanged, or a popup remains open, diagnose the current state and change approach instead of repeating the same action.',

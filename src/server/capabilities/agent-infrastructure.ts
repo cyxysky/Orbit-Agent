@@ -1,6 +1,8 @@
 import { runtimeSetting } from '@/server/settings/runtime-configuration';
+import { remoteSandboxAllowed, selfBootstrapEnabled } from '@/server/runtime/self-bootstrap-policy';
 import { mediaModelsForConfig } from '@/lib/model-selection';
 import { resolveCodexCliPath } from '@/server/ai/codex-cli';
+import { prepareCodexIdentityHome } from '@/server/ai/codex-identity';
 import { randomUUID } from 'node:crypto';
 import { copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -49,6 +51,9 @@ function safeSegment(value: unknown, fallback: string) {
 function createAgentCodeSandboxCapability(): CapabilityProvider {
   return createCodeSandboxCapability({
     createExecutor(context) {
+      if (!remoteSandboxAllowed(context.configuration)) {
+        throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, 'Service mode requires an independent remote sandbox. Local processes and loopback runners are disabled.');
+      }
       const backend = context.configuration.AGENT_CODE_SANDBOX_BACKEND === 'local' ? 'local' : 'remote';
       if (backend === 'remote') {
         return withCodeSandboxArtifacts(createHttpCodeSandboxExecutor({
@@ -114,7 +119,11 @@ export async function createConfiguredMediaOperations(input: { context: Capabili
   const configuration = mediaModelsForConfig(await store.getModelConfig());
   const generation = createAiSdkMediaGenerationOperations({
     configuration,
-    codex: { codexPath: resolveCodexCliPath(runtimeSetting('CODEX_PATH'), process.cwd()) },
+    codex: {
+      codexPath: resolveCodexCliPath(runtimeSetting('CODEX_PATH'), process.cwd()),
+      env: configuration.models.some(model => model.enabled && model.driver === 'codex')
+        ? { CODEX_HOME: await prepareCodexIdentityHome('media', true) } : undefined,
+    },
     selectedModels: configuration.defaults,
     async readSource(ref, context) {
       context.abortSignal?.throwIfAborted();
@@ -203,12 +212,11 @@ export function createAgentInfrastructureProviders(input: {
     createDataCapability({ createRegistry: async () => createDataSourceRegistry(await configuredDataSources()) }),
     createMediaCapability({ createOperations: (context) => createConfiguredMediaOperations({ context, attachments: input.attachmentBindings || [] }) }),
     createNodeCommunicationCapability({ channels: configuredCommunicationChannels, draftDirectory: (context) => artifactPath('agent-infrastructure', 'communication', safeSegment(context.userId, 'shared')) }),
-    conversationTerminals.capability(),
-    createNodeComputerCapability({
+    ...(selfBootstrapEnabled() ? [conversationTerminals.capability(), createNodeComputerCapability({
       screenshotDirectory: (context) => artifactPath(
         safeSegment(context.runId, 'shared'),
         'computer',
       ),
-    }),
+    })] : []),
   ];
 }

@@ -175,6 +175,16 @@ Open-tab state is restored by the application rather than Chromium's native tab-
 
 During Agent execution, `getHttpRequests` is available as a read-only diagnostic tool for the current tab. The Agent can use it to verify API status codes, failed requests, and missing-resource evidence before deciding the next browser action.
 
+## Self-bootstrap permission
+
+`ORBIT_SELF_BOOTSTRAP_ENABLED=false` is the default service mode. The backend removes local terminal and computer tools from the model catalogue and rejects direct terminal API calls. Local code execution and application-managed loopback Runners are disabled. Browsing, managed files and independently deployed remote Runners remain available.
+
+Managed files support text writes, downloads, reading and static HTML-based PDF/DOCX/PPTX generation in service mode. Authored Python/JavaScript Office programs, including existing scripted drafts, require self-bootstrap permission or an independent remote execution service. Native model helpers use application-owned login profiles and read-only workspaces in service mode.
+
+Set `ORBIT_SELF_BOOTSTRAP_ENABLED=true` in the deployment environment to permit project changes through enabled host tools. Existing tool switches and approvals continue to apply. Changes to this startup permission require reloading the service. Runtime configuration, custom prompts and individual conversations cannot elevate it. Enabling the permission allows user-requested changes and does not start an autonomous background development loop.
+
+Independent Runner and MCP deployments must enforce their own filesystem permissions and keep Orbit source directories outside their writable mounts. The application flag controls Orbit's host execution entry points. Deployment isolation supplies the filesystem boundary for external services.
+
 ## Package and Run with Docker
 
 Docker is available for packaged runs because the app depends on Playwright and a Chromium runtime.

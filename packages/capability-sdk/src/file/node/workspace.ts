@@ -9,7 +9,7 @@ import { officeValidationRepairHints } from './workspace-result.ts';
 export { officeValidationRepairHints, formatFileArtifactResult } from './workspace-result.ts';
 import { loadDraft, saveDraft, saveWorkingDraft, withDraftLock, requireDocumentId, DOCUMENT_ID_PATTERN, artifactDir, sanitizeFileName, draftProgramPath } from './workspace-draft-store.ts';
 
-import { currentNodeFileWorkspaceHost, resolveNodeFileWorkspaceHost, type ResolvedNodeFileWorkspaceHost, type NodeFileWorkspaceHost, nodeFileWorkspaceHost } from './workspace-host.ts';
+import { assertOfficeProgramExecutionAllowed, currentNodeFileWorkspaceHost, resolveNodeFileWorkspaceHost, type ResolvedNodeFileWorkspaceHost, type NodeFileWorkspaceHost, nodeFileWorkspaceHost } from './workspace-host.ts';
 export { type NodeFileWorkspaceHost, disposeDefaultNodeFileWorkspace } from './workspace-host.ts';
 import { sourceUnitsForDraft, applyUnoDraftPatchHunks, applyUnoDraftReplacements, synchronizeSourceUnits, isolateSourceUnit, replaceSourceUnit, draftSourceLineCount, normalizedDraftSource, type ParsedSourceUnit, sourceDigest, type UnoDraftPatchResult, normalizedSourceUnitPath } from './workspace-source-editor.ts';
 export { sourceUnitsForDraft, applyUnoDraftPatch, type UnoDraftPatchHunkFailure, type UnoDraftPatchResult, applyUnoDraftPatchHunks, applyUnoDraftReplacements } from './workspace-source-editor.ts';
@@ -227,9 +227,15 @@ const javascriptOfficeExtensions = new Set(['.docx', '.pptx', '.xlsx', '.pdf']);
 
 function configuredOfficeGenerator(fileName: string, operation: 'create' | 'modify'):
   OfficeDocumentDraft['generator'] {
+  const extension = path.extname(fileName).toLowerCase();
+  if (!currentNodeFileWorkspaceHost().allowLocalProgramExecution) {
+    const generator = operation === 'create' && javascriptOfficeExtensions.has(extension)
+      && extension !== '.xlsx' ? 'html' : 'uno';
+    assertOfficeProgramExecutionAllowed(generator);
+    return generator;
+  }
   if (operation === 'modify') return 'uno';
   const configured = currentNodeFileWorkspaceHost().officeGenerationMode;
-  const extension = path.extname(fileName).toLowerCase();
   if (configured === 'javascript') {
     if (!javascriptOfficeExtensions.has(extension)) {
       throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'JavaScript Office generation supports .pptx, .docx, .xlsx, and PDF from HTML. Select UNO mode for binary Office or OpenDocument output.');
@@ -1151,6 +1157,7 @@ async function generateValidatedDraftCandidate(input: {
   abortSignal?: AbortSignal;
   onProgress?: (progress: FileGenerationProgress) => void | Promise<void>;
 }): Promise<Omit<ValidatedDraftCandidate, 'validation'>> {
+  assertOfficeProgramExecutionAllowed(input.draft.generator);
   if (!input.draft.program) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `Office draft ${input.draft.documentId} has no source yet; call action=generate first.`);
   // Execute the candidate from an isolated source file. The committed
   // workspace is only replaced after every validation gate succeeds.
@@ -1230,6 +1237,7 @@ async function prepareValidatedDraft(input: {
   abortSignal?: AbortSignal;
   onProgress?: (progress: FileGenerationProgress) => void | Promise<void>;
 }): Promise<ValidatedDraftCandidate> {
+  assertOfficeProgramExecutionAllowed(input.draft.generator);
   if (!input.draft.program) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `Office draft ${input.draft.documentId} has no source yet; call action=generate first.`);
   try {
     await beginOfficeValidation(input.draft);
@@ -1454,6 +1462,7 @@ async function validateDraftSourceUnit(input: {
   abortSignal?: AbortSignal;
   onProgress?: (progress: FileGenerationProgress) => void | Promise<void>;
 }): Promise<FileArtifactOperationResult> {
+  assertOfficeProgramExecutionAllowed(input.draft.generator);
   const extension = path.extname(input.draft.fileName).toLowerCase();
   const suffix = randomUUID();
   const directory = artifactDir(input.runId, 'document-drafts');

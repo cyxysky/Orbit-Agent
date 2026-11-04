@@ -14,6 +14,11 @@ import { filterSensitiveData } from '@/server/capabilities/sensitive-data';
 import { normalizeToolInputSchemas } from '@/server/ai/tool-input-schema';
 import { normalizeRuntimeCacheUsage } from '@/server/ai/agents/runtime-prompt-cache';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+import { selfBootstrapEnabled } from '@/server/runtime/self-bootstrap-policy';
+import { appDataRoot } from '@/server/storage/paths';
+import { mkdir } from 'node:fs/promises';
+import path from 'node:path';
+import { prepareCodexIdentityHome } from './codex-identity';
 
 
 ensureAiSdkTelemetryRegistered();
@@ -377,39 +382,57 @@ export function getModelSettings() {
 function getCodexModel(model: string): GenerateTextModel {
   const projectRoot = process.cwd();
   const codexPath = resolveCodexCliPath(runtimeSetting('CODEX_PATH'), projectRoot);
-  const cwd = runtimeSetting("CODEX_CWD") || projectRoot;
-  const approvalMode = parseApprovalMode(runtimeSetting('CODEX_APPROVAL_MODE')) || 'on-request';
-  const sandboxMode = parseSandboxMode(runtimeSetting('CODEX_SANDBOX_MODE')) || 'workspace-write';
+  const selfBootstrap = selfBootstrapEnabled();
+  const cwd = selfBootstrap ? runtimeSetting('CODEX_CWD') || projectRoot : path.join(appDataRoot(), 'codex', 'model-workspace');
+  const approvalMode = selfBootstrap ? parseApprovalMode(runtimeSetting('CODEX_APPROVAL_MODE')) || 'on-request' : 'untrusted';
+  const sandboxMode = selfBootstrap ? parseSandboxMode(runtimeSetting('CODEX_SANDBOX_MODE')) || 'workspace-write' : 'read-only';
   const effort = parseReasoningEffort(currentReasoningEffort()) || 'medium';
   const verbose = runtimeSetting("CODEX_VERBOSE") === 'true';
+  const configOverrides = selfBootstrap ? undefined : {
+    'features.shell_tool': false,
+    'features.unified_exec': false,
+    'features.computer_use': false,
+    'features.apps': false,
+    'features.multi_agent': false,
+    web_search: 'disabled',
+  };
 
-  return lazyLanguageModel('codex', model, () => import('ai-sdk-provider-codex-cli').then((provider) => (
-    runtimeSetting("CODEX_TRANSPORT") === 'exec' || runtimeSetting("CODEX_PROVIDER_MODE") === 'exec'
+  return lazyLanguageModel('codex', model, async () => {
+    await mkdir(cwd, { recursive: true });
+    const environment = selfBootstrap ? undefined : { CODEX_HOME: await prepareCodexIdentityHome('auxiliary-model', true) };
+    const provider = await import('ai-sdk-provider-codex-cli');
+    return (
+      runtimeSetting('CODEX_TRANSPORT') === 'exec' || runtimeSetting('CODEX_PROVIDER_MODE') === 'exec'
       ? provider.createCodexCli({
           defaultSettings: {
             codexPath,
             cwd,
+            env: environment,
             approvalMode,
             sandboxMode,
             reasoningEffort: effort,
             verbose,
             skipGitRepoCheck: runtimeSetting("CODEX_SKIP_GIT_REPO_CHECK") !== 'false',
-            allowNpx: runtimeSetting("CODEX_ALLOW_NPX") === 'true',
+            allowNpx: selfBootstrap && runtimeSetting('CODEX_ALLOW_NPX') === 'true',
+            configOverrides,
           },
         })(model) as unknown as LoadedLanguageModel
       : provider.createCodexAppServer({
           defaultSettings: {
             codexPath,
             cwd,
+            env: environment,
             approvalPolicy: approvalMode,
             sandboxPolicy: sandboxMode,
             effort,
             verbose,
             minCodexVersion: '0.144.0',
             threadMode: 'stateless',
+            configOverrides,
           },
         })(model) as unknown as LoadedLanguageModel
-  )));
+    );
+  });
 }
 
 function normalizeProvider(value: string | undefined): AiProvider {

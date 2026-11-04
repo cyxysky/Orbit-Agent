@@ -1,14 +1,13 @@
 import { runtimeSetting } from '@/server/settings/runtime-configuration';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { createReadStream, createWriteStream, existsSync } from 'node:fs';
-import { mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { mkdir, realpath, rename, rm } from 'node:fs/promises';
 import { pipeline } from 'node:stream/promises';
 import { createHash, randomUUID } from 'node:crypto';
-import { homedir } from 'node:os';
 import path from 'node:path';
 import { resolveCodexCliPath } from './codex-cli';
-import { appDataRoot } from '@/server/storage/paths';
+import { prepareCodexIdentityHome } from './codex-identity';
 import { startCodexResponsesBridge, type CodexModelEvent } from './codex-responses-bridge';
 import { getModelSettings, type ModelSettingsOverride } from './model';
 import { aiRuntimeRequestTimeoutMs } from './ai-sdk-runtime';
@@ -232,24 +231,11 @@ export async function openCodexAppServer(input: { userId?: string; sessionId: st
   onModelEvent?: (event: CodexModelEvent) => void | Promise<void> }) {
   const settings = getModelSettings();
   const identity = createHash('sha256').update(input.userId || 'local').digest('hex').slice(0, 24);
-  const codexHome = path.join(appDataRoot(), 'codex', identity);
+  const native = settings.provider === 'codex';
+  const codexHome = await prepareCodexIdentityHome(identity, native);
   const cwd = path.join(codexHome, 'workspaces', createHash('sha256').update(`${input.sessionId}:${input.scope}`).digest('hex').slice(0, 24));
   await mkdir(cwd, { recursive: true });
   const env: NodeJS.ProcessEnv = { ...process.env, CODEX_HOME: codexHome };
-  const native = settings.provider === 'codex';
-  if (native) {
-    const authPath = path.join(process.env.CODEX_HOME || path.join(homedir(), '.codex'), 'auth.json');
-    if (existsSync(authPath)) {
-      const auth = await readFile(authPath);
-      const digest = createHash('sha256').update(auth).digest('hex');
-      const marker = path.join(codexHome, 'auth-source.sha256');
-      const copied = await readFile(marker, 'utf8').catch(() => '');
-      if (copied !== digest || !existsSync(path.join(codexHome, 'auth.json'))) {
-        await writeFile(path.join(codexHome, 'auth.json'), auth, { mode: 0o600 });
-        await writeFile(marker, digest);
-      }
-    }
-  }
   const bridge = native ? undefined : await startCodexResponsesBridge({ ...settings, sessionId: input.sessionId,
     reasoningEffort: currentReasoningEffort() } as ModelSettingsOverride, input.onModelEvent, input.hostTools);
   const config: CodexRecord = {

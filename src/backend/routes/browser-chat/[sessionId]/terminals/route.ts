@@ -6,9 +6,13 @@ import { requestApplicationUserId } from '@/server/auth/user-context';
 import { ApiRequestError, apiError } from '@/server/http/api-request';
 import type { BrowserChatSessionRouteContext } from '@/server/http/browser-chat-route';
 import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+import { isRuntimeToolEnabled } from '@/server/runtime/self-bootstrap-policy';
 
 
 async function authorizedManager(request: Request, context: BrowserChatSessionRouteContext) {
+  if (!isRuntimeToolEnabled('terminal', runtimeConfiguration())) {
+    throw new ApiRequestError('当前部署已禁用本地终端。', { status: 403 });
+  }
   const { sessionId } = await context.params;
   const userId = requestApplicationUserId(request);
   const session = await queryDatabaseOne<{ status: string }>(

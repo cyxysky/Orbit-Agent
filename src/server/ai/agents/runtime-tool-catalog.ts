@@ -1,7 +1,8 @@
 import { runtimeConfiguration } from '@/server/settings/runtime-configuration';
 import { capabilityRuntimeToolCatalog, hiddenRuntimeToolCatalog, hiddenRuntimeSkillIds } from './hidden-runtime-skills';
 import { normalizeDisabledBrowserChatTools } from '@/lib/browser-chat-tools';
-import { globallyDisabledCapabilityTools, isToolCapabilityEnabled, toolCapabilitySettings, type ToolCapabilityEnvironment } from '@/lib/tool-capability-settings';
+import { toolCapabilitySettings, type ToolCapabilityEnvironment } from '@/lib/tool-capability-settings';
+import { isRuntimeToolEnabled } from '@/server/runtime/self-bootstrap-policy';
 
 // Internal instructions shared with the runtime tool definitions.
 export const runtimeBuiltinToolPrompts = {
@@ -72,7 +73,7 @@ const prompts: Record<string, string[]> = {
 
 export function nativeRuntimeToolNames() {
   return [...new Set([...hiddenRuntimeToolCatalog().map((tool) => tool.name), ...Object.keys(runtimeBuiltinToolPrompts)])]
-    .filter(name => isToolCapabilityEnabled(name, runtimeConfiguration()));
+    .filter(name => isRuntimeToolEnabled(name, runtimeConfiguration()));
 }
 
 const capabilityToolNames = new Set(capabilityRuntimeToolCatalog().map((tool) => tool.name));
@@ -83,12 +84,13 @@ export function normalizeDisabledCapabilityTools(value: unknown) {
 
 /** Runtime-only union; never persist this list as the user's session preferences. */
 export function effectiveDisabledCapabilityTools(value: unknown, env: ToolCapabilityEnvironment = runtimeConfiguration()) {
-  return [...new Set([...normalizeDisabledCapabilityTools(value), ...globallyDisabledCapabilityTools(env)])].sort();
+  const disabled = toolCapabilitySettings.filter(tool => !isRuntimeToolEnabled(tool.name, env)).map(tool => tool.name);
+  return [...new Set([...normalizeDisabledCapabilityTools(value), ...disabled])].sort();
 }
 
 export function browserChatCapabilityToolCatalog(env: ToolCapabilityEnvironment = runtimeConfiguration()) {
   const tools = capabilityRuntimeToolCatalog();
-  return [...new Map(tools.map((tool) => [tool.name, tool])).values()].filter(tool => isToolCapabilityEnabled(tool.name, env)).map((tool) => ({
+  return [...new Map(tools.map((tool) => [tool.name, tool])).values()].filter(tool => isRuntimeToolEnabled(tool.name, env)).map((tool) => ({
     name: tool.name, label: help.get(tool.name)?.label || tool.label, description: help.get(tool.name)?.description || tool.description,
     prompts: prompts[tool.name] || [],
     available: true,

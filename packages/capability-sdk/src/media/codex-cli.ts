@@ -7,7 +7,7 @@ import type { MediaModelConfig } from './models.ts';
 import { CodedError, ERROR_CODES } from '../errors.ts';
 
 
-export type CodexImageOptions = { codexPath?: string };
+export type CodexImageOptions = { codexPath?: string; env?: Record<string, string> };
 
 const completedImage = z.object({
   method: z.literal('item/completed'),
@@ -25,7 +25,7 @@ function isImage(bytes: Uint8Array) {
     || (data.toString('ascii', 0, 4) === 'RIFF' && data.toString('ascii', 8, 12) === 'WEBP');
 }
 
-async function imageBytes(item: z.infer<typeof completedImage>['params']['item'], directory: string, signal: AbortSignal) {
+async function imageBytes(item: z.infer<typeof completedImage>['params']['item'], directory: string, signal: AbortSignal, codexHome = process.env.CODEX_HOME) {
   const base64 = item.result.replace(/^data:image\/[a-z0-9.+-]+;base64,/i, '');
   if (base64 && /^[A-Za-z0-9+/]+={0,2}$/.test(base64)) {
     if (base64.length > Math.ceil(maxImageBytes / 3) * 4) throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, 'Codex image exceeds 50 MB.');
@@ -35,7 +35,7 @@ async function imageBytes(item: z.infer<typeof completedImage>['params']['item']
   if (item.savedPath) {
     const file = await realpath(path.resolve(directory, item.savedPath));
     // Native imageGeneration items can point into CODEX_HOME/generated_images.
-    const roots = await Promise.all([directory, path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'generated_images')]
+    const roots = await Promise.all([directory, path.join(codexHome || path.join(os.homedir(), '.codex'), 'generated_images')]
       .map((root) => realpath(root).catch(() => undefined)));
     const inside = roots.some((root) => {
       if (!root) return false;
@@ -63,7 +63,7 @@ export function createCodexImageModel(model: MediaModelConfig, options: CodexIma
       const { createCodexAppServer } = await import('ai-sdk-provider-codex-cli');
       const directory = await mkdtemp(path.join(os.tmpdir(), 'webpilot-codex-image-'));
       const provider = createCodexAppServer({ defaultSettings: {
-        codexPath: options.codexPath, cwd: directory,
+        codexPath: options.codexPath, cwd: directory, env: options.env,
         approvalPolicy: 'never', sandboxPolicy: 'workspace-write',
         threadMode: 'stateless', minCodexVersion: '0.142.0',
         requestTimeoutMs: Math.min(model.timeoutMs, 30_000), logger: false,
@@ -71,6 +71,7 @@ export function createCodexImageModel(model: MediaModelConfig, options: CodexIma
         configOverrides: {
           'features.image_generation': true,
           'features.shell_tool': false,
+          'features.unified_exec': false,
           'features.multi_agent': false,
           'features.apps': false,
           web_search: 'disabled',
@@ -117,7 +118,7 @@ export function createCodexImageModel(model: MediaModelConfig, options: CodexIma
             if (!parsed.success) continue;
             const item = parsed.data.params.item;
             if (item.status !== 'completed') throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, `Codex image generation ${item.status}.`);
-            if (!images.has(item.id)) images.set(item.id, await imageBytes(item, directory, signal));
+            if (!images.has(item.id)) images.set(item.id, await imageBytes(item, directory, signal, options.env?.CODEX_HOME));
           }
         } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
         signal.throwIfAborted();
