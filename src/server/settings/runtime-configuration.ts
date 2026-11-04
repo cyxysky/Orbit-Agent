@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { defaultModelByProvider, defaultModelProviderSettings, isModelProvider, migrateRuntimeSettingValue, modelProviderDefinition, modelProviderDefinitionsForConfig, openAICompatibleProviderIndex, runtimeSettingDefinitions } from '@/config/settings';
+import { defaultModelByProvider, defaultModelProviderSettings, isModelProvider, migrateRuntimeSettingValue, modelProviderDefinition, modelProviderDefinitionsForConfig, openAICompatibleProviderIndex } from '@/config/settings';
 import type { ModelConfigRecord, ModelProvider, RuntimeSettingRecord } from '@/server/ai/schemas/runtime.schema';
+import { configurationDefinitions } from './settings-registry';
 
 export type RuntimeConfiguration = Readonly<Record<string, string | undefined>>;
 type ConfigurationState = {
@@ -11,7 +12,7 @@ type ConfigurationState = {
 };
 const root = globalThis as typeof globalThis & { __orbitRuntimeConfiguration?: ConfigurationState };
 function defaultConfiguration() {
-  const values: Record<string, string | undefined> = Object.fromEntries(runtimeSettingDefinitions.map(item => [item.key, item.defaultValue]));
+  const values: Record<string, string | undefined> = Object.fromEntries(configurationDefinitions().map(item => [item.key, item.defaultValue]));
   // Container/service topology remains deployment configuration. Saved tool
   // settings may override these connection defaults without restarting Orbit.
   if (process.env.ORBIT_CODE_SANDBOX_SERVICE_URL) {

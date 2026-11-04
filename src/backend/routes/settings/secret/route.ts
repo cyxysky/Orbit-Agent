@@ -1,6 +1,6 @@
 import { runtimeSetting } from '@/server/settings/runtime-configuration';
 import { z } from 'zod';
-import { runtimeSettingDefinitions } from '@/config/settings';
+import { configurationDefinitions } from '@/server/settings/settings-registry';
 import { store } from '@/server/db/store';
 import { ApiRequestError, apiError, apiJson, parseJsonRequest } from '@/server/http/api-request';
 import { requestHasAdminSettingsAccess } from '@/server/settings/admin-settings-access';
@@ -26,7 +26,7 @@ export async function POST(request: Request) {
       value = Object.entries((await store.getModelConfig())?.providers || {})
         .find(([provider]) => provider === source.provider)?.[1]?.apiKey;
     } else if (source.kind === 'runtime') {
-      const definition = runtimeSettingDefinitions.find(item => item.key === source.key && item.secret);
+      const definition = configurationDefinitions().find(item => item.key === source.key && (item.secret || item.control === 'secret'));
       if (definition) value = (await store.listRuntimeSettings()).find(item => item.key === source.key)?.value
         ?? runtimeSetting(source.key) ?? definition.defaultValue;
     } else {

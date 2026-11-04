@@ -1,14 +1,12 @@
 import { z } from 'zod';
+import { categorySchema, integrationSchema, saveIntegrationSettings } from '@/server/settings/integration-settings';
 import {
   deleteExternalIntegration,
   listExternalIntegrations,
-  resolveExternalIntegration,
-  upsertExternalIntegration,
 } from '@/server/integrations/external-integration-vault';
 import {
   listExternalIntegrationDrivers,
   publicExternalIntegrationSummary,
-  resolveExternalIntegrationConfiguration,
 } from '@/server/integrations/external-integration-drivers';
 import { ApiRequestError, apiError, apiJson, parseJsonRequest } from '@/server/http/api-request';
 import { requestHasAdminSettingsAccess } from '@/server/settings/admin-settings-access';
@@ -16,21 +14,6 @@ import { requestApplicationUserId } from '@/server/auth/user-context';
 import { refreshCommunicationRuntime, startCommunicationRuntime } from '@/server/integrations/communication-runtime';
 import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 
-
-const categorySchema = z.enum(['connector', 'communication', 'data']);
-const configurationSchema = z.record(z.string().max(100), z.string().max(20_000)).refine(
-  (value) => Object.keys(value).length <= 50,
-  '配置字段过多。',
-);
-const integrationSchema = z.object({
-  id: z.string().uuid().optional(),
-  category: categorySchema,
-  driverId: z.string().trim().min(2).max(100),
-  name: z.string().trim().min(1).max(200),
-  configuration: configurationSchema,
-  clearFields: z.array(z.string().trim().min(1).max(100)).max(50).optional(),
-  enabled: z.boolean(),
-}).strict();
 
 function requireAdmin(request: Request) {
   if (!requestHasAdminSettingsAccess(request)) {
@@ -58,34 +41,7 @@ export async function POST(request: Request) {
   try {
     requireAdmin(request);
     const body = await parseJsonRequest(request, integrationSchema, { maxBytes: 128 * 1024 });
-    const existing = body.id ? await resolveExternalIntegration(body.id) : undefined;
-    if (body.id && !existing) {
-      throw new ApiRequestError('外部集成不存在。', { code: ERROR_CODES.INTEGRATION_NOT_FOUND, status: 404 });
-    }
-    const configuration = resolveExternalIntegrationConfiguration({
-      driverId: body.driverId,
-      category: body.category,
-      configuration: {
-        ...body.configuration,
-        ...(body.driverId === 'wecom-aibot-mcp' ? { ownerUserId: existing?.configuration.ownerUserId || requestApplicationUserId(request) } : {}),
-      },
-      clearFields: body.clearFields,
-      existing,
-    });
-    if (body.driverId === 'wecom-aibot-mcp' && configuration.botId) {
-      const duplicate = (await listExternalIntegrations('communication')).find(item => item.id !== body.id
-        && item.driverId === body.driverId && item.configuration.botId === configuration.botId);
-      if (duplicate) throw new ApiRequestError('此机器人已配置到另一个渠道，请修改已有渠道，避免长连接互相断开。');
-    }
-    const item = await upsertExternalIntegration({
-      id: body.id,
-      category: body.category,
-      driverId: body.driverId,
-      name: body.name,
-      configuration,
-      enabled: body.enabled,
-    });
-    await refreshCommunicationRuntime();
+    const item = await saveIntegrationSettings(body, requestApplicationUserId(request));
     return apiJson(request, { ok: true, item: publicExternalIntegrationSummary(item) });
   } catch (error) {
     return apiError(request, error, { fallback: '保存外部集成失败' });

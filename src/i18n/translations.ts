@@ -3,6 +3,16 @@ import type { Language } from '@/i18n/language';
 export type { Language } from '@/i18n/language';
 
 const en: Record<string, string> = {
+  '显示模式': 'Appearance mode',
+  '选择浅色或深色界面。': 'Choose a light or dark interface.',
+  '浅色': 'Light',
+  '深色': 'Dark',
+  '设置侧边栏中的品牌前缀。': 'Set the brand prefix shown in the sidebar.',
+  '设置侧边栏中显示的产品名称。': 'Set the product name shown in the sidebar.',
+  '工具开关': 'Tool switches',
+  '配置管理': 'Configuration management',
+  '查询配置描述和当前值，自举开启时按权限修改和注册配置。': 'Query settings schemas and values. Update and register settings when self-bootstrap is enabled and permissions allow.',
+  '启用的工具可在每个对话中单独选择；关闭后，该工具将从对话工具列表中移除，也不会提供给 AI。': 'Enabled tools can be selected in each conversation. Turning a tool off removes it from the conversation tool list and from AI access.',
   '按内容筛选': 'Filter by content',
   '包含以下内容': 'Contains',
   '筛选内容': 'Filter value',

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { configurationCapabilityManifest } from '@/config/configuration-capability';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 import { browserInteractionSkill } from './runtime-browser-interaction';
 import type { BrowserActionResult } from '@cjfclonedeep/capability-sdk/browser/node';
@@ -27,6 +28,7 @@ function manifestRuntimeSkill(manifest: { id: string; skills?: readonly Capabili
 
 const browserRuntimeSkill = browserInteractionSkill;
 const capabilityRuntimeSkills = [
+  configurationCapabilityManifest,
   browserCapabilityManifest,
   fileCapabilityManifest,
   chartCapabilityManifest,

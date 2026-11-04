@@ -11,6 +11,7 @@ import {
 } from 'react';
 import { resolveWorkspaceBrand } from './product';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+import { subscribeSettingsPreferences, updateSettingsPreference } from '@/lib/settings-preferences';
 
 
 const PREFIX_STORAGE_KEY = 'orbit.brandPrefix';
@@ -56,20 +57,28 @@ export function WorkspaceBrandProvider({ children }: { children: ReactNode }) {
       }
     };
     syncStoredBrand();
+    const unsubscribePreferences = subscribeSettingsPreferences(values => {
+      const brand = resolveWorkspaceBrand({ prefix: values.UI_BRAND_PREFIX, text: values.UI_BRAND_TEXT });
+      setBrandPrefixState(brand.brandPrefix);
+      setBrandTextState(brand.brandText);
+    });
     window.addEventListener('storage', handleStorage);
-    return () => window.removeEventListener('storage', handleStorage);
+    return () => {
+      unsubscribePreferences();
+      window.removeEventListener('storage', handleStorage);
+    };
   }, []);
 
   const setBrandPrefix = useCallback((value: string) => {
     const nextValue = boundedBrandPart(value);
     setBrandPrefixState(nextValue);
-    window.localStorage.setItem(PREFIX_STORAGE_KEY, nextValue);
+    updateSettingsPreference('UI_BRAND_PREFIX', nextValue);
   }, []);
 
   const setBrandText = useCallback((value: string) => {
     const nextValue = boundedBrandPart(value);
     setBrandTextState(nextValue);
-    window.localStorage.setItem(TEXT_STORAGE_KEY, nextValue);
+    updateSettingsPreference('UI_BRAND_TEXT', nextValue);
   }, []);
 
   const contextValue = useMemo<WorkspaceBrandContextValue>(() => ({

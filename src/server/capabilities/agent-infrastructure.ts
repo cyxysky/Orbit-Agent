@@ -1,4 +1,5 @@
 import { runtimeSetting } from '@/server/settings/runtime-configuration';
+import { createConfigurationCapability } from './configuration';
 import { remoteSandboxAllowed, selfBootstrapEnabled } from '@/server/runtime/self-bootstrap-policy';
 import { mediaModelsForConfig } from '@/lib/model-selection';
 import { resolveCodexCliPath } from '@/server/ai/codex-cli';
@@ -188,6 +189,7 @@ export function createAgentInfrastructureProviders(input: {
   attachmentBindings?: readonly BrowserCodeAttachmentBinding[];
 } = {}): CapabilityProvider[] {
   return [
+    createConfigurationCapability(),
     createAgentCodeSandboxCapability(),
     createNodeConnectorsCapability({ connectors: configuredConnectors }),
     createNodeKnowledgeCapability({ directory: (context) => userKnowledgeDirectory(context.userId) }),

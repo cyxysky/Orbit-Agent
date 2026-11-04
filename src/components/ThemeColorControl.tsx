@@ -6,18 +6,27 @@ import { useI18n } from '@/i18n/I18nProvider';
 import { useTheme } from '@/theme/ThemeProvider';
 import { DEFAULT_THEME_COLOR } from '@/theme/palette';
 
-export function ThemeColorControl() {
+export function ThemeColorControl({ value, onChange, defaultValue = DEFAULT_THEME_COLOR, label = '主题色', disabled }: {
+  value?: string;
+  onChange?: (value: string) => void;
+  defaultValue?: string;
+  label?: string;
+  disabled?: boolean;
+} = {}) {
   const { t } = useI18n();
-  const { color, setColor } = useTheme();
+  const theme = useTheme();
+  const color = value ?? theme.color;
+  const setColor = onChange || theme.setColor;
   const [draft, setDraft] = useState(color);
   useEffect(() => setDraft(color), [color]);
 
   return (
     <div className="settings-control theme-palette-control">
-      <input aria-label={t('主题色')} type="color" value={color} onChange={(event) => setColor(event.target.value)} />
+      <input aria-label={t(label)} disabled={disabled} type="color" value={color} onChange={(event) => setColor(event.target.value)} />
       <AppInput
         aria-label={t('主题色色值')}
         maxLength={7}
+        disabled={disabled}
         onBlur={() => setDraft(color)}
         onChange={(event) => {
           const value = event.target.value;
@@ -32,7 +41,7 @@ export function ThemeColorControl() {
         }}
         value={draft}
       />
-      <button className="ui-button ui-button--neutral" disabled={color === DEFAULT_THEME_COLOR} onClick={() => setColor(DEFAULT_THEME_COLOR)} type="button">
+      <button className="ui-button ui-button--neutral" disabled={disabled || color === defaultValue} onClick={() => setColor(defaultValue)} type="button">
         {t('恢复默认配色')}
       </button>
     </div>

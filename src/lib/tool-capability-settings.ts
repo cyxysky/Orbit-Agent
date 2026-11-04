@@ -1,5 +1,6 @@
 /** Shared settings metadata. Global switches do not replace per-session choices. */
 export const toolCapabilitySettings = [
+  { name: 'configuration', envKey: 'AGENT_TOOL_CONFIGURATION_ENABLED', label: '配置管理', description: '查询配置描述和当前值，自举开启时按权限修改和注册配置。' },
   { name: 'browser', envKey: 'AGENT_TOOL_BROWSER_ENABLED', label: '浏览器', description: '搜索并读取网页、操作页面、检查界面和截图。' },
   { name: 'file', envKey: 'AGENT_TOOL_FILE_ENABLED', label: '文件', description: '下载文件，读取 PDF、Word、Excel、PPT 的文本和表格，以及创建、修改和预览文档。' },
   { name: 'chart', envKey: 'AGENT_TOOL_CHART_ENABLED', label: '图表与画布', description: '创建和更新二维、三维图表，以及可编辑的 Excalidraw 画布。' },
@@ -17,6 +18,11 @@ export const toolCapabilitySettings = [
 
 export type ToolCapabilityName = typeof toolCapabilitySettings[number]['name'];
 export type ToolCapabilityEnvironment = Readonly<Record<string, string | undefined>>;
+export const toolConfigurationTargets: Record<string, string> = {
+  browser: 'capability:browser', file: '文件能力', maps: '地图', codeSandbox: '代码沙箱',
+  connectors: 'integration:connector', knowledge: '知识库', data: 'integration:data',
+  media: '媒体', communication: 'integration:communication', terminal: '本地终端', computer: '计算机',
+};
 export const TOOL_CAPABILITY_SETTINGS_CHANGED_EVENT = 'orbit:tool-capability-settings-changed';
 
 const settingsByName = new Map<string, typeof toolCapabilitySettings[number]>(

@@ -12,10 +12,10 @@ import {
 import { normalizeLanguage, type Language } from '@/i18n/language';
 import { translateText } from '@/i18n/translations';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+import { subscribeSettingsPreferences, updateSettingsPreference } from '@/lib/settings-preferences';
 
 
 const STORAGE_KEY = 'webpilotqa.language';
-const COOKIE_KEY = 'WEBPILOTQA_LANGUAGE';
 type I18nContextValue = {
   language: Language;
   setLanguage: (language: Language) => void;
@@ -34,14 +34,14 @@ export function I18nProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     setLanguageState(readInitialLanguage());
+    return subscribeSettingsPreferences(values => setLanguageState(normalizeLanguage(values.UI_LANGUAGE)));
   }, []);
 
   const setLanguage = useCallback((nextLanguage: Language) => {
     const normalized = normalizeLanguage(nextLanguage);
     setLanguageState(normalized);
     if (typeof window === 'undefined') return;
-    window.localStorage.setItem(STORAGE_KEY, normalized);
-    document.cookie = `${COOKIE_KEY}=${normalized}; path=/; max-age=31536000; SameSite=Lax`;
+    updateSettingsPreference('UI_LANGUAGE', normalized);
   }, []);
 
   const t = useCallback((value: string, params?: Record<string, string | number>) => (

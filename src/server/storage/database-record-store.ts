@@ -13,11 +13,13 @@ import {
 } from '@/server/db/database';
 import { queueDatabaseWrite, type DatabaseWriteStatement } from './database-write-queue';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+import { settingsSchemaMetaKey, validateSettingValue, type RegisteredSetting } from '@/config/settings-schema';
 
 
 type ConfigRecord = {
   runtimeSettings: unknown[];
   modelConfig?: unknown;
+  registeredSettings?: unknown[];
 };
 
 type JsonRow = { record_json: string };
@@ -39,13 +41,16 @@ export async function writeRuntimeMeta(key: string, value: string) {
 }
 
 export async function readConfigRecord(): Promise<ConfigRecord> {
-  const row = await queryDatabaseOne<{ runtime_env_json?: string; model_config_json?: string | null }>(`
-    SELECT runtime_env_json, model_config_json FROM app_config WHERE id = 1
+  const row = await queryDatabaseOne<{ runtime_env_json?: string; model_config_json?: string | null; settings_schema_json?: string }>(`
+    SELECT runtime_env_json, model_config_json,
+      (SELECT value FROM runtime_meta WHERE key = 'settings-schema-v1') AS settings_schema_json
+    FROM app_config WHERE id = 1
   `);
   if (!row) return { runtimeSettings: [] };
   return {
     runtimeSettings: parseDatabaseJson<unknown[]>(row.runtime_env_json, []),
     modelConfig: parseDatabaseJson<unknown>(row.model_config_json, undefined),
+    registeredSettings: parseDatabaseJson<unknown[]>(row.settings_schema_json, []),
   };
 }
 
@@ -59,6 +64,17 @@ export async function writeModelConfigRecord(modelConfig: unknown) {
   `, ['[]', JSON.stringify(modelConfig), now()]);
 }
 
+export async function updateModelConfigRecord<T>(update: (current: unknown) => Promise<T>) {
+  return runDatabaseTransaction(async manager => {
+    await executeDatabase('INSERT INTO app_config (id, runtime_env_json, updated_at) VALUES (1, ?, ?) ON CONFLICT(id) DO NOTHING', ['[]', now()], manager);
+    const row = await queryDatabaseOne<{ model_config_json?: string }>(
+      `SELECT model_config_json FROM app_config WHERE id = 1${databaseDriver() === 'postgres' ? ' FOR UPDATE' : ''}`, [], manager);
+    const next = await update(parseDatabaseJson<unknown>(row?.model_config_json, undefined));
+    await executeDatabase('UPDATE app_config SET model_config_json = ?, updated_at = ? WHERE id = 1', [JSON.stringify(next), now()], manager);
+    return next;
+  });
+}
+
 /** Merge only submitted setting keys under the database lock. Model saves and
  * independent settings clients must not overwrite one another's columns. */
 export async function patchRuntimeSettingsRecords(patch: readonly RuntimeSettingRecord[]) {
@@ -67,7 +83,16 @@ export async function patchRuntimeSettingsRecords(patch: readonly RuntimeSetting
     const row = await queryDatabaseOne<{ runtime_env_json: string }>(
       `SELECT runtime_env_json FROM app_config WHERE id = 1${databaseDriver() === 'postgres' ? ' FOR UPDATE' : ''}`, [], manager);
     const values = new Map(parseDatabaseJson<RuntimeSettingRecord[]>(row?.runtime_env_json, []).map(item => [item.key, item]));
-    for (const item of patch) values.set(item.key, item);
+    const registry = await queryDatabaseOne<{ value: string }>('SELECT value FROM runtime_meta WHERE key = ?', [settingsSchemaMetaKey], manager);
+    const definitions = new Map(parseDatabaseJson<RegisteredSetting[]>(registry?.value, []).map(field => [field.key, field]));
+    for (const item of patch) {
+      const definition = definitions.get(item.key);
+      if (item.key.startsWith('PLUGIN_')) {
+        if (!definition) throw new Error(`Unregistered plugin setting ${item.key}.`);
+        validateSettingValue(definition, item.value);
+      }
+      values.set(item.key, { ...item, secret: Boolean(item.secret || values.get(item.key)?.secret || definition?.secret) });
+    }
     const settings = [...values.values()];
     await executeDatabase('UPDATE app_config SET runtime_env_json = ?, updated_at = ? WHERE id = 1', [JSON.stringify(settings), now()], manager);
     return settings;

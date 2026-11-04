@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { DEFAULT_THEME_COLOR, deriveThemePalette, normalizeThemeColor } from './palette';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+import { subscribeSettingsPreferences, updateSettingsPreference } from '@/lib/settings-preferences';
 
 
 const MODE_STORAGE_KEY = 'webpilotqa.themeMode';
@@ -37,6 +38,10 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     setModeState(normalizeThemeMode(window.localStorage.getItem(MODE_STORAGE_KEY)));
     setColorState(normalizeThemeColor(window.localStorage.getItem(COLOR_STORAGE_KEY)));
+    return subscribeSettingsPreferences(values => {
+      setModeState(normalizeThemeMode(values.UI_THEME_MODE));
+      setColorState(normalizeThemeColor(values.UI_THEME_COLOR));
+    });
   }, []);
 
   useEffect(() => {
@@ -58,14 +63,14 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const setColor = useCallback((nextColor: string) => {
     const normalized = normalizeThemeColor(nextColor);
     setColorState(normalized);
-    window.localStorage.setItem(COLOR_STORAGE_KEY, normalized);
+    updateSettingsPreference('UI_THEME_COLOR', normalized);
   }, []);
 
   const setMode = useCallback((nextMode: ThemeMode) => {
     const normalized = normalizeThemeMode(nextMode);
     applyThemeMode(normalized);
     setModeState(normalized);
-    window.localStorage.setItem(MODE_STORAGE_KEY, normalized);
+    updateSettingsPreference('UI_THEME_MODE', normalized);
   }, []);
 
   const toggleMode = useCallback(() => {

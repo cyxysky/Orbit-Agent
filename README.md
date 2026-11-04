@@ -185,6 +185,40 @@ Set `ORBIT_SELF_BOOTSTRAP_ENABLED=true` in the deployment environment to permit 
 
 Independent Runner and MCP deployments must enforce their own filesystem permissions and keep Orbit source directories outside their writable mounts. The application flag controls Orbit's host execution entry points. Deployment isolation supplies the filesystem boundary for external services.
 
+## Configuration registry and model access
+
+Settings fields are described by shared schemas and rendered with shared controls. The catalog includes runtime/context settings, interface preferences, tool switches, provider/model/media forms, and integration driver fields. Interface preferences are stored per user in the database. Existing browser preferences migrate once and remain a startup cache.
+
+`GET /api/settings/configuration` returns the catalog. Authenticated administrators can send `query`, `set`, and `register` requests to the same endpoint. Existing settings endpoints use the same validation and persistence services. Configuration queries mask stored credentials. Sending an empty stored secret preserves its current value.
+
+The model receives the `configuration` capability and its usage instructions. It can query `catalog`, `runtime`, `preferences`, `model`, and `integration`. Global values require administrator identity. Model writes and all field registration require the deployment grant `ORBIT_SELF_BOOTSTRAP_ENABLED=true`. In service mode, model queries remain available and administrators can continue editing existing settings manually. The grant itself stays outside the configuration registry and is fixed for the service process.
+
+For example, the model can register a field with this tool input.
+
+```json
+{
+  "action": "register",
+  "registration": {
+    "namespace": "reports",
+    "fields": [{
+      "key": "PLUGIN_REPORTS_BATCH_SIZE",
+      "label": "Report batch size",
+      "description": "Maximum records processed in a report batch.",
+      "tab": "runtime",
+      "group": "Reports",
+      "control": "number",
+      "defaultValue": "20",
+      "min": 1,
+      "max": 100
+    }]
+  }
+}
+```
+
+The field appears in open Settings pages without editing page markup. Its value can then be changed with `{"action":"set","domain":"runtime","values":{"PLUGIN_REPORTS_BATCH_SIZE":30}}`. Schemas persist in `runtime_meta`, and runtime values persist in `app_config`. Registered fields use a reserved `PLUGIN_<NAMESPACE>_` prefix. Validation checks defaults, current saved values, types, ranges, options, namespace ownership, and secret classifications before committing a schema change.
+
+The saving process publishes changes immediately. Other backend processes refresh their runtime snapshots every second. Open Settings pages refresh schemas and values every three seconds while preserving edits in progress. Model configuration patches merge inside a database transaction, and each capability continues to receive only its declared configuration. A registered data field becomes executable behavior when a capability implementation consumes it.
+
 ## Package and Run with Docker
 
 Docker is available for packaged runs because the app depends on Playwright and a Chromium runtime.

@@ -5,7 +5,6 @@ import {
   Cable,
   CircleCheck,
   Database,
-  FolderOpen,
   Loader2,
   PencilLine,
   Plus,
@@ -15,11 +14,10 @@ import {
   UsersRound,
   X,
 } from 'lucide-react';
-import { AppInput } from '@/components/ui/app-input';
-import { SecretInput } from '@/components/ui/secret-input';
+import { SettingsFieldControl, useSettingsForms } from '@/components/SettingsFields';
+import { integrationDriverForm, integrationPanels } from '@/config/integration-settings';
 import { AppModal } from '@/components/ui/app-modal';
 import { ConfirmDeleteModal } from '@/components/ConfirmDeleteModal';
-import { CustomSelect } from '@/components/CustomSelect';
 import { useI18n } from '@/i18n/I18nProvider';
 import { readApiJson } from '@/lib/api-client';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
@@ -95,47 +93,6 @@ type IntegrationTestStreamEvent =
   | { type: 'result'; result: IntegrationTestResult }
   | { type: 'error'; message: string };
 
-const panelDefinitions: Record<IntegrationCategory, {
-  addLabel: string;
-  description: string;
-  emptyTitle: string;
-  emptyDescription: string;
-  namePlaceholder: string;
-  typeLabel: string;
-  editLabel: string;
-  deleteTitle: string;
-}> = {
-  connector: {
-    addLabel: '添加 MCP 服务',
-    description: '配置 MCP 服务地址与授权，供 Agent 发现和调用工具。',
-    emptyTitle: '尚未配置 MCP 服务',
-    emptyDescription: '添加 MCP 服务地址及必要的授权信息，然后测试连接。',
-    namePlaceholder: '例如：企业 MCP 服务',
-    typeLabel: '连接类型',
-    editLabel: '编辑 MCP 服务',
-    deleteTitle: '删除 MCP 服务',
-  },
-  communication: {
-    addLabel: '添加发送渠道',
-    description: '每种渠道由独立驱动负责协议、认证、消息转换和结果校验。',
-    emptyTitle: '尚未配置发送渠道',
-    emptyDescription: '添加企业微信智能机器人或标准消息 Webhook。',
-    namePlaceholder: '例如：企业微信通知',
-    typeLabel: '渠道类型',
-    editLabel: '编辑发送渠道',
-    deleteTitle: '删除发送渠道',
-  },
-  data: {
-    addLabel: '添加数据源',
-    description: '添加 SQLite 或 PostgreSQL 数据库，填写连接信息后即可测试表结构。',
-    emptyTitle: '尚未添加数据源',
-    emptyDescription: '选择数据库类型并填写常规连接信息，无需编写 JSON 或连接脚本。',
-    namePlaceholder: '例如：业务分析库',
-    typeLabel: '数据库类型',
-    editLabel: '编辑数据源',
-    deleteTitle: '删除数据源',
-  },
-};
 
 function integrationIcon(category: IntegrationCategory, size: number) {
   if (category === 'connector') return <Cable size={size} />;
@@ -152,6 +109,7 @@ function defaultConfiguration(driver: IntegrationDriverDescriptor | undefined) {
 function visibleField(field: IntegrationFieldDescriptor, configuration: Record<string, string>) {
   return !field.hidden && (!field.visibleWhen || configuration[field.visibleWhen.field] === field.visibleWhen.value);
 }
+
 
 async function readIntegrationTestResult(
   response: Response,
@@ -203,7 +161,8 @@ export function ExternalIntegrationSettings({
   };
 }) {
   const { t } = useI18n();
-  const definition = panelDefinitions[category];
+  const definition = integrationPanels[category];
+  const form = useSettingsForms()('integration.basic');
   const [items, setItems] = useState<IntegrationSummary[]>([]);
   const [drivers, setDrivers] = useState<IntegrationDriverDescriptor[]>([]);
   const [editor, setEditor] = useState<IntegrationDraft | null>(null);
@@ -247,6 +206,23 @@ export function ExternalIntegrationSettings({
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (editor || saving || testing || deleting || updatingId) return;
+    const controller = new AbortController();
+    let pending = false;
+    const timer = setInterval(async () => {
+      if (pending || document.visibilityState !== 'visible') return;
+      pending = true;
+      try {
+        const response = await fetch(withWebPilotBasePath(`/api/settings/integrations?category=${category}`), { headers, cache: 'no-store', signal: controller.signal });
+        const data = await readApiJson<{ items?: IntegrationSummary[]; drivers?: IntegrationDriverDescriptor[] }>(response, t('读取外部集成失败'));
+        if (!controller.signal.aborted) { setItems(data.items || []); setDrivers(data.drivers || []); }
+      } catch { /* Keep the last confirmed list until the connection recovers. */ }
+      finally { pending = false; }
+    }, 3000);
+    return () => { controller.abort(); clearInterval(timer); };
+  }, [category, headers, t, editor, saving, testing, deleting, updatingId]);
 
   useEffect(() => {
     setHasFilePicker(Boolean(window.webPilotSystem?.selectFile));
@@ -603,24 +579,16 @@ export function ExternalIntegrationSettings({
           </header>
 
           <div className="ui-modal-body external-integration-form">
-            <label>
-              <span>{t('名称')}</span>
-              <AppInput disabled={saving || testing} onChange={(event) => setEditor((current) => current ? { ...current, name: event.target.value } : current)} placeholder={t(definition.namePlaceholder)} value={editor.name} />
-            </label>
-            <label>
-              <span>{t(definition.typeLabel)}</span>
-              <CustomSelect
-                className="settings-control"
-                disabled={Boolean(editor.id) || saving || testing}
-                onChange={selectDriver}
-                options={drivers.map((driver) => ({ label: t(driver.label), value: driver.id }))}
-                value={editor.driverId}
-              />
-            </label>
+            {form.fields.filter(field => field.key !== 'enabled').map(field => <label key={field.key}>
+              <span>{t(field.key === 'driverId' ? definition.typeLabel : field.label)}</span>
+              <SettingsFieldControl field={{ ...field, options: field.key === 'driverId' ? drivers.map(driver => ({ label: driver.label, value: driver.id })) : field.options, placeholder: field.key === 'name' ? definition.namePlaceholder : field.placeholder }}
+                disabled={saving || testing || (field.key === 'driverId' && Boolean(editor.id))} value={editor[field.key as 'name' | 'driverId']}
+                onChange={value => field.key === 'driverId' ? selectDriver(value) : setEditor(current => current ? { ...current, [field.key]: value } : current)} />
+            </label>)}
 
-            {activeDriver.fields.filter((field) => visibleField(field, editor.configuration)).map((field) => {
+            {integrationDriverForm(activeDriver).fields.filter(field => !field.visibleWhen || editor.configuration[field.visibleWhen.field] === field.visibleWhen.value).map((field) => {
               const hasStoredValue = editor.configuredFields.includes(field.key) && !editor.clearFields.includes(field.key);
-              const fieldClassName = field.control === 'textarea' || field.control === 'url' ? 'wide' : undefined;
+              const fieldClassName = field.control === 'textarea' || field.inputType === 'url' ? 'wide' : undefined;
               return (
                 <label className={fieldClassName} key={field.key}>
                   <span>
@@ -631,66 +599,20 @@ export function ExternalIntegrationSettings({
                       <button className="external-integration-clear-field" onClick={() => clearConfiguration(field.key)} type="button">{t('清除')}</button>
                     ) : null}
                   </span>
-                  {field.secret || field.control === 'password' ? (
-                    <SecretInput key={`${editor.id || 'new'}:${field.key}:${hasStoredValue}`}
-                      label={t(field.label)} disabled={saving || testing}
-                      value={editor.configuration[field.key] || ''}
-                      onChange={value => updateConfiguration(field.key, value)}
-                      storedPreview={hasStoredValue ? items.find(item => item.id === editor.id)?.secretPreviews[field.key] || '••••••••••••' : undefined}
-                      source={editor.id ? { kind: 'integration', id: editor.id, field: field.key } : undefined}
-                      headers={headers} placeholder={t(field.placeholder || '未设置')} />
-                  ) : field.control === 'select' ? (
-                    <CustomSelect
-                      className="settings-control"
-                      disabled={saving || testing}
-                      onChange={(value) => updateConfiguration(field.key, value)}
-                      options={(field.options || []).map((option) => ({ label: t(option.label), value: option.value }))}
-                      value={editor.configuration[field.key] || field.defaultValue || ''}
-                    />
-                  ) : field.control === 'textarea' ? (
-                    <textarea
-                      className="settings-control external-integration-textarea"
-                      disabled={saving || testing}
-                      onChange={(event) => updateConfiguration(field.key, event.target.value)}
-                      placeholder={t(hasStoredValue ? '已安全保存，留空则不修改' : field.placeholder || '')}
-                      rows={3}
-                      value={editor.configuration[field.key] || ''}
-                    />
-                  ) : field.picker === 'file' ? (
-                    <div className="external-integration-path-control">
-                      <AppInput
-                        disabled={saving || testing}
-                        onChange={(event) => updateConfiguration(field.key, event.target.value)}
-                        placeholder={t(field.placeholder || '')}
-                        type="text"
-                        value={editor.configuration[field.key] || ''}
-                      />
-                      {hasFilePicker ? (
-                        <button className="ui-button ui-button--neutral" disabled={saving || testing} onClick={() => void chooseFile(field.key)} type="button">
-                          <FolderOpen size={15} />
-                          {t('选择文件')}
-                        </button>
-                      ) : null}
-                    </div>
-                  ) : (
-                    <AppInput
-                      autoComplete={field.secret ? 'new-password' : undefined}
-                      disabled={saving || testing}
-                      onChange={(event) => updateConfiguration(field.key, event.target.value)}
-                      placeholder={t(hasStoredValue ? '已安全保存，留空则不修改' : field.placeholder || '')}
-                      type={field.control === 'url' ? 'url' : 'text'}
-                      value={editor.configuration[field.key] || ''}
-                    />
-                  )}
+                  <SettingsFieldControl field={field} disabled={saving || testing}
+                    value={editor.configuration[field.key] ?? field.defaultValue ?? ''} onChange={value => updateConfiguration(field.key, value)}
+                    secretPreview={hasStoredValue ? items.find(item => item.id === editor.id)?.secretPreviews[field.key] || '••••••••••••' : undefined}
+                    secretSource={editor.id ? { kind: 'integration', id: editor.id, field: field.key } : undefined} headers={headers}
+                    onPickDirectory={field.picker === 'file' && hasFilePicker ? () => void chooseFile(field.key) : undefined} />
                   {field.description ? <small className="external-integration-field-description">{t(field.description)}</small> : null}
                 </label>
               );
             })}
 
-            <div className="external-integration-enabled-field wide">
-              <div><strong>{t('启用')}</strong><span>{t('停用后保留配置，但 Agent 不会加载它。')}</span></div>
-              <button aria-pressed={editor.enabled} className={`settings-toggle${editor.enabled ? ' on' : ''}`} disabled={saving || testing} onClick={() => setEditor((current) => current ? { ...current, enabled: !current.enabled } : current)} type="button"><span /></button>
-            </div>
+            {form.fields.filter(field => field.key === 'enabled').map(field => <div className="external-integration-enabled-field wide" key={field.key}>
+              <div><strong>{t(field.label)}</strong><span>{t(field.description || '')}</span></div>
+              <SettingsFieldControl field={field} value={editor.enabled} disabled={saving || testing} onChange={value => setEditor(current => current ? { ...current, enabled: value === 'true' } : current)} />
+            </div>)}
             {activeDriver.testHint ? (
               <div className={`external-integration-test-hint wide${testing ? ' is-waiting' : ''}`} role={testing ? 'status' : undefined}>
                 <Send aria-hidden="true" size={14} />

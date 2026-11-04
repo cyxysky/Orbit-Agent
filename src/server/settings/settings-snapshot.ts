@@ -5,12 +5,12 @@ import {
   modelListForProvider,
   modelProviderDefinitionsForConfig,
   migrateRuntimeSettingValue,
-  runtimeSettingDefinitions,
 } from '@/config/settings';
 import type { ModelProvider, ModelProviderSettings } from '@/server/ai/schemas/runtime.schema';
 import { normalizedModelCapabilities } from '@/lib/model-capabilities';
 import { store } from '@/server/db/store';
 import { maskSecret } from '@/lib/secret-input';
+import { configurationDefinitions } from './settings-registry';
 
 function completeProviders(input?: Partial<Record<ModelProvider, ModelProviderSettings>>) {
   const result: Partial<Record<ModelProvider, ModelProviderSettings>> = {};
@@ -33,9 +33,9 @@ function completeProviders(input?: Partial<Record<ModelProvider, ModelProviderSe
 
 export async function readRuntimeSettingsItems() {
   const savedByKey = new Map((await store.listRuntimeSettings()).map((item) => [item.key, item]));
-  return runtimeSettingDefinitions.map((definition) => {
+  return configurationDefinitions().map((definition) => {
     const saved = savedByKey.get(definition.key);
-    const secret = saved?.secret ?? Boolean(definition.secret);
+    const secret = Boolean(saved?.secret || definition.secret || definition.control === 'secret');
     const value = migrateRuntimeSettingValue(
       definition.key,
       saved?.value ?? runtimeSetting(definition.key) ?? definition.defaultValue,
@@ -81,5 +81,6 @@ export async function readEnvironmentSettingsSnapshot() {
   return {
     runtimeItems: await readRuntimeSettingsItems(),
     modelConfig: (await readModelSettingsState()).config,
+    definitions: configurationDefinitions(),
   };
 }

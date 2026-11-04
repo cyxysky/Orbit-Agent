@@ -2,6 +2,7 @@
 import { authorizeAdminSettingsRequest, authorizeSettingsMenuRequest } from '@/server/settings/admin-settings-access';
 
 const settingsRoutes = [
+  { path: '/api/settings/configuration', load: () => import('./routes/settings/configuration/route') },
   { path: '/api/settings/knowledge', load: () => import('./routes/settings/knowledge/route') },
   { path: '/api/settings/bootstrap', load: () => import('./routes/settings/bootstrap/route') },
   { path: '/api/settings/browser-runtime', load: () => import('./routes/settings/browser-runtime/route') },
@@ -17,6 +18,7 @@ const settingsRoutes = [
 
 export const routes = [
   ...settingsRoutes,
+  { path: '/api/settings/preferences', load: () => import('./routes/settings/preferences/route') },
   { path: '/api/text-documents/workspace', load: () => import('./routes/text-documents/workspace/route') },
   { path: '/api/media/video-projects', load: () => import('./routes/media/video-projects/route') },
   { path: '/embed/orbit.js', load: () => import('./routes/embed-scripts/orbit.js/route') },

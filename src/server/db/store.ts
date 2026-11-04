@@ -31,7 +31,7 @@ import {
   readSkillById,
   readSkillsByIds,
   readSkills,
-  writeModelConfigRecord,
+  updateModelConfigRecord,
   patchRuntimeSettingsRecords,
   writeRuntimeMeta,
   writeSkillRecord,
@@ -39,12 +39,14 @@ import {
   writeSkillRecordsQueued,
 } from '@/server/storage/database-record-store';
 import { publishRuntimeConfiguration } from '@/server/settings/runtime-configuration';
+import { publishSettingsRegistry } from '@/server/settings/settings-registry';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 
 
 type ConfigStoreData = {
   runtimeSettings: RuntimeSettingRecord[];
   modelConfig?: ModelConfigRecord;
+  registeredSettings?: unknown[];
 };
 
 const sensitiveDataEvaluationCasesMetaKey = 'sensitive-data-evaluation-cases';
@@ -165,6 +167,7 @@ async function readConfigData(): Promise<ConfigStoreData> {
   return {
     runtimeSettings: stored.runtimeSettings || [],
     modelConfig: stored.modelConfig,
+    registeredSettings: stored.registeredSettings,
   };
 }
 
@@ -173,6 +176,7 @@ function publishSavedConfiguration() {
   const operation = configurationRefresh.then(async () => {
     const data = await readConfigData();
     const models = normalizeStoredModelConfig(data.modelConfig);
+    publishSettingsRegistry(data.registeredSettings || []);
     configureRuntimeModelContexts(models?.providers);
     publishRuntimeConfiguration(data.runtimeSettings, models);
     return data.runtimeSettings;
@@ -261,46 +265,48 @@ export const store = {
   async getModelConfig() {
     return normalizeStoredModelConfig((await readConfigData()).modelConfig);
   },
-  async saveModelConfig(input: Pick<ModelConfigRecord, 'provider' | 'providers' | 'providerOrder' | 'mediaSelections'>, removedProviders: readonly OpenAICompatibleModelProvider[] = []) {
-    const data = await readConfigData();
-    const existing = normalizeStoredModelConfig(data.modelConfig);
-    const providers: Partial<Record<ModelProvider, ModelProviderSettings>> = {};
-    const { providerMediaSettingsSchema, mediaModelSelectionsSchema } = await import('@cjfclonedeep/capability-sdk/media/model-settings');
-    const timestamp = now();
-    const providerInputs = {
-      ...existing?.providers,
-      ...input.providers,
-    };
-    for (const provider of removedProviders) delete providerInputs[provider];
-    const providerDefinitions = modelProviderDefinitionsForConfig(providerInputs);
-    for (const definition of providerDefinitions) {
-      const provider = definition.value;
-      const current = input.providers[provider];
-      const previous = existing?.providers[provider];
-      const merged = { ...previous, ...current };
-      const models = modelListForProvider(definition, merged);
-      const model = defaultModelForProvider(definition, { ...merged, models });
-      const baseURL = current?.baseURL ?? previous?.baseURL ?? definition.defaultBaseURL ?? '';
-      providers[provider] = {
-        ...defaultModelProviderSettings(provider),
-        ...merged,
-        media: providerMediaSettingsSchema.parse(current?.media ?? previous?.media ?? {}),
-        enabled: current?.enabled ?? previous?.enabled ?? false,
-        defaultModel: model,
-        model,
-        models,
-        modelCapabilities: normalizedModelCapabilities(provider, models, merged.modelCapabilities),
-        apiKey: current?.apiKey ?? previous?.apiKey ?? '',
-        baseURL: provider === 'minimax'
-          ? normalizeMiniMaxOpenAIBaseURL(baseURL) || ''
-          : baseURL,
-        extraRequestParameters: normalizeExtraRequestParameters(current?.extraRequestParameters ?? previous?.extraRequestParameters),
-        updatedAt: current ? timestamp : previous?.updatedAt,
+  async saveModelConfig(change: Pick<ModelConfigRecord, 'provider' | 'providers' | 'providerOrder' | 'mediaSelections'> | ((current: ModelConfigRecord | undefined) => Pick<ModelConfigRecord, 'provider' | 'providers' | 'providerOrder' | 'mediaSelections'>), removedProviders: readonly OpenAICompatibleModelProvider[] = []) {
+    const config = await updateModelConfigRecord(async current => {
+      const existing = normalizeStoredModelConfig(current as ModelConfigRecord | undefined);
+      const input = typeof change === 'function' ? change(existing) : change;
+      const providers: Partial<Record<ModelProvider, ModelProviderSettings>> = {};
+      const { providerMediaSettingsSchema, mediaModelSelectionsSchema } = await import('@cjfclonedeep/capability-sdk/media/model-settings');
+      const timestamp = now();
+      const providerInputs = {
+        ...existing?.providers,
+        ...input.providers,
       };
-    }
-    const providerOrder = modelProviderDefinitionsForConfig(providers, input.providerOrder ?? existing?.providerOrder).map(({ value }) => value);
-    const config = removeCustomModelProviders({ provider: input.provider, providers, providerOrder, mediaSelections: mediaModelSelectionsSchema.parse(input.mediaSelections ?? existing?.mediaSelections ?? {}), updatedAt: timestamp }, removedProviders);
-    await writeModelConfigRecord(config);
+      for (const provider of removedProviders) delete providerInputs[provider];
+      const providerDefinitions = modelProviderDefinitionsForConfig(providerInputs);
+      for (const definition of providerDefinitions) {
+        const provider = definition.value;
+        const current = input.providers[provider];
+        const previous = existing?.providers[provider];
+        const merged = { ...previous, ...current };
+        const models = modelListForProvider(definition, merged);
+        const model = defaultModelForProvider(definition, { ...merged, models });
+        const baseURL = current?.baseURL ?? previous?.baseURL ?? definition.defaultBaseURL ?? '';
+        providers[provider] = {
+          ...defaultModelProviderSettings(provider),
+          ...merged,
+          media: providerMediaSettingsSchema.parse(current?.media ?? previous?.media ?? {}),
+          enabled: current?.enabled ?? previous?.enabled ?? false,
+          defaultModel: model,
+          model,
+          models,
+          modelCapabilities: normalizedModelCapabilities(provider, models, merged.modelCapabilities),
+          apiKey: current?.apiKey ?? previous?.apiKey ?? '',
+          baseURL: provider === 'minimax'
+            ? normalizeMiniMaxOpenAIBaseURL(baseURL) || ''
+            : baseURL,
+          extraRequestParameters: normalizeExtraRequestParameters(current?.extraRequestParameters ?? previous?.extraRequestParameters),
+          updatedAt: current ? timestamp : previous?.updatedAt,
+        };
+      }
+      const providerOrder = modelProviderDefinitionsForConfig(providers, input.providerOrder ?? existing?.providerOrder).map(({ value }) => value);
+      const config = removeCustomModelProviders({ provider: input.provider, providers, providerOrder, mediaSelections: mediaModelSelectionsSchema.parse(input.mediaSelections ?? existing?.mediaSelections ?? {}), updatedAt: timestamp }, removedProviders);
+      return config;
+    });
     await publishSavedConfiguration();
     return config;
   },

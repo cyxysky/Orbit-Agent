@@ -1,13 +1,18 @@
 'use client';
 
+import { integrationSettingsSections, browserRuntimeGroups, browserSettingsPages, envSettingGroup, envSettingDisplayTab, envSettingSectionId, browserSettingsPageFor, envSettingCardTitle, envSettingIsContextuallyVisible, type BrowserSettingsPage } from '@/config/settings-presentation';
 import { SettingsDetailSection } from '@/components/SettingsDetailSection';
+import { SettingsFields, SettingsFieldControl, useSettingsForms } from '@/components/SettingsFields';
+import { useSettingsCatalog } from '@/components/useSettingsCatalog';
+import { updateSettingsPreference, settingsPreferencesStatus, subscribeSettingsPreferencesStatus } from '@/lib/settings-preferences';
+import { useTheme } from '@/theme/ThemeProvider';
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { TextArea } from '@heroui/react/textarea';
 import { InputGroup } from '@heroui/react/input-group';
 import { ExpandableActionLabel } from '@/components/ui/expandable-action-label';
 import Link from 'next/link';
-import { AlertCircle, ArrowLeft, BookOpen, Bot, Brain, Bug, ChartNoAxesCombined, ChevronDown, CircleCheck, ClipboardCheck, CodeXml, Copy, Database, Files, FolderOpen, Gauge, ImageIcon, KeyRound, Layers, Loader2, Maximize2, MessagesSquare, Monitor, Navigation, Network, Palette, PencilLine, PlayCircle, Plug, Plus, RefreshCw, Save, ScanSearch, Search, Server, ShieldCheck, SlidersHorizontal, Terminal, Trash2, X, type LucideIcon } from 'lucide-react';
+import { AlertCircle, ArrowLeft, BookOpen, Bot, Brain, Bug, ChartNoAxesCombined, ChevronDown, CircleCheck, ClipboardCheck, CodeXml, Copy, Database, Files, Gauge, ImageIcon, KeyRound, Layers, Loader2, Maximize2, MessagesSquare, Monitor, Navigation, Network, Palette, PencilLine, PlayCircle, Plug, Plus, RefreshCw, Save, ScanSearch, Search, Server, ShieldCheck, SlidersHorizontal, Terminal, Trash2, X, type LucideIcon } from 'lucide-react';
 import { CustomSelect } from '@/components/CustomSelect';
 import { ConfirmDeleteModal } from '@/components/ConfirmDeleteModal';
 import { SkillsManager } from '@/components/SkillsManager';
@@ -21,15 +26,13 @@ import {
   modelProviderDefinition,
   openAICompatibleProviderIndex,
   removeCustomModelProviders,
-  runtimeSettingDefinition,
+  runtimeSettingDefinition as builtinRuntimeSettingDefinition,
   uniqueModelIds,
   type SettingsTab,
   type OpenAICompatibleModelProvider,
 } from '@/config/settings';
 import { useI18n } from '@/i18n/I18nProvider';
-import { ThemeColorControl } from '@/components/ThemeColorControl';
 import { LiquidGlassLoader } from '@/components/LiquidGlassLoader';
-import { languageOptions } from '@/i18n/language';
 import { waitForMinimumLoading } from '@/lib/minimum-loading';
 import type { ModelConfigRecord, ModelProvider, ModelProviderSettings, RuntimeSettingRecord } from '@/server/ai/schemas/runtime.schema';
 import { readApiJson } from '@/lib/api-client';
@@ -38,7 +41,6 @@ import { DataTransferButtons } from '@/components/DataTransferButtons';
 import { ManagementDataTable } from '@/components/ManagementDataTable';
 import { ModelBrandIcon } from '@/components/ModelBrandIcon';
 import { AppInput } from '@/components/ui/app-input';
-import { SecretInput } from '@/components/ui/secret-input';
 import { AppModal } from '@/components/ui/app-modal';
 import { ModelCapabilitiesModal } from '@/components/ModelCapabilitiesModal';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
@@ -65,8 +67,8 @@ import { ExternalIntegrationSettings } from '@/components/ExternalIntegrationSet
 import { ModelTypeSettings } from '@/components/ModelTypeSettings';
 import { ToolCapabilitySettings } from '@/components/ToolCapabilitySettings';
 import { toolCapabilitySettings, TOOL_CAPABILITY_SETTINGS_CHANGED_EVENT } from '@/lib/tool-capability-settings';
-import { builtInMediaModels, createMediaTypeSettings, normalizeProviderMediaSettings, mediaSettingFields, mediaModelTypeDefinitions, type MediaTypeSettings } from '@cjfclonedeep/capability-sdk/media/model-settings';
-import { mediaModelDrivers, mediaModelDriver, type MediaModelKind, type MediaModelDriver } from '@cjfclonedeep/capability-sdk/media/models';
+import { builtInMediaModels, createMediaTypeSettings, normalizeProviderMediaSettings, mediaModelTypeDefinitions, type MediaTypeSettings } from '@cjfclonedeep/capability-sdk/media/model-settings';
+import { type MediaModelKind, type MediaModelDriver } from '@cjfclonedeep/capability-sdk/media/models';
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, arrayMove, rectSortingStrategy, sortableKeyboardCoordinates, useSortable } from '@dnd-kit/sortable';
 import { CSS as DndCSS } from '@dnd-kit/utilities';
@@ -133,6 +135,7 @@ function SortableProviderRow({ provider, active, label, children, onSelect, onDe
 export type EnvironmentSettingsInitialData = {
   runtimeItems: RuntimeSettingRow[];
   modelConfig: ModelConfig;
+  definitions?: import('@/config/settings').RuntimeSettingDefinition[];
 };
 
 type PersonalMemoryScope = 'global' | 'domain';
@@ -322,7 +325,7 @@ type SensitiveDataEvaluationRun = {
 type VisibleEnvSetting = {
   item: RuntimeSettingRow;
   index: number;
-  definition: ReturnType<typeof runtimeSettingDefinition>;
+  definition: ReturnType<typeof builtinRuntimeSettingDefinition>;
 };
 
 type SettingsSecondaryNavItem = {
@@ -373,21 +376,6 @@ const settingsSectionIcons: Record<string, LucideIcon> = {
 };
 
 const customRuntimeSettingKeys = new Set(['AGENT_COMMUNICATION_ALLOW_SEND', 'AGENT_DATA_ALLOW_WRITES']);
-const integrationSettingsSections: Record<string, string> = {
-  'MCP': 'integration:connector',
-  '通信': 'integration:communication',
-  '数据': 'integration:data',
-};
-const browserRuntimeGroups = new Set(['站点访问规则', '浏览器观察', '实时预览', '浏览器实例', '导航与诊断', '浏览器 Agent', '浏览器调试']);
-const capabilityRuntimeGroups = new Set(['代码沙箱', '计算机', '文件能力', '本地终端', '知识库', '媒体', '地图', '数据与文件', ...Object.keys(integrationSettingsSections)]);
-const browserSettingsPages = [
-  { id: 'access', label: '站点访问规则' },
-  { id: 'interaction', label: '操作与观察' },
-  { id: 'instance', label: '实例与会话' },
-  { id: 'preview', label: '实时预览' },
-  { id: 'diagnostics', label: '诊断与日志' },
-] as const;
-type BrowserSettingsPage = (typeof browserSettingsPages)[number]['id'];
 
 function SettingsSecondaryNav({
   activeId,
@@ -474,34 +462,7 @@ function SettingsGroupCard({
   );
 }
 
-function runtimeSettingGroup(tab: SettingsTab, key: string, configuredGroup?: string) {
-  if (configuredGroup) return configuredGroup;
-  if (tab === 'browser') {
-    if (/^BROWSER_(?:PREVIEW|SCREENCAST|OUTPUT)/.test(key)) return '实时预览';
-    if (/^(?:ELECTRON_|HEADLESS_|BROWSER_(?:PROFILE|USER_BROWSER|VIEWPORT))/.test(key)) return '浏览器实例';
-    return '导航与诊断';
-  }
-  if (tab === 'sensitive-data') {
-    if (/^AI_SENSITIVE_DATA_FILTER_/.test(key)) return '脱敏策略';
-    if (/^GLINER_(?:MODEL|PII_MODEL)$/.test(key)) return '脱敏模型';
-    return '推理服务';
-  }
-  if (tab === 'runtime') {
-    if (/^(?:SQLITE_|OFFICE_)/.test(key)) return '数据与文件';
-    if (/^AI_SUBAGENT_/.test(key)) return '子 Agent';
-    if (/^BROWSER_CHAT_/.test(key)) return '对话运行';
-    if (/^AI_PERSONAL_MEMORY_/.test(key)) return '个性化记忆';
-    if (/^AI_(?:CONTEXT|GLM_CONTEXT|IMAGE_CONTEXT|VISUAL_)/.test(key)) return '上下文管理';
-    if (key === 'AI_CUSTOM_SYSTEM_PROMPT') return '运行规则';
-    if (/^AI_(?:REQUEST_TIMEOUT|RUNTIME_REQUEST_TIMEOUT|RUNTIME_FIRST_CHUNK_TIMEOUT|STREAM_FIRST_CHUNK_TIMEOUT|STREAM_CHUNK_TIMEOUT)_MS$/.test(key)) return '请求超时';
-    return '执行控制';
-  }
-  return '配置';
-}
 
-function envSettingGroup(setting: VisibleEnvSetting) {
-  return runtimeSettingGroup(setting.definition?.tab || 'runtime', setting.item.key, setting.definition?.group);
-}
 
 function groupVisibleEnvSettings(settings: VisibleEnvSetting[]) {
   const groups = new Map<string, VisibleEnvSetting[]>();
@@ -514,74 +475,6 @@ function groupVisibleEnvSettings(settings: VisibleEnvSetting[]) {
   return [...groups.entries()].map(([title, items]) => ({ title, items }));
 }
 
-function envSettingDisplayTab(setting: VisibleEnvSetting): SettingsTab {
-  const sourceTab = setting.definition?.tab;
-  const group = envSettingGroup(setting);
-  if (sourceTab === 'browser' || browserRuntimeGroups.has(group)) return 'capabilities';
-  if (sourceTab === 'runtime' && capabilityRuntimeGroups.has(group)) return 'capabilities';
-  if (sourceTab === 'runtime' && group === '个性化记忆') return 'memory';
-  return sourceTab || 'runtime';
-}
-
-function envSettingSectionId(setting: VisibleEnvSetting) {
-  const group = envSettingGroup(setting);
-  if (setting.definition?.tab === 'browser' || browserRuntimeGroups.has(group)) return 'capability:browser';
-  if (group === '工具开关') return 'capability:overview';
-  return integrationSettingsSections[group] || group;
-}
-
-function browserSettingsPageFor(setting: VisibleEnvSetting): BrowserSettingsPage {
-  const group = envSettingGroup(setting);
-  if (group === '站点访问规则') return 'access';
-  const key = setting.item.key;
-  if (group === '实时预览') return 'preview';
-  if (group === '浏览器实例' || key === 'BROWSER_CHAT_KEEP_BROWSER_OPEN_AFTER_TURN') return 'instance';
-  if (group === '导航与诊断' || group === '浏览器调试' || key === 'BROWSER_CHAT_LOG_LIMIT') return 'diagnostics';
-  return 'interaction';
-}
-
-function envSettingCardTitle(setting: VisibleEnvSetting) {
-  const key = setting.item.key;
-  const group = envSettingGroup(setting);
-  if (envSettingSectionId(setting) === 'capability:browser') {
-    switch (browserSettingsPageFor(setting)) {
-      case 'preview':
-        if (/^BROWSER_(?:OUTPUT|SCREENCAST)/.test(key)) return '图像输出';
-        if (/_TRANSPORT$|_SOURCE_FORMAT$|_KEYFRAME_INTERVAL$/.test(key)) return '传输与编码';
-        return '视频画面';
-      case 'instance':
-        if (/^BROWSER_VIEWPORT_/.test(key)) return '视口尺寸';
-        if (key === 'HEADLESS_BROWSER' || key === 'ELECTRON_EMBEDDED_BROWSER') return '浏览器进程';
-        return '会话与缓存';
-      case 'diagnostics':
-        if (key.startsWith('BROWSER_NAVIGATION_')) return '页面稳定等待';
-        if (/HTTP|LOG_LIMIT/.test(key)) return '网络与记录';
-        return '执行诊断';
-      default:
-        if (key === 'BROWSER_CODE_AUTO_SCREENSHOT' || key === 'AI_VISUAL_HISTORY_LIMIT') return '视觉观察';
-        if (key === 'MANUAL_VERIFICATION_TIMEOUT_MS' || key === 'BROWSER_CHAT_SHOW_REASONING') return '任务交互';
-        return '操作方式';
-    }
-  }
-  if (group === '请求超时') return /FIRST_CHUNK|STREAM_CHUNK/.test(key) ? '流式响应' : '模型请求';
-  if (group === '代码沙箱') {
-    if (/RUNNER_|_BACKEND$|_ENABLED$/.test(key)) return '执行环境';
-    if (/NETWORK_MODE|ALLOW_PACKAGE_INSTALL|MAX_PACKAGES|INSTALL_TIMEOUT/.test(key)) return '网络与依赖';
-    if (/MEMORY_MB|CPU_LIMIT|PIDS_LIMIT|WORKSPACE_MB/.test(key)) return '资源配额';
-    return '执行限制';
-  }
-  if (group === 'Codex CLI') {
-    if (/PATH$|CWD$/.test(key)) return '程序与目录';
-    if (/APPROVAL|SANDBOX/.test(key)) return '访问权限';
-    return '启动选项';
-  }
-  if (group === '本地终端') return /ENABLED|CWD|SHELL/.test(key) ? '终端环境' : '执行与输出';
-  if (group === '地图') return /_KEY$|_LANGUAGE$/.test(key) ? '连接与语言' : '请求配额';
-  if (group === '脱敏策略') return /THRESHOLD|LABELS/.test(key) ? '识别范围' : '过滤与失败策略';
-  if (group === '推理服务') return /DEVICE|BATCH_SIZE/.test(key) ? '推理性能' : '服务连接';
-  return group;
-}
-
 function groupEnvSettingCards(settings: VisibleEnvSetting[]) {
   const cards = new Map<string, VisibleEnvSetting[]>();
   for (const setting of settings) {
@@ -591,17 +484,6 @@ function groupEnvSettingCards(settings: VisibleEnvSetting[]) {
   return [...cards].map(([title, items]) => ({ title, items }));
 }
 
-function envSettingIsContextuallyVisible(setting: VisibleEnvSetting, values: Map<string, string>) {
-  if (setting.item.key === 'BROWSER_SCREENCAST_QUALITY') return values.get('BROWSER_SCREENCAST_FORMAT') === 'jpeg';
-  if (setting.item.key.startsWith('BROWSER_PREVIEW_VIDEO_')) return values.get('BROWSER_PREVIEW_TRANSPORT') === 'video';
-  if (setting.item.key === 'BROWSER_VIEWPORT_WIDTH' || setting.item.key === 'BROWSER_VIEWPORT_HEIGHT') {
-    return values.get('BROWSER_VIEWPORT_MODE') === 'fixed';
-  }
-  if (setting.item.key === 'GLINER_SERVICE_URL' || setting.item.key === 'GLINER_SERVICE_API_KEY') {
-    return values.get('GLINER_RUNTIME_MODE') === 'external';
-  }
-  return true;
-}
 
 function runtimeItemsFingerprint(items: RuntimeSettingRow[]) {
   return JSON.stringify(items.map(({ key, value, enabled, secret }) => ({ key, value, enabled, secret })));
@@ -867,7 +749,7 @@ function evaluationCaseDisplayName(name: string, index: number, t: (value: strin
 }
 
 function isSecret(item: RuntimeSettingRow) {
-  const definition = runtimeSettingDefinition(item.key);
+  const definition = builtinRuntimeSettingDefinition(item.key);
   if (definition) return Boolean(item.secret || definition.secret || definition.control === 'secret');
   return Boolean(item.secret || /(?:^|_)(?:KEY|TOKEN|SECRET|PASSWORD|COOKIE)(?:_|$)|(?:^|_)DATABASE_URL$/i.test(item.key));
 }
@@ -907,8 +789,10 @@ export function EnvironmentSettings({
 } = {}) {
   const shouldLoadEnvironmentConfig = !controlledActiveTab
     || !['skills', 'memory', 'accounts', 'knowledge'].includes(controlledActiveTab);
-  const { language, setLanguage, t } = useI18n();
-  const { brandPrefix, brandText, setBrandPrefix, setBrandText } = useWorkspaceBrand();
+  const { language, t } = useI18n();
+  const { color: themeColor, mode: themeMode } = useTheme();
+  const preferenceStatus = useSyncExternalStore(subscribeSettingsPreferencesStatus, settingsPreferencesStatus, () => 'saved' as const);
+  const { brandPrefix, brandText } = useWorkspaceBrand();
   const [internalActiveTab, setInternalActiveTab] = useState<SettingsTab>('general');
   const [items, setItems] = useState<RuntimeSettingRow[]>(() => initialData?.runtimeItems || []);
   const [savedItems, setSavedItems] = useState<RuntimeSettingRow[]>(() => initialData?.runtimeItems || []);
@@ -928,7 +812,6 @@ export function EnvironmentSettings({
   const [extraRequestParameterRows, setExtraRequestParameterRows] = useState<Partial<Record<ModelProvider, ExtraRequestParameterDraft[]>>>(() => (
     extraRequestParameterDrafts(createModelConfig(initialData?.modelConfig))
   ));
-  const extraRequestParameterIdRef = useRef(0);
   const [personalMemoryItems, setPersonalMemoryItems] = useState<PersonalMemoryItem[]>([]);
   const [personalMemoryDraft, setPersonalMemoryDraft] = useState<PersonalMemoryDraft>(() => createPersonalMemoryDraft());
   const [personalMemoryEditorMode, setPersonalMemoryEditorMode] = useState<PersonalMemoryEditorMode>(null);
@@ -993,6 +876,37 @@ export function EnvironmentSettings({
   const adminSettingsAuthorizationHeaders: Record<string, string> = adminSettingsAccessToken
     ? { Authorization: `Bearer ${adminSettingsAccessToken}` }
     : {};
+  const settingsCatalog = useSettingsCatalog(adminSettingsAuthorizationHeaders);
+  const form = useSettingsForms();
+  const runtimeSettingDefinition = (key: string) => settingsCatalog.definitions.find(field => field.key === key);
+  const confirmedRuntimeItems = useRef(savedItems);
+  confirmedRuntimeItems.current = savedItems;
+  useEffect(() => {
+    if (!shouldLoadEnvironmentConfig || (adminSettingsPasswordRequired && !adminSettingsAccessToken)) return;
+    let active = true;
+    let pending = false;
+    const controller = new AbortController();
+    const refresh = async () => {
+      if (pending || document.visibilityState !== 'visible') return;
+      pending = true;
+      const before = runtimeItemsFingerprint(itemsRef.current);
+      const confirmedBefore = runtimeItemsFingerprint(confirmedRuntimeItems.current);
+      try {
+        const response = await fetch(withWebPilotBasePath('/api/settings/runtime'), { headers: adminSettingsAccessToken ? { Authorization: `Bearer ${adminSettingsAccessToken}` } : {}, cache: 'no-store', signal: controller.signal });
+        if (!response.ok) return;
+        const data = await response.json() as { saved?: RuntimeSettingRow[] };
+        if (!active || !data.saved || before !== runtimeItemsFingerprint(itemsRef.current) || confirmedBefore !== runtimeItemsFingerprint(confirmedRuntimeItems.current)) return;
+        const current = new Map(itemsRef.current.map(item => [item.key, item]));
+        const previous = new Map(confirmedRuntimeItems.current.map(item => [item.key, item]));
+        const next = data.saved.map(item => current.has(item.key) && current.get(item.key)?.value !== previous.get(item.key)?.value ? current.get(item.key)! : item);
+        setSavedItems(data.saved);
+        setItems(next);
+      } catch { /* Keep pending edits while the connection recovers. */ }
+      finally { pending = false; }
+    };
+    const timer = setInterval(() => void refresh(), 3000);
+    return () => { active = false; controller.abort(); clearInterval(timer); };
+  }, [adminSettingsAccessToken, adminSettingsPasswordRequired, shouldLoadEnvironmentConfig]);
   const selectTab = (tab: SettingsTab) => {
     const nextTab = tab === 'browser' ? 'capabilities' : tab;
     if (!visibleSettingsTabs.some((item) => item.id === nextTab)) return;
@@ -1006,11 +920,6 @@ export function EnvironmentSettings({
     const section = requestedSourceTab === 'browser' ? 'capability:browser' : initialSection;
     if (section) setActiveSettingsSections((current) => ({ ...current, [requestedActiveTab]: section }));
   }, [initialSection, requestedActiveTab, requestedSourceTab]);
-
-  function optionLabel(option: { label: string; value: string }) {
-    if (option.label === '关闭' && option.value === 'false') return language === 'en' ? 'Off' : '关闭';
-    return t(option.label);
-  }
 
   useEffect(() => {
     setHasDirectoryPicker(typeof window !== 'undefined' && Boolean(window.webPilotSystem?.selectDirectory));
@@ -1379,32 +1288,6 @@ export function EnvironmentSettings({
     updateActiveProviderSettings({ extraRequestParameters: serializeExtraRequestParameterPairs(rows) });
   }
 
-  function addActiveProviderExtraRequestParameter() {
-    commitActiveProviderExtraRequestParameters([
-      ...activeProviderExtraRequestParameterRows,
-      {
-        id: `${activeProvider}:new:${extraRequestParameterIdRef.current++}`,
-        key: '',
-        value: '',
-      },
-    ]);
-  }
-
-  function updateActiveProviderExtraRequestParameter(
-    id: string,
-    patch: Partial<ExtraRequestParameterPair>,
-  ) {
-    commitActiveProviderExtraRequestParameters(
-      activeProviderExtraRequestParameterRows.map((row) => row.id === id ? { ...row, ...patch } : row),
-    );
-  }
-
-  function removeActiveProviderExtraRequestParameter(id: string) {
-    commitActiveProviderExtraRequestParameters(
-      activeProviderExtraRequestParameterRows.filter((row) => row.id !== id),
-    );
-  }
-
   function setActiveProviderModels(
     models: string[],
     defaultModel?: string,
@@ -1508,13 +1391,28 @@ export function EnvironmentSettings({
     const draft = createModelConfig(modelDraft);
     const payload = removedProvider ? removeCustomModelProviders(draft, [removedProvider]) : draft;
     const sourceFingerprint = JSON.stringify(payload);
+    const baseline = createModelConfig(modelConfig);
+    const providers = Object.fromEntries(Object.entries(payload.providers).flatMap(([provider, settings]) => {
+      if (!settings) return [];
+      const previous = baseline.providers[provider as ModelProvider];
+      const changed = Object.fromEntries(Object.entries(settings).filter(([key, value]) =>
+        !['apiKeyPreview', 'hasApiKey', 'updatedAt'].includes(key)
+        && JSON.stringify(value) !== JSON.stringify(previous?.[key as keyof ModelProviderSettings])));
+      return Object.keys(changed).length ? [[provider, changed]] : [];
+    }));
+    const changes = {
+      providers,
+      ...(payload.provider !== baseline.provider ? { provider: payload.provider } : {}),
+      ...(JSON.stringify(payload.providerOrder) !== JSON.stringify(baseline.providerOrder) ? { providerOrder: payload.providerOrder } : {}),
+      ...(removedProvider ? { removedProviders: [removedProvider] } : {}),
+    };
     setSavingModel(true);
     setModelAutoSaveError('');
     try {
       const response = await fetch(withWebPilotBasePath('/api/settings/model'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...adminSettingsAuthorizationHeaders },
-        body: JSON.stringify({ ...payload, ...(removedProvider ? { removedProviders: [removedProvider] } : {}) }),
+        body: JSON.stringify(changes),
       });
       const data = await readApiJson<{ config?: Partial<ModelConfig> }>(response, t('保存模型配置失败'));
       const nextModel = createModelConfig(data.config);
@@ -2008,86 +1906,11 @@ export function EnvironmentSettings({
 
   function renderRuntimeControl(item: RuntimeSettingRow, index: number) {
     const definition = runtimeSettingDefinition(item.key);
-    if (definition?.control === 'boolean') {
-      const checked = item.value === 'true';
-      return (
-        <button className={`settings-toggle${checked ? ' on' : ''}`} onClick={() => update(index, { value: checked ? 'false' : 'true' })} type="button" aria-pressed={checked}>
-          <span />
-        </button>
-      );
-    }
-
-    if (definition?.control === 'select') {
-      return (
-        <CustomSelect
-          className="settings-control"
-          value={item.value}
-          onChange={(nextValue) => update(index, { value: nextValue })}
-          options={(definition.options || []).map((option) => ({
-            label: optionLabel(option),
-            value: option.value,
-          }))}
-        />
-      );
-    }
-
-    if (isSecret(item)) {
-      return <SecretInput key={`${item.key}:${item.updatedAt || ''}`} label={t(definition?.label || item.key)}
-        value={item.value} onChange={value => update(index, { value })}
-        storedPreview={item.secretPreview || (item.hasValue ? '••••••••••••' : undefined)}
-        source={{ kind: 'runtime', key: item.key }} headers={adminSettingsAuthorizationHeaders}
-        placeholder={t('未设置')} />;
-    }
-
-    if (definition?.control === 'textarea') {
-      return (
-        <div className="settings-prompt-control">
-          <TextArea
-            className="settings-textarea-control"
-            fullWidth
-            placeholder={t('未设置')}
-            value={item.value}
-            onChange={(event) => update(index, { value: event.target.value })}
-          />
-        </div>
-      );
-    }
-
-    if (definition?.picker === 'directory') {
-      return (
-        <div className="settings-directory-control">
-          <AppInput
-            placeholder={t('未设置')}
-            type="text"
-            value={item.value}
-            onChange={(event) => update(index, { value: event.target.value })}
-          />
-          <button
-            className="ui-button ui-button--neutral"
-            disabled={!hasDirectoryPicker}
-            onClick={() => chooseRuntimeDirectory(index, item)}
-            title={hasDirectoryPicker ? t('选择目录') : t('仅 Electron 桌面端支持目录选择')}
-            type="button"
-          >
-            <FolderOpen size={15} />
-            {t('选择')}
-          </button>
-        </div>
-      );
-    }
-
-    return (
-      <AppInput
-        inputMode={definition?.control === 'number' ? 'decimal' : undefined}
-        min={definition?.min}
-        max={definition?.max}
-        placeholder={item.hasValue ? t('已配置，留空表示不修改') : t('未设置')}
-        type={definition?.control === 'number' ? 'number' : 'text'}
-        step={definition?.step}
-        value={item.value}
-        onChange={(event) => update(index, { value: event.target.value })}
-      />
-    );
+    if (!definition) return null;
+    return <SettingsFieldControl field={definition} value={item.value} onChange={value => update(index, { value })}
+      secretPreview={item.secretPreview || (item.hasValue ? '••••••••••••' : undefined)}
+      secretSource={{ kind: 'runtime', key: item.key }} headers={adminSettingsAuthorizationHeaders}
+      onPickDirectory={hasDirectoryPicker ? () => void chooseRuntimeDirectory(index, item) : undefined} />;
   }
 
   function renderPersonalMemoryEditorModal() {
@@ -2638,6 +2461,39 @@ export function EnvironmentSettings({
 
   const envDirty = runtimeItemsFingerprint(items) !== runtimeItemsFingerprint(savedItems);
   const modelDirty = JSON.stringify(createModelConfig(modelDraft)) !== JSON.stringify(createModelConfig(modelConfig));
+  const modelSnapshotRef = useRef({ modelDraft, modelConfig, savingModel, extraRequestParameterRows });
+  modelSnapshotRef.current = { modelDraft, modelConfig, savingModel, extraRequestParameterRows };
+  useEffect(() => {
+    if (!shouldLoadEnvironmentConfig || (adminSettingsPasswordRequired && !adminSettingsAccessToken)) return;
+    const controller = new AbortController();
+    let pending = false;
+    const refresh = async () => {
+      const before = modelSnapshotRef.current;
+      if (pending || before.savingModel || document.visibilityState !== 'visible'
+        || JSON.stringify(before.modelDraft) !== JSON.stringify(before.modelConfig)) return;
+      const hasPendingPairs = Object.entries(before.extraRequestParameterRows).some(([provider, rows]) =>
+        JSON.stringify(rows?.map(({ key, value }) => ({ key, value })) || [])
+          !== JSON.stringify(parseExtraRequestParameterPairs(providerSettings(before.modelConfig, provider as ModelProvider).extraRequestParameters)));
+      if (hasPendingPairs) return;
+      pending = true;
+      try {
+        const response = await fetch(withWebPilotBasePath('/api/settings/model'), { headers: adminSettingsAccessToken ? { Authorization: `Bearer ${adminSettingsAccessToken}` } : {}, cache: 'no-store', signal: controller.signal });
+        if (!response.ok) return;
+        const data = await response.json() as { config?: Partial<ModelConfig> };
+        const current = modelSnapshotRef.current;
+        if (controller.signal.aborted || current.savingModel || current.modelDraft !== before.modelDraft
+          || current.modelConfig !== before.modelConfig || current.extraRequestParameterRows !== before.extraRequestParameterRows) return;
+        const next = createModelConfig(data.config);
+        if (JSON.stringify(next) === JSON.stringify(current.modelConfig)) return;
+        setModelConfig(next);
+        setModelDraft(next);
+        setExtraRequestParameterRows(extraRequestParameterDrafts(next));
+      } catch { /* Preserve the current editor until the connection recovers. */ }
+      finally { pending = false; }
+    };
+    const timer = setInterval(() => void refresh(), 3000);
+    return () => { controller.abort(); clearInterval(timer); };
+  }, [adminSettingsAccessToken, adminSettingsPasswordRequired, shouldLoadEnvironmentConfig]);
   const sensitiveDataEvaluationFingerprint = JSON.stringify(sensitiveDataEvaluationPayload(sensitiveDataEvaluationCases));
   const sensitiveDataEvaluationDirty = sensitiveDataEvaluationFingerprint !== JSON.stringify(sensitiveDataEvaluationPayload(savedSensitiveDataEvaluationCases));
 
@@ -2711,52 +2567,24 @@ export function EnvironmentSettings({
     updateMediaSettings({ models, defaultModel: available.includes(defaultModel) ? defaultModel : available[0] || '' });
   }
 
-  function mediaSettingRow(label: string, description: string, children: ReactNode) {
-    return <div className="settings-row"><div><strong>{t(label)}</strong><span>{t(description)}</span></div><div className="settings-control">{children}</div></div>;
-  }
-
-  function renderMediaFields(group: 'connection' | 'generation') {
+  function renderMediaForm(group: 'connection' | 'generation') {
     if (!activeMediaSettings || !activeMediaKind) return null;
     const settings = activeMediaSettings;
-    return mediaSettingFields.filter((field) => field.group === group && field.kinds.includes(activeMediaKind)).map((field) => {
-      const raw = settings[field.key];
-      const value = typeof raw === 'number' ? raw / (field.scale || 1) : raw ?? '';
-      return <div key={field.key}>{mediaSettingRow(field.label, field.description, <AppInput
-        aria-label={t(field.label)} type={field.type} min={field.min} max={field.max} placeholder={field.placeholder} value={value}
-        onChange={(event) => {
-          const input = event.target.value;
-          if (!input && field.scale) return;
-          updateMediaSettings({ [field.key]: field.type === 'number' ? input ? Number(input) * (field.scale || 1) : undefined : input });
-        }}
-      />)}</div>;
-    });
-  }
-
-  function renderMediaConnection() {
-    if (!activeMediaSettings || !activeMediaKind) return null;
-    const settings = activeMediaSettings;
-    const driver = mediaModelDriver(settings.driver);
-    return <>
-      {mediaSettingRow('接口协议', '选择供应商实际使用的协议；自定义服务地址和路径不会转换请求或响应格式。', <CustomSelect value={settings.driver} options={mediaModelDrivers.filter((item) => item.models[activeMediaKind]).map((item) => ({ label: item.label, value: item.id }))} onChange={(driver) => updateMediaSettings({ driver: driver as MediaModelDriver, baseURL: '', paths: {}, parameters: [] })} />)}
-      {!driver.localAuth && mediaSettingRow('服务地址', '填写当前类型的 API 基础地址，与其他类型独立。', <AppInput aria-label={t('服务地址')} value={settings.baseURL} placeholder={driver.baseURL} onChange={(event) => updateMediaSettings({ baseURL: event.target.value })} />)}
-      {(driver.models[activeMediaKind]?.routes || []).map((route) => <div key={route.key}>{mediaSettingRow(route.label, '留空使用供应商默认路径；自定义路径以 / 开头，并保留占位符。', <AppInput aria-label={t(route.label)} value={settings.paths[route.key] || ''} placeholder={route.path} onChange={(event) => updateMediaSettings({ paths: { ...settings.paths, [route.key]: event.target.value } })} />)}</div>)}
-      {renderMediaFields('connection')}
-      {mediaSettingRow('额外请求参数', '填写当前类型 AI SDK 支持的参数名和值。', <div className="settings-extra-parameters-control">
-        {settings.parameters.map((parameter, index) => <div className="settings-extra-parameter-input-row" key={index}>
-          <AppInput aria-label={t('参数名')} placeholder={t('参数名')} value={parameter.key} onChange={(event) => updateMediaSettings({ parameters: settings.parameters.map((item, i) => i === index ? { ...item, key: event.target.value } : item) })} />
-          <AppInput aria-label={t('参数值')} placeholder={t('参数值')} value={parameter.value} onChange={(event) => updateMediaSettings({ parameters: settings.parameters.map((item, i) => i === index ? { ...item, value: event.target.value } : item) })} />
-          <button aria-label={t('删除参数')} className="settings-model-row-button danger" onClick={() => updateMediaSettings({ parameters: settings.parameters.filter((_, i) => i !== index) })} type="button"><Trash2 size={15} /></button>
-        </div>)}
-        <button className="ui-button settings-add-parameter-button" onClick={() => updateMediaSettings({ parameters: [...settings.parameters, { key: '', value: '' }] })} type="button"><Plus size={15} />{t('添加参数')}</button>
-      </div>)}
-    </>;
-  }
-
-  function renderMediaGenerationParameters() {
-    if (!activeMediaSettings || !activeMediaKind) return null;
-    return <SettingsDetailSection className="settings-model-group" heading={t('生成参数')} description={t('留空使用模型默认值；可用参数取决于模型。')}>
-      {renderMediaFields('generation')}
-    </SettingsDetailSection>;
+    const descriptor = form(`media.${activeMediaKind}.${settings.driver}.${group}`);
+    const values = Object.fromEntries(descriptor.fields.map(field => {
+      const raw = field.key.startsWith('paths.') ? settings.paths[field.key.slice(6)] : settings[field.key as keyof MediaTypeSettings];
+      return [field.key, typeof raw === 'number' ? raw / (field.scale || 1) : raw ?? ''];
+    }));
+    return <SettingsFields bare={group === 'connection'} form={descriptor} values={values} onChange={(key, value) => {
+      const field = descriptor.fields.find(field => field.key === key)!;
+      if (key === 'driver') updateMediaSettings({ driver: value as MediaModelDriver, baseURL: '', paths: {}, parameters: [] });
+      else if (key.startsWith('paths.')) updateMediaSettings({ paths: { ...settings.paths, [key.slice(6)]: value } });
+      else if (key === 'parameters') updateMediaSettings({ parameters: JSON.parse(value) });
+      else if (field.control === 'number') {
+        if (!value && field.scale) return;
+        updateMediaSettings({ [key]: value ? Number(value) * (field.scale || 1) : undefined });
+      } else updateMediaSettings({ [key]: value });
+    }} />;
   }
 
   const activeProviderSupportsExtraRequestParameters = activeProvider === 'minimax' || activeProvider.startsWith('openai-compatible');
@@ -2961,7 +2789,9 @@ export function EnvironmentSettings({
                     onImported={reloadModelConfigAfterImport}
                   />
                 ) : null}
-                {activeTab === 'model' ? (
+                {activeTab === 'general' && preferenceStatus !== 'saved' ? (
+                  <span className={preferenceStatus === 'error' ? 'is-error' : 'is-saving'}>{t(preferenceStatus === 'error' ? '自动保存失败，修改后重试' : '正在自动保存')}</span>
+                ) : activeTab === 'model' ? (
                   <span className={modelAutoSaveError ? 'is-error' : savingModel ? 'is-saving' : modelDirty ? 'is-dirty' : 'is-saved'} title={modelAutoSaveError || undefined}>
                     {savingModel ? <Loader2 className="spin" size={14} /> : <span />}
                     {t(modelAutoSaveError ? '自动保存失败，修改后重试' : savingModel ? '正在自动保存' : modelDirty ? '等待自动保存' : '已自动保存')}
@@ -2994,58 +2824,9 @@ export function EnvironmentSettings({
                   label={t('设置项')}
                   onChange={section => setActiveSettingsSections(current => ({ ...current, general: section }))}
                 />
-                {activeSettingsSection === 'general:appearance' ? <SettingsDetailSection heading={t('基础设置')} description={t('调整品牌、界面语言与主题色。')}>
-                <div className="settings-row">
-                  <div>
-                    <strong>{t('品牌前缀')}</strong>
-                    <span>{t('设置侧边栏中高亮显示的品牌文字。')}</span>
-                  </div>
-                  <div className="settings-control">
-                    <AppInput
-                      aria-label={t('品牌前缀')}
-                      maxLength={48}
-                      onChange={(event) => setBrandPrefix(event.target.value)}
-                      value={brandPrefix}
-                    />
-                  </div>
-                </div>
-                <div className="settings-row">
-                  <div>
-                    <strong>{t('产品名称')}</strong>
-                    <span>{t('设置侧边栏中显示在品牌前缀右侧的名称。')}</span>
-                  </div>
-                  <div className="settings-control">
-                    <AppInput
-                      aria-label={t('产品名称')}
-                      maxLength={48}
-                      onChange={(event) => setBrandText(event.target.value)}
-                      value={brandText}
-                    />
-                  </div>
-                </div>
-                <div className="settings-row">
-                  <div>
-                    <strong>{t('界面语言')}</strong>
-                    <span>{t('选择界面显示语言。')}</span>
-                  </div>
-                  <CustomSelect
-                    className="settings-control"
-                    value={language}
-                    onChange={(nextValue) => setLanguage(nextValue === 'en' ? 'en' : 'zh')}
-                    options={languageOptions.map((option) => ({
-                      label: t(option.label),
-                      value: option.value,
-                    }))}
-                  />
-                </div>
-                <div className="settings-row">
-                  <div>
-                    <strong>{t('主题色')}</strong>
-                    <span>{t('按当前配色比例联动背景、按钮、菜单、选择器和滚动条。夜间保持黑白灰。')}</span>
-                  </div>
-                  <ThemeColorControl />
-                </div>
-                </SettingsDetailSection> : activeEnvGroup ? <SettingsDetailSection heading={t(activeEnvGroup.title)} description={t('{count} 项设置，修改后自动保存。', { count: activeEnvGroup.items.length })}>
+                {activeSettingsSection === 'general:appearance' ? <SettingsFields form={form('appearance')}
+                  values={{ UI_BRAND_PREFIX: brandPrefix, UI_BRAND_TEXT: brandText, UI_LANGUAGE: language, UI_THEME_COLOR: themeColor, UI_THEME_MODE: themeMode }}
+                  onChange={(key, value) => updateSettingsPreference(key, value)} /> : activeEnvGroup ? <SettingsDetailSection heading={t(activeEnvGroup.title)} description={t('{count} 项设置，修改后自动保存。', { count: activeEnvGroup.items.length })}>
                   {renderEnvSettingList(activeEnvGroup.items)}
                 </SettingsDetailSection> : null}
               </div>
@@ -3100,72 +2881,17 @@ export function EnvironmentSettings({
                   </div>
                 </aside>
                 <div className="settings-model-detail">
-                <SettingsDetailSection className="settings-model-group settings-provider-basics" heading={t('基础信息')} description={t('配置供应商名称和可用状态。')}>
-                <div className="settings-row">
-                  <div>
-                    <strong>{t('默认服务商')}</strong>
-                    <span>{t('选择默认使用的 AI 模型服务提供商。')}</span>
-                  </div>
-                  <CustomSelect
-                    className="settings-control"
-                    value={editingModelConfig.provider}
-                    onChange={(nextValue) => selectDefaultProvider(nextValue as ModelProvider)}
-                    options={visibleModelProviders.map((provider) => ({
-                      label: editingModelConfig.providers?.[provider.value]?.displayName?.trim() || t(provider.label),
-                      value: provider.value,
-                    }))}
-                  />
-                </div>
-                <div className="settings-row">
-                  <div>
-                    <strong>{t('供应商名称')}</strong>
-                    <span>{t('用于模型选择器中的分组名称，可按实际接入服务自由修改。')}</span>
-                  </div>
-                  <AppInput
-                    maxLength={80}
-                    onChange={(event) => updateActiveProviderSettings({ displayName: event.target.value })}
-                    placeholder={t(activeProviderOption.label)}
-                    value={activeProviderSettings.displayName || ''}
-                  />
-                </div>
-                <div className="settings-row">
-                  <div>
-                    <strong>{t('启用服务商')}</strong>
-                    <span>{t('开启后，该服务商下配置的模型才会出现在模型选择列表中。')}</span>
-                  </div>
-                  <button
-                    aria-label={t(activeProviderEnabled ? '关闭当前服务商' : '开启当前服务商')}
-                    aria-pressed={activeProviderEnabled}
-                    className={`settings-toggle${activeProviderEnabled ? ' on' : ''}`}
-                    onClick={() => updateActiveProviderSettings({ enabled: !activeProviderEnabled })}
-                    title={t(activeProviderEnabled ? '已开启' : '已关闭')}
-                    type="button"
-                  >
-                    <span />
-                  </button>
-                </div>
-                <div className="settings-row">
-                  <div>
-                    <strong>{t('访问密钥')}</strong>
-                    <span>{t(activeProviderOption.keyLabel)}</span>
-                  </div>
-                  <SecretInput
-                    key={`${activeProvider}:${editingModelConfig.updatedAt || ''}`}
-                    label={t('访问密钥')}
-                    disabled={Boolean(activeProviderOption.localAuth)}
-                    value={activeProviderSettings.apiKey || ''}
-                    onChange={(value) => updateActiveProviderSettings({ apiKey: value, hasApiKey: Boolean(value) || activeProviderSettings.hasApiKey })}
-                    storedPreview={activeProviderSettings.apiKeyPreview || (activeProviderSettings.hasApiKey ? '••••••••••••' : undefined)}
-                    source={{ kind: 'provider', provider: activeProvider }}
-                    headers={adminSettingsAuthorizationHeaders}
-                    placeholder={activeProviderOption.localAuth
-                      ? t('本地登录，无需 Key')
-                      : activeProviderSettings.hasApiKey
-                        ? t('已配置，留空表示不修改')
-                        : t('填写该服务商的访问密钥')}
-                  />
-                </div>
-                </SettingsDetailSection>
+                <SettingsFields form={form('provider.basic')}
+                  values={{ ...activeProviderSettings, provider: editingModelConfig.provider }}
+                  fieldOptions={{
+                    provider: { options: visibleModelProviders.map(provider => ({ label: editingModelConfig.providers?.[provider.value]?.displayName?.trim() || provider.label, value: provider.value })) },
+                    displayName: { placeholder: activeProviderOption.label },
+                    apiKey: { description: activeProviderOption.keyLabel, disabled: Boolean(activeProviderOption.localAuth) },
+                  }}
+                  secretPreview={activeProviderSettings.apiKeyPreview || (activeProviderSettings.hasApiKey ? '••••••••••••' : undefined)}
+                  secretSource={{ kind: 'provider', provider: activeProvider }} headers={adminSettingsAuthorizationHeaders}
+                  onChange={(key, value) => key === 'provider' ? selectDefaultProvider(value as ModelProvider)
+                    : updateActiveProviderSettings({ [key]: key === 'enabled' ? value === 'true' : value })} />
               <div className="settings-model-types" role="tablist" aria-label={t('模型类型')}>
                 {([{ id: 'language', label: '对话模型' }, ...mediaModelTypeDefinitions] as const).map((item) => (
                   <button key={item.id} type="button" role="tab" aria-selected={modelKind === item.id} className={modelKind === item.id ? 'active' : ''} onClick={() => setModelKind(item.id)}>{t(item.label)}</button>
@@ -3204,76 +2930,17 @@ export function EnvironmentSettings({
                   ><PencilLine aria-hidden="true" size={16} strokeWidth={1.9} /></button>
                 ) : undefined}
                 connection={modelKind === 'language' ? <>
-                {activeProviderOption.baseUrlLabel ? (
-                  <div className="settings-row">
-                    <div>
-                      <strong>{t(activeProviderOption.baseUrlLabel)}</strong>
-                      <span>{t(activeProvider.startsWith('openai-compatible')
-                        ? '填写服务商提供的 OpenAI 兼容 Base URL，通常以 /v1 结尾。'
-                        : '自定义兼容服务地址，留空使用默认地址。')}</span>
-                    </div>
-                    <AppInput value={activeProviderSettings.baseURL || ''} onChange={(event) => updateActiveProviderSettings({ baseURL: event.target.value })} placeholder={activeProviderOption.defaultBaseURL || t('默认地址')} />
-                  </div>
-                ) : null}
-                {activeProviderSupportsExtraRequestParameters ? (
-                  <div className="settings-row settings-extra-parameters-row">
-                    <div>
-                      <strong>{t('额外请求参数')}</strong>
-                      <span>{t('以键值对形式添加到每次 Chat Completions 请求。值支持布尔值、数字、JSON 对象、数组和字符串；model、messages、stream、tools、tool_choice 由应用管理。')}</span>
-                    </div>
-                    <div className="settings-extra-parameters-control">
-                      {activeProviderExtraRequestParameterRows.length ? (
-                        <div className="settings-extra-parameters-list">
-                          {activeProviderExtraRequestParameterRows.map((row) => (
-                            <div className="settings-extra-parameter-input-row" key={row.id}>
-                              <AppInput
-                                aria-invalid={activeProviderDuplicateExtraRequestParameterKeys.includes(row.key.trim()) || undefined}
-                                aria-label={t('参数名')}
-                                autoCapitalize="none"
-                                onChange={(event) => updateActiveProviderExtraRequestParameter(row.id, { key: event.target.value })}
-                                placeholder={t('参数名')}
-                                spellCheck={false}
-                                title={row.key || t('参数名')}
-                                value={row.key}
-                              />
-                              <AppInput
-                                aria-label={t('参数值')}
-                                onChange={(event) => updateActiveProviderExtraRequestParameter(row.id, { value: event.target.value })}
-                                placeholder={t('参数值，例如 true、0.2、"priority" 或 {"type":"adaptive"}')}
-                                spellCheck={false}
-                                title={row.value || t('参数值')}
-                                value={row.value}
-                              />
-                              <button
-                                aria-label={t('删除参数')}
-                                className="settings-model-row-button danger"
-                                onClick={() => removeActiveProviderExtraRequestParameter(row.id)}
-                                title={t('删除参数')}
-                                type="button"
-                              >
-                                <Trash2 size={15} />
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <span className="settings-extra-parameters-empty">{t('暂未添加额外请求参数。')}</span>
-                      )}
-                      {activeProviderDuplicateExtraRequestParameterKeys.length ? (
-                        <span className="settings-extra-parameters-error" role="alert">
-                          {t('额外请求参数名不能重复：{keys}', { keys: activeProviderDuplicateExtraRequestParameterKeys.join(', ') })}
-                        </span>
-                      ) : null}
-                      <button className="ui-button settings-add-parameter-button" onClick={addActiveProviderExtraRequestParameter} type="button">
-                        <Plus size={15} />
-                        {t('添加参数')}
-                      </button>
-                    </div>
-                  </div>
-                ) : null}
-                </> : renderMediaConnection()}
+                  <SettingsFields bare form={form('provider.connection')}
+                    values={{ baseURL: activeProviderSettings.baseURL, extraRequestParameters: activeProviderExtraRequestParameterRows }}
+                    fieldOptions={{ baseURL: { hidden: !activeProviderOption.baseUrlLabel, label: activeProviderOption.baseUrlLabel, placeholder: activeProviderOption.defaultBaseURL }, extraRequestParameters: { hidden: !activeProviderSupportsExtraRequestParameters } }}
+                    onChange={(key, value) => {
+                      if (key === 'extraRequestParameters') commitActiveProviderExtraRequestParameters(JSON.parse(value).map((pair: ExtraRequestParameterPair, index: number) => ({ ...pair, id: String(index) })));
+                      else updateActiveProviderSettings({ [key]: value });
+                    }} />
+                  {activeProviderDuplicateExtraRequestParameterKeys.length ? <span className="settings-extra-parameters-error" role="alert">{t('额外请求参数名不能重复：{keys}', { keys: activeProviderDuplicateExtraRequestParameterKeys.join(', ') })}</span> : null}
+                </> : renderMediaForm('connection')}
               >
-                {renderMediaGenerationParameters()}
+                {renderMediaForm('generation')}
               </ModelTypeSettings>}
                 </div>
               </div>

@@ -4,7 +4,8 @@ import {
   decryptCredentialSecret,
   encryptCredentialSecret,
 } from '@/server/credentials/credential-master-key';
-import { readRuntimeMeta, writeRuntimeMeta } from '@/server/storage/database-record-store';
+import { readRuntimeMeta } from '@/server/storage/database-record-store';
+import { databaseDriver, executeDatabase, queryDatabaseOne, runDatabaseTransaction } from '@/server/db/database';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 
 
@@ -48,8 +49,6 @@ const storeSchema = z.object({
   items: z.array(storedIntegrationSchema).max(200),
 }).strict();
 
-let mutationQueue = Promise.resolve();
-
 function integrationAad(record: Pick<StoredExternalIntegration, 'id' | 'category' | 'driverId'>) {
   return Buffer.from(`webpilot-external-integration\0${record.category}\0${record.driverId}\0${record.id}\0configuration`, 'utf8');
 }
@@ -91,8 +90,7 @@ function decryptConfiguration(record: StoredExternalIntegration) {
   }
 }
 
-async function readStore() {
-  const serialized = await readRuntimeMeta(externalIntegrationStoreKey);
+function parseStore(serialized: string | undefined) {
   if (!serialized) return { version: 2 as const, items: [] as StoredExternalIntegration[] };
   try {
     return storeSchema.parse(JSON.parse(serialized));
@@ -101,15 +99,23 @@ async function readStore() {
   }
 }
 
+async function readStore() {
+  return parseStore(await readRuntimeMeta(externalIntegrationStoreKey));
+}
+
 async function mutateStore<T>(operation: (items: StoredExternalIntegration[]) => Promise<T> | T) {
-  const pending = mutationQueue.then(async () => {
-    const store = await readStore();
+  return runDatabaseTransaction(async manager => {
+    const timestamp = new Date().toISOString();
+    await executeDatabase('INSERT INTO runtime_meta (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING',
+      [externalIntegrationStoreKey, JSON.stringify({ version: 2, items: [] }), timestamp], manager);
+    const row = await queryDatabaseOne<{ value: string }>(
+      `SELECT value FROM runtime_meta WHERE key = ?${databaseDriver() === 'postgres' ? ' FOR UPDATE' : ''}`, [externalIntegrationStoreKey], manager);
+    const store = parseStore(row?.value);
     const result = await operation(store.items);
-    await writeRuntimeMeta(externalIntegrationStoreKey, JSON.stringify({ version: 2, items: store.items }));
+    await executeDatabase('UPDATE runtime_meta SET value = ?, updated_at = ? WHERE key = ?',
+      [JSON.stringify({ version: 2, items: store.items }), timestamp, externalIntegrationStoreKey], manager);
     return result;
   });
-  mutationQueue = pending.then(() => undefined, () => undefined);
-  return pending;
 }
 
 function resolveStored(record: StoredExternalIntegration): ResolvedExternalIntegration {
@@ -149,7 +155,7 @@ export async function upsertExternalIntegration(input: {
   category: ExternalIntegrationCategory;
   driverId: string;
   name: string;
-  configuration: ExternalIntegrationConfiguration;
+  configuration: ExternalIntegrationConfiguration | ((existing: ResolvedExternalIntegration | undefined, items: ResolvedExternalIntegration[]) => ExternalIntegrationConfiguration);
   enabled: boolean;
 }) {
   return mutateStore((items) => {
@@ -165,7 +171,8 @@ export async function upsertExternalIntegration(input: {
     const record: StoredExternalIntegration = {
       ...identity,
       name: input.name.trim(),
-      configurationEnvelope: encryptConfiguration(input.configuration, identity),
+      configurationEnvelope: encryptConfiguration(typeof input.configuration === 'function'
+        ? input.configuration(existing ? resolveStored(existing) : undefined, items.map(resolveStored)) : input.configuration, identity),
       enabled: input.enabled,
       createdAt: existing?.createdAt || timestamp,
       updatedAt: timestamp,
