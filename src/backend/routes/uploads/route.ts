@@ -1,3 +1,4 @@
+import { runtimeConfiguration } from '@/server/settings/runtime-configuration';
 import { Readable } from 'node:stream';
 import { requestApplicationUserId } from '@/server/auth/user-context';
 import { ApiRequestError, apiError, apiJson } from '@/server/http/api-request';
@@ -35,8 +36,8 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    await store.applyRuntimeEnv();
-    const policy = readChatInterfaceSettings(process.env);
+    await store.refreshRuntimeSettings();
+    const policy = readChatInterfaceSettings(runtimeConfiguration());
     if (!policy.attachmentUploadEnabled) throw new ApiRequestError('附件上传已关闭', { status: 403 });
     const maxBytes = uploadMaxBytes();
     const contentLengthHeader = request.headers.get('content-length');

@@ -1,3 +1,4 @@
+import { runtimeSetting } from '@/server/settings/runtime-configuration';
 import { z } from 'zod';
 import { browserInteractionSchema } from '../agents/runtime-browser-interaction';
 import type { BrowserChatInteractionMode } from '@/lib/browser-chat-interaction-mode';
@@ -45,7 +46,7 @@ export function buildCodexObjectPrompt(
 }
 
 export function customRuntimePromptFromEnv() {
-  const rules = String(process.env.AI_CUSTOM_SYSTEM_PROMPT || '').trim();
+  const rules = String(runtimeSetting("AI_CUSTOM_SYSTEM_PROMPT") || '').trim();
   if (!rules) return '';
   return [
     'Additional user-configured rules (append-only):',

@@ -179,7 +179,11 @@ During Agent execution, `getHttpRequests` is available as a read-only diagnostic
 
 Docker is available for packaged runs because the app depends on Playwright and a Chromium runtime.
 
-1. Create `.env`, set the mounted/default user ID policy, and fill the provider key you want to use.
+1. Create `.env` for service deployment, database connection, and identity/administrator settings only. Configure model credentials, MCP services, tools, context, memory and interface options in Settings.
+   Business configuration is persisted in the database and published as immutable runtime snapshots. API and execution processes refresh it without restarting Orbit. New turns use the latest configuration; active work keeps its current instance until a safe transition. Browser startup settings automatically replace idle instances, and managed sandbox changes wait for active execution to finish. Existing conversations and stored authentication data remain available.
+
+   On the first upgrade, registered business settings in an existing `.env` are imported once, without overwriting settings already saved in the database. Later edits to those environment entries have no effect. A `.env` file is not required for configuring tools or models.
+
 2. Build and start:
 
 ```bash

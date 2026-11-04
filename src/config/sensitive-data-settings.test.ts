@@ -3,7 +3,7 @@ import {
   environmentSettingsTabs,
   isAdministratorOnlySettingsTab,
 } from '../components/environment-settings-model';
-import { normalizeRuntimeEnvValue, runtimeEnvDefinitions } from './settings';
+import { normalizeRuntimeSettingValue, runtimeSettingDefinitions } from './settings';
 
 const sensitiveDataSettingKeys = [
   'AI_SENSITIVE_DATA_FILTER_ENABLED',
@@ -25,21 +25,21 @@ describe('sensitive-data settings tab', () => {
   });
 
   it('keeps every GLiNER filter setting out of runtime settings', () => {
-    const definitionsByKey = new Map(runtimeEnvDefinitions.map((item) => [item.key, item]));
+    const definitionsByKey = new Map(runtimeSettingDefinitions.map((item) => [item.key, item]));
     for (const key of sensitiveDataSettingKeys) {
       expect(definitionsByKey.get(key)?.tab).toBe('sensitive-data');
     }
   });
 
   it('migrates the incompatible legacy GLiNER checkpoint', () => {
-    const definition = runtimeEnvDefinitions.find((item) => item.key === 'GLINER_MODEL');
+    const definition = runtimeSettingDefinitions.find((item) => item.key === 'GLINER_MODEL');
     expect(definition).toBeDefined();
-    expect(normalizeRuntimeEnvValue(definition!, 'urchade/gliner_multi-v2.1'))
+    expect(normalizeRuntimeSettingValue(definition!, 'urchade/gliner_multi-v2.1'))
       .toBe('fastino/gliner2.5-multi-v1');
   });
 
   it('uses the LiquidAI PII detector as the fixed-label companion model', () => {
-    const definition = runtimeEnvDefinitions.find((item) => item.key === 'GLINER_PII_MODEL');
+    const definition = runtimeSettingDefinitions.find((item) => item.key === 'GLINER_PII_MODEL');
     expect(definition?.defaultValue).toBe('LiquidAI/LFM2.5-Encoder-350M-PII-Detector');
   });
 });

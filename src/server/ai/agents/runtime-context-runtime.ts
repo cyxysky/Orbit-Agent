@@ -1,3 +1,4 @@
+import { runtimeSetting } from '@/server/settings/runtime-configuration';
 import { randomUUID } from 'node:crypto';
 import type { ModelMessage } from 'ai';
 import { jsonRecordFromUnknown, jsonValueFromString } from '@cjfclonedeep/capability-sdk';
@@ -133,7 +134,7 @@ export async function prepareRuntimeContext(input: RuntimeContextInput & {
   let attemptedCompaction = false;
   let lastCompactionError: ContextSummaryError | undefined;
   const rejectedBatchKeys = new Set<string>();
-  const configuredKeepRecent = Number(process.env.AI_CONTEXT_KEEP_RECENT_BLOCKS);
+  const configuredKeepRecent = Number(runtimeSetting('AI_CONTEXT_KEEP_RECENT_BLOCKS'));
   const keepRecent = Number.isFinite(configuredKeepRecent) ? Math.max(1, Math.floor(configuredKeepRecent)) : 4;
   const maximumInputTokens = input.inputBudgetTokens;
   let waveCount = 0;

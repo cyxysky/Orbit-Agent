@@ -1,3 +1,4 @@
+import { runtimeSetting } from '@/server/settings/runtime-configuration';
 import { createHash, randomUUID } from 'node:crypto';
 import { link, mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -28,8 +29,8 @@ async function renderPng(chart: ChartRecord, userId: string) {
   const identityTicket = createMountIdentityTicket({ userId }).ticket;
   url.searchParams.set('identityTicket', identityTicket);
   const browser = await chromium.launch({ headless: true, timeout: 30_000,
-    ...(process.env.AI_WEB_TEST_CHROMIUM_EXECUTABLE_PATH?.trim()
-      ? { executablePath: process.env.AI_WEB_TEST_CHROMIUM_EXECUTABLE_PATH.trim() } : {}),
+    ...(runtimeSetting('AI_WEB_TEST_CHROMIUM_EXECUTABLE_PATH')?.trim()
+      ? { executablePath: runtimeSetting('AI_WEB_TEST_CHROMIUM_EXECUTABLE_PATH')?.trim() } : {}),
   });
   const deadline = setTimeout(() => { void browser.close().catch(() => {}); }, 90_000);
   try {

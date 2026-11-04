@@ -1,3 +1,4 @@
+import { runtimeSetting } from '@/server/settings/runtime-configuration';
 import { randomUUID, createHash } from 'node:crypto';
 import { copyFile, mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
@@ -147,8 +148,8 @@ export async function renderVideoProject(id: string, revision: number, userIdVal
     const project = readProject(store, id, revision);
     const execution: CapabilityExecutionContext = { invocationId: randomUUID(), abortSignal: signal };
     const operations = createRemotionMediaOperations({
-      timeoutMs: Number(process.env.AGENT_MEDIA_TIMEOUT_MS) || 120_000,
-      renderTimeoutMs: Number(process.env.AGENT_VIDEO_RENDER_TIMEOUT_MS) || 900_000,
+      timeoutMs: Number(runtimeSetting('AGENT_MEDIA_TIMEOUT_MS')) || 120_000,
+      renderTimeoutMs: Number(runtimeSetting('AGENT_VIDEO_RENDER_TIMEOUT_MS')) || 900_000,
       resolveSource: ref => ownedSource(ref, userId),
       async publishArtifact(filePath) {
         signal?.throwIfAborted();

@@ -25,10 +25,8 @@ RUN if [ "$WEBPILOT_CAPABILITY_SOURCE" = "npm" ]; then cp /tmp/webpilot-package.
 RUN node scripts/stage-capability-runtime.mjs "$WEBPILOT_CAPABILITY_SOURCE"
 ARG WEBPILOT_BASE_PATH=
 ARG ORBIT_BASE_PATH=${WEBPILOT_BASE_PATH}
-ARG ORBIT_BRAND_PREFIX=
-ARG ORBIT_BRAND_TEXT=Orbit
-# Only public build-time settings belong in the image. Runtime values arrive via env_file / --env-file.
-RUN ORBIT_BASE_PATH="$ORBIT_BASE_PATH" ORBIT_BRAND_PREFIX="$ORBIT_BRAND_PREFIX" ORBIT_BRAND_TEXT="$ORBIT_BRAND_TEXT" npm run build
+# Only the public service mount path is compiled into the image.
+RUN ORBIT_BASE_PATH="$ORBIT_BASE_PATH" npm run build
 RUN npm prune --omit=dev
 
 FROM mcr.microsoft.com/playwright:v1.60.0-noble AS runner
@@ -45,7 +43,6 @@ RUN apt-get update \
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
-ENV HEADLESS_BROWSER=true
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 ENV LIBREOFFICE_PATH=/usr/bin/libreoffice
 ENV CAPABILITY_FILE_RUNTIME_DIR=/app/capability-runtime/file
@@ -54,8 +51,6 @@ ENV CAPABILITY_COMPUTER_RUNTIME_DIR=/app/capability-runtime/computer
 ENV LIBREOFFICE_UNO_PROGRAM_WORKER_PATH=/app/capability-runtime/file/python/libreoffice-program-worker.py
 ENV APP_DATA_DIR=/app
 ENV ARTIFACTS_DIR=/app/artifacts
-ENV AI_SENSITIVE_DATA_FILTER_ENABLED=false
-ENV AI_SENSITIVE_DATA_FILTER_FAILURE_MODE=closed
 
 COPY --from=build /app/package*.json ./
 COPY --from=build /app/node_modules ./node_modules

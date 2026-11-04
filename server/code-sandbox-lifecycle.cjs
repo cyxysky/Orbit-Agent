@@ -73,12 +73,12 @@ async function startManagedRunner({ appDir, environment, url }) {
   const child = spawn(process.execPath, [path.join(__dirname, 'code-sandbox-runner.js')], {
     cwd: appDir,
     env: {
-      ...environment,
+      ...process.env,
       CODE_SANDBOX_RUNNER_HOST: url.hostname === '[::1]' ? '::1' : url.hostname,
       CODE_SANDBOX_RUNNER_PORT: url.port || '80',
       CODE_SANDBOX_RUNNER_TOKEN: token,
       CODE_SANDBOX_RUNNER_CONCURRENCY: environment.AGENT_CODE_SANDBOX_MAX_CONCURRENCY || '2',
-      CODE_SANDBOX_PYTHON_PATH: environment.CODE_SANDBOX_PYTHON_PATH || environment.GLINER_PYTHON_PATH || '',
+      CODE_SANDBOX_PYTHON_PATH: environment.CODE_SANDBOX_PYTHON_PATH || process.env.CODE_SANDBOX_PYTHON_PATH || process.env.GLINER_PYTHON_PATH || '',
     },
     stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
     windowsHide: true,
@@ -126,7 +126,7 @@ async function startManagedRunner({ appDir, environment, url }) {
   }
 }
 
-function createCodeSandboxRunnerManager({ appDir }) {
+function createCodeSandboxRunnerManager({ appDir, canReconfigure = () => true }) {
   let runner, key, latestEnvironment, closed = false, lastCheck = 0, retryAfter = 0;
   let pending;
   let queue = Promise.resolve();
@@ -140,6 +140,10 @@ function createCodeSandboxRunnerManager({ appDir }) {
     const operation = queue.then(async () => {
       if (closed) return;
       if (nextKey !== key) {
+        // Keep in-flight turns on their original runner and credentials. New
+        // execution requests wait for this configuration barrier at the API.
+        while (runner && !closed && !canReconfigure()) await delay(100);
+        if (closed) return;
         await runner?.stop(); runner = undefined; key = nextKey; retryAfter = 0;
       }
       if (!url || Date.now() < retryAfter) return;

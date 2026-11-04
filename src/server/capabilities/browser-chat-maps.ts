@@ -1,3 +1,4 @@
+import { runtimeSetting } from '@/server/settings/runtime-configuration';
 import { createGoogleMapsClient, createMapsCapability, createMapsTool, mapsCapabilitySettings, MapsError, type GoogleMapsOptions } from '@cjfclonedeep/capability-sdk/maps';
 import { createFileSystemMapStore, reserveMapsRequest } from '@cjfclonedeep/capability-sdk/maps/node';
 import { artifactPath, appDataRoot } from '@/server/storage/paths';
@@ -15,7 +16,7 @@ function mapScope(runId: string) {
 }
 export function browserChatMapStore(runId: string) { return createFileSystemMapStore(artifactPath(mapScope(runId), 'maps')); }
 function mapConfiguration(): CapabilityConfiguration {
-  return Object.fromEntries(mapsCapabilitySettings.map(setting => [setting.key, process.env[setting.key] ?? setting.defaultValue]));
+  return Object.fromEntries(mapsCapabilitySettings.map(setting => [setting.key, runtimeSetting(setting.key) ?? setting.defaultValue]));
 }
 function clientOptions(configuration: CapabilityConfiguration): GoogleMapsOptions {
   return { configuration, reserveRequest: (kind, signal) => reserveMapsRequest(path.join(appDataRoot(), '.data', 'maps-usage'), kind,

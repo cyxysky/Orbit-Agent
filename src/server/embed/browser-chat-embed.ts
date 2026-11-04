@@ -1,3 +1,4 @@
+import { runtimeSetting } from '@/server/settings/runtime-configuration';
 import crypto from 'node:crypto';
 import { joinWebPilotUrl, WEBPILOT_BASE_PATH } from '@/lib/webpilot-base-path';
 import { ERROR_CODES, getErrorCode, withErrorCode } from '@cjfclonedeep/capability-sdk';
@@ -73,7 +74,7 @@ function tokenSecret() {
   return process.env.WEBPILOT_EMBED_TOKEN_SECRET
     || process.env.AI_EMBED_TOKEN_SECRET
     || process.env.NEXTAUTH_SECRET
-    || process.env.AI_API_KEY
+    || runtimeSetting('AI_API_KEY')
     || 'webpilot-qa-local-embed-secret';
 }
 

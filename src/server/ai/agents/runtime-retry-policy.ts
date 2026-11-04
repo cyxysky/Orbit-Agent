@@ -1,3 +1,4 @@
+import { runtimeSetting } from '@/server/settings/runtime-configuration';
 
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 export type RuntimeRetryCategory =
@@ -304,7 +305,7 @@ export function classifyRuntimeRetry(error: unknown, signal?: AbortSignal): Runt
 }
 
 function configuredDelay(name: string, fallback: number) {
-  const value = Number(process.env[name]);
+  const value = Number(runtimeSetting(name));
   return Number.isFinite(value) && value >= 0 ? Math.floor(value) : fallback;
 }
 

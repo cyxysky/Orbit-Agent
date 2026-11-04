@@ -40,7 +40,7 @@ export async function POST(request: Request) {
           providers: saved?.providers || {},
           mediaSelections: { ...saved?.mediaSelections, [media.kind]: { provider: selection.provider, model: media.id } },
         });
-        await store.applyRuntimeEnv();
+        await store.refreshRuntimeSettings();
         return apiJson(request, { ok: true, ...await readModelSettingsState() });
       }
       const definition = modelProviderDefinition(selection.provider);
@@ -63,7 +63,7 @@ export async function POST(request: Request) {
           },
         },
       });
-      await store.applyRuntimeEnv();
+      await store.refreshRuntimeSettings();
       return apiJson(request, { ok: true, ...await readModelSettingsState() });
     });
   } catch (error) {

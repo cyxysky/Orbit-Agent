@@ -85,6 +85,15 @@ export function createExecutionSupervisor() {
   };
   return {
     ensure,
+    isIdle: () => !worker?.tasks.size,
+    configurationBarrierRequired(pathname: string, method?: string) {
+      if (method !== 'POST') return false;
+      const chat = /^\/api\/(?:embed\/)?browser-chat\/([^/]+)\/(?:message|retry)$/.exec(pathname);
+      // Steering an active turn, confirmations, previews and interruption must
+      // remain reachable while another request waits for resource replacement.
+      if (chat) return ![...(worker?.tasks.values() || [])].some(task => task.kind === 'chat' && task.id === chat[1]);
+      return /^\/api\/automation\/cases\/[^/]+\/run$/.test(pathname);
+    },
     status: () => ({ pid: worker?.child.pid, ready: Boolean(worker?.port) }),
     async proxy(request: IncomingMessage, response: ServerResponse, pathname: string) {
       const current = await ensure();

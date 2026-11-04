@@ -63,7 +63,7 @@ export async function POST(request: Request) {
       throw new ApiRequestError('请至少添加一个有效评测用例。', { code: ERROR_CODES.EVALUATION_SET_EMPTY, status: 400 });
     }
 
-    await store.applyRuntimeEnv();
+    await store.refreshRuntimeSettings();
     const redaction = await redactSensitiveTexts(cases.map((item) => item.text), request.signal);
     let truePositiveCount = 0;
     let falsePositiveCount = 0;

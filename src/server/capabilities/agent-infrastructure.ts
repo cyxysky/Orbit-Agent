@@ -1,3 +1,4 @@
+import { runtimeSetting } from '@/server/settings/runtime-configuration';
 import { mediaModelsForConfig } from '@/lib/model-selection';
 import { resolveCodexCliPath } from '@/server/ai/codex-cli';
 import { randomUUID } from 'node:crypto';
@@ -113,7 +114,7 @@ export async function createConfiguredMediaOperations(input: { context: Capabili
   const configuration = mediaModelsForConfig(await store.getModelConfig());
   const generation = createAiSdkMediaGenerationOperations({
     configuration,
-    codex: { codexPath: resolveCodexCliPath(process.env.CODEX_PATH, process.cwd()) },
+    codex: { codexPath: resolveCodexCliPath(runtimeSetting('CODEX_PATH'), process.cwd()) },
     selectedModels: configuration.defaults,
     async readSource(ref, context) {
       context.abortSignal?.throwIfAborted();
@@ -168,8 +169,8 @@ export async function createConfiguredMediaOperations(input: { context: Capabili
 export async function agentMediaToolTimeoutMs() {
   const configuration = mediaModelsForConfig(await store.getModelConfig());
   return Math.max(
-    Number(process.env.AGENT_VIDEO_RENDER_TIMEOUT_MS) || 900_000,
-    Number(process.env.AGENT_MEDIA_TIMEOUT_MS) || 120_000,
+    Number(runtimeSetting('AGENT_VIDEO_RENDER_TIMEOUT_MS')) || 900_000,
+    Number(runtimeSetting('AGENT_MEDIA_TIMEOUT_MS')) || 120_000,
     ...configuration.models.filter(model => model.enabled).map(model => model.timeoutMs),
   ) + 30_000;
 }

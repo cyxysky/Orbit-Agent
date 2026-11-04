@@ -1,3 +1,6 @@
+import { runtimeConfiguration } from '@/server/settings/runtime-configuration';
+import { runtimeCapabilityConfigStore } from '@/server/settings/capability-config-store';
+import { runtimeSetting } from '@/server/settings/runtime-configuration';
 import { executeAppServerBrowserTurn, reviewAppServerCompletion } from './browser-chat-app-server-runtime';
 import { browserInteractionSchema, browserInteractionInstructions, executeBrowserInteraction } from './runtime-browser-interaction';
 import { normalizeBrowserChatInteractionMode, type BrowserChatInteractionMode } from '@/lib/browser-chat-interaction-mode';
@@ -16,7 +19,7 @@ import { browserCapabilityManifest, browserCapabilityToolNames } from '@cjfclone
 import { chartCapabilityManifest, chartCapabilityToolNames } from '@cjfclonedeep/capability-sdk/chart';
 import { mapsCapabilityManifest } from '@cjfclonedeep/capability-sdk/maps';
 import { browserChatMapsCapability } from '@/server/capabilities/browser-chat-maps';
-import { createAISDKResponseTool, EnvironmentCapabilityConfigStore, mountAISDKCapabilities } from '@cjfclonedeep/capability-sdk/ai-sdk';
+import { createAISDKResponseTool, mountAISDKCapabilities } from '@cjfclonedeep/capability-sdk/ai-sdk';
 import type { AiRequestSnapshot, AiToolContextSnapshot, BrowserOperationRecord, StepExecutionResult, StepToolCall, VisualFrameRecord } from '@/server/ai/schemas/runtime.schema';
 import { getModelSettings } from '@/server/ai/model';
 import { codexRuntimeError } from '@/server/ai/codex-runtime-errors';
@@ -595,7 +598,7 @@ class VisualContextManager {
   private currentId?: string;
   private sequence = 0;
 
-  constructor(private readonly maxHistory = Math.max(0, Math.min(3, Math.floor(9000 / Math.max(1, imageTokenEstimatePerImage())) - 1, boundedInteger(process.env.AI_VISUAL_HISTORY_LIMIT, 3, 0, 3)))) {}
+  constructor(private readonly maxHistory = Math.max(0, Math.min(3, Math.floor(9000 / Math.max(1, imageTokenEstimatePerImage())) - 1, boundedInteger(runtimeSetting('AI_VISUAL_HISTORY_LIMIT'), 3, 0, 3)))) {}
 
   append(frame: Omit<VisualFrameRecord, 'id' | 'role' | 'createdAt'>, mode: 'replace' | 'append' | 'keep-pair' | 'refresh' = 'replace') {
     if (this.current()?.path === frame.path) return this.current()!;
@@ -949,7 +952,7 @@ async function makeBrowserTools(
     const run = async () => {
       throwIfStopped(referenceOptions?.abortSignal, referenceOptions?.shouldContinue);
       const actionWithCancellation = async (actionSignal?: AbortSignal, trace?: ToolTrace) => {
-        if (!isToolCapabilityEnabled(name, process.env)) {
+        if (!isToolCapabilityEnabled(name, runtimeConfiguration())) {
           return { ok: false, actual: `Tool ${name} has been disabled globally. No action was executed.` } satisfies BrowserActionResult;
         }
         // Preserve the SDK's per-tool deadline as well as turn cancellation.
@@ -1044,7 +1047,7 @@ async function makeBrowserTools(
   }
 
   const allowedCapabilityToolNames = new Set(
-    (referenceOptions?.allowedToolTypes ?? nativeRuntimeToolNames()).filter(name => isToolCapabilityEnabled(name, process.env)),
+    (referenceOptions?.allowedToolTypes ?? nativeRuntimeToolNames()).filter(name => isToolCapabilityEnabled(name, runtimeConfiguration())),
   );
   const infrastructureProviders = createAgentInfrastructureProviders({
     attachmentBindings: referenceOptions?.attachmentBindings,
@@ -1092,7 +1095,7 @@ async function makeBrowserTools(
       userId: referenceOptions?.userId,
       abortSignal: referenceOptions?.abortSignal,
     },
-    configStore: new EnvironmentCapabilityConfigStore(process.env),
+    configStore: runtimeCapabilityConfigStore,
     enabledCapabilityIds,
     allowedToolNames: allowedCapabilityToolNames,
     skills: {

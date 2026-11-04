@@ -3,7 +3,6 @@ import { PHASE_DEVELOPMENT_SERVER } from 'next/constants';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { resolveWorkspaceBrand } from './electron/product-brand';
 import { applyOrbitEnvironment } from './server/orbit-environment';
 
 // Next compiles TypeScript configuration through a temporary
@@ -15,10 +14,6 @@ const configFilePath = resolve(projectRoot, 'next.config.ts');
 const configRevision = createHash('sha256').update(readFileSync(configFilePath)).digest('hex');
 const configuredBasePath = String(process.env.ORBIT_BASE_PATH ?? process.env.WEBPILOT_BASE_PATH ?? '').trim().replace(/^\/+|\/+$/g, '');
 const basePath = configuredBasePath ? `/${configuredBasePath}` : '';
-const { brandPrefix, brandText } = resolveWorkspaceBrand({
-  prefix: process.env.ORBIT_BRAND_PREFIX ?? process.env.WEBPILOT_BRAND_PREFIX,
-  text: process.env.ORBIT_BRAND_TEXT ?? process.env.WEBPILOT_BRAND_TEXT,
-});
 const capabilitySource = process.env.WEBPILOT_CAPABILITY_SOURCE === 'npm' ? 'npm' : 'workspace';
 
 export default function nextConfig(phase: string): NextConfig {
@@ -34,11 +29,7 @@ export default function nextConfig(phase: string): NextConfig {
     distDir: phase === PHASE_DEVELOPMENT_SERVER ? '.next-dev-ui' : '.next',
     env: {
       NEXT_PUBLIC_ORBIT_BASE_PATH: basePath,
-      NEXT_PUBLIC_ORBIT_BRAND_PREFIX: brandPrefix,
-      NEXT_PUBLIC_ORBIT_BRAND_TEXT: brandText,
       NEXT_PUBLIC_WEBPILOT_BASE_PATH: basePath,
-      NEXT_PUBLIC_WEBPILOT_BRAND_PREFIX: brandPrefix,
-      NEXT_PUBLIC_WEBPILOT_BRAND_TEXT: brandText,
     },
     // Do not let Turbopack walk out to an unrelated package-lock.json in a
     // parent directory (for example, the Windows user profile directory).

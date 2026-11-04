@@ -1,3 +1,4 @@
+import { runtimeSetting } from '@/server/settings/runtime-configuration';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { createReadStream, createWriteStream, existsSync } from 'node:fs';
@@ -261,14 +262,14 @@ export async function openCodexAppServer(input: { userId?: string; sessionId: st
     // text was being cut out of otherwise complete dynamic-tool receipts.
     tool_output_token_limit: 32768,
   };
-  const configuredWindow = settings.maxContextTokens || Number(process.env.AI_CONTEXT_WINDOW_TOKENS) || (native ? undefined : 256000);
+  const configuredWindow = settings.maxContextTokens || Number(runtimeSetting('AI_CONTEXT_WINDOW_TOKENS')) || (native ? undefined : 256000);
   if (configuredWindow && configuredWindow > 0) {
     config.model_context_window = Math.floor(configuredWindow);
-    const ratio = Number(process.env.AI_CONTEXT_COMPRESSION_TRIGGER_RATIO) || 0.85;
+    const ratio = Number(runtimeSetting('AI_CONTEXT_COMPRESSION_TRIGGER_RATIO')) || 0.85;
     config.model_auto_compact_token_limit = Math.floor(configuredWindow * Math.max(0.01, Math.min(0.99, ratio)));
   }
   if (bridge) {
-    const retries = Math.max(0, Math.min(10, Math.floor(Number(process.env.AI_RUNTIME_REQUEST_RETRY_ATTEMPTS) || 3) - 1));
+    const retries = Math.max(0, Math.min(10, Math.floor(Number(runtimeSetting('AI_RUNTIME_REQUEST_RETRY_ATTEMPTS')) || 3) - 1));
     env.ORBIT_CODEX_BRIDGE_TOKEN = bridge.token;
     config.model_provider = 'orbit';
     config['model_providers.orbit'] = { name: 'Orbit model bridge', base_url: bridge.baseUrl, env_key: 'ORBIT_CODEX_BRIDGE_TOKEN',
@@ -276,7 +277,7 @@ export async function openCodexAppServer(input: { userId?: string; sessionId: st
       // layers the same budget multiplies three configured attempts into nine.
       wire_api: 'responses', request_max_retries: 0, stream_max_retries: retries, stream_idle_timeout_ms: aiRuntimeRequestTimeoutMs() };
   }
-  const codexPath = resolveCodexCliPath(process.env.CODEX_PATH, process.cwd()) || 'codex';
+  const codexPath = resolveCodexCliPath(runtimeSetting('CODEX_PATH'), process.cwd()) || 'codex';
   const args = ['app-server', '--listen', 'stdio://'];
   for (const [key, value] of Object.entries(config)) args.push('-c', `${key}=${toml(value)}`);
   const command = /\.[cm]?js$/i.test(codexPath) ? process.execPath : codexPath;

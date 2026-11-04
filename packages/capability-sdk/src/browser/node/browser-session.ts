@@ -83,8 +83,10 @@ export type BrowserSessionOptions = {
   actionFrameLimit?: number;
   /** Host-owned artifact storage and optional durable browserCode state. */
   host?: BrowserSessionHost;
-  /** Per-runtime settings loaded by the Capability host; values override process.env. */
+  /** Per-runtime settings supplied by the capability host. */
   configuration?: CapabilityConfiguration;
+  /** Standalone clients may inherit environment settings; application hosts can disable it. */
+  inheritEnvironment?: boolean;
 };
 
 export type BrowserSessionHost = {
@@ -1684,11 +1686,11 @@ export class BrowserSession {
   }
 
   private runtimeEnvironment(): BrowserRuntimeEnvironment {
-    return { ...process.env, ...this.capabilityConfiguration };
+    return { ...(this.options.inheritEnvironment === false ? {} : process.env), ...this.capabilityConfiguration };
   }
 
   private configuredValue(key: string) {
-    return this.capabilityConfiguration[key] ?? process.env[key];
+    return this.capabilityConfiguration[key] ?? (this.options.inheritEnvironment === false ? undefined : process.env[key]);
   }
 
   private snapshotFrameConcurrency() {
@@ -1799,6 +1801,7 @@ export class BrowserSession {
       slowMoMs: options.slowMoMs,
       host: this.options.host,
       configuration: this.capabilityConfiguration,
+      inheritEnvironment: this.options.inheritEnvironment,
     });
     child.browserSurface = this.browserSurface;
     child.transportKind = this.transportKind;
@@ -1907,7 +1910,7 @@ export class BrowserSession {
     const connection = this.browserCodeConnection;
     if (!context || connection?.protocol !== 'cdp') throw new Error('Browser policy requires a CDP connection');
     await Promise.all([...this.ownedPages].filter(page => !page.isClosed()).map(page => guardNavigationRedirects(context, page,
-      () => ({ ...process.env, ...contextAccessPolicyConfigurations.get(context) }), connection.endpoint)));
+      () => ({ ...(this.options.inheritEnvironment === false ? {} : process.env), ...contextAccessPolicyConfigurations.get(context) }), connection.endpoint)));
   }
 
   private async startNow() {
@@ -2311,7 +2314,10 @@ export class BrowserSession {
 
   private async prepareContext(context: BrowserContext, options: { claimPages?: boolean } = {}) {
     contextAccessPolicyConfigurations.set(context, this.capabilityConfiguration);
-    const readContextPolicy: () => BrowserRuntimeEnvironment = () => ({ ...process.env, ...contextAccessPolicyConfigurations.get(context) });
+    const readContextPolicy: () => BrowserRuntimeEnvironment = () => ({
+      ...(this.options.inheritEnvironment === false ? {} : process.env),
+      ...contextAccessPolicyConfigurations.get(context),
+    });
     const policyEndpoint = this.browserCodeConnection?.endpoint || '';
     const hasRules = (policy: BrowserRuntimeEnvironment) => Boolean(policy.BROWSER_DOMAIN_ALLOWLIST?.trim() || policy.BROWSER_DOMAIN_DENYLIST?.trim());
     const needsAccessPolicy = hasRules(readContextPolicy()) || context.pages().some(page => hasRules((pageAccessPolicyReaders.get(page) || readContextPolicy)()));

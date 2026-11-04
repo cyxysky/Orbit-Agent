@@ -18,10 +18,7 @@ const TEXT_STORAGE_KEY = 'orbit.brandText';
 const LEGACY_PREFIX_STORAGE_KEY = 'webpilotqa.brandPrefix';
 const LEGACY_TEXT_STORAGE_KEY = 'webpilotqa.brandText';
 const MAX_BRAND_PART_LENGTH = 48;
-const { brandPrefix: DEFAULT_BRAND_PREFIX, brandText: DEFAULT_BRAND_TEXT } = resolveWorkspaceBrand({
-  prefix: process.env.NEXT_PUBLIC_ORBIT_BRAND_PREFIX ?? process.env.NEXT_PUBLIC_WEBPILOT_BRAND_PREFIX,
-  text: process.env.NEXT_PUBLIC_ORBIT_BRAND_TEXT ?? process.env.NEXT_PUBLIC_WEBPILOT_BRAND_TEXT,
-});
+const { brandPrefix: DEFAULT_BRAND_PREFIX, brandText: DEFAULT_BRAND_TEXT } = resolveWorkspaceBrand();
 
 type WorkspaceBrandContextValue = {
   brandPrefix: string;

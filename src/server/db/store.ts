@@ -1,25 +1,19 @@
 import {
-  defaultModelByProvider,
   defaultModelForProvider,
   defaultModelProviderSettings,
   isModelProvider,
   modelListForProvider,
-  modelProviderDefinition,
   modelProviderDefinitionsForConfig,
   normalizeMiniMaxOpenAIBaseURL,
-  openAICompatibleProviderIndex,
   removeCustomModelProviders,
   type OpenAICompatibleModelProvider,
-  migrateRuntimeEnvValue,
-  runtimeEnvDefinitions,
-  runtimeEnvKeys,
 } from '@/config/settings';
 import { normalizeApplicationUserId } from '@/server/auth/user-context';
 import type {
   ModelConfigRecord,
   ModelProvider,
   ModelProviderSettings,
-  RuntimeEnvRecord,
+  RuntimeSettingRecord,
   SkillContent,
   SkillRecord,
 } from '@/server/ai/schemas/runtime.schema';
@@ -37,17 +31,19 @@ import {
   readSkillById,
   readSkillsByIds,
   readSkills,
-  writeConfigRecord,
+  writeModelConfigRecord,
+  patchRuntimeSettingsRecords,
   writeRuntimeMeta,
   writeSkillRecord,
   writeSkillRecords,
   writeSkillRecordsQueued,
 } from '@/server/storage/database-record-store';
+import { publishRuntimeConfiguration } from '@/server/settings/runtime-configuration';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 
 
 type ConfigStoreData = {
-  runtimeEnv: RuntimeEnvRecord[];
+  runtimeSettings: RuntimeSettingRecord[];
   modelConfig?: ModelConfigRecord;
 };
 
@@ -66,96 +62,6 @@ function normalizeExtraRequestParameters(value: unknown) {
   } catch {
     return '';
   }
-}
-
-const modelApiKeyEnv: Partial<Record<ModelProvider, string>> = {
-  'ai-gateway': 'AI_GATEWAY_API_KEY',
-  alibaba: 'ALIBABA_API_KEY',
-  anthropic: 'ANTHROPIC_API_KEY',
-  'azure-openai': 'AZURE_OPENAI_API_KEY',
-  bedrock: 'AWS_BEARER_TOKEN_BEDROCK',
-  cerebras: 'CEREBRAS_API_KEY',
-  codex: '',
-  cohere: 'COHERE_API_KEY',
-  deepinfra: 'DEEPINFRA_API_KEY',
-  deepseek: 'DEEPSEEK_API_KEY',
-  fireworks: 'FIREWORKS_API_KEY',
-  google: 'GOOGLE_GENERATIVE_AI_API_KEY',
-  groq: 'GROQ_API_KEY',
-  huggingface: 'HUGGINGFACE_API_KEY',
-  'llama-cpp': 'LLAMA_CPP_API_KEY',
-  lmstudio: 'LMSTUDIO_API_KEY',
-  minimax: 'MINIMAX_API_KEY',
-  mistral: 'MISTRAL_API_KEY',
-  ollama: 'OLLAMA_API_KEY',
-  openai: 'OPENAI_API_KEY',
-  'openai-compatible': 'OPENAI_COMPATIBLE_API_KEY',
-  'openai-compatible-2': 'OPENAI_COMPATIBLE_2_API_KEY',
-  'openai-compatible-3': 'OPENAI_COMPATIBLE_3_API_KEY',
-  openrouter: 'OPENROUTER_API_KEY',
-  perplexity: 'PERPLEXITY_API_KEY',
-  togetherai: 'TOGETHERAI_API_KEY',
-  vercel: 'VERCEL_API_KEY',
-  xai: 'XAI_API_KEY',
-};
-
-const modelBaseUrlEnv: Partial<Record<ModelProvider, string>> = {
-  'ai-gateway': 'AI_GATEWAY_BASE_URL',
-  alibaba: 'ALIBABA_BASE_URL',
-  anthropic: 'ANTHROPIC_BASE_URL',
-  'azure-openai': 'AZURE_OPENAI_BASE_URL',
-  bedrock: 'AWS_REGION',
-  cerebras: 'CEREBRAS_BASE_URL',
-  codex: '',
-  cohere: 'COHERE_BASE_URL',
-  deepinfra: 'DEEPINFRA_BASE_URL',
-  deepseek: 'DEEPSEEK_BASE_URL',
-  fireworks: 'FIREWORKS_BASE_URL',
-  google: '',
-  groq: 'GROQ_BASE_URL',
-  huggingface: 'HUGGINGFACE_BASE_URL',
-  'llama-cpp': 'LLAMA_CPP_BASE_URL',
-  lmstudio: 'LMSTUDIO_BASE_URL',
-  minimax: 'MINIMAX_BASE_URL',
-  mistral: 'MISTRAL_BASE_URL',
-  ollama: 'OLLAMA_BASE_URL',
-  openai: 'OPENAI_BASE_URL',
-  'openai-compatible': 'OPENAI_COMPATIBLE_BASE_URL',
-  'openai-compatible-2': 'OPENAI_COMPATIBLE_2_BASE_URL',
-  'openai-compatible-3': 'OPENAI_COMPATIBLE_3_BASE_URL',
-  openrouter: '',
-  perplexity: 'PERPLEXITY_BASE_URL',
-  togetherai: 'TOGETHERAI_BASE_URL',
-  vercel: 'VERCEL_BASE_URL',
-  xai: 'XAI_BASE_URL',
-};
-
-const modelExtraRequestParametersEnv: Partial<Record<ModelProvider, string>> = {
-  minimax: 'MINIMAX_EXTRA_REQUEST_PARAMETERS',
-  'openai-compatible': 'OPENAI_COMPATIBLE_EXTRA_REQUEST_PARAMETERS',
-  'openai-compatible-2': 'OPENAI_COMPATIBLE_2_EXTRA_REQUEST_PARAMETERS',
-  'openai-compatible-3': 'OPENAI_COMPATIBLE_3_EXTRA_REQUEST_PARAMETERS',
-};
-
-function openAICompatibleEnvironmentPrefix(provider: ModelProvider) {
-  const index = openAICompatibleProviderIndex(provider);
-  if (!index) return '';
-  return index === 1 ? 'OPENAI_COMPATIBLE' : `OPENAI_COMPATIBLE_${index}`;
-}
-
-function modelApiKeyEnvironment(provider: ModelProvider) {
-  const prefix = openAICompatibleEnvironmentPrefix(provider);
-  return prefix ? `${prefix}_API_KEY` : modelApiKeyEnv[provider] || '';
-}
-
-function modelBaseUrlEnvironment(provider: ModelProvider) {
-  const prefix = openAICompatibleEnvironmentPrefix(provider);
-  return prefix ? `${prefix}_BASE_URL` : modelBaseUrlEnv[provider] || '';
-}
-
-function modelExtraRequestParametersEnvironment(provider: ModelProvider) {
-  const prefix = openAICompatibleEnvironmentPrefix(provider);
-  return prefix ? `${prefix}_EXTRA_REQUEST_PARAMETERS` : modelExtraRequestParametersEnv[provider] || '';
 }
 
 function normalizeStoredModelConfig(input?: ModelConfigRecord): ModelConfigRecord | undefined {
@@ -185,54 +91,6 @@ function normalizeStoredModelConfig(input?: ModelConfigRecord): ModelConfigRecor
   }
   const providerOrder = modelProviderDefinitionsForConfig(providers, input.providerOrder).map(({ value }) => value);
   return { provider, providers, providerOrder, mediaSelections: input.mediaSelections, updatedAt: input.updatedAt || now() };
-}
-
-function updateInitialEnv(values: Record<string, string | undefined>) {
-  const update = Reflect.get(globalThis, Symbol.for('webpilot.updateInitialRuntimeEnv'));
-  if (typeof update === 'function') update(values);
-  // Node processes own their environment; only the UI host maintains Next's
-  // initial-environment snapshot. Never load Next in an API/Agent process.
-}
-
-function applyModelConfig(config?: ModelConfigRecord) {
-  const normalized = normalizeStoredModelConfig(config);
-  configureRuntimeModelContexts(normalized?.providers);
-  if (!normalized) {
-    process.env.AI_MODEL_PROVIDER_ENABLED = 'false';
-    delete process.env.AI_PROVIDER;
-    delete process.env.AI_MODEL;
-    updateInitialEnv({ AI_MODEL_PROVIDER_ENABLED: 'false', AI_PROVIDER: undefined, AI_MODEL: undefined });
-    return;
-  }
-  const providerDefinitions = modelProviderDefinitionsForConfig(normalized.providers);
-  const modelEnvironmentKeys = ['AI_MODEL_PROVIDER_ENABLED', 'AI_PROVIDER', 'AI_MODEL'];
-  for (const definition of providerDefinitions) {
-    const settings = normalized.providers[definition.value] || defaultModelProviderSettings(definition.value);
-    const keyEnv = modelApiKeyEnvironment(definition.value);
-    if (keyEnv) modelEnvironmentKeys.push(keyEnv);
-    if (keyEnv) process.env[keyEnv] = settings.apiKey || '';
-    const baseUrlEnv = modelBaseUrlEnvironment(definition.value);
-    if (baseUrlEnv) modelEnvironmentKeys.push(baseUrlEnv);
-    if (baseUrlEnv) process.env[baseUrlEnv] = settings.baseURL || definition.defaultBaseURL || '';
-    const extraRequestParametersEnv = modelExtraRequestParametersEnvironment(definition.value);
-    if (extraRequestParametersEnv) modelEnvironmentKeys.push(extraRequestParametersEnv);
-    if (extraRequestParametersEnv) process.env[extraRequestParametersEnv] = settings.extraRequestParameters || '';
-  }
-  const activeProvider = normalized.providers[normalized.provider]?.enabled
-    ? normalized.provider
-    : providerDefinitions.find((definition) => normalized.providers[definition.value]?.enabled)?.value;
-  if (!activeProvider) {
-    process.env.AI_MODEL_PROVIDER_ENABLED = 'false';
-    delete process.env.AI_PROVIDER;
-    delete process.env.AI_MODEL;
-    updateInitialEnv(Object.fromEntries(modelEnvironmentKeys.map((key) => [key, process.env[key]])));
-    return;
-  }
-  const active = normalized.providers[activeProvider] || defaultModelProviderSettings(activeProvider);
-  process.env.AI_MODEL_PROVIDER_ENABLED = 'true';
-  process.env.AI_PROVIDER = activeProvider;
-  process.env.AI_MODEL = active.defaultModel || active.model || defaultModelByProvider[activeProvider] || modelProviderDefinition(activeProvider).defaultModel;
-  updateInitialEnv(Object.fromEntries(modelEnvironmentKeys.map((key) => [key, process.env[key]])));
 }
 
 function normalizeSkillItems(items: string[] | undefined, limit: number) {
@@ -305,13 +163,22 @@ function buildSkillRecord(input: UpsertSkillInput, existing: SkillRecord | undef
 async function readConfigData(): Promise<ConfigStoreData> {
   const stored = await readConfigRecord() as Partial<ConfigStoreData>;
   return {
-    runtimeEnv: stored.runtimeEnv || [],
+    runtimeSettings: stored.runtimeSettings || [],
     modelConfig: stored.modelConfig,
   };
 }
 
-async function writeConfigData(data: ConfigStoreData) {
-  await writeConfigRecord(data);
+let configurationRefresh: Promise<unknown> = Promise.resolve();
+function publishSavedConfiguration() {
+  const operation = configurationRefresh.then(async () => {
+    const data = await readConfigData();
+    const models = normalizeStoredModelConfig(data.modelConfig);
+    configureRuntimeModelContexts(models?.providers);
+    publishRuntimeConfiguration(data.runtimeSettings, models);
+    return data.runtimeSettings;
+  });
+  configurationRefresh = operation.catch(() => undefined);
+  return operation;
 }
 
 export const store = {
@@ -368,8 +235,8 @@ export const store = {
   async deleteSkill(skillId: string, userId?: string | number) {
     return deleteSkillRecord(skillId, normalizeApplicationUserId(userId));
   },
-  async listRuntimeEnv() {
-    return (await readConfigData()).runtimeEnv;
+  async listRuntimeSettings() {
+    return (await readConfigData()).runtimeSettings;
   },
   async listSensitiveDataEvaluationCases() {
     const serialized = await readRuntimeMeta(sensitiveDataEvaluationCasesMetaKey);
@@ -433,46 +300,25 @@ export const store = {
     }
     const providerOrder = modelProviderDefinitionsForConfig(providers, input.providerOrder ?? existing?.providerOrder).map(({ value }) => value);
     const config = removeCustomModelProviders({ provider: input.provider, providers, providerOrder, mediaSelections: mediaModelSelectionsSchema.parse(input.mediaSelections ?? existing?.mediaSelections ?? {}), updatedAt: timestamp }, removedProviders);
-    await writeConfigData({ ...data, modelConfig: config });
-    const removedEnvironment: Record<string, undefined> = {};
-    for (const provider of removedProviders) {
-      for (const key of [modelApiKeyEnvironment(provider), modelBaseUrlEnvironment(provider), modelExtraRequestParametersEnvironment(provider)]) {
-        if (key) { delete process.env[key]; removedEnvironment[key] = undefined; }
-      }
-    }
-    if (removedProviders.length) updateInitialEnv(removedEnvironment);
-    applyModelConfig(config);
+    await writeModelConfigRecord(config);
+    await publishSavedConfiguration();
     return config;
   },
-  async saveRuntimeEnv(items: Array<Pick<RuntimeEnvRecord, 'key' | 'value' | 'enabled' | 'secret'>>) {
-    const data = await readConfigData();
-    const runtimeEnv = items.filter((item) => item.key.trim()).map((item) => ({
+  async saveRuntimeSettings(items: Array<Pick<RuntimeSettingRecord, 'key' | 'value' | 'enabled' | 'secret'>>) {
+    const runtimeSettings = items.filter((item) => item.key.trim()).map((item) => ({
       key: item.key.trim(),
       value: item.value,
       enabled: item.enabled,
       secret: item.secret,
       updatedAt: now(),
     }));
-    await writeConfigData({ ...data, runtimeEnv });
-    return runtimeEnv;
+    const saved = await patchRuntimeSettingsRecords(runtimeSettings);
+    await publishSavedConfiguration();
+    return saved;
   },
-  async applyRuntimeEnv() {
-    const data = await readConfigData();
-    const allowedKeys = new Set(runtimeEnvKeys);
-    const savedByKey = new Map(data.runtimeEnv.filter((item) => allowedKeys.has(item.key)).map((item) => [item.key, item]));
-    for (const definition of runtimeEnvDefinitions) {
-      const item = savedByKey.get(definition.key);
-      if (item?.enabled === false) continue;
-      const configuredValue = migrateRuntimeEnvValue(
-        definition.key,
-        item?.value ?? process.env[definition.key] ?? definition.defaultValue,
-      );
-      const deploymentValue = process.env[definition.key];
-      if (!item && deploymentValue !== undefined && configuredValue === deploymentValue) continue;
-      process.env[definition.key] = configuredValue;
-      updateInitialEnv({ [definition.key]: configuredValue });
-    }
-    applyModelConfig(data.modelConfig);
-    return data.runtimeEnv;
+  async refreshRuntimeSettings() {
+    const { importLegacyConfigurationOnce } = await import('@/server/settings/legacy-configuration-migration');
+    await importLegacyConfigurationOnce();
+    return publishSavedConfiguration();
   },
 };

@@ -16,6 +16,7 @@ import {
   browserPreviewVideoDimensions,
 } from './video-encoder.ts';
 import { CodedError, ERROR_CODES } from '../../errors.ts';
+import type { BrowserRuntimeEnvironment } from '../node/browser-session-runtime.ts';
 
 
 
@@ -47,6 +48,7 @@ type BrowserPreviewClient = {
 type BrowserPreviewStream = {
   backpressureDrops: number;
   clients: Set<BrowserPreviewClient>;
+  configurationKey?: string;
   generation: number;
   key: string;
   lastTabs?: BrowserTabSnapshot[];
@@ -84,6 +86,7 @@ type BrowserPreviewWebSocketState = {
 
 export type BrowserPreviewServerOptions = {
   port?: number;
+  getConfiguration?: () => BrowserRuntimeEnvironment;
   authorize: (input: { origin: string; scope: 'browser-preview'; sessionId: string; ticket: string }) => Promise<{ userId: string } | undefined>;
   startScreencast: (sessionId: string, userId: string, handlers: Parameters<BrowserSession['startScreencast']>[0]) => Promise<Awaited<ReturnType<BrowserSession['startScreencast']>> | undefined>;
   dispatchInput: (sessionId: string, userId: string, input: BrowserLiveInput) => Promise<Awaited<ReturnType<BrowserSession['dispatchLiveInput']>> | undefined>;
@@ -101,6 +104,10 @@ export function createBrowserPreviewServer(options: BrowserPreviewServerOptions)
   const dispatchPreviewInput = options.dispatchInput;
   const authorize = options.authorize;
   const previewWebSocketPortStart = () => options.port ?? 18021;
+  const configuration = () => options.getConfiguration?.() || process.env;
+  const previewConfigurationKey = () => JSON.stringify(Object.entries(configuration())
+    .filter(([key]) => key.startsWith('BROWSER_PREVIEW_') || key.startsWith('BROWSER_SCREENCAST_'))
+    .sort(([a], [b]) => a.localeCompare(b)));
 function sendToClient(client: BrowserPreviewClient, payload: unknown) {
   if (client.socket.destroyed) return false;
   try {
@@ -310,7 +317,7 @@ function pushVideoFrame(stream: BrowserPreviewStream, frame: BrowserScreencastFr
   const dimensions = browserPreviewVideoDimensions({
     height: frame.metadata?.deviceHeight || frame.viewport.height,
     width: frame.metadata?.deviceWidth || frame.viewport.width,
-  });
+  }, configuration());
   const current = stream.videoEncoder?.metrics();
   if (current && (current.width !== dimensions.width || current.height !== dimensions.height)) {
     const encoder = stream.videoEncoder;
@@ -327,6 +334,7 @@ function pushVideoFrame(stream: BrowserPreviewStream, frame: BrowserScreencastFr
     let encoder!: BrowserPreviewVideoEncoder;
     try {
       encoder = new BrowserPreviewVideoEncoder({
+        configuration: configuration(),
         contentType: frame.contentType,
         framesPerSecond: browserPreviewFramesPerSecond(frame.framesPerSecond),
         height: dimensions.height,
@@ -390,6 +398,11 @@ function startStreamMetrics(stream: BrowserPreviewStream, metrics: () => Browser
     wireFrames: stream.wireFrames,
   };
   stream.metricsTimer = setInterval(() => {
+    if (stream.configurationKey !== previewConfigurationKey()) {
+      stream.transport = browserPreviewPreferredTransport(configuration().BROWSER_PREVIEW_TRANSPORT);
+      void restartStream(stream);
+      return;
+    }
     const pumpMetrics = stream.metrics?.();
     if (!pumpMetrics) return;
     const sampledAt = performance.now();
@@ -620,6 +633,7 @@ async function attachStream(stream: BrowserPreviewStream) {
     return;
   }
   const generation = ++stream.generation;
+  stream.configurationKey = previewConfigurationKey();
   stream.starting = (async () => {
     try {
       broadcastText(stream, { type: 'transportChanged', transport: stream.transport });
@@ -793,7 +807,7 @@ function createServer() {
       sessionId,
       socket: netSocket,
       streamKey: '',
-      transport: browserPreviewPreferredTransport(url.searchParams.get('transport') || undefined),
+      transport: browserPreviewPreferredTransport(url.searchParams.get('transport') || configuration().BROWSER_PREVIEW_TRANSPORT),
       userId: auth.userId,
     };
     client.streamKey = `${client.userId}\u0000${client.sessionId}\u0000${client.transport}`;

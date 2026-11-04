@@ -1,3 +1,4 @@
+import { runtimeSetting } from '@/server/settings/runtime-configuration';
 import { mkdir, readdir, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { databaseDriver, getDatabase, queryDatabase } from '@/server/db/database';
@@ -11,12 +12,12 @@ const runtimeState = ((globalThis as typeof globalThis & {
 }).__databaseMaintenanceState ??= {});
 
 function sqliteCompactionFreeRatio() {
-  const value = Number(process.env.SQLITE_COMPACTION_FREE_RATIO || 0.3);
+  const value = Number(runtimeSetting("SQLITE_COMPACTION_FREE_RATIO") || 0.3);
   return Number.isFinite(value) ? Math.max(0.1, Math.min(0.9, value)) : 0.3;
 }
 
 function sqliteCompactionMinimumFreePages() {
-  const value = Number(process.env.SQLITE_COMPACTION_MIN_FREE_PAGES || 1024);
+  const value = Number(runtimeSetting("SQLITE_COMPACTION_MIN_FREE_PAGES") || 1024);
   return Number.isFinite(value) ? Math.max(128, Math.floor(value)) : 1024;
 }
 
@@ -32,7 +33,7 @@ export async function compactDatabaseIfNeeded() {
   const freePagesBefore = await pragmaNumber('freelist_count');
   const pageSize = await pragmaNumber('page_size');
   const freeRatioBefore = pageCountBefore ? freePagesBefore / pageCountBefore : 0;
-  const shouldCompact = process.env.SQLITE_AUTO_COMPACT_ENABLED !== 'false'
+  const shouldCompact = runtimeSetting("SQLITE_AUTO_COMPACT_ENABLED") !== 'false'
     && freePagesBefore >= sqliteCompactionMinimumFreePages()
     && freeRatioBefore >= sqliteCompactionFreeRatio();
   if (shouldCompact) await queryDatabase('VACUUM');

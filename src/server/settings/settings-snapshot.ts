@@ -1,10 +1,11 @@
+import { runtimeSetting } from '@/server/settings/runtime-configuration';
 import {
   defaultModelForProvider,
   defaultModelProviderSettings,
   modelListForProvider,
   modelProviderDefinitionsForConfig,
-  migrateRuntimeEnvValue,
-  runtimeEnvDefinitions,
+  migrateRuntimeSettingValue,
+  runtimeSettingDefinitions,
 } from '@/config/settings';
 import type { ModelProvider, ModelProviderSettings } from '@/server/ai/schemas/runtime.schema';
 import { normalizedModelCapabilities } from '@/lib/model-capabilities';
@@ -31,13 +32,13 @@ function completeProviders(input?: Partial<Record<ModelProvider, ModelProviderSe
 }
 
 export async function readRuntimeSettingsItems() {
-  const savedByKey = new Map((await store.listRuntimeEnv()).map((item) => [item.key, item]));
-  return runtimeEnvDefinitions.map((definition) => {
+  const savedByKey = new Map((await store.listRuntimeSettings()).map((item) => [item.key, item]));
+  return runtimeSettingDefinitions.map((definition) => {
     const saved = savedByKey.get(definition.key);
     const secret = saved?.secret ?? Boolean(definition.secret);
-    const value = migrateRuntimeEnvValue(
+    const value = migrateRuntimeSettingValue(
       definition.key,
-      saved?.value ?? process.env[definition.key] ?? definition.defaultValue,
+      saved?.value ?? runtimeSetting(definition.key) ?? definition.defaultValue,
     );
     return {
       key: definition.key,
@@ -78,7 +79,7 @@ export async function readModelSettingsState() {
 
 export async function readEnvironmentSettingsSnapshot() {
   return {
-    envItems: await readRuntimeSettingsItems(),
+    runtimeItems: await readRuntimeSettingsItems(),
     modelConfig: (await readModelSettingsState()).config,
   };
 }

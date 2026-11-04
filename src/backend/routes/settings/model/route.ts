@@ -139,7 +139,7 @@ export async function POST(request: Request) {
         ? undefined
         : modelProviderDefinitionsForConfig(providersInput, body.providerOrder).map(({ value }) => value);
       await store.saveModelConfig({ provider, providers: providersInput, providerOrder }, removedProviders);
-      await store.applyRuntimeEnv();
+      await store.refreshRuntimeSettings();
       return apiJson(request, { ok: true, ...await readModelSettingsState() });
     });
   } catch (error) {

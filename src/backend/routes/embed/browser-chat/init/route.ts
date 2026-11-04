@@ -37,7 +37,7 @@ export function OPTIONS() {
 export async function POST(request: Request) {
   try {
     const body = await parseJsonRequest(request, initSchema, { maxBytes: 64 * 1024 });
-    await store.applyRuntimeEnv();
+    await store.refreshRuntimeSettings();
 
     const mountedIdentity = createMountIdentityTicket({
       origin: requestOrigin(request),

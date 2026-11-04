@@ -1,10 +1,11 @@
+import { runtimeSetting } from '@/server/settings/runtime-configuration';
 import { readFile } from 'node:fs/promises';
 import sharp from 'sharp';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 
 
 function aiScreenshotMaxBytes() {
-  const kb = Number(process.env.AI_SCREENSHOT_MAX_KB || '');
+  const kb = Number(runtimeSetting("AI_SCREENSHOT_MAX_KB") || '');
   if (!Number.isFinite(kb) || kb <= 0) return undefined;
   return Math.max(1, Math.floor(kb * 1024));
 }

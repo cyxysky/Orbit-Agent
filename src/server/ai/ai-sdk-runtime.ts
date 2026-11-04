@@ -1,3 +1,4 @@
+import { runtimeSetting } from '@/server/settings/runtime-configuration';
 import type { LanguageModelCallOptions, TelemetryOptions } from 'ai';
 import type { LanguageModelV4CallOptions } from '@ai-sdk/provider';
 import { currentReasoningEffort } from './reasoning-scope';
@@ -42,14 +43,14 @@ export function withAiReasoningSettings(options: LanguageModelV4CallOptions, pro
 }
 
 export function aiRequestTimeoutMs(fallback = 120_000) {
-  return positiveInteger(process.env.AI_REQUEST_TIMEOUT_MS, fallback);
+  return positiveInteger(runtimeSetting('AI_REQUEST_TIMEOUT_MS'), fallback);
 }
 
 /** Agent Loop requests can spend substantially longer on a large prompt before
  * emitting their first chunk. Keep this deadline separate from short auxiliary
  * model calls and expose it in runtime settings. */
 export function aiRuntimeRequestTimeoutMs() {
-  return positiveInteger(process.env.AI_RUNTIME_REQUEST_TIMEOUT_MS, 600_000);
+  return positiveInteger(runtimeSetting('AI_RUNTIME_REQUEST_TIMEOUT_MS'), 600_000);
 }
 
 /**
@@ -161,11 +162,11 @@ export function createAiRequestWatchdog(parentSignal?: AbortSignal, timeoutMs = 
 
 export function aiStreamTimeouts(requestTimeoutMs = aiRequestTimeoutMs()) {
   const requestMs = requestTimeoutMs;
-  const toolMs = positiveInteger(process.env.AI_TOOL_TIMEOUT_MS, 120_000);
+  const toolMs = positiveInteger(runtimeSetting('AI_TOOL_TIMEOUT_MS'), 120_000);
   // First output is independent of the much longer agent/tool deadline.
   // The runtime watchdog also covers provider setup and response-header wait.
-  const configuredFirstChunkMs = positiveInteger(process.env.AI_STREAM_FIRST_CHUNK_TIMEOUT_MS, requestMs);
-  const configuredChunkMs = positiveInteger(process.env.AI_STREAM_CHUNK_TIMEOUT_MS, requestMs);
+  const configuredFirstChunkMs = positiveInteger(runtimeSetting('AI_STREAM_FIRST_CHUNK_TIMEOUT_MS'), requestMs);
+  const configuredChunkMs = positiveInteger(runtimeSetting('AI_STREAM_CHUNK_TIMEOUT_MS'), requestMs);
   return {
     firstChunkMs: configuredFirstChunkMs,
     // AI SDK keeps the inter-chunk timer running while a tool executes. Keep
@@ -180,8 +181,8 @@ export function aiStreamTimeouts(requestTimeoutMs = aiRequestTimeoutMs()) {
  * Auxiliary-call settings must not prematurely cancel the agent request.
  * Recovery increases the first-output allowance, bounded by its request timeout. */
 export function aiRuntimeStreamTimeouts(requestTimeoutMs = aiRuntimeRequestTimeoutMs(), retryAttempt = 0, subagent = false) {
-  const baseMs = positiveInteger(subagent ? process.env.AI_SUBAGENT_FIRST_CHUNK_TIMEOUT_MS
-    ?? process.env.AI_RUNTIME_FIRST_CHUNK_TIMEOUT_MS : process.env.AI_RUNTIME_FIRST_CHUNK_TIMEOUT_MS, 180_000);
+  const baseMs = positiveInteger(subagent ? runtimeSetting("AI_SUBAGENT_FIRST_CHUNK_TIMEOUT_MS")
+    ?? runtimeSetting('AI_RUNTIME_FIRST_CHUNK_TIMEOUT_MS') : runtimeSetting('AI_RUNTIME_FIRST_CHUNK_TIMEOUT_MS'), 180_000);
   // A silent child must not keep its parent waiting through 3 + 6 + 10 minutes.
   // Requests that are producing output still use the inactivity watchdog.
   const exponent = subagent ? 0 : Math.min(10, Math.max(0, Math.floor(retryAttempt) || 0));
@@ -193,7 +194,7 @@ export function aiRuntimeStreamTimeouts(requestTimeoutMs = aiRuntimeRequestTimeo
 
 export function aiTelemetry(functionId: string): TelemetryOptions {
   return {
-    isEnabled: process.env.AI_TELEMETRY_ENABLED !== 'false',
+    isEnabled: runtimeSetting("AI_TELEMETRY_ENABLED") !== 'false',
     functionId,
     recordInputs: false,
     recordOutputs: false,

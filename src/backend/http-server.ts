@@ -1,3 +1,4 @@
+import { runtimeConfiguration, runtimeSetting } from '@/server/settings/runtime-configuration';
 import http from 'node:http';
 import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
@@ -13,8 +14,8 @@ function authorized(value: unknown) {
 }
 
 type CodeSandboxLifecycle = {
-  managedRunnerUrl(environment: NodeJS.ProcessEnv): URL | undefined;
-  sync(environment: NodeJS.ProcessEnv): Promise<void>;
+  managedRunnerUrl(configuration: Readonly<Record<string, string | undefined>>): URL | undefined;
+  sync(configuration: Readonly<Record<string, string | undefined>>): Promise<void>;
   close(): Promise<void>;
 };
 
@@ -24,15 +25,14 @@ export async function startBackend({ codeSandbox }: { codeSandbox?: CodeSandboxL
   let refreshing: Promise<void> = Promise.resolve();
   const refreshRuntime = () => {
     const operation = refreshing.then(async () => {
-      await store.applyRuntimeEnv();
+      await store.refreshRuntimeSettings();
       if (!codeSandbox) return;
       try {
-        if (codeSandbox.managedRunnerUrl(process.env) && !process.env.AGENT_CODE_SANDBOX_RUNNER_TOKEN?.trim()) {
-          const items = await store.listRuntimeEnv();
-          await store.saveRuntimeEnv([...items.filter(item => item.key !== 'AGENT_CODE_SANDBOX_RUNNER_TOKEN'), {
+        if (codeSandbox.managedRunnerUrl(runtimeConfiguration()) && !runtimeSetting('AGENT_CODE_SANDBOX_RUNNER_TOKEN')?.trim()) {
+          await store.saveRuntimeSettings([{
             key: 'AGENT_CODE_SANDBOX_RUNNER_TOKEN', value: randomBytes(32).toString('base64url'), enabled: true, secret: true,
           }]);
-          await store.applyRuntimeEnv();
+          await store.refreshRuntimeSettings();
         }
       } catch (error) {
         // A misconfigured sandbox must not prevent opening Settings to repair it.
@@ -43,7 +43,15 @@ export async function startBackend({ codeSandbox }: { codeSandbox?: CodeSandboxL
     return operation;
   };
   await refreshRuntime();
-  const syncCodeSandbox = () => codeSandbox?.sync(process.env).catch(error => {
+  // Shared persistence is the source of truth for API and execution processes,
+  // including background jobs that do not receive another HTTP request.
+  const configurationTimer = setInterval(() => {
+    void refreshRuntime().then(() => syncCodeSandbox()).catch(error => {
+      console.error('[settings] Configuration refresh failed', error instanceof Error ? error.name : 'Error');
+    });
+  }, 1000);
+  configurationTimer.unref();
+  const syncCodeSandbox = () => codeSandbox?.sync(runtimeConfiguration()).catch(error => {
     console.error('[code-sandbox] Runner synchronization failed', error);
   });
   await syncCodeSandbox();
@@ -64,16 +72,19 @@ export async function startBackend({ codeSandbox }: { codeSandbox?: CodeSandboxL
       if (pathname === '/api/health') {
         await sendWebResponse(Response.json({ ok: !closing, role: execution ? 'execution' : 'api', pid: process.pid, execution: supervisor?.status() }), outgoing); return;
       }
-      // Settings are persisted in the shared database; each process refreshes
-      // its own environment before serving the next request.
+      // Refresh the process-local configuration snapshot, never process.env.
       await refreshRuntime();
       // Runner health/recovery must not hold up unrelated page/API requests.
       // Its manager coalesces concurrent checks and monitors recovery itself.
       void syncCodeSandbox();
-      if (supervisor && executionRequest(pathname, incoming.method)) { await supervisor.proxy(incoming, outgoing, pathname); return; }
+      if (supervisor && executionRequest(pathname, incoming.method)) {
+        if (supervisor.configurationBarrierRequired(pathname, incoming.method)) await syncCodeSandbox();
+        await supervisor.proxy(incoming, outgoing, pathname);
+        return;
+      }
       const request = webRequest(incoming, outgoing);
       const response = await route(request, pathname);
-      if (pathname === '/api/settings/env' && incoming.method === 'POST' && response.ok) {
+      if (pathname === '/api/settings/runtime' && incoming.method === 'POST' && response.ok) {
         await refreshRuntime();
         void syncCodeSandbox();
       }
@@ -103,8 +114,9 @@ export async function startBackend({ codeSandbox }: { codeSandbox?: CodeSandboxL
     starting = start();
   } else void supervisor!.ensure().catch(error => console.error('[backend] Execution startup failed', error));
   console.log(`[backend] ${execution ? 'Execution' : 'API'} ready on 127.0.0.1:${port}`);
-  return { port, async close() {
+  return { port, executionIdle: () => supervisor?.isIdle() ?? true, async close() {
     closing = true;
+    clearInterval(configurationTimer);
     server.close();
     try {
       await supervisor?.close();

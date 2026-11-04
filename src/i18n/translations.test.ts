@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { modelProviderDefinitions, runtimeEnvDefinitions } from '@/config/settings';
+import { modelProviderDefinitions, runtimeSettingDefinitions } from '@/config/settings';
 import { hasChinese, translateText } from '@/i18n/translations';
 
 test('settings translations cover browser, account, and shared-resource copy', () => {
@@ -30,7 +30,7 @@ test('settings translations cover browser, account, and shared-resource copy', (
 test('all settings copy has an English translation', () => {
   const copy = [
     ...modelProviderDefinitions.flatMap((definition) => [definition.keyLabel, definition.baseUrlLabel]),
-    ...runtimeEnvDefinitions.flatMap((definition) => [
+    ...runtimeSettingDefinitions.flatMap((definition) => [
       definition.label,
       definition.description,
       definition.group,

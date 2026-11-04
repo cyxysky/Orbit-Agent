@@ -1,3 +1,4 @@
+import { runtimeSetting } from '@/server/settings/runtime-configuration';
 import { readFile, readdir, rm, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { artifactsRoot } from './paths';
@@ -24,7 +25,7 @@ function sessionIdFromArtifactDirectory(name: string) {
 }
 
 function configuredPositiveNumber(name: string, fallback: number) {
-  const value = Number(process.env[name]);
+  const value = Number(runtimeSetting(name));
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 

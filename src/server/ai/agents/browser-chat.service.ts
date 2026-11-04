@@ -1,3 +1,4 @@
+import { runtimeSetting } from '@/server/settings/runtime-configuration';
 import { normalizeReasoningEffort, type ReasoningEffortSetting } from '@/lib/reasoning-effort';
 import { recoverCodexBrowserChatOutputCycles } from './browser-chat-codex-output-recovery';
 import { normalizeBrowserChatInteractionMode, type BrowserChatInteractionMode } from '@/lib/browser-chat-interaction-mode';
@@ -15,7 +16,7 @@ import type {
   BrowserCodeAttachmentBinding,
   BrowserCodeCredentialBinding,
 } from '@cjfclonedeep/capability-sdk/browser/node';
-import { createWebPilotBrowserSession } from '@/server/capabilities/webpilot-browser';
+import { browserInstanceConfigurationKey, browserRuntimeConfiguration, createWebPilotBrowserSession } from '@/server/capabilities/webpilot-browser';
 import { normalizeApplicationUserId } from '@/server/auth/user-context';
 import { normalizeDisabledCapabilityTools } from './runtime-tool-catalog';
 import { readBrowserDomainCookies } from '@/server/credentials/browser-domain-cookie-vault';
@@ -598,7 +599,7 @@ function browserChatUserRuntimeKey(userId?: string | number) {
 }
 
 function browserChatUserBrowserIdleTimeoutMs() {
-  const configured = Number(process.env.BROWSER_USER_BROWSER_IDLE_TIMEOUT_MS || 3 * 60 * 1000);
+  const configured = Number(runtimeSetting("BROWSER_USER_BROWSER_IDLE_TIMEOUT_MS") || 3 * 60 * 1000);
   return Number.isFinite(configured)
     ? Math.min(24 * 60 * 60 * 1000, Math.max(60_000, Math.floor(configured)))
     : 3 * 60 * 1000;
@@ -775,37 +776,37 @@ function scheduleBrowserChatUserIdleClose(userId?: string | number) {
 }
 
 function browserChatLogLimit() {
-  const raw = Number(process.env.BROWSER_CHAT_LOG_LIMIT || 512);
+  const raw = Number(runtimeSetting("BROWSER_CHAT_LOG_LIMIT") || 512);
   const normalized = Number.isFinite(raw) ? Math.floor(raw) : 512;
   return Math.min(Math.max(normalized, 64), 10000);
 }
 
 function browserChatLogDetailCharacterLimit() {
-  const raw = Number(process.env.BROWSER_CHAT_LOG_DETAIL_CHARACTER_LIMIT || 96 * 1024);
+  const raw = Number(runtimeSetting("BROWSER_CHAT_LOG_DETAIL_CHARACTER_LIMIT") || 96 * 1024);
   const normalized = Number.isFinite(raw) ? Math.floor(raw) : 96 * 1024;
   return Math.min(Math.max(normalized, 8 * 1024), 1024 * 1024);
 }
 
 function browserChatLogCharacterLimit() {
-  const raw = Number(process.env.BROWSER_CHAT_LOG_CHARACTER_LIMIT || 2 * 1024 * 1024);
+  const raw = Number(runtimeSetting("BROWSER_CHAT_LOG_CHARACTER_LIMIT") || 2 * 1024 * 1024);
   const normalized = Number.isFinite(raw) ? Math.floor(raw) : 2 * 1024 * 1024;
   return Math.min(Math.max(normalized, 256 * 1024), 128 * 1024 * 1024);
 }
 
 function browserChatOutputCycleLimit() {
-  const raw = Number(process.env.BROWSER_CHAT_OUTPUT_CYCLE_LIMIT || 256);
+  const raw = Number(runtimeSetting("BROWSER_CHAT_OUTPUT_CYCLE_LIMIT") || 256);
   const normalized = Number.isFinite(raw) ? Math.floor(raw) : 256;
   return Math.min(Math.max(normalized, 32), 2_000);
 }
 
 function browserChatProgressPersistDelayMs() {
-  const raw = Number(process.env.BROWSER_CHAT_PROGRESS_PERSIST_DELAY_MS || 600);
+  const raw = Number(runtimeSetting("BROWSER_CHAT_PROGRESS_PERSIST_DELAY_MS") || 600);
   const normalized = Number.isFinite(raw) ? Math.floor(raw) : 100;
   return Math.min(Math.max(normalized, 0), 1000);
 }
 
 function browserChatStreamPublishDelayMs() {
-  const raw = Number(process.env.BROWSER_CHAT_STREAM_PUBLISH_DELAY_MS || 40);
+  const raw = Number(runtimeSetting("BROWSER_CHAT_STREAM_PUBLISH_DELAY_MS") || 40);
   const normalized = Number.isFinite(raw) ? Math.floor(raw) : 40;
   return Math.min(Math.max(normalized, 16), 160);
 }
@@ -909,20 +910,12 @@ function browserChatLogStorageLimit() {
 }
 
 function browserChatKeepBrowserOpenAfterTurn() {
-  return process.env.BROWSER_CHAT_KEEP_BROWSER_OPEN_AFTER_TURN !== 'false';
-}
-
-function browserChatBoundedNonNegativeEnv(key: string, fallback: number, max: number) {
-  const raw = Number(process.env[key]);
-  if (!Number.isFinite(raw) || raw < 0) return fallback;
-  return Math.min(Math.floor(raw), max);
+  return runtimeSetting("BROWSER_CHAT_KEEP_BROWSER_OPEN_AFTER_TURN") !== 'false';
 }
 
 function browserChatBrowserExecutionOptions() {
   return {
-    slowMoMs: browserChatBoundedNonNegativeEnv('BROWSER_CHAT_SLOW_MO_MS', 0, 2000),
-    popupWaitMs: browserChatBoundedNonNegativeEnv('BROWSER_CHAT_POPUP_WAIT_MS', 0, 3000),
-    actionFrameLimit: Math.max(1, browserChatBoundedNonNegativeEnv('BROWSER_CHAT_ACTION_FRAME_LIMIT', 24, 200)),
+    popupWaitMs: 0,
   };
 }
 
@@ -968,7 +961,7 @@ function normalizeSafetyMode(value: unknown): BrowserChatSafetyMode {
 }
 
 async function browserChatModelSettings(providerInput?: unknown, modelInput?: unknown) {
-  await store.applyRuntimeEnv();
+  await store.refreshRuntimeSettings();
   const config = await store.getModelConfig();
   if (!enabledModelProviders(config).length) {
     throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, '尚未启用模型服务商，请先在模型配置中开启至少一个服务商。');
@@ -1388,7 +1381,7 @@ async function createBrowserChatRuntimeOperationalContext(input: {
   const getContext = async () => {
     const domain = normalizePersonalMemoryDomain(browserChatMemoryUrl(input.browser, input.session));
     const knowledge = await resolver.refresh(domain, JSON.stringify([
-      personalMemoryEnabled(), process.env.AI_PERSONAL_MEMORY_PROMPT_LIMIT,
+      personalMemoryEnabled(), runtimeSetting('AI_PERSONAL_MEMORY_PROMPT_LIMIT'),
     ]));
     const credentials = await browserChatCredentialContext(input.session, credentialReferences);
     const officeDraftCatalog = await officeDraftCatalogForPrompt(input.session.id);
@@ -3259,6 +3252,7 @@ type BrowserChatTurnGuard = () => void;
 type BrowserChatStartOptions = {
   preferExistingPage?: boolean;
   abortSignal?: AbortSignal;
+  beginTurn?: boolean;
 };
 
 async function ensureStarted(
@@ -3288,7 +3282,7 @@ function createBrowserChatBrowser(session: BrowserChatSessionRecord, preferExist
   return createWebPilotBrowserSession({
     browserSurface: 'electron-embedded',
     browserProfileKey,
-    ...(process.env.ELECTRON_EMBEDDED_BROWSER === 'true' ? {} : { sharedBrowserRuntimeKey: browserProfileKey }),
+    ...(runtimeSetting("ELECTRON_EMBEDDED_BROWSER") === 'true' ? {} : { sharedBrowserRuntimeKey: browserProfileKey }),
     ...browserChatBrowserExecutionOptions(),
     browserCodeStateSessionId: session.id,
     isMarked: true,
@@ -3311,6 +3305,8 @@ async function browserForTurnDecision(
 ) {
   assertTurnActive?.();
   restoreBrowserSessionPrototype(session.browser);
+  if (options.beginTurn || !activeTurns.has(session.id)) await refreshBrowserProfileConfiguration(session);
+  session.browser?.configure(browserRuntimeConfiguration());
   if (session.browser && session.started && !session.browser.isUsable()) {
     assertTurnActive?.();
     appendLog(session, 'browser:stale', '历史对话的浏览器已关闭或页面已失效，正在重新接管本会话。');
@@ -3326,6 +3322,46 @@ async function browserForTurnDecision(
   return session.browser;
 }
 
+const browserConfigurationState = globalThis as typeof globalThis & {
+  __orbitBrowserProfileConfigurations?: Map<string, { key: string; pending?: Promise<void> }>;
+};
+const browserProfileConfigurations = browserConfigurationState.__orbitBrowserProfileConfigurations ??= new Map();
+
+async function refreshBrowserProfileConfiguration(session: BrowserChatSessionRecord) {
+  const profile = browserChatBrowserProfileKey(session);
+  const key = browserInstanceConfigurationKey();
+  const previous = browserProfileConfigurations.get(profile);
+  if (!previous) {
+    browserProfileConfigurations.set(profile, { key });
+    return;
+  }
+  if (previous.pending) {
+    await previous.pending;
+    return refreshBrowserProfileConfiguration(session);
+  }
+  if (previous.key === key) return;
+  const siblings = [...sessions.values()].filter(candidate => browserChatBrowserProfileKey(candidate) === profile);
+  // Finish active work on its existing instance. The next safe operation takes
+  // the new settings without interrupting another conversation's tool call.
+  if (siblings.some(candidate => candidate.id !== session.id && (candidate.busy || candidate.status === 'running'
+    || candidate.pendingToolConfirmation || activeTurns.has(candidate.id)))) return;
+  if ([...activeSubagents.values()].some(runtime => siblings.some(candidate => candidate.id === runtime.sessionId)
+    && !runtime.abortController.signal.aborted)) return;
+  const pending = Promise.all(siblings.map(async candidate => {
+    if (!candidate.browser) return;
+    restoreBrowserSessionPrototype(candidate.browser);
+    await candidate.browser.close({ force: true, preservePages: true });
+    candidate.browser = undefined;
+    candidate.started = false;
+  })).then(() => { browserProfileConfigurations.set(profile, { key }); });
+  previous.pending = pending;
+  try {
+    await pending;
+  } finally {
+    previous.pending = undefined;
+  }
+}
+
 async function ensureStartedNow(
   session: BrowserChatSessionRecord,
   assertTurnActive?: BrowserChatTurnGuard,
@@ -3339,7 +3375,7 @@ async function ensureStartedNow(
     return browser;
   }
   assertTurnActive?.();
-  await store.applyRuntimeEnv();
+  await store.refreshRuntimeSettings();
   const startedAt = Date.now();
   appendLog(session, 'browser:start', '正在启动或连接浏览器');
   const hasPriorConversation = session.steps.length > 0
@@ -3434,7 +3470,7 @@ export async function createBrowserChatSession(input: {
   title?: string;
   userId?: string | number;
 } = {}) {
-  await store.applyRuntimeEnv();
+  await store.refreshRuntimeSettings();
   const modelSettings = await browserChatModelSettings(input.modelProvider, input.model);
   const timestamp = now();
   const session: BrowserChatSessionRecord = {
@@ -3444,7 +3480,7 @@ export async function createBrowserChatSession(input: {
     browserGroupId: '',
     targetUrl: exportableTargetUrl(input.targetUrl || ''),
     safetyMode: normalizeSafetyMode(input.safetyMode),
-    browserInteractionMode: normalizeBrowserChatInteractionMode(process.env.BROWSER_CHAT_INTERACTION_MODE),
+    browserInteractionMode: normalizeBrowserChatInteractionMode(runtimeSetting('BROWSER_CHAT_INTERACTION_MODE')),
     disabledTools: normalizeDisabledCapabilityTools(input.disabledTools),
     modelProvider: modelSettings.provider,
     model: modelSettings.model,
@@ -3864,6 +3900,7 @@ export async function startBrowserChatScreencast(
   cancelBrowserChatUserIdleClose(userKey);
   let handle: Awaited<ReturnType<BrowserSession['startScreencast']>>;
   try {
+    browser.configure(browserRuntimeConfiguration());
     handle = await browser.startScreencast({
       onActivePageChanged: handlers.onActivePageChanged,
       onError: handlers.onError,
@@ -3931,7 +3968,7 @@ export async function dispatchBrowserChatPreviewInput(
 
   let resolvedInput = input;
   if (input.kind === 'files') {
-    const configuredMaxTotalBytes = Number(process.env.WEBPILOT_LIVE_FILE_MAX_BYTES || 100 * 1024 * 1024);
+    const configuredMaxTotalBytes = Number(runtimeSetting("WEBPILOT_LIVE_FILE_MAX_BYTES") || 100 * 1024 * 1024);
     const maxTotalBytes = Number.isFinite(configuredMaxTotalBytes)
       ? Math.min(512 * 1024 * 1024, Math.max(1024, configuredMaxTotalBytes))
       : 100 * 1024 * 1024;
@@ -4149,12 +4186,12 @@ async function startNextQueuedBrowserChatTurn(session: BrowserChatSessionRecord,
   }
   if (!queued || userMessageIndex < 0) return false;
 
-  await store.applyRuntimeEnv();
+  await store.refreshRuntimeSettings();
   cancelPendingToolConfirmation(session);
   cancelOrphanToolConfirmationsForSession(session.id);
   transitionBrowserChatSession(session, { type: 'confirmationCleared' });
   session.safetyMode = normalizeSafetyMode(queued.safetyMode);
-  session.browserInteractionMode = normalizeBrowserChatInteractionMode(process.env.BROWSER_CHAT_INTERACTION_MODE);
+  session.browserInteractionMode = normalizeBrowserChatInteractionMode(runtimeSetting('BROWSER_CHAT_INTERACTION_MODE'));
   session.disabledTools = normalizeDisabledCapabilityTools(queued.disabledTools);
   const modelSettings = await browserChatModelSettings(queued.modelProvider, queued.model);
   session.modelProvider = modelSettings.provider;
@@ -4273,7 +4310,7 @@ export async function sendBrowserChatMessage(
   const requestedSafetyMode = normalizeSafetyMode(safetyMode ?? session.safetyMode);
   const requestedDisabledTools = normalizeDisabledCapabilityTools(disabledTools ?? session.disabledTools);
   const requestedModelSettings = await browserChatModelSettings(modelProvider ?? session.modelProvider, model ?? session.model);
-  const requestedBrowserInteractionMode = normalizeBrowserChatInteractionMode(process.env.BROWSER_CHAT_INTERACTION_MODE);
+  const requestedBrowserInteractionMode = normalizeBrowserChatInteractionMode(runtimeSetting('BROWSER_CHAT_INTERACTION_MODE'));
   if (attachments.some(isBrowserChatImageAttachment) && !requestedModelSettings.supportsImageInput) {
     throw new ApiRequestError(
       `模型 ${requestedModelSettings.model} 未配置图片输入能力，请在“模型配置”中启用后再上传图片。`,
@@ -4299,7 +4336,7 @@ export async function sendBrowserChatMessage(
     && 'action' in pendingBrowserCall.input ? pendingBrowserCall.input.action : undefined;
   if (paused && ['requestUserInput', 'waitForHumanVerification'].includes(String(pendingAction))
     && !activeTurns.has(session.id)) {
-    await store.applyRuntimeEnv();
+    await store.refreshRuntimeSettings();
     session.safetyMode = requestedSafetyMode;
     session.browserInteractionMode = requestedBrowserInteractionMode;
     session.disabledTools = requestedDisabledTools;
@@ -4416,7 +4453,7 @@ export async function sendBrowserChatMessage(
     return clientSnapshot(session);
   }
   finalizeIdleRunningAssistantMessages(session);
-  await store.applyRuntimeEnv();
+  await store.refreshRuntimeSettings();
   cancelPendingToolConfirmation(session);
   cancelOrphanToolConfirmationsForSession(session.id);
   transitionBrowserChatSession(session, { type: 'confirmationCleared' });
@@ -6599,7 +6636,7 @@ async function runBrowserChatMessage(
       // The first main-browser tool starts this exact instance through
       // ensureBrowserStarted. Subagent browser work starts it explicitly when
       // acquiring a shared child page; ordinary chat, file, and skill work does not.
-      const browser = await browserForTurnDecision(session, assertTurnActive, { preferExistingPage: true });
+      const browser = await browserForTurnDecision(session, assertTurnActive, { preferExistingPage: true, beginTurn: true });
       assertTurnActive();
       const historicalMessages = await readBrowserChatFileMessages<BrowserChatMessage>(session.id);
       const usedMemoryIds = browserChatTurnUsedMemoryIds(session, assistantMessageId);

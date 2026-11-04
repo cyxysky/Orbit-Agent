@@ -1,3 +1,4 @@
+import { runtimeSetting } from '@/server/settings/runtime-configuration';
 import { randomUUID } from 'node:crypto';
 import { fuzzyRetrievalScore, normalizeRetrievalText } from '@/lib/fuzzy-retrieval';
 import { normalizeApplicationUserId } from '@/server/auth/user-context';
@@ -159,25 +160,25 @@ export function normalizePersonalMemoryUserId(value: unknown) {
 }
 
 export function personalMemoryEnabled() {
-  return process.env.AI_PERSONAL_MEMORY_ENABLED !== 'false';
+  return runtimeSetting("AI_PERSONAL_MEMORY_ENABLED") !== 'false';
 }
 
 export function personalMemoryExtractionEnabled() {
-  return personalMemoryEnabled() && process.env.AI_PERSONAL_MEMORY_EXTRACT_ENABLED !== 'false';
+  return personalMemoryEnabled() && runtimeSetting("AI_PERSONAL_MEMORY_EXTRACT_ENABLED") !== 'false';
 }
 
 function personalMemoryPromptLimit() {
-  const raw = Number(process.env.AI_PERSONAL_MEMORY_PROMPT_LIMIT || 6);
+  const raw = Number(runtimeSetting("AI_PERSONAL_MEMORY_PROMPT_LIMIT") || 6);
   return Number.isFinite(raw) ? Math.min(Math.max(Math.floor(raw), 0), 20) : 6;
 }
 
 function personalMemoryPromptMaxChars() {
-  const raw = Number(process.env.AI_PERSONAL_MEMORY_PROMPT_MAX_CHARS || 12000);
+  const raw = Number(runtimeSetting("AI_PERSONAL_MEMORY_PROMPT_MAX_CHARS") || 12000);
   return Number.isFinite(raw) ? Math.min(Math.max(Math.floor(raw), 1000), 120000) : 12000;
 }
 
 export function personalMemoryExtractionInputLimit() {
-  const raw = Number(process.env.AI_PERSONAL_MEMORY_EXTRACTION_INPUT_MAX_CHARS || 18000);
+  const raw = Number(runtimeSetting("AI_PERSONAL_MEMORY_EXTRACTION_INPUT_MAX_CHARS") || 18000);
   return Number.isFinite(raw) ? Math.min(Math.max(Math.floor(raw), 3000), 60000) : 18000;
 }
 

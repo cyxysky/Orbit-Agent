@@ -960,7 +960,7 @@
   white-space: nowrap;
 }
 
-.settings-apply-badge.is-startup {
+.settings-apply-badge.is-recreate {
   background: color-mix(in srgb, #e39a27 8%, var(--settings-surface));
   border-color: color-mix(in srgb, #e39a27 25%, var(--settings-border));
   color: color-mix(in srgb, #c57b12 82%, var(--settings-text));

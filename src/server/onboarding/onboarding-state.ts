@@ -143,7 +143,7 @@ export async function updateOnboardingState(userId: string, input: {
 }
 
 export async function readOnboardingReadiness(): Promise<WebPilotOnboardingReadiness> {
-  await store.applyRuntimeEnv();
+  await store.refreshRuntimeSettings();
   const modelState = await readModelSettingsState();
   const configuredProvider = modelState.config.provider;
   const provider = modelState.config.providers?.[configuredProvider]?.enabled

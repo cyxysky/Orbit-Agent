@@ -1,5 +1,6 @@
+import { runtimeSetting } from '@/server/settings/runtime-configuration';
 import { z } from 'zod';
-import { normalizeRuntimeEnvValue, runtimeEnvDefinitions } from '@/config/settings';
+import { normalizeRuntimeSettingValue, runtimeSettingDefinitions } from '@/config/settings';
 import { requestApplicationUserId } from '@/server/auth/user-context';
 import { store } from '@/server/db/store';
 import { ApiRequestError, apiError, apiJson, parseJsonRequest } from '@/server/http/api-request';
@@ -9,8 +10,8 @@ import { readRuntimeSettingsItems } from '@/server/settings/settings-snapshot';
 import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 
 
-const allowedKeys = new Set(runtimeEnvDefinitions.map((item) => item.key));
-const envSchema = z.object({
+const allowedKeys = new Set(runtimeSettingDefinitions.map((item) => item.key));
+const runtimeSettingsSchema = z.object({
   items: z.array(z.object({
     key: z.string().max(200),
     value: z.unknown().optional(),
@@ -28,45 +29,46 @@ export async function GET(request: Request) {
     requireAdmin(request);
     return apiJson(request, { saved: await readRuntimeSettingsItems() });
   } catch (error) {
-    return apiError(request, error, { fallback: '读取环境配置失败' });
+    return apiError(request, error, { fallback: '读取运行配置失败' });
   }
 }
 
 export async function POST(request: Request) {
   try {
     requireAdmin(request);
-    const body = await parseJsonRequest(request, envSchema, { maxBytes: 256 * 1024 });
+    const body = await parseJsonRequest(request, runtimeSettingsSchema, { maxBytes: 256 * 1024 });
     const userId = requestApplicationUserId(request);
-    return runIdempotentJson(request, {
+    return await runIdempotentJson(request, {
       fingerprint: idempotencyFingerprint(body),
-      scope: 'settings.environment',
+      scope: 'settings.runtime',
       userId,
     }, async () => {
-      const incomingByKey = new Map(body.items
-        .filter((item) => allowedKeys.has(item.key))
-        .map((item) => [item.key, item]));
-      const savedByKey = new Map((await store.listRuntimeEnv()).map((item) => [item.key, item]));
-      const sanitized = runtimeEnvDefinitions.map((definition) => {
+      if (body.items.some(item => !allowedKeys.has(item.key))) throw new ApiRequestError('包含未注册的运行配置。');
+      const incomingByKey = new Map(body.items.map((item) => [item.key, item]));
+      const savedByKey = new Map((await store.listRuntimeSettings()).map((item) => [item.key, item]));
+      const sanitized = runtimeSettingDefinitions.filter(definition => incomingByKey.has(definition.key)).map((definition) => {
         const item = incomingByKey.get(definition.key);
         const secret = Boolean(definition.secret);
-        const submittedValue = typeof item?.value === 'string' ? item.value : '';
+        let value = savedByKey.get(definition.key)?.value ?? runtimeSetting(definition.key) ?? definition.defaultValue;
+        if (typeof item?.value === 'string' && (!secret || item.value)) {
+          try {
+            value = normalizeRuntimeSettingValue(definition, item.value);
+          } catch (error) {
+            throw new ApiRequestError(error instanceof Error ? error.message : '配置值无效');
+          }
+        }
         return {
           key: definition.key,
-          value: secret && !submittedValue
-            ? savedByKey.get(definition.key)?.value ?? process.env[definition.key] ?? definition.defaultValue
-            : typeof item?.value === 'string' ? (() => {
-              try { return normalizeRuntimeEnvValue(definition, submittedValue); }
-              catch (error) { throw new ApiRequestError(error instanceof Error ? error.message : '配置值无效'); }
-            })() : definition.defaultValue,
+          value,
           enabled: true,
           secret,
         };
       });
-      await store.saveRuntimeEnv(sanitized);
-      await store.applyRuntimeEnv();
+      await store.saveRuntimeSettings(sanitized);
+      await store.refreshRuntimeSettings();
       return apiJson(request, { ok: true, saved: await readRuntimeSettingsItems() });
     });
   } catch (error) {
-    return apiError(request, error, { fallback: '保存环境配置失败' });
+    return apiError(request, error, { fallback: '保存运行配置失败' });
   }
 }

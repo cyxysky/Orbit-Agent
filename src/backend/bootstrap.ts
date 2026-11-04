@@ -1,6 +1,6 @@
 export async function startExecutionServices() {
   const { store } = await import('@/server/db/store');
-  await store.applyRuntimeEnv();
+  await store.refreshRuntimeSettings();
   const [{ startAutomationScheduler }, { startCommunicationRuntime, stopCommunicationRuntime }, { startMemoryExtractionWorker }] = await Promise.all([
     import('@/server/automation/automation-scheduler'), import('@/server/integrations/communication-runtime'),
     import('@/server/ai/runtime-memory-lifecycle'),

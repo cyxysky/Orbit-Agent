@@ -16,7 +16,7 @@ export const responseHandlers = new ResponseHandlerRegistry(responseRegistry)
     },
   }))
   .register(createMapResponseHandlers({
-    resolve: async (id, context) => { await store.applyRuntimeEnv(); return resolveBrowserChatMap(context.scopeId, id, context.signal); },
+    resolve: async (id, context) => { await store.refreshRuntimeSettings(); return resolveBrowserChatMap(context.scopeId, id, context.signal); },
     read: (id, context) => browserChatMapStore(context.scopeId).read(id),
   }))
   .assertComplete();

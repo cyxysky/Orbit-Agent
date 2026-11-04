@@ -1,3 +1,4 @@
+import { runtimeConfiguration } from '@/server/settings/runtime-configuration';
 import { createHash, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { asSchema } from '@ai-sdk/provider-utils';
@@ -270,7 +271,7 @@ export async function executeAppServerBrowserTurn(input: Input, host: AppServerB
   // Global switches control registration; session preferences remain dispatch restrictions.
   const definitions: ToolSet = Object.fromEntries(Object.entries({
     ...mount.tools, ...input.memoryTools, contextRead: createRuntimeContextReadTool(() => records),
-  }).filter(([name]) => isToolCapabilityEnabled(name, process.env)));
+  }).filter(([name]) => isToolCapabilityEnabled(name, runtimeConfiguration())));
   let runtime: Awaited<ReturnType<typeof openCodexAppServer>> | undefined;
   let lastText = '';
   let finalText = '';
@@ -466,7 +467,7 @@ export async function executeAppServerBrowserTurn(input: Input, host: AppServerB
         const definition = call.namespace === 'orbit' ? definitions[name] : undefined;
         const validation = definition ? await asSchema(definition.inputSchema).validate?.(call.arguments) : undefined;
         const args = validation?.success ? validation.value : call.arguments;
-        const rejection = !definition?.execute || disabled.has(name) || !isToolCapabilityEnabled(name, process.env) || accepted || pauseRequested
+        const rejection = !definition?.execute || disabled.has(name) || !isToolCapabilityEnabled(name, runtimeConfiguration()) || accepted || pauseRequested
           ? 'This tool is unavailable in the current host scope. No action was executed.'
           : validation && !validation.success ? `Invalid tool arguments: ${validation.error}` : undefined;
         const item = { id: call.callId, type: 'dynamicToolCall', tool: name, arguments: args };
@@ -485,7 +486,7 @@ export async function executeAppServerBrowserTurn(input: Input, host: AppServerB
           if (rejection) value = { ok: false, outcome: 'not-executed', actual: rejection,
             ...(validation && !validation.success ? { error: codexRuntimeError(validation.error) } : {}) };
           else if (!await host.approve(name, args)) value = { ok: false, outcome: 'not-executed', actual: 'Host denied this action.' };
-          else if (!isToolCapabilityEnabled(name, process.env)) value = { ok: false, outcome: 'not-executed', actual: 'This tool has been disabled globally. No action was executed.' };
+          else if (!isToolCapabilityEnabled(name, runtimeConfiguration())) value = { ok: false, outcome: 'not-executed', actual: 'This tool has been disabled globally. No action was executed.' };
           else {
             assertActive(); await journal.begin(call.callId);
             value = await definition!.execute!(args, { toolCallId: call.callId, messages: [], abortSignal: signal, context: undefined });

@@ -43,7 +43,7 @@ export type ModelSettingsLike = {
   models?: string[];
 };
 
-export type RuntimeEnvDefinition = {
+export type RuntimeSettingDefinition = {
   key: string;
   label: string;
   description: string;
@@ -54,7 +54,7 @@ export type RuntimeEnvDefinition = {
   max?: number;
   step?: number;
   group?: string;
-  applyMode?: 'runtime' | 'startup';
+  applyMode?: 'runtime' | 'recreate';
   options?: ReadonlyArray<{ label: string; value: string }>;
   picker?: 'directory';
   secret?: boolean;
@@ -85,12 +85,13 @@ const capabilitySettingDefinitions: readonly CapabilitySettingDefinition[] = [
   ...sensitiveDataCapabilitySettings,
 ];
 
-const capabilityRuntimeEnvDefinitions: RuntimeEnvDefinition[] = capabilitySettingDefinitions.map((definition) => ({
+const capabilityRuntimeSettingDefinitions: RuntimeSettingDefinition[] = capabilitySettingDefinitions.map((definition) => ({
   ...definition,
-  tab: definition.section as RuntimeEnvDefinition['tab'],
+  tab: definition.section as RuntimeSettingDefinition['tab'],
+  applyMode: definition.applyMode === 'startup' ? 'recreate' : 'runtime',
 }));
 
-export function migrateRuntimeEnvValue(key: string, value: string) {
+export function migrateRuntimeSettingValue(key: string, value: string) {
   const definition = capabilitySettingDefinitions.find((item) => item.key === key);
   const normalized = definition?.emptyUsesDefault && !value.trim() ? definition.defaultValue : value;
   return definition?.valueAliases?.[normalized] ?? normalized;
@@ -312,7 +313,10 @@ const boolOptions = [
   { label: '关闭', value: 'false' },
 ];
 
-const applicationRuntimeEnvDefinitions: RuntimeEnvDefinition[] = [
+const applicationRuntimeSettingDefinitions: RuntimeSettingDefinition[] = [
+  { key: 'BROWSER_SLOW_MO_MS', label: '浏览器操作延迟', description: '浏览器操作的额外延迟，单位毫秒；系统自动更新浏览器实例。', tab: 'browser', group: '浏览器实例', defaultValue: '0', control: 'number', min: 0, max: 2000, applyMode: 'recreate' },
+  { key: 'AI_WEB_TEST_CHROMIUM_EXECUTABLE_PATH', label: '浏览器可执行文件', description: '留空使用随应用安装的浏览器；修改后系统在执行空闲时自动更新实例。', tab: 'browser', group: '浏览器实例', defaultValue: '', control: 'text', applyMode: 'recreate' },
+  { key: 'AI_SCREENSHOT_MAX_KB', label: '模型截图大小上限', description: '发送给模型的单张截图大小上限，单位 KB。', tab: 'browser', group: '浏览器观察', defaultValue: '20000', control: 'number', min: 1, max: 50000, applyMode: 'runtime' },
   { key: 'BROWSER_CHAT_INTERACTION_MODE', label: 'Browser Chat 操作模式', description: 'DOM 模式使用页面结构与定位器操作，支持图片的模型也会收到最新截图；纯视觉使用截图与鼠标键盘；混合模式同时提供两种能力；Playwright MCP 模式通过官方 MCP 服务连接当前会话浏览器并使用其快照和操作工具。保存后从下一轮执行生效。', tab: 'browser', group: '浏览器观察', defaultValue: 'hybrid', control: 'select', applyMode: 'runtime', options: browserChatInteractionModeOptions },
 
   { key: 'SQLITE_AUTO_COMPACT_ENABLED', label: 'SQLite 自动压缩', description: '维护任务发现大量空闲页时执行 WAL checkpoint 和 VACUUM，减少数据库及备份体积。', tab: 'runtime', defaultValue: 'true', control: 'boolean', options: boolOptions },
@@ -350,26 +354,26 @@ const applicationRuntimeEnvDefinitions: RuntimeEnvDefinition[] = [
   { key: 'CODEX_ALLOW_NPX', label: '允许 Codex 使用 npx', description: 'Codex CLI 是否允许 npx。', tab: 'capabilities', group: 'Codex CLI', defaultValue: 'false', control: 'boolean', options: boolOptions },
 ];
 
-export const runtimeEnvDefinitions: RuntimeEnvDefinition[] = [
+export const runtimeSettingDefinitions: RuntimeSettingDefinition[] = [
   { key: 'CHAT_SHOW_MORE_MENU', label: '显示对话更多菜单', description: '控制对话中的三个点入口，包括快捷管理和更多对话操作。', tab: 'general', group: '对话界面', defaultValue: 'true', control: 'boolean', applyMode: 'runtime', options: boolOptions },
   { key: 'CHAT_SHOW_TOOL_CONFIGURATION', label: '显示工具配置入口', description: '控制输入区的工具配置按钮。工具是否可用仍由工具开关控制。', tab: 'general', group: '对话界面', defaultValue: 'true', control: 'boolean', applyMode: 'runtime', options: boolOptions },
   { key: 'CHAT_ATTACHMENT_UPLOAD_ENABLED', label: '允许附件上传', description: '控制文件选择、拖放、粘贴上传，并在服务端拒绝关闭后的上传请求。', tab: 'general', group: '附件', defaultValue: 'true', control: 'boolean', applyMode: 'runtime', options: boolOptions },
   { key: 'CHAT_ATTACHMENT_ACCEPT', label: '附件支持类型', description: '留空允许所有类型。使用逗号或换行分隔，例如 .pdf,.docx,.xlsx,.pptx,.txt,.md,image/*；扩展名与 MIME 类型任一匹配即可。', tab: 'general', group: '附件', defaultValue: '', control: 'textarea', applyMode: 'runtime' },
-  ...applicationRuntimeEnvDefinitions,
-  ...toolCapabilitySettings.map((tool): RuntimeEnvDefinition => ({
+  ...applicationRuntimeSettingDefinitions,
+  ...toolCapabilitySettings.map((tool): RuntimeSettingDefinition => ({
     key: tool.envKey, label: tool.label, description: tool.description,
     tab: 'capabilities', group: '工具开关', defaultValue: 'true', control: 'boolean',
     applyMode: 'runtime', options: boolOptions,
   })),
-  ...capabilityRuntimeEnvDefinitions,
+  ...capabilityRuntimeSettingDefinitions,
 ];
 
-export const runtimeEnvKeys = runtimeEnvDefinitions.map((item) => item.key);
+export const runtimeSettingKeys = runtimeSettingDefinitions.map((item) => item.key);
 
-export function normalizeRuntimeEnvValue(definition: RuntimeEnvDefinition, value: string) {
+export function normalizeRuntimeSettingValue(definition: RuntimeSettingDefinition, value: string) {
   if (definition.key === 'CHAT_ATTACHMENT_ACCEPT') return normalizeAttachmentAccept(value);
   if (definition.key === 'BROWSER_DOMAIN_ALLOWLIST' || definition.key === 'BROWSER_DOMAIN_DENYLIST') return normalizeBrowserDomainRules(value);
-  const migratedValue = migrateRuntimeEnvValue(definition.key, value);
+  const migratedValue = migrateRuntimeSettingValue(definition.key, value);
   if (definition.control !== 'number' || (definition.min === undefined && definition.max === undefined)) return migratedValue;
   return normalizeBoundedNumberSetting({
     value: migratedValue,
@@ -380,6 +384,6 @@ export function normalizeRuntimeEnvValue(definition: RuntimeEnvDefinition, value
   });
 }
 
-export function runtimeEnvDefinition(key: string) {
-  return runtimeEnvDefinitions.find((item) => item.key === key);
+export function runtimeSettingDefinition(key: string) {
+  return runtimeSettingDefinitions.find((item) => item.key === key);
 }

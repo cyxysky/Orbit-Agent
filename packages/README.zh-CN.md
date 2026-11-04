@@ -4,6 +4,8 @@
 
 一个包提供能力契约、执行、配置、响应、AI SDK/MCP 适配，以及全部工具。
 
+Orbit 宿主通过数据库配置存储向每个能力传入其 Manifest 声明的配置，不以进程环境变量传递业务设置。SDK 声明中的 `startup` 表示能力实例创建时需要这些值；Orbit 会在安全时机自动更新该实例，界面标记为“自动更新实例”，不要求重启项目。独立 MCP/CLI 宿主仍可自行选择配置存储和启动方式。
+
 ```sh
 npm install @cjfclonedeep/capability-sdk
 ```

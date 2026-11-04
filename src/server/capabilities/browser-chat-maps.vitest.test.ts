@@ -3,7 +3,7 @@ const mocks = vi.hoisted(() => ({ read: vi.fn(), resolve: vi.fn(), apply: vi.fn(
 vi.mock('@/server/ai/agents/browser-chat-read.service', () => ({ readBrowserChatRuntimeState: mocks.read }));
 vi.mock('@/server/storage/automation-store', () => ({ getAutomationRun: mocks.automation }));
 vi.mock('@/server/auth/user-context', () => ({ requestApplicationUserId: () => 'user-1' }));
-vi.mock('@/server/db/store', () => ({ store: { applyRuntimeEnv: mocks.apply } }));
+vi.mock('@/server/db/store', () => ({ store: { refreshRuntimeSettings: mocks.apply } }));
 vi.mock('@/server/capabilities/browser-chat-maps', () => ({ resolveBrowserChatMap: mocks.resolve }));
 vi.mock('@/server/observability/runtime-observability', () => ({ incrementMetric: vi.fn(), structuredLog: vi.fn() }));
 import { mapViewResponse } from './browser-chat-maps-route';

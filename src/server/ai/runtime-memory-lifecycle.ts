@@ -1,3 +1,4 @@
+import { runtimeSetting } from '@/server/settings/runtime-configuration';
 import { createHash, randomUUID } from 'node:crypto';
 import { queryDatabase, queryDatabaseOne, executeDatabase } from '@/server/db/database';
 import { commitPersonalMemoryReview } from '@/server/storage/database-record-store';
@@ -70,7 +71,7 @@ export function startMemoryExtractionWorker() {
     if (polling || controller.signal.aborted || !personalMemoryExtractionEnabled()) return;
     polling = true;
     try {
-      const configured = Number(process.env.AI_PERSONAL_MEMORY_EXTRACTION_CONCURRENCY || 2);
+      const configured = Number(runtimeSetting("AI_PERSONAL_MEMORY_EXTRACTION_CONCURRENCY") || 2);
       const concurrency = Number.isFinite(configured) ? Math.min(8, Math.max(1, Math.floor(configured))) : 2;
       const now = Date.now();
       await executeDatabase("UPDATE agent_memory_job SET status = 'failed', lease_until = 0, error = 'Memory extraction worker was interrupted after the final attempt.' WHERE status = 'running' AND lease_until < ? AND attempts >= 4", [now]);

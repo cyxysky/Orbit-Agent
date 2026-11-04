@@ -6,5 +6,5 @@ export function maskSecret(value: string) {
 
 export type SettingsSecretSource =
   | { kind: 'provider'; provider: string }
-  | { kind: 'environment'; key: string }
+  | { kind: 'runtime'; key: string }
   | { kind: 'integration'; id: string; field: string };

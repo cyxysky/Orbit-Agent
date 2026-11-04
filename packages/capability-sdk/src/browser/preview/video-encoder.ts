@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { normalizeBoundedInteger } from '../../index.ts';
+import type { BrowserRuntimeEnvironment } from '../node/browser-session-runtime.ts';
 import ffmpegStaticPath from 'ffmpeg-static';
 import { CodedError, ERROR_CODES } from '../../errors.ts';
 
@@ -141,8 +142,8 @@ function evenDimension(value: number, fallback: number) {
   return normalized % 2 === 0 ? normalized : normalized - 1;
 }
 
-function boundedIntegerEnv(name: string, fallback: number, minimum: number, maximum: number) {
-  return normalizeBoundedInteger(process.env[name], fallback, minimum, maximum);
+function boundedIntegerEnv(name: string, fallback: number, minimum: number, maximum: number, configuration: BrowserRuntimeEnvironment) {
+  return normalizeBoundedInteger(configuration[name], fallback, minimum, maximum);
 }
 
 export function browserPreviewH264Configuration(
@@ -194,9 +195,9 @@ export function browserPreviewVideoMimeType(initialization: Buffer) {
   return `video/mp4; codecs="avc1.${codec}"`;
 }
 
-export function browserPreviewVideoBitrateKbps(width: number, height: number, framesPerSecond: number) {
+export function browserPreviewVideoBitrateKbps(width: number, height: number, framesPerSecond: number, configuration: BrowserRuntimeEnvironment = process.env) {
   const estimated = Math.round(width * height * framesPerSecond * 0.12 / 1000);
-  const configured = Number(process.env.BROWSER_PREVIEW_VIDEO_BITRATE_KBPS || '');
+  const configured = Number(configuration.BROWSER_PREVIEW_VIDEO_BITRATE_KBPS || '');
   if (Number.isFinite(configured) && configured >= 500) return Math.floor(configured);
   return Math.max(1_500, estimated);
 }
@@ -223,6 +224,7 @@ export class BrowserPreviewVideoEncoder {
   };
 
   constructor(private readonly options: {
+    configuration?: BrowserRuntimeEnvironment;
     contentType: 'image/jpeg' | 'image/png';
     framesPerSecond: number;
     height: number;
@@ -295,7 +297,8 @@ export class BrowserPreviewVideoEncoder {
     const framesPerSecond = Math.max(1, Math.min(60, Math.floor(this.options.framesPerSecond)));
     const width = evenDimension(this.options.width, 1280);
     const height = evenDimension(this.options.height, 720);
-    const bitrateKbps = browserPreviewVideoBitrateKbps(width, height, framesPerSecond);
+    const configuration = this.options.configuration || process.env;
+    const bitrateKbps = browserPreviewVideoBitrateKbps(width, height, framesPerSecond, configuration);
     const h264 = browserPreviewH264Configuration(width, height, framesPerSecond, bitrateKbps);
     Object.assign(this.state, {
       bitrateKbps,
@@ -309,6 +312,7 @@ export class BrowserPreviewVideoEncoder {
       Math.max(5, Math.round(framesPerSecond / 2)),
       1,
       framesPerSecond * 2,
+      configuration,
     );
     const inputCodec = this.options.contentType === 'image/png' ? 'png' : 'mjpeg';
     const child = spawn(executable, [

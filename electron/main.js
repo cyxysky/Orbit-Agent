@@ -2465,13 +2465,10 @@ async function startServer(appDataDir) {
   const browserProfileDir = ensureDir(path.join(appDataDir, 'browser-profile'));
   const env = {
     ...process.env,
-    AI_WEB_TEST_BROWSER_PROFILE_DIR: process.env.AI_WEB_TEST_BROWSER_PROFILE_DIR || browserProfileDir,
-    AI_WEB_TEST_FORCE_PLAYWRIGHT_BROWSER: app.isPackaged ? 'true' : process.env.AI_WEB_TEST_FORCE_PLAYWRIGHT_BROWSER,
-    AI_WEB_TEST_CHROMIUM_EXECUTABLE_PATH: packagedChromiumExecutable(),
+    CAPABILITY_BROWSER_PROFILE_DIR: process.env.CAPABILITY_BROWSER_PROFILE_DIR || browserProfileDir,
+    ORBIT_BROWSER_EXECUTABLE_PATH: packagedChromiumExecutable(),
     APP_DATA_DIR: appDataDir,
     ARTIFACTS_DIR: ensureDir(path.join(appDataDir, 'artifacts')),
-    BROWSER_SHARED_TABS: process.env.BROWSER_SHARED_TABS || 'true',
-    BROWSER_USER_DATA_DIR: process.env.BROWSER_USER_DATA_DIR || browserProfileDir,
     ELECTRON_EMBEDDED_BROWSER_CDP_PORT: String(EMBEDDED_BROWSER_CDP_PORT),
     HOSTNAME: '127.0.0.1',
     LIBREOFFICE_PATH: packagedLibreOfficeExecutable(),
@@ -2502,13 +2499,10 @@ async function startServer(appDataDir) {
 
   appendLog(`Starting server: ${process.execPath} ${args.join(' ')}`);
   appendLog(`cwd=${serverDir}`);
-  appendLog(`BROWSER_SHARED_TABS=${env.BROWSER_SHARED_TABS}`);
-  appendLog(`BROWSER_USER_DATA_DIR=${env.BROWSER_USER_DATA_DIR}`);
-  appendLog(`AI_WEB_TEST_BROWSER_PROFILE_DIR=${env.AI_WEB_TEST_BROWSER_PROFILE_DIR}`);
+  appendLog(`CAPABILITY_BROWSER_PROFILE_DIR=${env.CAPABILITY_BROWSER_PROFILE_DIR}`);
   appendLog(`PLAYWRIGHT_BROWSERS_PATH=${env.PLAYWRIGHT_BROWSERS_PATH || ''}`);
-  appendLog(`AI_WEB_TEST_CHROMIUM_EXECUTABLE_PATH=${env.AI_WEB_TEST_CHROMIUM_EXECUTABLE_PATH || ''}`);
+  appendLog(`ORBIT_BROWSER_EXECUTABLE_PATH=${env.ORBIT_BROWSER_EXECUTABLE_PATH || ''}`);
   appendLog(`LIBREOFFICE_PATH=${env.LIBREOFFICE_PATH || ''}`);
-  appendLog(`GLINER_RUNTIME_MODE=${env.GLINER_RUNTIME_MODE || ''}`);
   appendLog(`GLINER_PYTHON_PATH=${env.GLINER_PYTHON_PATH || ''}`);
   appendLog(`WEBPILOT_ELECTRON_CDP_PORT=${env.WEBPILOT_ELECTRON_CDP_PORT || ''}`);
   appendLog(`NODE_PATH=${env.NODE_PATH || ''}`);

@@ -1,3 +1,4 @@
+import { runtimeSetting } from '@/server/settings/runtime-configuration';
 import { readdir, rm, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { artifactsRoot } from './paths';
@@ -16,7 +17,7 @@ const state = ((globalThis as typeof globalThis & {
 }).__uploadArtifactMaintenance ??= {});
 
 function configuredLimit(name: string, fallback: number, maximum: number) {
-  const value = Number(process.env[name]);
+  const value = Number(runtimeSetting(name));
   return Number.isFinite(value) ? Math.max(1, Math.min(maximum, Math.floor(value))) : fallback;
 }
 
@@ -106,7 +107,7 @@ export async function maintainUserUploads(retainedPaths: ReadonlySet<string>) {
 }
 
 export function scheduleUploadArtifactMaintenance(retainedUploadPaths: () => Promise<ReadonlySet<string>>) {
-  if (state.timer || process.env.UPLOAD_MAINTENANCE_ENABLED === 'false') return;
+  if (state.timer || runtimeSetting("UPLOAD_MAINTENANCE_ENABLED") === 'false') return;
   const run = () => {
     if (state.running) return;
     try {

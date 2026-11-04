@@ -175,7 +175,7 @@ export function SettingsWorkspace({
         translate={t}
       >
         {!adminSettingsLocked ? <section className="browser-chat-sidebar-section browser-chat-settings-section">
-          <nav className="browser-chat-subnav" aria-label={t('环境配置分类')}>
+          <nav className="browser-chat-subnav" aria-label={t('运行配置分类')}>
             {environmentSettingsTabGroups.map((group) => {
               const tabs = group.tabs.flatMap((tabId) => {
                 const tab = visibleSettingsTabs.find((item) => item.id === tabId);

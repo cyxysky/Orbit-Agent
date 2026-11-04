@@ -33,16 +33,20 @@ function subscribe(listener: () => void) {
           if (request.signal.aborted || document.visibilityState !== 'visible') return;
           // Keep the last confirmed catalog; recover without a reload after an initial failure.
           retry = setTimeout(refresh, retryMs); retryMs = Math.min(retryMs * 2, 30_000);
-        });
+        }).finally(() => { if (controller === request) controller = undefined; });
     };
     const visible = () => { if (document.visibilityState === 'visible') refresh(); };
     refresh();
     window.addEventListener('focus', visible);
     window.addEventListener(TOOL_CAPABILITY_SETTINGS_CHANGED_EVENT, refresh);
     document.addEventListener('visibilitychange', visible);
+    const poll = setInterval(() => {
+      if (document.visibilityState === 'visible' && !controller) refresh();
+    }, 3000);
     stop = () => {
       controller?.abort();
       clearTimeout(retry);
+      clearInterval(poll);
       window.removeEventListener('focus', visible);
       window.removeEventListener(TOOL_CAPABILITY_SETTINGS_CHANGED_EVENT, refresh);
       document.removeEventListener('visibilitychange', visible);

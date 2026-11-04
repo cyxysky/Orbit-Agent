@@ -26,9 +26,9 @@ async function main() {
   const { startBackend } = await import(pathToFileURL(entry).href);
   // The API owner loads persisted settings before starting the shared Runner.
   // Execution workers use it; they must not create competing child processes.
-  const codeSandbox = process.env.WEBPILOT_SERVER_ROLE === 'execution' ? undefined
-    : createCodeSandboxRunnerManager({ appDir: root });
   let backend;
+  const codeSandbox = process.env.WEBPILOT_SERVER_ROLE === 'execution' ? undefined
+    : createCodeSandboxRunnerManager({ appDir: root, canReconfigure: () => backend?.executionIdle() ?? true });
   try { backend = await startBackend({ codeSandbox }); }
   catch (error) { await codeSandbox?.close(); throw error; }
   let stopping = false;

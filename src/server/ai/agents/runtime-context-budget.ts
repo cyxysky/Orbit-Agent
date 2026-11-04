@@ -1,3 +1,4 @@
+import { runtimeSetting } from '@/server/settings/runtime-configuration';
 import type { ModelConfigRecord } from '@/server/ai/schemas/runtime.schema';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 
@@ -43,17 +44,17 @@ export function runtimeContextProfile(input: RuntimeContextModel = {}) {
   const configuredWindow = input.maxContextTokens !== undefined
     ? positive(input.maxContextTokens, 0) || undefined
     : contextState.windows.get(key);
-  const windowTokens = configuredWindow ?? positive(process.env.AI_CONTEXT_WINDOW_TOKENS, 256000);
-  const safetyReserveTokens = positive(process.env.AI_CONTEXT_SAFETY_RESERVE_TOKENS, 4096);
+  const windowTokens = configuredWindow ?? positive(runtimeSetting('AI_CONTEXT_WINDOW_TOKENS'), 256000);
+  const safetyReserveTokens = positive(runtimeSetting('AI_CONTEXT_SAFETY_RESERVE_TOKENS'), 4096);
   const inputBudgetTokens = windowTokens - safetyReserveTokens;
   if (inputBudgetTokens <= 0) throw new CodedError(ERROR_CODES.CONTEXT_READ_FAILED, 'Context window must exceed the protocol safety reserve.');
-  const compressionTriggerRatio = ratio(process.env.AI_CONTEXT_COMPRESSION_TRIGGER_RATIO, 0.85);
+  const compressionTriggerRatio = ratio(runtimeSetting('AI_CONTEXT_COMPRESSION_TRIGGER_RATIO'), 0.85);
   const compressionTriggerTokens = Math.max(1, Math.floor(inputBudgetTokens * compressionTriggerRatio));
-  const compressionTargetRatio = ratio(process.env.AI_CONTEXT_COMPRESSION_TARGET_RATIO, 0.25);
+  const compressionTargetRatio = ratio(runtimeSetting('AI_CONTEXT_COMPRESSION_TARGET_RATIO'), 0.25);
   return {
     key, windowTokens, inputBudgetTokens, safetyReserveTokens,
     compressionTriggerTokens, compressionTargetTokens: Math.max(1, Math.min(Math.floor(inputBudgetTokens * compressionTargetRatio), Math.floor(compressionTriggerTokens * 0.9))),
-    imageTokens: positive(process.env.AI_IMAGE_CONTEXT_ESTIMATE_TOKENS, 1200),
+    imageTokens: positive(runtimeSetting('AI_IMAGE_CONTEXT_ESTIMATE_TOKENS'), 1200),
     protocol: 'preserve-provider-reasoning-and-signatures' as const,
     source: configuredWindow !== undefined ? 'model-capabilities' : 'default-context-window',
   };
@@ -146,7 +147,7 @@ export function runtimeProviderInputTokens(value: unknown): number | undefined {
 }
 
 function runtimeImageContextEstimateTokens() {
-  return positive(process.env.AI_IMAGE_CONTEXT_ESTIMATE_TOKENS, 1200);
+  return positive(runtimeSetting('AI_IMAGE_CONTEXT_ESTIMATE_TOKENS'), 1200);
 }
 
 export function estimateRuntimeMessageContext(messages: unknown): RuntimeMessageContextEstimate {

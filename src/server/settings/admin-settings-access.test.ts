@@ -33,7 +33,7 @@ test('administrator settings access tokens are signed and expire', () => {
   assert.equal(verifyAdminSettingsAccessToken(`${token}x`, enabledEnv, issuedAt + 1), false);
   assert.equal(verifyAdminSettingsAccessToken(token, enabledEnv, issuedAt + 4 * 60 * 60 * 1000), false);
 
-  const request = new Request('http://localhost/api/settings/env', {
+  const request = new Request('http://localhost/api/settings/runtime', {
     headers: { Authorization: `Bearer ${token}` },
   });
   assert.equal(requestHasAdminSettingsAccess(request, enabledEnv), true);

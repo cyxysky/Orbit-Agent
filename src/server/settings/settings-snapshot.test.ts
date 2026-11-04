@@ -41,7 +41,7 @@ test('settings snapshots expose secret presence without returning the model key'
     const environmentSnapshot = readEnvironmentSettingsSnapshot();
     assert.equal(JSON.stringify(environmentSnapshot).includes(secret), false);
     assert.equal(
-      environmentSnapshot.envItems.find((item) => item.key === 'AI_SENSITIVE_DATA_FILTER_ENABLED')?.value,
+      environmentSnapshot.runtimeItems.find((item) => item.key === 'AI_SENSITIVE_DATA_FILTER_ENABLED')?.value,
       'true',
     );
   } finally {

@@ -1,3 +1,4 @@
+import { runtimeSetting } from '@/server/settings/runtime-configuration';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
@@ -106,9 +107,9 @@ export async function POST(request: Request) {
       updatedAt: new Date().toISOString(),
     };
     const timeout = body.category === 'connector'
-      ? Math.max(1_000, Number(process.env.AGENT_CONNECTOR_TIMEOUT_MS) || 30_000)
+      ? Math.max(1_000, Number(runtimeSetting('AGENT_CONNECTOR_TIMEOUT_MS')) || 30_000)
       : body.category === 'communication'
-        ? Math.max(1_000, Number(process.env.AGENT_COMMUNICATION_TIMEOUT_MS) || 30_000)
+        ? Math.max(1_000, Number(runtimeSetting('AGENT_COMMUNICATION_TIMEOUT_MS')) || 30_000)
         : 15_000;
     if (new URL(request.url).searchParams.get('stream') === '1') {
       return streamIntegrationTest(request, candidate, timeout, body.selectedTarget);

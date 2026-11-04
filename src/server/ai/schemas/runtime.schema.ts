@@ -228,7 +228,7 @@ export type BrowserChatSubagentRecord = {
   error?: string;
 };
 
-export type RuntimeEnvRecord = {
+export type RuntimeSettingRecord = {
   key: string;
   value: string;
   enabled: boolean;

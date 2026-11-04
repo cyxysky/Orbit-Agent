@@ -5,7 +5,7 @@ import { store } from '@/server/db/store';
 export async function POST(request: Request) {
   try {
     const userId = requestApplicationUserId(request), input = await parseJsonRequest(request, textWorkspaceInput, { maxBytes: null });
-    if (input.action === 'rewrite') await store.applyRuntimeEnv();
+    if (input.action === 'rewrite') await store.refreshRuntimeSettings();
     return apiJson(request, await executeTextWorkspace(input, userId, request.signal));
   } catch (error) { return apiError(request, error, { fallback: '文本操作失败，请稍后重试。' }); }
 }

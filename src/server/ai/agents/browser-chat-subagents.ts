@@ -1,3 +1,4 @@
+import { runtimeSetting } from '@/server/settings/runtime-configuration';
 import type { ModelMessage } from 'ai';
 import type {
   BrowserChatSubagentMessage,
@@ -208,7 +209,7 @@ export function resolvedBrowserChatSubagentStatus(input: {
 }
 
 export function browserChatSubagentSuggestedSummaryChars() {
-  const configured = Number(process.env.AI_SUBAGENT_RESULT_MAX_CHARS);
+  const configured = Number(runtimeSetting('AI_SUBAGENT_RESULT_MAX_CHARS'));
   return Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : undefined;
 }
 
@@ -228,7 +229,7 @@ let activeSubagents = 0;
 const subagentWaiters: Array<() => void> = [];
 
 function subagentConcurrency() {
-  const configured = Number(process.env.AI_SUBAGENT_CONCURRENCY || 20);
+  const configured = Number(runtimeSetting("AI_SUBAGENT_CONCURRENCY") || 20);
   return Number.isFinite(configured) ? Math.max(1, Math.floor(configured)) : 20;
 }
 

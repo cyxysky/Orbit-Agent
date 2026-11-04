@@ -1,6 +1,6 @@
 import { hydrateBrowserChatContextSnapshot, splitBrowserChatContextSnapshot, markBrowserChatContextWritten } from './browser-chat-context-store';
 import type { EntityManager } from 'typeorm';
-import type { SkillRecord } from '@/server/ai/schemas/runtime.schema';
+import type { SkillRecord, RuntimeSettingRecord } from '@/server/ai/schemas/runtime.schema';
 import {
   databaseDriver,
   executeDatabase,
@@ -16,7 +16,7 @@ import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 
 
 type ConfigRecord = {
-  runtimeEnv: unknown[];
+  runtimeSettings: unknown[];
   modelConfig?: unknown;
 };
 
@@ -42,22 +42,36 @@ export async function readConfigRecord(): Promise<ConfigRecord> {
   const row = await queryDatabaseOne<{ runtime_env_json?: string; model_config_json?: string | null }>(`
     SELECT runtime_env_json, model_config_json FROM app_config WHERE id = 1
   `);
-  if (!row) return { runtimeEnv: [] };
+  if (!row) return { runtimeSettings: [] };
   return {
-    runtimeEnv: parseDatabaseJson<unknown[]>(row.runtime_env_json, []),
+    runtimeSettings: parseDatabaseJson<unknown[]>(row.runtime_env_json, []),
     modelConfig: parseDatabaseJson<unknown>(row.model_config_json, undefined),
   };
 }
 
-export async function writeConfigRecord(data: ConfigRecord) {
+export async function writeModelConfigRecord(modelConfig: unknown) {
   await executeDatabase(`
     INSERT INTO app_config (id, runtime_env_json, model_config_json, updated_at)
     VALUES (1, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
-      runtime_env_json = excluded.runtime_env_json,
       model_config_json = excluded.model_config_json,
       updated_at = excluded.updated_at
-  `, [JSON.stringify(data.runtimeEnv || []), data.modelConfig === undefined ? null : JSON.stringify(data.modelConfig), now()]);
+  `, ['[]', JSON.stringify(modelConfig), now()]);
+}
+
+/** Merge only submitted setting keys under the database lock. Model saves and
+ * independent settings clients must not overwrite one another's columns. */
+export async function patchRuntimeSettingsRecords(patch: readonly RuntimeSettingRecord[]) {
+  return runDatabaseTransaction(async manager => {
+    await executeDatabase('INSERT INTO app_config (id, runtime_env_json, updated_at) VALUES (1, ?, ?) ON CONFLICT(id) DO NOTHING', ['[]', now()], manager);
+    const row = await queryDatabaseOne<{ runtime_env_json: string }>(
+      `SELECT runtime_env_json FROM app_config WHERE id = 1${databaseDriver() === 'postgres' ? ' FOR UPDATE' : ''}`, [], manager);
+    const values = new Map(parseDatabaseJson<RuntimeSettingRecord[]>(row?.runtime_env_json, []).map(item => [item.key, item]));
+    for (const item of patch) values.set(item.key, item);
+    const settings = [...values.values()];
+    await executeDatabase('UPDATE app_config SET runtime_env_json = ?, updated_at = ? WHERE id = 1', [JSON.stringify(settings), now()], manager);
+    return settings;
+  });
 }
 
 export async function readSkills(userId?: string, input: {

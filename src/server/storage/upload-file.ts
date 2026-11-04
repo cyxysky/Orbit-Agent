@@ -1,3 +1,4 @@
+import { runtimeSetting } from '@/server/settings/runtime-configuration';
 import { createWriteStream } from 'node:fs';
 import { mkdir, unlink } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
@@ -15,7 +16,7 @@ import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 
 
 export function uploadMaxBytes() {
-  const configured = Number(process.env.WEBPILOT_UPLOAD_MAX_BYTES || 50 * 1024 * 1024);
+  const configured = Number(runtimeSetting("WEBPILOT_UPLOAD_MAX_BYTES") || 50 * 1024 * 1024);
   return Number.isFinite(configured)
     ? Math.min(512 * 1024 * 1024, Math.max(1024, Math.floor(configured)))
     : 50 * 1024 * 1024;

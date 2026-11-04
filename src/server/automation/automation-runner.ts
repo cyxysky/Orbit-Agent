@@ -230,7 +230,7 @@ function agentStepRecord(step: StepExecutionResult, previous?: AutomationRunStep
 
 async function executeAutomationRunNow(runId: string, options: ExecuteAutomationRunOptions): Promise<AutomationRunRecord> {
   // Scheduled executions also need settings saved by the separate API process.
-  await store.applyRuntimeEnv();
+  await store.refreshRuntimeSettings();
   const requestedUserId = options.userId === undefined ? undefined : userId(options.userId);
   const initialRun = await getAutomationRun(runId, requestedUserId);
   if (!initialRun) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Automation run not found.');

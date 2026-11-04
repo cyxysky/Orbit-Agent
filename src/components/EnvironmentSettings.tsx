@@ -21,7 +21,7 @@ import {
   modelProviderDefinition,
   openAICompatibleProviderIndex,
   removeCustomModelProviders,
-  runtimeEnvDefinition,
+  runtimeSettingDefinition,
   uniqueModelIds,
   type SettingsTab,
   type OpenAICompatibleModelProvider,
@@ -31,7 +31,7 @@ import { ThemeColorControl } from '@/components/ThemeColorControl';
 import { LiquidGlassLoader } from '@/components/LiquidGlassLoader';
 import { languageOptions } from '@/i18n/language';
 import { waitForMinimumLoading } from '@/lib/minimum-loading';
-import type { ModelConfigRecord, ModelProvider, ModelProviderSettings, RuntimeEnvRecord } from '@/server/ai/schemas/runtime.schema';
+import type { ModelConfigRecord, ModelProvider, ModelProviderSettings, RuntimeSettingRecord } from '@/server/ai/schemas/runtime.schema';
 import { readApiJson } from '@/lib/api-client';
 import { LoginAccountModal, type LoginAccountMetadata } from '@/components/LoginAccountModal';
 import { DataTransferButtons } from '@/components/DataTransferButtons';
@@ -80,7 +80,7 @@ export {
   isAdministratorOnlySettingsTab,
 } from '@/components/environment-settings-model';
 
-export type EnvRow = Pick<RuntimeEnvRecord, 'key' | 'value' | 'enabled' | 'secret'> & {
+export type RuntimeSettingRow = Pick<RuntimeSettingRecord, 'key' | 'value' | 'enabled' | 'secret'> & {
   hasValue?: boolean;
   secretPreview?: string;
   updatedAt?: string;
@@ -131,7 +131,7 @@ function SortableProviderRow({ provider, active, label, children, onSelect, onDe
 }
 
 export type EnvironmentSettingsInitialData = {
-  envItems: EnvRow[];
+  runtimeItems: RuntimeSettingRow[];
   modelConfig: ModelConfig;
 };
 
@@ -320,9 +320,9 @@ type SensitiveDataEvaluationRun = {
 };
 
 type VisibleEnvSetting = {
-  item: EnvRow;
+  item: RuntimeSettingRow;
   index: number;
-  definition: ReturnType<typeof runtimeEnvDefinition>;
+  definition: ReturnType<typeof runtimeSettingDefinition>;
 };
 
 type SettingsSecondaryNavItem = {
@@ -603,7 +603,7 @@ function envSettingIsContextuallyVisible(setting: VisibleEnvSetting, values: Map
   return true;
 }
 
-function envItemsFingerprint(items: EnvRow[]) {
+function runtimeItemsFingerprint(items: RuntimeSettingRow[]) {
   return JSON.stringify(items.map(({ key, value, enabled, secret }) => ({ key, value, enabled, secret })));
 }
 
@@ -866,8 +866,8 @@ function evaluationCaseDisplayName(name: string, index: number, t: (value: strin
   return name.trim().replace(/^综合业务场景\s*[·・]\s*/, '') || t('用例 {index}', { index: index + 1 });
 }
 
-function isSecret(item: EnvRow) {
-  const definition = runtimeEnvDefinition(item.key);
+function isSecret(item: RuntimeSettingRow) {
+  const definition = runtimeSettingDefinition(item.key);
   if (definition) return Boolean(item.secret || definition.secret || definition.control === 'secret');
   return Boolean(item.secret || /(?:^|_)(?:KEY|TOKEN|SECRET|PASSWORD|COOKIE)(?:_|$)|(?:^|_)DATABASE_URL$/i.test(item.key));
 }
@@ -882,7 +882,7 @@ export function EnvironmentSettings({
   initialSection,
   onActiveTabChange,
   onModelSaved,
-  onRuntimeEnvSaved,
+  onRuntimeSettingsSaved,
   onSkillsChanged,
   personalMemoryRefreshToken = '',
   showSectionTitles = true,
@@ -898,7 +898,7 @@ export function EnvironmentSettings({
   initialSection?: string;
   onActiveTabChange?: (tab: SettingsTab) => void;
   onModelSaved?: () => void;
-  onRuntimeEnvSaved?: () => void;
+  onRuntimeSettingsSaved?: () => void;
   onSkillsChanged?: () => void;
   personalMemoryRefreshToken?: string;
   showSectionTitles?: boolean;
@@ -910,8 +910,8 @@ export function EnvironmentSettings({
   const { language, setLanguage, t } = useI18n();
   const { brandPrefix, brandText, setBrandPrefix, setBrandText } = useWorkspaceBrand();
   const [internalActiveTab, setInternalActiveTab] = useState<SettingsTab>('general');
-  const [items, setItems] = useState<EnvRow[]>(() => initialData?.envItems || []);
-  const [savedItems, setSavedItems] = useState<EnvRow[]>(() => initialData?.envItems || []);
+  const [items, setItems] = useState<RuntimeSettingRow[]>(() => initialData?.runtimeItems || []);
+  const [savedItems, setSavedItems] = useState<RuntimeSettingRow[]>(() => initialData?.runtimeItems || []);
   const itemsRef = useRef(items);
   const [modelConfig, setModelConfig] = useState<ModelConfig>(() => createModelConfig(initialData?.modelConfig));
   const [modelDraft, setModelDraft] = useState<ModelConfig>(() => createModelConfig(initialData?.modelConfig));
@@ -1073,10 +1073,10 @@ export function EnvironmentSettings({
     setLoading(true);
     try {
       const [envResponse, modelResponse] = await Promise.all([
-        fetch(withWebPilotBasePath('/api/settings/env'), { cache: 'no-store', headers: adminSettingsAuthorizationHeaders }),
+        fetch(withWebPilotBasePath('/api/settings/runtime'), { cache: 'no-store', headers: adminSettingsAuthorizationHeaders }),
         fetch(withWebPilotBasePath('/api/settings/model'), { cache: 'no-store', headers: adminSettingsAuthorizationHeaders }),
       ]);
-      const envData = await readApiJson<{ saved?: EnvRow[] }>(envResponse, t('读取环境配置失败'));
+      const envData = await readApiJson<{ saved?: RuntimeSettingRow[] }>(envResponse, t('读取运行配置失败'));
       const modelData = await readApiJson<{ config?: Partial<ModelConfig> }>(modelResponse, t('读取模型配置失败'));
       const nextModel = createModelConfig(modelData.config);
       setItems(envData.saved || []);
@@ -1090,7 +1090,7 @@ export function EnvironmentSettings({
     }
   }
 
-  function update(index: number, patch: Partial<EnvRow>) {
+  function update(index: number, patch: Partial<RuntimeSettingRow>) {
     setItems((current) => current.map((item, itemIndex) => (itemIndex === index ? { ...item, enabled: true, ...patch } : item)));
   }
 
@@ -1104,7 +1104,7 @@ export function EnvironmentSettings({
     });
   }
 
-  async function chooseRuntimeDirectory(index: number, item: EnvRow) {
+  async function chooseRuntimeDirectory(index: number, item: RuntimeSettingRow) {
     const bridge = typeof window !== 'undefined' ? window.webPilotSystem : undefined;
     if (!bridge?.selectDirectory) return;
     const result = await bridge.selectDirectory({ defaultPath: item.value || undefined });
@@ -1116,16 +1116,19 @@ export function EnvironmentSettings({
   }
 
   async function saveEnv() {
-    const sourceFingerprint = envItemsFingerprint(items);
+    const sourceFingerprint = runtimeItemsFingerprint(items);
     setSavingEnv(true);
     setEnvAutoSaveError('');
     try {
-      const response = await fetch(withWebPilotBasePath('/api/settings/env'), {
+      const response = await fetch(withWebPilotBasePath('/api/settings/runtime'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...adminSettingsAuthorizationHeaders },
-        body: JSON.stringify({ items: items.map((item) => ({ ...item, enabled: true, secret: isSecret(item) })) }),
+        body: JSON.stringify({ items: items.filter(item => {
+          const saved = savedItems.find(previous => previous.key === item.key);
+          return !saved || item.value !== saved.value;
+        }).map((item) => ({ ...item, enabled: true, secret: isSecret(item) })) }),
       });
-      const data = await readApiJson<{ saved?: EnvRow[] }>(response, t('保存环境配置失败'));
+      const data = await readApiJson<{ saved?: RuntimeSettingRow[] }>(response, t('保存运行配置失败'));
       const saved = data.saved || [];
       const unsavedTool = toolCapabilitySettings.find((tool) => {
         const requested = items.find((item) => item.key === tool.envKey);
@@ -1136,12 +1139,12 @@ export function EnvironmentSettings({
       if (unsavedTool) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, t('工具开关未保存：{name}', { name: t(unsavedTool.label) }));
       envFailedFingerprintRef.current = '';
       setSavedItems(saved);
-      if (envItemsFingerprint(itemsRef.current) === sourceFingerprint) setItems(saved);
-      onRuntimeEnvSaved?.();
+      if (runtimeItemsFingerprint(itemsRef.current) === sourceFingerprint) setItems(saved);
+      onRuntimeSettingsSaved?.();
       window.dispatchEvent(new Event(TOOL_CAPABILITY_SETTINGS_CHANGED_EVENT));
     } catch (error) {
       envFailedFingerprintRef.current = sourceFingerprint;
-      setEnvAutoSaveError(error instanceof Error ? t(error.message) : t('保存环境配置失败'));
+      setEnvAutoSaveError(error instanceof Error ? t(error.message) : t('保存运行配置失败'));
       throw error;
     } finally {
       setSavingEnv(false);
@@ -2003,8 +2006,8 @@ export function EnvironmentSettings({
     );
   }
 
-  function renderRuntimeControl(item: EnvRow, index: number) {
-    const definition = runtimeEnvDefinition(item.key);
+  function renderRuntimeControl(item: RuntimeSettingRow, index: number) {
+    const definition = runtimeSettingDefinition(item.key);
     if (definition?.control === 'boolean') {
       const checked = item.value === 'true';
       return (
@@ -2032,7 +2035,7 @@ export function EnvironmentSettings({
       return <SecretInput key={`${item.key}:${item.updatedAt || ''}`} label={t(definition?.label || item.key)}
         value={item.value} onChange={value => update(index, { value })}
         storedPreview={item.secretPreview || (item.hasValue ? '••••••••••••' : undefined)}
-        source={{ kind: 'environment', key: item.key }} headers={adminSettingsAuthorizationHeaders}
+        source={{ kind: 'runtime', key: item.key }} headers={adminSettingsAuthorizationHeaders}
         placeholder={t('未设置')} />;
     }
 
@@ -2623,7 +2626,7 @@ export function EnvironmentSettings({
         <div className="env-name">
           <span className="settings-field-title-line">
             <strong>{definition?.label ? t(definition.label) : item.key}</strong>
-            <small className={`settings-apply-badge is-${definition?.applyMode || 'runtime'}`}>{t(definition?.applyMode === 'startup' ? '重启后生效' : '即时生效')}</small>
+            <small className={`settings-apply-badge is-${definition?.applyMode || 'runtime'}`}>{t(definition?.applyMode === 'recreate' ? '自动更新实例' : '即时生效')}</small>
           </span>
           <span>{definition?.description ? t(definition.description) : t('网页配置项。')}</span>
           <small className="settings-field-default" title={item.key}>{t('默认值')}：{displayDefaultValue(item.key, definition?.defaultValue || '', t)}</small>
@@ -2633,13 +2636,13 @@ export function EnvironmentSettings({
     ));
   }
 
-  const envDirty = envItemsFingerprint(items) !== envItemsFingerprint(savedItems);
+  const envDirty = runtimeItemsFingerprint(items) !== runtimeItemsFingerprint(savedItems);
   const modelDirty = JSON.stringify(createModelConfig(modelDraft)) !== JSON.stringify(createModelConfig(modelConfig));
   const sensitiveDataEvaluationFingerprint = JSON.stringify(sensitiveDataEvaluationPayload(sensitiveDataEvaluationCases));
   const sensitiveDataEvaluationDirty = sensitiveDataEvaluationFingerprint !== JSON.stringify(sensitiveDataEvaluationPayload(savedSensitiveDataEvaluationCases));
 
   useEffect(() => {
-    const fingerprint = envItemsFingerprint(items);
+    const fingerprint = runtimeItemsFingerprint(items);
     if (
       loading
       || savingEnv
@@ -2766,7 +2769,7 @@ export function EnvironmentSettings({
     const settings = editingModelConfig.providers?.[provider.value];
     return Boolean(settings?.enabled || settings?.displayName?.trim() || settings?.apiKey || settings?.hasApiKey || settings?.baseURL);
   });
-  const allEnvSettings = items.map((item, index) => ({ item, index, definition: runtimeEnvDefinition(item.key) }));
+  const allEnvSettings = items.map((item, index) => ({ item, index, definition: runtimeSettingDefinition(item.key) }));
   const envValues = new Map(items.map((item) => [item.key, item.value]));
   const visibleEnvItems = allEnvSettings.filter((setting) => (
     setting.definition?.hidden !== true
@@ -2900,7 +2903,7 @@ export function EnvironmentSettings({
             {t('返回工作台')}
           </Link>
           <div>
-            <h1>{t('环境配置')}</h1>
+            <h1>{t('运行配置')}</h1>
             <span>{t('模型、浏览器、敏感数据过滤、运行控制和调试参数全部在网页配置中管理。')}</span>
           </div>
         </header>
@@ -2908,7 +2911,7 @@ export function EnvironmentSettings({
 
       <div className={showTabs ? 'settings-layout' : 'settings-layout no-tabs'}>
         {showTabs ? (
-          <nav className="settings-tabs" aria-label={t('环境配置分类')}>
+          <nav className="settings-tabs" aria-label={t('运行配置分类')}>
             {visibleSettingsTabs.map((tab) => (
               <button className={activeTab === tab.id ? 'active' : undefined} key={tab.id} onClick={() => selectTab(tab.id)} type="button">
                 {t(tab.label)}
@@ -2976,7 +2979,7 @@ export function EnvironmentSettings({
             <section className="settings-loading-panel" role="status" aria-live="polite">
               <LiquidGlassLoader />
               <div>
-                <h2>{t('正在读取环境配置')}</h2>
+                <h2>{t('正在读取运行配置')}</h2>
                 <span>{t('正在加载模型、浏览器、敏感数据过滤、运行控制和调试参数。')}</span>
               </div>
             </section>
@@ -3305,7 +3308,7 @@ export function EnvironmentSettings({
                             <div className="env-name">
                               <span className="settings-field-title-line">
                                 <strong>{definition?.label ? t(definition.label) : item.key}</strong>
-                                <small className={`settings-apply-badge is-${definition?.applyMode || 'runtime'}`}>{t(definition?.applyMode === 'startup' ? '重启后生效' : '即时生效')}</small>
+                                <small className={`settings-apply-badge is-${definition?.applyMode || 'runtime'}`}>{t(definition?.applyMode === 'recreate' ? '自动更新实例' : '即时生效')}</small>
                               </span>
                               <span>{definition?.description ? t(definition.description) : t('网页配置项。')}</span>
                               <small className="settings-field-default">{t('默认值')}：{displayDefaultValue(item.key, definition?.defaultValue || '', t)}</small>
