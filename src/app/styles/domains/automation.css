@@ -81,6 +81,7 @@
 .automation-icon-action.automation-primary-action:hover:not(:disabled) {
   background: var(--muted-strong);
   border-color: var(--muted-strong);
+  color: var(--panel);
 }
 
 .automation-icon-action:disabled {
@@ -170,7 +171,6 @@
 }
 
 .automation-empty-state .automation-icon-action {
-  color: var(--accent-strong);
   margin-top: 14px;
 }
 

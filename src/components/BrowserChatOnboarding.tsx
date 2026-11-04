@@ -24,6 +24,7 @@ import { OrbitIcon } from '@/components/OrbitIcon';
 import { readApiJson } from '@/lib/api-client';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 import { TextAnimate } from '@/components/ui/text-animate';
+import { useWorkspaceAccess } from '@/components/WorkspaceAccessProvider';
 
 type OnboardingPayload = {
   readiness: WebPilotOnboardingReadiness;
@@ -59,6 +60,7 @@ export function BrowserChatOnboarding({
   safetyMode: OnboardingSafetyMode;
 }) {
   const { t } = useI18n();
+  const { settingsMenuVisible } = useWorkspaceAccess();
   const router = useRouter();
   const searchParams = useSearchParams();
   const forceTutorial = searchParams.get('onboarding') === '1';
@@ -338,7 +340,7 @@ export function BrowserChatOnboarding({
             ))}
           </div>
           <p className="browser-chat-onboarding-note">{t('模型和浏览器是执行网页任务的必要条件；图片输入影响视觉理解，Office 影响 Word、Excel、PPT 和 PDF 的创建、排版与预览。')}</p>
-          {!payload?.readiness.model.ready ? <Link className="ui-button secondary browser-chat-onboarding-action" href="/settings"><Settings size={16} />{t('配置模型')}</Link> : null}
+          {settingsMenuVisible && !payload?.readiness.model.ready ? <Link className="ui-button secondary browser-chat-onboarding-action" href="/settings"><Settings size={16} />{t('配置模型')}</Link> : null}
         </>
       );
     }

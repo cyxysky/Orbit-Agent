@@ -62,12 +62,13 @@
 .text-document { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; container: text-document / inline-size; }
 .text-document-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; flex-shrink: 0; gap: 12px; min-height: 48px; padding: 0 18px; border-bottom: 1px solid color-mix(in srgb, var(--border) 65%, transparent); }
 .text-toolbar-end { display: flex; align-items: center; justify-self: end; gap: 8px; min-width: 0; }
-.text-format-tabs { align-self: stretch; justify-self: center; min-width: 0; max-width: 100%; background: transparent; }
-.text-format-tabs [data-slot="tabs-list-container"] { padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
-.text-format-tabs [data-slot="tabs-list"] { gap: 4px; min-height: 48px; padding: 0; border: 0; border-radius: 0; background: transparent; }
-.text-format-tabs [data-slot="tabs-tab"] { position: relative; min-width: 72px; min-height: 48px; padding: 0 12px; border: 0; border-radius: 0; background: transparent; box-shadow: none; color: var(--muted); font-size: 12px; font-weight: 400; white-space: nowrap; }
-.text-format-tabs [data-slot="tabs-tab"][aria-selected="true"] { background: transparent; color: var(--foreground); font-weight: 500; }
-.text-format-tabs [data-slot="tabs-indicator"] { inset: auto 10px 0; height: 2px; border: 0; border-radius: 1px; background: var(--foreground); box-shadow: none; }
+.text-format-tabs { justify-self: center; width: 240px; min-width: 0; max-width: 100%; }
+.text-format-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3px; padding: 3px; border-radius: 7px; background: var(--panel-soft); }
+.text-format-tab { display: flex; align-items: center; justify-content: center; min-width: 0; min-height: 30px; padding: 4px 8px; border: 1px solid transparent; border-radius: 5px; color: var(--muted-strong); font-size: 12px; font-weight: 400; white-space: nowrap; cursor: pointer; outline: none; }
+.text-format-tab[aria-selected="true"] { background: var(--panel); border-color: var(--border); color: var(--foreground); font-weight: 500; }
+.text-format-tab[data-hovered]:not([aria-selected="true"]) { background: var(--menu-hover-bg); }
+.text-format-tab[data-focus-visible] { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.text-format-tab[data-disabled] { opacity: .45; cursor: default; }
 .text-mode-switch { display: flex; align-items: stretch; align-self: stretch; gap: 18px; }
 .text-document-toolbar .text-mode-switch .text-mode-tab { position: relative; height: 100%; min-height: 42px; padding: 0 2px; border-radius: 0; background: transparent; color: var(--muted); font-size: 12px; }
 .text-document-toolbar .text-mode-tab[aria-pressed="true"] { color: var(--foreground); background: transparent; }
@@ -169,11 +170,11 @@
   .text-mode-switch { grid-column: 1; grid-row: 1; }
   .text-toolbar-end { grid-column: 2; grid-row: 1; }
   .text-format-tabs { grid-column: 1 / -1; grid-row: 2; }
-  .text-format-tabs :is([data-slot="tabs-list"], [data-slot="tabs-tab"]) { min-height: 40px; }
+  .text-format-tabs { margin-block: 4px; }
 }
 @container text-document (max-width: 360px) {
   .text-document-toolbar { padding-inline: 8px; }
-  .text-format-tabs [data-slot="tabs-tab"] { min-width: 0; padding-inline: 6px; }
+  .text-format-tab { padding-inline: 5px; }
   .text-toolbar-end .text-save-state { display: none; }
   .text-toolbar-end .text-toolbar-actions { gap: 0; padding-left: 0; border-left: 0; }
   .text-toolbar-end .text-toolbar-actions .creative-button-icon { width: 24px; min-width: 24px; }

@@ -1086,7 +1086,7 @@ type NativeTabGroupActivation = {
 };
 
 const preparedContextInitScripts = new WeakSet<BrowserContext>();
-const accessPolicyContexts = new WeakSet<BrowserContext>();
+const accessPolicyContexts = new WeakMap<BrowserContext, Parameters<BrowserContext['route']>[1]>();
 const contextAccessPolicyConfigurations = new WeakMap<BrowserContext, CapabilityConfiguration>();
 const pageAccessPolicyReaders = new WeakMap<Page, () => BrowserRuntimeEnvironment>();
 const navigationResponseGuards = new WeakMap<Page, Promise<void>>();
@@ -1900,8 +1900,10 @@ export class BrowserSession {
 
   private async prepareNavigationPolicy() {
     const policy = this.runtimeEnvironment();
-    if (!policy.BROWSER_DOMAIN_ALLOWLIST && !policy.BROWSER_DOMAIN_DENYLIST) return;
     const context = this.context;
+    if (!context) return;
+    await this.prepareContext(context, { claimPages: false });
+    if (!policy.BROWSER_DOMAIN_ALLOWLIST && !policy.BROWSER_DOMAIN_DENYLIST) return;
     const connection = this.browserCodeConnection;
     if (!context || connection?.protocol !== 'cdp') throw new Error('Browser policy requires a CDP connection');
     await Promise.all([...this.ownedPages].filter(page => !page.isClosed()).map(page => guardNavigationRedirects(context, page,
@@ -2311,10 +2313,19 @@ export class BrowserSession {
     contextAccessPolicyConfigurations.set(context, this.capabilityConfiguration);
     const readContextPolicy: () => BrowserRuntimeEnvironment = () => ({ ...process.env, ...contextAccessPolicyConfigurations.get(context) });
     const policyEndpoint = this.browserCodeConnection?.endpoint || '';
-    if (!accessPolicyContexts.has(context)) {
+    const hasRules = (policy: BrowserRuntimeEnvironment) => Boolean(policy.BROWSER_DOMAIN_ALLOWLIST?.trim() || policy.BROWSER_DOMAIN_DENYLIST?.trim());
+    const needsAccessPolicy = hasRules(readContextPolicy()) || context.pages().some(page => hasRules((pageAccessPolicyReaders.get(page) || readContextPolicy)()));
+    const previousPolicy = accessPolicyContexts.get(context);
+    // Playwright disables the HTTP cache whenever routing is enabled. Keep the
+    // interceptor absent when no page has site rules, and release it on clearing.
+    if (!needsAccessPolicy && previousPolicy) {
+      await context.unroute('**/*', previousPolicy);
+      accessPolicyContexts.delete(context);
+    }
+    if (needsAccessPolicy && !previousPolicy) {
       // Context routing also covers the first request of popups and redirect hops.
       // Read the policy for each navigation so already-open sessions see saved changes.
-      await context.route('**/*', async route => {
+      const routeHandler: Parameters<BrowserContext['route']>[1] = async route => {
         const request = route.request();
         if (request.isNavigationRequest()) {
           // A popup's first request can precede its Frame/Page object.
@@ -2337,8 +2348,9 @@ export class BrowserSession {
           }
         }
         await route.fallback();
-      });
-      accessPolicyContexts.add(context);
+      };
+      await context.route('**/*', routeHandler);
+      accessPolicyContexts.set(context, routeHandler);
     }
     if (!preparedContextInitScripts.has(context)) {
       preparedContextInitScripts.add(context);

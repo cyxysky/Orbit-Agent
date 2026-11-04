@@ -1,4 +1,5 @@
 import { cookies, headers } from 'next/headers';
+import { cache } from 'react';
 import { SIDEBAR_COLLAPSED_COOKIE_NAME, sidebarCollapsedFromCookie } from '@/lib/sidebar-collapse';
 import { readBackendJson } from './backend-http';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
@@ -44,9 +45,9 @@ export async function readBackendPageData<T>(pathname: string): Promise<T> {
   }
 }
 
-export async function readWorkspacePageContext() {
+export const readWorkspacePageContext = cache(async () => {
   const [context, requestCookies] = await Promise.all([
     readBackendPageData<{ userId: string; admin: boolean; adminSettingsPasswordRequired: boolean }>('/api/workspace/context'), cookies(),
   ]);
-  return { ...context, sidebarCollapsed: sidebarCollapsedFromCookie(requestCookies.get(SIDEBAR_COLLAPSED_COOKIE_NAME)?.value) };
-}
+  return { ...context, settingsMenuVisible: !context.adminSettingsPasswordRequired || context.admin, sidebarCollapsed: sidebarCollapsedFromCookie(requestCookies.get(SIDEBAR_COLLAPSED_COOKIE_NAME)?.value) };
+});

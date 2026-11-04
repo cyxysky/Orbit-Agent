@@ -28,18 +28,18 @@ html .workspace-mode-tab-label {
   font: inherit;
 }
 
-html .workspace-mode-tabs [data-slot="tabs-tab"][aria-selected="true"] {
+html .workspace-mode-tabs [data-slot="tabs-tab"][aria-current="page"] {
   background: var(--menu-selected-bg) !important;
   color: var(--menu-selected-foreground) !important;
   box-shadow: none;
   font-weight: var(--navigation-selected-font-weight);
 }
 
-html .workspace-mode-tabs [data-slot="tabs-tab"][aria-selected="true"] > svg {
+html .workspace-mode-tabs [data-slot="tabs-tab"][aria-current="page"] > svg {
   color: var(--menu-selected-foreground) !important;
 }
 
-html .workspace-mode-tabs [data-slot="tabs-tab"][aria-selected="true"] .workspace-mode-tab-label {
+html .workspace-mode-tabs [data-slot="tabs-tab"][aria-current="page"] .workspace-mode-tab-label {
   color: var(--menu-selected-foreground) !important;
   font-weight: var(--navigation-selected-font-weight);
 }

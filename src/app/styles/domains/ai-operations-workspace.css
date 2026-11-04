@@ -245,5 +245,3 @@
 @media (prefers-reduced-motion: reduce) {
   .ai-operations-stacked-bar { transition: none; }
 }
-.ai-operations-initial-loading > [role="status"] { color: var(--muted-strong); margin-block: 28px 20px; }
-.ai-operations-loading-placeholder { min-height: 320px; background: var(--panel); border: 1px solid var(--table-border); border-radius: 12px; }

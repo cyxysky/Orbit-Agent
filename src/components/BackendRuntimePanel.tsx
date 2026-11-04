@@ -3,6 +3,7 @@
 import { Activity, CircleStop, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { DataTable } from '@/components/ui/data-table';
+import { WorkspacePageSkeleton } from '@/components/WorkspacePageSkeleton';
 import { readApiJson } from '@/lib/api-client';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 import { useI18n } from '@/i18n/I18nProvider';
@@ -55,7 +56,7 @@ export function BackendRuntimePanel() {
     }
   };
 
-  if (!data && loading) return <div className="ai-runtime-loading"><RefreshCw className="spin" size={18} /> {t("正在读取后端状态…")}</div>;
+  if (!data && loading) return <WorkspacePageSkeleton label={t('正在读取后端状态…')} />;
 
   return (
     <div className="ai-runtime-status" aria-busy={loading}>

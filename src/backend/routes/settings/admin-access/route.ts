@@ -5,6 +5,7 @@ import {
   adminSettingsPasswordEnabled,
   createAdminSettingsAccessToken,
   verifyAdminSettingsPassword,
+  authorizeSettingsMenuRequest,
 } from '@/server/settings/admin-settings-access';
 import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 
@@ -14,6 +15,8 @@ const passwordSchema = z.object({ password: z.string().min(1).max(4_000) }).stri
 
 export async function POST(request: Request) {
   try {
+    const denied = authorizeSettingsMenuRequest(request);
+    if (denied) return denied;
     if (!adminSettingsPasswordEnabled()) return apiJson(request, { ok: true, token: '' });
     if (!adminSettingsPasswordConfigured()) {
       throw new ApiRequestError('管理员设置密码尚未配置，请设置 WEBPILOT_ADMIN_SETTINGS_PASSWORD。', {

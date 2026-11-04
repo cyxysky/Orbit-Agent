@@ -7,7 +7,7 @@ import { textFileExtension, textFormatFromFile, textPreviewHtml } from '@/lib/te
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 import { CreativeButton } from './ui/creative-button';
 import { TextArea } from '@heroui/react/textarea';
-import { Tabs } from '@heroui/react/tabs';
+import { Tabs, TabList, Tab } from 'react-aria-components';
 import { CreativeEditorLoading } from './CreativeEditorLoading';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 import { MonacoTextEditor, type MonacoTextEditorHandle } from './MonacoTextEditor';
@@ -210,7 +210,7 @@ export function TextEditorPanel({ documentId, importSourceUrl, fileName, handleR
           <CreativeButton variant="ghost" className="text-mode-tab" aria-pressed={mode === 'edit'} disabled={disabled} onClick={() => void changeMode('edit')}>编辑</CreativeButton>
           <CreativeButton variant="ghost" className="text-mode-tab" aria-pressed={mode === 'read'} disabled={disabled} onClick={() => void changeMode('read')}>预览</CreativeButton>
         </div><Tabs className="text-format-tabs" selectedKey={draft.format} onSelectionChange={key => void changeFormat(String(key) as TextDraft['format'])}>
-          <Tabs.ListContainer><Tabs.List aria-label="文档格式">{formats.map(format => <Tabs.Tab key={format.value} id={format.value} isDisabled={disabled}>{format.label}<Tabs.Indicator /></Tabs.Tab>)}</Tabs.List></Tabs.ListContainer>
+          <TabList className="text-format-list" aria-label="文档格式">{formats.map(format => <Tab className="text-format-tab" key={format.value} id={format.value} isDisabled={disabled}>{format.label}</Tab>)}</TabList>
         </Tabs>
           <div className="text-toolbar-end"><span className="text-save-state">{saving ? '保存中' : dirty ? '待保存' : '已保存'}</span>
           <div className="text-toolbar-actions"><CreativeButton variant="ghost" isIconOnly title="保存" aria-label="保存文本" disabled={disabled || !dirty} onClick={() => void save().catch(() => undefined)}><Save size={15} /></CreativeButton>

@@ -5,6 +5,8 @@ import { usePathname } from 'next/navigation';
 import { LiquidGlassLoader } from '@/components/LiquidGlassLoader';
 import { useI18n } from '@/i18n/I18nProvider';
 import { withoutWebPilotBasePath } from '@/lib/webpilot-base-path';
+import { WorkspacePageSkeleton } from '@/components/WorkspacePageSkeleton';
+import { BrowserChatLoadingSkeleton } from '@/components/BrowserChatLoadingSkeleton';
 
 function isInternalNavigationLink(anchor: HTMLAnchorElement) {
   if (anchor.target && anchor.target !== '_self') return false;
@@ -50,6 +52,10 @@ function workspaceContentBounds(): WorkspaceContentBounds | undefined {
     return bounds.width > 0 && bounds.height > 0;
   });
   const sidebar = layout?.querySelector<HTMLElement>(':scope > .browser-chat-sidebar');
+  const mainBounds = layout?.querySelector<HTMLElement>(':scope > .browser-chat-main')?.getBoundingClientRect();
+  if (mainBounds && mainBounds.width > 0 && mainBounds.height > 0) {
+    return { height: mainBounds.height, left: mainBounds.left, top: mainBounds.top, width: mainBounds.width };
+  }
   if (layout && sidebar) {
     const layoutBounds = layout.getBoundingClientRect();
     const sidebarBounds = sidebar.getBoundingClientRect();
@@ -73,7 +79,7 @@ function workspaceContentBounds(): WorkspaceContentBounds | undefined {
   };
 }
 
-function LoadingOverlay({ label, scope }: { label: string; scope: NavigationLoadingScope }) {
+function LoadingOverlay({ label, scope, targetPathname }: { label: string; scope: NavigationLoadingScope; targetPathname: string }) {
   const { t } = useI18n();
   const translatedLabel = t(label);
   const [contentBounds, setContentBounds] = useState<WorkspaceContentBounds | undefined>(() => (
@@ -99,15 +105,15 @@ function LoadingOverlay({ label, scope }: { label: string; scope: NavigationLoad
   return (
     <div
       className={contentBounds ? 'navigation-loading-overlay navigation-loading-overlay--workspace' : 'navigation-loading-overlay'}
-      role="status"
-      aria-live="polite"
-      aria-label={translatedLabel}
+      role={contentBounds ? undefined : 'status'}
+      aria-live={contentBounds ? undefined : 'polite'}
+      aria-label={contentBounds ? undefined : translatedLabel}
       style={contentBounds}
     >
-      <div className="navigation-loading-content">
+      {contentBounds ? (targetPathname === '/browser-chat' ? <BrowserChatLoadingSkeleton label={translatedLabel} /> : <WorkspacePageSkeleton label={translatedLabel} variant={targetPathname === '/admin/ai-operations' ? 'overview' : targetPathname === '/settings' ? 'settings' : 'list'} />) : <div className="navigation-loading-content">
         <LiquidGlassLoader />
         <p>{translatedLabel}</p>
-      </div>
+      </div>}
     </div>
   );
 }
@@ -117,16 +123,18 @@ export function NavigationLoading() {
   const [visible, setVisible] = useState(false);
   const [label, setLabel] = useState('正在切换界面');
   const [scope, setScope] = useState<NavigationLoadingScope>('viewport');
+  const [targetPathname, setTargetPathname] = useState('');
   const pendingRef = useRef(0);
   const showTimeoutRef = useRef<number | undefined>(undefined);
   const timeoutRef = useRef<number | undefined>(undefined);
 
-  function start(nextLabel = '正在处理', nextScope: NavigationLoadingScope = 'viewport') {
+  function start(nextLabel = '正在处理', nextScope: NavigationLoadingScope = 'viewport', target = '') {
     window.clearTimeout(timeoutRef.current);
     const wasIdle = pendingRef.current === 0;
     pendingRef.current += 1;
     setLabel(nextLabel);
     setScope(nextScope);
+    setTargetPathname(withoutWebPilotBasePath(target));
     if (wasIdle) {
       window.clearTimeout(showTimeoutRef.current);
       showTimeoutRef.current = window.setTimeout(() => setVisible(true), 160);
@@ -142,7 +150,8 @@ export function NavigationLoading() {
     pendingRef.current = force ? 0 : Math.max(0, pendingRef.current - 1);
     if (pendingRef.current > 0) return;
     window.clearTimeout(showTimeoutRef.current);
-    timeoutRef.current = window.setTimeout(() => setVisible(false), 180);
+    if (force) setVisible(false);
+    else timeoutRef.current = window.setTimeout(() => setVisible(false), 180);
   }
 
   useEffect(() => {
@@ -151,12 +160,12 @@ export function NavigationLoading() {
       const anchor = (event.target as Element | null)?.closest?.('a[href]');
       if (anchor instanceof HTMLAnchorElement && isInternalNavigationLink(anchor)) {
         const target = new URL(anchor.href, window.location.href);
-        start('正在切换界面', isWorkspaceViewPathname(target.pathname) ? 'workspace' : 'viewport');
+        start('正在切换界面', isWorkspaceViewPathname(target.pathname) ? 'workspace' : 'viewport', target.pathname);
       }
     }
 
     function onPopState() {
-      start('正在切换界面', isWorkspaceViewPathname(window.location.pathname) ? 'workspace' : 'viewport');
+      start('正在切换界面', isWorkspaceViewPathname(window.location.pathname) ? 'workspace' : 'viewport', window.location.pathname);
     }
 
     function onManualStart(event: Event) {
@@ -186,5 +195,5 @@ export function NavigationLoading() {
     stop(true);
   }, [pathname]);
 
-  return visible ? <LoadingOverlay label={label} scope={scope} /> : null;
+  return visible ? <LoadingOverlay label={label} scope={scope} targetPathname={targetPathname} /> : null;
 }

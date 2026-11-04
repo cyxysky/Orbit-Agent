@@ -3,6 +3,11 @@ import type { Language } from '@/i18n/language';
 export type { Language } from '@/i18n/language';
 
 const en: Record<string, string> = {
+  '按内容筛选': 'Filter by content',
+  '包含以下内容': 'Contains',
+  '筛选内容': 'Filter value',
+  '输入筛选内容': 'Enter a filter value',
+  '应用筛选': 'Apply filter',
   '共 {count} 条': '{count} records',
   '每页': 'Per page',
   '每页条数': 'Rows per page',

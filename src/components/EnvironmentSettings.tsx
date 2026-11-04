@@ -3284,7 +3284,7 @@ export function EnvironmentSettings({
 
           {activeTab === 'skills' ? <SkillsManager onChanged={onSkillsChanged} showTitle={showSectionTitles} userId={normalizedUserId} /> : null}
 
-          {activeTab === 'knowledge' ? <KnowledgeSettings /> : null}
+          {activeTab === 'knowledge' ? <KnowledgeSettings authorizationToken={adminSettingsAccessToken} /> : null}
 
           {activeTab === 'memory' ? (
             <div className="settings-memory-page">

@@ -2,7 +2,8 @@
 
 import { EmptyState } from '@heroui/react/empty-state';
 import { Table } from '@heroui/react/table';
-import { ChevronLeft, ChevronRight, Layers } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Layers, X } from 'lucide-react';
+import { TableColumnFilter } from '@/components/ui/table-column-filter';
 import type { SortDescriptor } from 'react-aria-components';
 import { useDeferredValue, useMemo, useState, type ReactNode } from 'react';
 import { useI18n } from '@/i18n/I18nProvider';
@@ -75,6 +76,7 @@ export function DataTable<T>({
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const deferredFilters = useDeferredValue(filters);
+  const activeFilters = filterable ? columns.filter(column => filters[column.id]?.trim()) : [];
   const filteredData = useMemo(() => {
     if (!filterable) return data;
     const active = columns.filter(column => column.accessor && deferredFilters[column.id]?.trim());
@@ -124,6 +126,12 @@ export function DataTable<T>({
 
   return (
     <div className="app-data-table-region">
+    {activeFilters.length ? <div className="app-data-table-active-filters" aria-label={t('筛选条件')}>
+      {activeFilters.map(column => <button className="app-data-table-filter-chip" key={column.id} onClick={() => { setFilters(current => ({ ...current, [column.id]: '' })); setPage(1); }} type="button" aria-label={`${t('清除')} ${typeof column.header === 'string' ? column.header : column.id} · ${filters[column.id]}`}>
+        <span>{column.header}: {filters[column.id]}</span><X aria-hidden="true" size={12} />
+      </button>)}
+      <button className="app-data-table-clear-filters" onClick={() => { setFilters({}); setPage(1); }} type="button">{t('清除全部')}</button>
+    </div> : null}
     <Table variant="primary" className={['app-data-table', compact ? 'is-compact' : '', className || ''].filter(Boolean).join(' ')}>
       <Table.ScrollContainer>
         <Table.Content
@@ -147,14 +155,9 @@ export function DataTable<T>({
                     <span className="app-data-table-header-label">{column.header}</span>
                   </Table.SortableColumnHeader>
                 ) : <span className="app-data-table-header-label">{column.header}</span>}
-                {filterable && column.accessor ? <input
-                  aria-label={`${typeof column.header === 'string' ? column.header : column.id} · ${t('筛选')}`}
-                  className="app-data-table-filter"
-                  onChange={event => { const value = event.currentTarget.value; setFilters(current => ({ ...current, [column.id]: value })); setPage(1); }}
-                  onClick={event => event.stopPropagation()}
-                  onKeyDown={event => event.stopPropagation()}
-                  placeholder={t('筛选')}
-                  type="search"
+                {filterable && column.accessor ? <TableColumnFilter
+                  label={typeof column.header === 'string' ? column.header : column.id}
+                  onApply={value => { setFilters(current => ({ ...current, [column.id]: value })); setPage(1); }}
                   value={filters[column.id] || ''}
                 /> : null}
                 </div>}

@@ -235,8 +235,7 @@ body {
 }
 
 .app-data-table-region { min-width: 0; }
-.app-data-table-heading { display: grid; gap: 8px; min-width: 72px; }
-.app-data-table-filter,
+.app-data-table-heading { align-items: center; display: flex; justify-content: space-between; gap: 8px; min-width: 64px; }
 .app-data-table-pagination :is(input, select) {
   background: var(--field-background);
   border: 1px solid var(--field-border);
@@ -247,7 +246,27 @@ body {
   min-height: 32px;
   padding: 4px 8px;
 }
-.app-data-table-filter { width: 100%; min-width: 60px; max-width: 180px; font-size: 12px; }
+.app-table-filter-trigger { position: relative; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 28px; width: 28px; height: 28px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; }
+.app-table-filter-trigger:is(:hover, [aria-expanded="true"]) { background: var(--menu-hover-bg); color: var(--foreground); }
+.app-table-filter-trigger.is-active { background: var(--accent-soft); color: var(--accent-strong); }
+.app-table-filter-trigger.is-active::after { position: absolute; top: 4px; right: 4px; width: 4px; height: 4px; border-radius: 50%; background: currentColor; content: ''; }
+.app-table-filter-popover { padding: 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-elevated); color: var(--foreground); }
+.app-table-filter-popover form { display: grid; gap: 16px; }
+.app-table-filter-popover header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.app-table-filter-popover header strong { font-size: 14px; font-weight: 600; }
+.app-table-filter-popover header > span, .app-table-filter-field > span { color: var(--muted-strong); font-size: 12px; }
+.app-table-filter-field { display: grid; gap: 7px; }
+.app-table-filter-field > div { display: flex; align-items: center; gap: 7px; padding-inline: 10px; border: 1px solid var(--field-border); border-radius: 6px; background: var(--field-background); color: var(--muted); }
+.app-table-filter-field input { width: 100%; min-width: 0; min-height: 36px; border: 0; background: transparent; color: var(--field-foreground); font: inherit; font-size: 13px; outline: none; }
+.app-table-filter-field input:focus-visible { outline: none; box-shadow: none; }
+.app-table-filter-field > div:focus-within { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.app-table-filter-popover footer { display: flex; justify-content: flex-end; gap: 8px; }
+.app-table-filter-popover footer .ui-button { min-height: 32px; padding: 5px 12px; font-size: 12px; }
+.app-data-table-active-filters { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; padding: 10px 16px; border-bottom: 1px solid var(--table-border); }
+.app-data-table-filter-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 5px 8px; border: 0; border-radius: 5px; background: var(--accent-soft); color: var(--accent-strong); font-size: 12px; cursor: pointer; }
+.app-data-table-filter-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.app-data-table-filter-chip svg { flex-shrink: 0; }
+.app-data-table-clear-filters { margin-inline-start: auto; padding: 5px 0 5px 8px; background: transparent; border: 0; color: var(--muted-strong); font-size: 12px; cursor: pointer; }
 .app-data-table-pagination { align-items: center; border-top: 1px solid var(--table-border); color: var(--muted-strong); display: flex; flex-wrap: wrap; gap: 12px; padding: 12px 16px; font-size: 12px; }
 .app-data-table-pagination > span { margin-inline-end: auto; }
 .app-data-table-pagination label, .app-data-table-page-controls { align-items: center; display: flex; gap: 6px; }
@@ -797,6 +816,35 @@ input[type="checkbox"]:not([data-slot], [data-slot] *):focus-visible {
   font-weight: 500;
   line-height: 1;
   white-space: nowrap;
+}
+
+.navigation-loading-overlay--workspace { display: block; overflow: hidden; padding: 28px; background: var(--background); backdrop-filter: none; animation: none; }
+.navigation-loading-overlay--workspace .browser-chat-loading-skeleton { width: 100%; height: 100%; }
+.workspace-page-skeleton { width: 100%; min-width: 0; }
+.workspace-page-skeleton > div { display: grid; gap: 20px; }
+.workspace-page-skeleton i { display: block; height: 10px; border-radius: 4px; background: var(--border); animation: workspace-skeleton-pulse 1.8s ease-in-out infinite; }
+.workspace-skeleton-heading { display: grid; gap: 12px; padding-block: 6px 10px; }
+.workspace-skeleton-heading i:first-child { width: min(220px, 45%); height: 24px; }
+.workspace-skeleton-heading i:last-child { width: min(380px, 65%); }
+.workspace-skeleton-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+.workspace-skeleton-metrics > div { display: grid; gap: 18px; padding: 22px; border-radius: 12px; background: var(--panel); }
+.workspace-skeleton-metrics i:nth-child(1) { width: 55%; }
+.workspace-skeleton-metrics i:nth-child(2) { width: 38%; height: 30px; }
+.workspace-skeleton-metrics i:nth-child(3) { width: 75%; }
+.workspace-skeleton-chart-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 20px; }
+.workspace-skeleton-chart, .workspace-skeleton-panel { padding: 20px; border-radius: 12px; background: var(--panel); }
+.workspace-skeleton-chart { min-height: 230px; display: flex; align-items: flex-end; }
+.workspace-skeleton-chart i { height: 160px; width: 100%; }
+.workspace-skeleton-row { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr); align-items: center; gap: 20px; min-height: 48px; border-bottom: 1px solid var(--border); }
+.workspace-skeleton-row:last-child { border: 0; }
+.workspace-skeleton-row i { width: 65%; }
+.workspace-skeleton-settings { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(0, 3fr); gap: 24px; }
+@keyframes workspace-skeleton-pulse { 50% { opacity: .4; } }
+@media (prefers-reduced-motion: reduce) { .workspace-page-skeleton i { animation: none; } }
+@media (max-width: 700px) {
+  .navigation-loading-overlay--workspace { padding: 18px 14px; }
+  .workspace-skeleton-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .workspace-skeleton-chart-grid, .workspace-skeleton-settings { grid-template-columns: minmax(0, 1fr); }
 }
 
 .settings-loading-panel {
