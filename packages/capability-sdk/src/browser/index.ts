@@ -19,6 +19,7 @@ export * from './output-settings.ts';
 export * from './interaction-schema.ts';
 export * from './runtime-skill.ts';
 export * from './settings.ts';
+export * from './access-policy.ts';
 export * from './session-group.ts';
 
 export const browserCodeDescription = 'action=code executes JavaScript with top-level await in a persistent Node.js Playwright runtime. page, context, browser and tab are already provided: use page directly; never initialize it from window.__page or redeclare these bindings. document, window and DOMParser are unavailable in the outer cell; use them inside a browser-side callback such as page.evaluate. Correct: var info = await page.evaluate(() => ({ title: document.title, url: window.location.href })); nodeRepl.write(info); Incorrect: const page = window.__page; document.querySelector(...). An evaluate callback runs in the page and cannot capture Node variables, page or nodeRepl; pass values using its second argument, return JSON-safe data, then call nodeRepl.write outside the callback. Use nodeRepl.write(value) for results (top-level return is also supported). Prefer var for bindings reused across cells. Bare fetch runs on the Node host without browser cookies; for an observed browser-authenticated HTTP API use context.request.get(url), check response.ok(), then await response.json()/text(). If document/window is not defined, move the DOM read into page.evaluate instead of retrying the same outer-cell code.';

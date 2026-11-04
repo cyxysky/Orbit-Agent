@@ -11,7 +11,7 @@
 
 :root[data-theme="dark"] {
   --navigation-selected-bg: #303335;
-  --navigation-selected-foreground: #f4f5f5;
+  --navigation-selected-foreground: #dedede;
 }
 
 html :is(.browser-chat-sidebar, .settings-secondary-nav, .settings-provider-list, .settings-view-tabs, .settings-model-types, .settings-capability-tabs, .settings-tabs, .custom-select-menu) {
@@ -29,18 +29,18 @@ html .workspace-mode-tab-label {
   font: inherit;
 }
 
-html .workspace-mode-tabs [data-slot="tabs-tab"][aria-selected="true"] {
+html .workspace-mode-tabs [data-slot="tabs-tab"][aria-current="page"] {
   background: var(--menu-selected-bg) !important;
   color: var(--menu-selected-foreground) !important;
   box-shadow: none;
   font-weight: var(--navigation-selected-font-weight);
 }
 
-html .workspace-mode-tabs [data-slot="tabs-tab"][aria-selected="true"] > svg {
+html .workspace-mode-tabs [data-slot="tabs-tab"][aria-current="page"] > svg {
   color: var(--menu-selected-foreground) !important;
 }
 
-html .workspace-mode-tabs [data-slot="tabs-tab"][aria-selected="true"] .workspace-mode-tab-label {
+html .workspace-mode-tabs [data-slot="tabs-tab"][aria-current="page"] .workspace-mode-tab-label {
   color: var(--menu-selected-foreground) !important;
   font-weight: var(--navigation-selected-font-weight);
 }
@@ -101,8 +101,8 @@ html .settlement-modal.settlement-modal {
   min-height: 0;
   overflow: hidden;
   --form-dialog-surface: var(--panel-elevated);
-  --form-dialog-field: var(--panel-warm);
-  --form-dialog-field-border: transparent;
+  --form-dialog-field: var(--input-filled-surface);
+  --form-dialog-field-border: var(--input-filled-border);
   --form-dialog-title: var(--foreground);
   --form-dialog-label: var(--muted);
   --form-dialog-value: var(--foreground);
@@ -189,8 +189,8 @@ html .settlement-modal.settlement-modal .app-modal-footer {
 }
 
 html .settlement-modal.settlement-modal :is([data-slot="input-group"], [data-slot="textarea"], .custom-select-button) {
-  background: var(--panel-warm) !important;
-  border: 1px solid transparent !important;
+  background: var(--form-dialog-field) !important;
+  border: 1px solid var(--form-dialog-field-border) !important;
   border-radius: 11px;
   box-shadow: none !important;
   color: var(--foreground);
@@ -276,3 +276,9 @@ html .settlement-delete-modal .app-modal-body > [role="alert"] { color: var(--da
   html .settlement-modal.settlement-modal .app-modal-footer { padding: 16px 20px; }
   html .settlement-modal.settlement-modal :is(.settlement-modal-close, [data-slot="modal-close-trigger"], [data-slot="alert-dialog-close-trigger"]) { top: 17px; right: 14px; }
 }
+:root .confirm-action-popover { padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel-elevated); color: var(--foreground); font-size: 13px; line-height: 1.55; }
+.confirm-action-popover > strong { font-size: 14px; font-weight: 500; }
+.confirm-action-popover > p { margin: 8px 0 16px; overflow-wrap: anywhere; color: var(--muted-strong); }
+.confirm-action-popover-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.confirm-action-popover-actions .ui-button { min-height: 30px; padding: 4px 12px; }
+.confirm-action-popover-actions .is-danger { background: var(--danger); color: var(--on-danger, #fff); }

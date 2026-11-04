@@ -46,7 +46,11 @@ export async function sendWebResponse(response: Response, outgoing: ServerRespon
 }
 
 export type RouteModule = Record<string, unknown>;
-export type RouteEntry = { path: string; load: () => Promise<RouteModule> };
+export type RouteEntry = {
+  path: string;
+  load: () => Promise<RouteModule>;
+  authorize?: (request: Request) => Response | void | Promise<Response | void>;
+};
 
 export function createRouter(entries: RouteEntry[]) {
   const routes = entries.map(entry => {
@@ -62,6 +66,8 @@ export function createRouter(entries: RouteEntry[]) {
     for (const route of routes) {
       const match = route.regexp.exec(pathname);
       if (!match) continue;
+      const denied = await route.authorize?.(request);
+      if (denied) return denied;
       const params: Record<string, string | string[]> = {};
       try { route.keys.forEach((key, i) => { params[key] = route.path.includes(`[...${key}]`) ? match[i + 1].split('/').map(decodeURIComponent) : decodeURIComponent(match[i + 1]); }); }
       catch { return Response.json({ code: ERROR_CODES.INVALID_URL_ENCODING, error: 'Invalid URL encoding' }, { status: 400 }); }

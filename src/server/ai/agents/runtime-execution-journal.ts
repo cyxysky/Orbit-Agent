@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { ModelMessage } from 'ai';
 import { queryDatabaseOne, queryDatabase, executeDatabase, runDatabaseTransaction, type DatabaseExecutor } from '@/server/db/database';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+import { ensureRuntimeOwner } from '@/server/storage/runtime-owner';
 
 
 type Pending = { id: string; phase: 'planned' | 'awaiting-approval' | 'executing' | 'uncertain' | 'completed'; messages: ModelMessage[]; calls: Array<{ toolCallId: string; toolName: string; input: unknown }>; results: ModelMessage[]; startedCallIds?: string[] };
@@ -18,6 +19,7 @@ export class RuntimeExecutionJournal {
     const previous = this.state.revision;
     const next = structuredClone(this.state); mutate(next); next.revision++;
     await runDatabaseTransaction(async executor => {
+      if (!previous) await ensureRuntimeOwner(this.sessionId, executor);
       if (!previous) await executeDatabase('INSERT INTO agent_runtime_state (session_id, scope_id, revision, record_json) VALUES (?, ?, ?, ?)', [this.sessionId, this.scopeId, next.revision, JSON.stringify(next)], executor);
       else {
         const rows = await queryDatabase('UPDATE agent_runtime_state SET revision = ?, record_json = ? WHERE session_id = ? AND scope_id = ? AND revision = ? RETURNING session_id', [next.revision, JSON.stringify(next), this.sessionId, this.scopeId, previous], executor);

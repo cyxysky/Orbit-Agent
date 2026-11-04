@@ -1063,7 +1063,7 @@ body.is-dragging-embedded-tab * {
   transform: scale(0.975);
 }
 
-:root[data-theme="dark"] .navigation-loading-overlay {
+:root[data-theme="dark"] .navigation-loading-overlay:not(.navigation-loading-overlay--workspace) {
   background: rgba(15, 17, 21, 0.82);
 }
 

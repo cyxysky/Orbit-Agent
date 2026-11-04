@@ -15,7 +15,7 @@ import type {
 import { CodedError, ERROR_CODES } from '../../errors.ts';
 
 
-export const AI_DOM_RUNTIME_VERSION = 47;
+export const AI_DOM_RUNTIME_VERSION = 48;
 
 export function installAccessibilitySnapshotExportControl() {
   if (window.top !== window) return;
@@ -249,8 +249,12 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
   }
 
   const mutationState = win.__aiDomMutationState || { epoch: 0, lastMutationAt: Date.now() };
-  if (mutationState.document !== document) {
+  if (mutationState.document !== document || mutationState.observerVersion !== runtimeVersion) {
     try { mutationState.observer?.disconnect(); } catch {}
+    window.clearTimeout(mutationState.mutationReleaseTimer);
+    if (mutationState.releaseOnHidden) document.removeEventListener('visibilitychange', mutationState.releaseOnHidden);
+    mutationState.mutationReleaseTimer = undefined;
+    mutationState.observerVersion = runtimeVersion;
     mutationState.document = document;
     mutationState.observer = undefined;
     mutationState.epoch = 0;
@@ -265,7 +269,28 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
     mutationState.interactionSequence = 0;
   }
   win.__aiDomMutationState = mutationState;
+  function stopEmptyMutationTimer() {
+    if (mutationState.pendingMutations?.length || mutationState.journalMutations?.length) return;
+    window.clearTimeout(mutationState.mutationReleaseTimer);
+    mutationState.mutationReleaseTimer = undefined;
+  }
   if (!mutationState.observer) {
+    // MutationRecord owns its target and entire removed subtrees. A record-count
+    // limit alone can therefore pin arbitrarily large detached applications.
+    const releaseMutations = () => {
+      if (mutationState.pendingMutations?.length) mutationState.pendingOverflow = true;
+      if (mutationState.journalMutations?.length) mutationState.journalOverflow = true;
+      mutationState.pendingMutations = [];
+      mutationState.pendingMutationKeys = new WeakMap<Node, Set<string>>();
+      mutationState.journalMutations = [];
+      for (const [ref, element] of win.__browserUseVisibleDomState?.refToElement || []) {
+        if (!element.isConnected) win.__browserUseVisibleDomState?.refToElement.delete(ref);
+      }
+      window.clearTimeout(mutationState.mutationReleaseTimer);
+      mutationState.mutationReleaseTimer = undefined;
+    };
+    mutationState.releaseOnHidden = () => { if (document.hidden) releaseMutations(); };
+    document.addEventListener('visibilitychange', mutationState.releaseOnHidden);
     mutationState.observer = new MutationObserver((mutations) => {
       const relevantMutations = mutations.filter((mutation) => !(
         mutation.type === 'attributes'
@@ -280,10 +305,23 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
       mutationState.pendingMutationKeys = mutationState.pendingMutationKeys || new WeakMap<Node, Set<string>>();
       mutationState.journalMutations = mutationState.journalMutations || [];
       for (const mutation of relevantMutations) {
-        if (mutationState.journalMutations.length >= 10000) mutationState.journalOverflow = true;
-        else mutationState.journalMutations.push(mutation);
+        if (document.hidden) {
+          releaseMutations();
+          mutationState.pendingOverflow = true;
+          mutationState.journalOverflow = true;
+          break;
+        }
+        if (!mutationState.journalOverflow) {
+          if (mutationState.journalMutations.length >= 10000) {
+            mutationState.journalOverflow = true;
+            mutationState.journalMutations = [];
+          } else mutationState.journalMutations.push(mutation);
+        }
+        if (mutationState.pendingOverflow) continue;
         if (mutationState.pendingMutations.length >= 500) {
           mutationState.pendingOverflow = true;
+          mutationState.pendingMutations = [];
+          mutationState.pendingMutationKeys = new WeakMap<Node, Set<string>>();
           continue;
         }
         if (mutation.type !== 'childList') {
@@ -298,6 +336,12 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
         }
         mutationState.pendingMutations.push(mutation);
       }
+      if (mutationState.mutationReleaseTimer === undefined && (mutationState.pendingMutations.length || mutationState.journalMutations.length)) {
+        // Expired deltas report overflow so callers obtain a fresh snapshot.
+        // Never extend this deadline on a continuously updating page.
+        mutationState.mutationReleaseTimer = window.setTimeout(releaseMutations, 5000);
+      }
+      if (mutationState.pendingOverflow && mutationState.journalOverflow) releaseMutations();
       mutationState.epoch += 1;
       mutationState.lastMutationAt = Date.now();
     });
@@ -1620,6 +1664,7 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
     mutationState.pendingMutations = [];
     mutationState.pendingMutationKeys = new WeakMap<Node, Set<string>>();
     mutationState.pendingOverflow = false;
+    stopEmptyMutationTimer();
     return { epoch: mutationState.epoch, overflow, discardedMutations };
   }
 
@@ -1628,6 +1673,7 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
     const overflow = Boolean(mutationState.journalOverflow);
     mutationState.journalMutations = [];
     mutationState.journalOverflow = false;
+    stopEmptyMutationTimer();
     return { epoch: mutationState.epoch, overflow, discardedMutations };
   }
 
@@ -1650,6 +1696,7 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
     const overflow = Boolean(mutationState.journalOverflow);
     mutationState.journalMutations = [];
     mutationState.journalOverflow = false;
+    stopEmptyMutationTimer();
     const added = new Set<string>();
     const updated = new Set<string>();
     const removed = new Set<string>();
@@ -1701,6 +1748,7 @@ export function installAiBrowserPageRuntime(runtimeVersion: number) {
     mutationState.pendingMutations = [];
     mutationState.pendingMutationKeys = new WeakMap<Node, Set<string>>();
     mutationState.pendingOverflow = false;
+    stopEmptyMutationTimer();
     if (!pending.length) {
       return {
         epoch: mutationState.epoch,

@@ -1,12 +1,27 @@
 // Explicit lazy imports keep Node route loading independent of Next.
-export const routes = [
+import { authorizeAdminSettingsRequest, authorizeSettingsMenuRequest } from '@/server/settings/admin-settings-access';
+
+const settingsRoutes = [
   { path: '/api/settings/knowledge', load: () => import('./routes/settings/knowledge/route') },
+  { path: '/api/settings/bootstrap', load: () => import('./routes/settings/bootstrap/route') },
+  { path: '/api/settings/browser-runtime', load: () => import('./routes/settings/browser-runtime/route') },
+  { path: '/api/settings/env', load: () => import('./routes/settings/env/route') },
+  { path: '/api/settings/secret', load: () => import('./routes/settings/secret/route') },
+  { path: '/api/settings/integrations', load: () => import('./routes/settings/integrations/route') },
+  { path: '/api/settings/integrations/test', load: () => import('./routes/settings/integrations/test/route') },
+  { path: '/api/settings/model', load: () => import('./routes/settings/model/route') },
+  { path: '/api/settings/sensitive-data-evaluation', load: () => import('./routes/settings/sensitive-data-evaluation/route') },
+  { path: '/api/settings/sensitive-data-test', load: () => import('./routes/settings/sensitive-data-test/route') },
+  { path: '/api/settings/sensitive-data-runtime', load: () => import('./routes/settings/sensitive-data-runtime/route') },
+].map(route => ({ ...route, authorize: authorizeAdminSettingsRequest }));
+
+export const routes = [
+  ...settingsRoutes,
   { path: '/api/text-documents/workspace', load: () => import('./routes/text-documents/workspace/route') },
   { path: '/api/media/video-projects', load: () => import('./routes/media/video-projects/route') },
   { path: '/embed/orbit.js', load: () => import('./routes/embed-scripts/orbit.js/route') },
   { path: '/embed/webpilot.js', load: () => import('./routes/embed-scripts/webpilot.js/route') },
   { path: '/api/workspace/context', load: () => import('./routes/workspace/context/route') },
-  { path: '/api/settings/bootstrap', load: () => import('./routes/settings/bootstrap/route') },
   { path: '/api/admin/ai-operations', load: () => import('./routes/admin/ai-operations/route') },
   { path: '/api/admin/ai-operations/runtime/browsers/[browserId]', load: () => import('./routes/admin/ai-operations/runtime/browsers/[browserId]/route') },
   { path: '/api/admin/ai-operations/runtime', load: () => import('./routes/admin/ai-operations/runtime/route') },
@@ -71,17 +86,8 @@ export const routes = [
   { path: '/api/personal-memory/[id]', load: () => import('./routes/personal-memory/[id]/route') },
   { path: '/api/personal-memory', load: () => import('./routes/personal-memory/route') },
   { path: '/api/realtime/ws', load: () => import('./routes/realtime/ws/route') },
-  { path: '/api/settings/admin-access', load: () => import('./routes/settings/admin-access/route') },
-  { path: '/api/settings/browser-runtime', load: () => import('./routes/settings/browser-runtime/route') },
-  { path: '/api/settings/env', load: () => import('./routes/settings/env/route') },
-  { path: '/api/settings/secret', load: () => import('./routes/settings/secret/route') },
-  { path: '/api/settings/integrations', load: () => import('./routes/settings/integrations/route') },
-  { path: '/api/settings/integrations/test', load: () => import('./routes/settings/integrations/test/route') },
-  { path: '/api/settings/model', load: () => import('./routes/settings/model/route') },
+  { path: '/api/settings/admin-access', authorize: authorizeSettingsMenuRequest, load: () => import('./routes/settings/admin-access/route') },
   { path: '/api/settings/model-selection', load: () => import('./routes/settings/model-selection/route') },
-  { path: '/api/settings/sensitive-data-evaluation', load: () => import('./routes/settings/sensitive-data-evaluation/route') },
-  { path: '/api/settings/sensitive-data-test', load: () => import('./routes/settings/sensitive-data-test/route') },
-  { path: '/api/settings/sensitive-data-runtime', load: () => import('./routes/settings/sensitive-data-runtime/route') },
   { path: '/api/skills/[skillId]', load: () => import('./routes/skills/[skillId]/route') },
   { path: '/api/skills', load: () => import('./routes/skills/route') },
   { path: '/api/system/shutdown', load: () => import('./routes/system/shutdown/route') },

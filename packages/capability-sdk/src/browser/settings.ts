@@ -1,4 +1,5 @@
 import type { CapabilitySettingDefinition } from '../index.ts';
+export { normalizeBrowserDomainRules } from './access-policy.ts';
 
 const booleanOptions = [
   { label: '开启', value: 'true' },
@@ -6,6 +7,8 @@ const booleanOptions = [
 ] as const;
 
 export const browserCapabilitySettings = [
+  { key: 'BROWSER_DOMAIN_ALLOWLIST', label: '浏览器白名单', description: '留空允许访问所有站点；填写后仅允许名单内的域名。每行一个域名或网址；*.example.com 匹配子域名，example.com 匹配主域名。黑名单优先。仅限制网页导航，不限制页面加载的图片、脚本等资源。', section: 'browser', group: '站点访问规则', defaultValue: '', control: 'textarea', applyMode: 'runtime' },
+  { key: 'BROWSER_DOMAIN_DENYLIST', label: '浏览器黑名单', description: '禁止访问这些站点。支持域名、网址和 *.example.com，每行一项；同时限制地址跳转、链接、新标签页和重定向。保存后对后续导航生效。', section: 'browser', group: '站点访问规则', defaultValue: '', control: 'textarea', applyMode: 'runtime' },
   { key: 'BROWSER_CODE_AUTO_SCREENSHOT', label: '操作后自动截图', description: '每次浏览器代码执行后截取当前视口，供支持图片的模型观察。关闭后不自动截图或附加旧截图；代码主动截图不受影响。', section: 'browser', group: '浏览器观察', defaultValue: 'true', control: 'boolean', applyMode: 'runtime', options: booleanOptions },
   { key: 'BROWSER_PREVIEW_FPS', label: '实时预览帧率', description: '实时预览采样与视频编码的固定目标帧率。优先使用浏览器原生帧，无法使用时回退截图。', section: 'browser', group: '实时预览', defaultValue: '30', control: 'number', applyMode: 'runtime', min: 1, max: 60, step: 1 },
   { key: 'BROWSER_OUTPUT_PIXEL_RATIO', label: '截图输出像素倍率', description: '提高系统截图的输出像素密度，不改变网页 CSS 视口。', section: 'browser', group: '实时预览', defaultValue: '1.5', control: 'number', applyMode: 'runtime', min: 1, max: 2, step: 0.25 },

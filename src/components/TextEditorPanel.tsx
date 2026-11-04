@@ -1,19 +1,18 @@
 'use client';
 
-import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type CSSProperties, type Ref } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type CSSProperties, type Ref } from 'react';
 import { Check, Copy, Download, FileText, GripVertical, LoaderCircle, Plus, RefreshCw, Save, Sparkles, Trash2, Upload, X } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import rehypeRaw from 'rehype-raw';
-import rehypeSanitize from 'rehype-sanitize';
 import type { TextDocument, TextDocumentSummary, TextDraft, TextEditProposal, TextEditorResponse, TextSelection } from '@/lib/text-editor';
 import { textFileExtension, textFormatFromFile, textPreviewHtml } from '@/lib/text-editor';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 import { CreativeButton } from './ui/creative-button';
 import { TextArea } from '@heroui/react/textarea';
-import { CustomSelect } from './CustomSelect';
+import { Tabs, TabList, Tab } from 'react-aria-components';
 import { CreativeEditorLoading } from './CreativeEditorLoading';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+import { MonacoTextEditor, type MonacoTextEditorHandle } from './MonacoTextEditor';
+
+const MarkdownDocumentPreview = lazy(() => import('./MarkdownDocumentPreview'));
 
 
 export type TextEditorHandle = { flush(): Promise<void> };
@@ -36,8 +35,12 @@ async function requestText(body: unknown, signal?: AbortSignal): Promise<TextEdi
   const result = await response.json(); if (!response.ok) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, result.error || '文本操作失败'); return result;
 }
 const asDraft = (document: TextDocument): TextDraft => ({ title: document.title, format: document.format, content: document.content });
-const signature = (draft?: TextDraft) => JSON.stringify(draft);
+const sameDraft = (a?: TextDraft, b?: TextDraft) => a === b || !!a && !!b && a.title === b.title && a.format === b.format && a.content === b.content;
 const summary = ({ content, ...document }: TextDocument): TextDocumentSummary => ({ ...document, contentChars: content.length });
+function updateDocumentList(items: TextDocumentSummary[], document: TextDocument) {
+  const next = summary(document);
+  return items.some(item => item.id === next.id) ? items.map(item => item.id === next.id ? next : item) : [next, ...items];
+}
 const formats = [{ value: 'text', label: '纯文本' }, { value: 'markdown', label: 'Markdown' }, { value: 'html', label: 'HTML' }];
 
 export function TextEditorPanel({ documentId, importSourceUrl, fileName, handleRef }: {
@@ -50,35 +53,37 @@ export function TextEditorPanel({ documentId, importSourceUrl, fileName, handleR
   const [selection, setSelection] = useState<TextSelection>(), [wholeDocument, setWholeDocument] = useState(false);
   const [selectionOpen, setSelectionOpen] = useState(false), [selectionBounds, setSelectionBounds] = useState<Bounds>();
   const [point, setPoint] = useState<Point>({ x: 12, y: 12 }), [area, setArea] = useState<Size>({ width: 800, height: 600 });
-  const [proposal, setProposal] = useState<TextEditProposal>(), [sidebarWidth, setSidebarWidth] = useState(200);
-  const workspace = useRef<HTMLDivElement>(null), card = useRef<HTMLDivElement>(null), source = useRef<HTMLTextAreaElement>(null), reader = useRef<HTMLDivElement>(null), importFile = useRef<HTMLInputElement>(null);
+  const [sidebarWidth, setSidebarWidth] = useState(200);
+  const [proposal, setProposal] = useState<TextEditProposal>();
+  const workspace = useRef<HTMLDivElement>(null), card = useRef<HTMLDivElement>(null), source = useRef<MonacoTextEditorHandle>(null), importFile = useRef<HTMLInputElement>(null);
   const current = useRef(document), currentDraft = useRef(draft), saved = useRef<TextDraft>(undefined);
   const pendingSave = useRef<Promise<void>>(undefined), pendingOperation = useRef<AbortController>(undefined), initialImport = useRef<Promise<TextEditorResponse>>(undefined);
   const alive = useRef(true), composing = useRef(false), moved = useRef(false);
   const gesture = useRef<{ pointerId: number; x: number; y: number; point: Point; scaleX: number; scaleY: number }>(undefined);
   const sidebarGesture = useRef<{ pointerId: number; x: number; width: number; scale: number }>(undefined);
-  const minimumSidebar = area.width < 500 ? 104 : 140, maximumSidebar = Math.max(minimumSidebar, Math.min(420, area.width - Math.min(320, area.width * .55) - 7));
+  const minimumSidebar = area.width < 500 ? 104 : 140, maximumSidebar = Math.max(minimumSidebar, Math.min(420, area.width - Math.min(320, Math.max(240, area.width * .55)) - 7));
   const effectiveSidebar = Math.round(Math.max(minimumSidebar, Math.min(maximumSidebar, sidebarWidth)));
-  const dirty = signature(draft) !== signature(saved.current), disabled = loading || working;
+  const dirty = !sameDraft(draft, saved.current), disabled = loading || working;
   const showError = useCallback((reason: unknown) => { if (alive.current) setError(reason instanceof Error ? reason.message : String(reason)); }, []);
   const accept = useCallback((result: TextEditorResponse) => {
     if (!result.document) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '未返回文本内容');
     const next = result.document; current.current = next; currentDraft.current = asDraft(next); saved.current = asDraft(next);
     setDocument(next); setDraft(asDraft(next)); setSelection(undefined); setSelectionOpen(false); setProposal(undefined);
-    setDocuments(items => [summary(next), ...items.filter(item => item.id !== next.id)]);
+    setDocuments(items => updateDocumentList(items, next));
   }, []);
   const save = useCallback(async () => {
+    await source.current?.flush();
     if (pendingSave.current) return pendingSave.current;
     const operation = async () => {
       if (alive.current) setSaving(true);
       try {
-        while (!composing.current && current.current && currentDraft.current && signature(currentDraft.current) !== signature(saved.current)) {
-          const before = signature(currentDraft.current), snapshot = { ...currentDraft.current, title: currentDraft.current.title.trim() || '未命名文档' }, id = current.current.id;
+        while (!composing.current && current.current && currentDraft.current && !sameDraft(currentDraft.current, saved.current)) {
+          const before = currentDraft.current, snapshot = { ...before, title: before.title.trim() || '未命名文档' }, id = current.current.id;
           const result = await requestText({ action: 'save', documentId: id, document: snapshot, expected: saved.current });
           if (!result.document) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '未返回已保存文本');
           current.current = result.document; saved.current = asDraft(result.document);
-          if (alive.current) { setDocument(result.document); setDocuments(items => items.map(item => item.id === id ? summary(result.document!) : item)); setError(''); }
-          if (signature(currentDraft.current) === before) { currentDraft.current = asDraft(result.document); if (alive.current) setDraft(currentDraft.current); }
+          if (alive.current) { setDocument(result.document); setDocuments(items => updateDocumentList(items, result.document!)); setError(''); }
+          if (sameDraft(currentDraft.current, before)) { currentDraft.current = asDraft(result.document); if (alive.current) setDraft(currentDraft.current); }
         }
       } catch (reason) { showError(reason); throw reason; }
       finally { if (alive.current) setSaving(false); }
@@ -112,7 +117,7 @@ export function TextEditorPanel({ documentId, importSourceUrl, fileName, handleR
   }, [draft, dirty, disabled, save]);
   useLayoutEffect(() => {
     if (!workspace.current) return;
-    const resize = () => setArea({ width: workspace.current!.clientWidth, height: workspace.current!.clientHeight });
+    const resize = () => { const width = workspace.current!.clientWidth, height = workspace.current!.clientHeight; setArea(previous => previous.width === width && previous.height === height ? previous : { width, height }); };
     const observer = new ResizeObserver(resize); observer.observe(workspace.current); resize(); return () => observer.disconnect();
   }, [loading]);
   useLayoutEffect(() => {
@@ -131,6 +136,19 @@ export function TextEditorPanel({ documentId, importSourceUrl, fileName, handleR
     finally { if (pendingOperation.current === controller) pendingOperation.current = undefined; if (alive.current) setWorking(false); }
   }
   function update(next: TextDraft) { currentDraft.current = next; setDraft(next); setProposal(undefined); }
+  async function changeMode(next: 'read' | 'edit') {
+    try { await source.current?.flush(); } catch (reason) { showError(reason); return; }
+    setMode(next); setSelection(undefined); setSelectionOpen(false);
+  }
+  async function changeFormat(format: TextDraft['format']) {
+    try { await source.current?.flush(); } catch (reason) { showError(reason); return; }
+    if (currentDraft.current) update({ ...currentDraft.current, format });
+    setSelection(undefined); setSelectionOpen(false);
+  }
+  async function copyWholeText() {
+    try { await source.current?.flush(); await navigator.clipboard.writeText(currentDraft.current?.content || ''); setNotice('全文已复制。'); }
+    catch (reason) { showError(reason); }
+  }
   function select(start: number, end: number, rect: Bounds) {
     if (pendingOperation.current || !currentDraft.current || !workspace.current) return;
     if (start === end) { setSelection(undefined); setSelectionOpen(false); return; }
@@ -138,14 +156,8 @@ export function TextEditorPanel({ documentId, importSourceUrl, fileName, handleR
     setSelection({ start, end, text: currentDraft.current.content.slice(start, end) }); setWholeDocument(false); setSelectionOpen(false); setProposal(undefined); moved.current = false;
     setSelectionBounds({ left: (rect.left - root.left) * scaleX, right: (rect.right - root.left) * scaleX, top: (rect.top - root.top) * scaleY, bottom: (rect.bottom - root.top) * scaleY });
   }
-  function selectReader() {
-    if (currentDraft.current?.format !== 'text' || !reader.current) return;
-    const selected = window.getSelection(); if (!selected?.rangeCount || selected.isCollapsed) return;
-    const range = selected.getRangeAt(0); if (!reader.current.contains(range.commonAncestorContainer)) return;
-    const before = range.cloneRange(); before.selectNodeContents(reader.current); before.setEnd(range.startContainer, range.startOffset);
-    const start = before.toString().length; select(start, start + range.toString().length, range.getBoundingClientRect());
-  }
-  function openWholeRewrite() {
+  async function openWholeRewrite() {
+    try { await source.current?.flush(); } catch (reason) { showError(reason); return; }
     if (!currentDraft.current) return;
     setSelection({ start: 0, end: currentDraft.current.content.length, text: currentDraft.current.content }); setWholeDocument(true);
     setSelectionBounds(undefined); setProposal(undefined); moved.current = true; setPoint({ x: Math.max(12, area.width - 392), y: 60 }); setSelectionOpen(true);
@@ -157,10 +169,12 @@ export function TextEditorPanel({ documentId, importSourceUrl, fileName, handleR
       const target = wholeDocument ? { start: 0, end: currentDraft.current.content.length, text: currentDraft.current.content } : selection;
       if (currentDraft.current.content.slice(target.start, target.end) !== target.text) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '原选区已改变，请重新选择。');
       const result = await requestText({ action: 'rewrite', documentId: current.current.id, document: currentDraft.current, selection: target, wholeDocument, instruction }, signal);
-      signal.throwIfAborted(); if (!result.proposal) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '未返回修改建议'); setProposal(result.proposal);
+      signal.throwIfAborted(); if (!result.proposal) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '未返回修改建议');
+      setProposal(result.proposal);
     });
   }
-  function download() {
+  async function download() {
+    try { await source.current?.flush(); } catch (reason) { showError(reason); return; }
     if (!currentDraft.current) return;
     const value = currentDraft.current, extension = textFileExtension(value.format), title = value.title.replace(/[<>:"/\\|?*]/g, '_').replace(/\.(?:txt|md|markdown|html?)$/i, '') || 'document';
     const url = URL.createObjectURL(new Blob([value.content], { type: value.format === 'html' ? 'text/html;charset=utf-8' : 'text/plain;charset=utf-8' }));
@@ -193,12 +207,14 @@ export function TextEditorPanel({ documentId, importSourceUrl, fileName, handleR
       {error && <p className="text-error-banner" role="alert">{error}</p>}{notice && <p className="text-notice" role="status"><Check size={13} />{notice}</p>}
       {draft ? <>
         <div className="text-document-toolbar"><div className="text-mode-switch">
-          <CreativeButton variant="ghost" className="text-mode-tab" aria-pressed={mode === 'edit'} disabled={disabled} onClick={() => { setMode('edit'); setSelection(undefined); setSelectionOpen(false); }}>编辑</CreativeButton>
-          <CreativeButton variant="ghost" className="text-mode-tab" aria-pressed={mode === 'read'} disabled={disabled} onClick={() => { setMode('read'); setSelection(undefined); setSelectionOpen(false); }}>预览</CreativeButton>
-        </div><CustomSelect ariaLabel="文档格式" value={draft.format} options={formats} disabled={disabled} onChange={format => update({ ...draft, format: format as TextDraft['format'] })} />
-          <span className="text-save-state">{saving ? '保存中' : dirty ? '待保存' : '已保存'}</span>
+          <CreativeButton variant="ghost" className="text-mode-tab" aria-pressed={mode === 'edit'} disabled={disabled} onClick={() => void changeMode('edit')}>编辑</CreativeButton>
+          <CreativeButton variant="ghost" className="text-mode-tab" aria-pressed={mode === 'read'} disabled={disabled} onClick={() => void changeMode('read')}>预览</CreativeButton>
+        </div><Tabs className="text-format-tabs" selectedKey={draft.format} onSelectionChange={key => void changeFormat(String(key) as TextDraft['format'])}>
+          <TabList className="text-format-list" aria-label="文档格式">{formats.map(format => <Tab className="text-format-tab" key={format.value} id={format.value} isDisabled={disabled}>{format.label}</Tab>)}</TabList>
+        </Tabs>
+          <div className="text-toolbar-end"><span className="text-save-state">{saving ? '保存中' : dirty ? '待保存' : '已保存'}</span>
           <div className="text-toolbar-actions"><CreativeButton variant="ghost" isIconOnly title="保存" aria-label="保存文本" disabled={disabled || !dirty} onClick={() => void save().catch(() => undefined)}><Save size={15} /></CreativeButton>
-            <CreativeButton variant="ghost" isIconOnly title="复制全文" aria-label="复制全文" onClick={() => void navigator.clipboard.writeText(draft.content).then(() => setNotice('全文已复制。'), showError)}><Copy size={15} /></CreativeButton>
+            <CreativeButton variant="ghost" isIconOnly title="复制全文" aria-label="复制全文" onClick={() => void copyWholeText()}><Copy size={15} /></CreativeButton>
             <CreativeButton variant="ghost" isIconOnly title="导出文本" aria-label="导出文本" onClick={download}><Download size={15} /></CreativeButton>
             <CreativeButton variant="ghost" isIconOnly title="重新读取文档" aria-label="重新读取文档" disabled={disabled} onClick={() => void operate(async signal => { if (current.current) accept(await requestText({ action: 'read', documentId: current.current.id }, signal)); }, false)}><RefreshCw size={15} /></CreativeButton>
             <CreativeButton variant="ghost" isIconOnly title="AI 编辑整篇文档" aria-label="AI 编辑整篇文档" disabled={disabled} onClick={openWholeRewrite}><Sparkles size={15} /></CreativeButton>
@@ -207,20 +223,17 @@ export function TextEditorPanel({ documentId, importSourceUrl, fileName, handleR
               current.current = undefined; currentDraft.current = undefined; saved.current = undefined; setDocument(undefined); setDraft(undefined); setSelection(undefined); setSelectionOpen(false); setProposal(undefined);
               if (list.documents?.[0]) accept(await requestText({ action: 'read', documentId: list.documents[0].id }, signal)); setNotice('文档已删除。');
             }, false)}><Trash2 size={15} /></CreativeButton>
-          </div>
+          </div></div>
         </div>
-        <div className="text-document-content"><article className={`text-paper${draft.format === 'html' && mode === 'read' ? ' is-html' : ''}`}>
-          <input className="text-title-editor" aria-label="文档标题" value={draft.title} maxLength={240} disabled={disabled} onChange={event => update({ ...draft, title: event.target.value })} />
-          {mode === 'edit' ? <textarea ref={source} className="text-source-editor" aria-label="文本源码" spellCheck={false} value={draft.content} disabled={disabled}
-            onCompositionStart={() => { composing.current = true; }} onCompositionEnd={event => { composing.current = false; update({ ...draft, content: event.currentTarget.value }); }}
-            onChange={event => { setSelection(undefined); setSelectionOpen(false); update({ ...draft, content: event.target.value }); }}
-            onPointerUp={event => { const input = event.currentTarget; select(input.selectionStart, input.selectionEnd, input.getBoundingClientRect()); }}
-            onKeyUp={event => { if (event.shiftKey) { const input = event.currentTarget; select(input.selectionStart, input.selectionEnd, input.getBoundingClientRect()); } }} />
-            : draft.format === 'html' ? <iframe className="text-html-preview" title="HTML 内容预览" sandbox="" referrerPolicy="no-referrer" srcDoc={textPreviewHtml(draft.content)} />
-              : <div className="text-reader-viewport" onPointerUp={selectReader} onKeyUp={selectReader}>
-                {draft.format === 'markdown' ? <div className="text-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw, rehypeSanitize]}>{draft.content}</ReactMarkdown></div>
-                  : <div ref={reader} className="text-prose">{draft.content}</div>}
-              </div>}
+        <div className="text-document-content"><article className={`text-paper${mode === 'edit' ? ' is-editing' : draft.format === 'html' ? ' is-html' : ''}`}>
+          <input className="text-title-editor" aria-label="文档标题" value={draft.title} maxLength={240} disabled={disabled} onChange={event => update({ ...currentDraft.current!, title: event.target.value })} />
+          {mode === 'edit' || draft.format === 'text' ?
+            <MonacoTextEditor key={document?.id} handleRef={source} value={draft.content} language={draft.format} disabled={disabled} readOnly={mode === 'read'} label={mode === 'edit' ? '文本源码' : '文本内容预览'}
+              onSave={() => save().catch(() => undefined)}
+              onComposition={value => { composing.current = value; }} onSelection={select}
+              onChange={content => { setSelection(undefined); setSelectionOpen(false); update({ ...currentDraft.current!, content }); }} />
+           : draft.format === 'html' ? <iframe className="text-html-preview" title="HTML 内容预览" sandbox="" referrerPolicy="no-referrer" srcDoc={textPreviewHtml(draft.content)} />
+            : <div className="text-reader-viewport"><Suspense fallback={<CreativeEditorLoading label="正在加载预览" />}><MarkdownDocumentPreview content={draft.content} /></Suspense></div>}
         </article></div>
         <footer className="text-document-footer"><span>{draft.content.length.toLocaleString()} 字符 · {formats.find(item => item.value === draft.format)?.label}</span><span>{mode === 'edit' ? '选择文字可复制或 AI 改写 · Ctrl / ⌘ + S 保存' : draft.format === 'html' ? 'HTML 渲染预览' : '内容预览'}</span></footer>
       </> : <div className="text-empty"><FileText size={36} /><h3>独立文本编辑器</h3><p>新建或导入文档，编辑纯文本、Markdown 和 HTML。</p><CreativeButton variant="primary" disabled={disabled} onClick={() => void operate(async signal => { accept(await requestText({ action: 'create', document: { title: '未命名文档', format: 'markdown', content: '' } }, signal)); setMode('edit'); })}><Plus size={15} />新建文档</CreativeButton></div>}
@@ -238,12 +251,18 @@ export function TextEditorPanel({ documentId, importSourceUrl, fileName, handleR
         onKeyDown={event => { if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return; event.preventDefault(); event.stopPropagation(); moved.current = true; const step = event.shiftKey ? 40 : 10; setPoint(previous => clampOverlay({ x: previous.x + (event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0), y: previous.y + (event.key === 'ArrowUp' ? -step : event.key === 'ArrowDown' ? step : 0) }, { width: card.current?.offsetWidth || cardWidth, height: card.current?.offsetHeight || cardHeight }, area)); }}>
         <GripVertical size={14} /><Sparkles size={15} />{wholeDocument ? '编辑整篇文档' : '修改选中文字'}<small>{selection.text.length.toLocaleString()} 字符</small>
       </div><CreativeButton variant="ghost" isIconOnly aria-label="关闭 AI 编辑窗口" onClick={() => { pendingOperation.current?.abort(); setSelectionOpen(false); setProposal(undefined); }}><X size={15} /></CreativeButton></header>
-      <div className="text-selection-body">{!wholeDocument && <div className="text-selection-excerpt">{selection.text}</div>}
-        <label className="text-prompt-label" htmlFor="text-edit-instruction">想怎样修改？</label><TextArea id="text-edit-instruction" fullWidth className="text-ai-prompt" rows={3} value={instruction} disabled={working} onChange={event => setInstruction(event.target.value)} placeholder="例如：润色表达，缩短篇幅，整理成 Markdown，调整 HTML 排版。" />
+      <div className="text-selection-body">
+        <TextArea aria-label="修改要求" fullWidth className="text-ai-prompt" rows={3} value={instruction} disabled={working} onChange={event => setInstruction(event.target.value)} placeholder="例如：润色表达，缩短篇幅，整理成 Markdown，调整 HTML 排版。" />
         <div className="text-prompt-chips">{['润色表达', '精简内容', '修正错别字'].map(label => <CreativeButton key={label} variant="ghost" disabled={working} onClick={() => setInstruction(`请${label}，保留原有事实和格式。`)}>{label}</CreativeButton>)}</div>
-        <div className="text-proposal-actions">{working && <CreativeButton variant="ghost" onClick={() => pendingOperation.current?.abort()}>取消修改</CreativeButton>}<CreativeButton variant="primary" disabled={disabled || !instruction.trim()} onClick={rewrite}>{working ? <LoaderCircle size={15} className="editor-spin" /> : <Sparkles size={15} />}{working ? '正在修改…' : proposal ? '重新生成' : '生成修改建议'}</CreativeButton></div>
-        {proposal && <section className="text-rewrite-result" aria-label="AI 修改对比"><header><span><Check size={14} />修改已生成</span></header><details><summary>查看原文</summary><p>{proposal.original}</p></details><h4>建议稿</h4><div className="text-replacement">{proposal.replacement || '（删除选中内容）'}</div>
-          <div className="text-proposal-actions"><CreativeButton variant="ghost" disabled={working} onClick={() => setProposal(undefined)}>保留原文</CreativeButton><CreativeButton variant="primary" disabled={working} onClick={() => void operate(async signal => { if (!current.current) return; accept(await requestText({ action: 'apply', documentId: current.current.id, proposalId: proposal.id }, signal)); setNotice('AI 修改已保存。'); })}><Check size={14} />应用修改</CreativeButton></div></section>}
+        <div className="text-proposal-actions">{working && <CreativeButton variant="ghost" onClick={() => pendingOperation.current?.abort()}>取消修改</CreativeButton>}<CreativeButton variant="primary" disabled={disabled || !instruction.trim()} onClick={rewrite}>{working ? <LoaderCircle size={15} className="editor-spin" /> : <Sparkles size={15} />}{working ? '正在生成…' : proposal ? '重新生成' : '生成修改建议'}</CreativeButton></div>
+        {proposal && <section className="text-rewrite-result" aria-label="修改建议"><h4>修改建议</h4>
+          <div className="text-proposal-preview"><MonacoTextEditor readOnly value={proposal.replacement} language={draft?.format} label="修改建议全文" /></div>
+          <div className="text-proposal-actions"><CreativeButton variant="ghost" disabled={working} onClick={() => setProposal(undefined)}>保留原文</CreativeButton><CreativeButton variant="primary" disabled={working} onClick={() => void operate(async signal => {
+            if (!current.current) return;
+            const result = await requestText({ action: 'apply', documentId: current.current.id, proposalId: proposal.id }, signal);
+            signal.throwIfAborted(); accept(result);
+          })}><Check size={14} />应用修改</CreativeButton></div>
+        </section>}
       </div>
     </div>}
   </div>;

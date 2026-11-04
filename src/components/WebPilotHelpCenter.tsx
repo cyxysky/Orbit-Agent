@@ -14,11 +14,13 @@ import {
 import { readApiJson } from '@/lib/api-client';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 import { OrbitIcon } from '@/components/OrbitIcon';
+import { useWorkspaceAccess } from '@/components/WorkspaceAccessProvider';
 
 type HelpPayload = { readiness: WebPilotOnboardingReadiness; state: WebPilotOnboardingState };
 
 export function WebPilotHelpCenter({ collapsed = false }: { collapsed?: boolean }) {
   const { t } = useI18n();
+  const { settingsMenuVisible } = useWorkspaceAccess();
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [portalReady, setPortalReady] = useState(false);
@@ -123,7 +125,7 @@ export function WebPilotHelpCenter({ collapsed = false }: { collapsed?: boolean 
               <button className="ui-button secondary" disabled={resetting} onClick={() => void restartTutorial()} type="button">
                 {resetting ? <Loader2 className="spin" size={15} /> : <RotateCcw size={15} />}{t('重新开始教程')}
               </button>
-              <Link className="ui-button secondary" href="/settings" onClick={() => setOpen(false)}><Settings size={15} />{t('打开设置')}</Link>
+              {settingsMenuVisible ? <Link className="ui-button secondary" href="/settings" onClick={() => setOpen(false)}><Settings size={15} />{t('打开设置')}</Link> : null}
             </footer>
           </aside>
         </div>,

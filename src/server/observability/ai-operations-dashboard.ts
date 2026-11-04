@@ -740,9 +740,8 @@ async function buildAiOperationsDashboard(
   return {
     generatedAt: now.toISOString(),
     incidents: incidents
-      .sort((left, right) => right.time.localeCompare(left.time))
-      .slice(0, 40),
-    models: modelRows.slice(0, 30),
+      .sort((left, right) => right.time.localeCompare(left.time)),
+    models: modelRows,
     overview: {
       activeUsers: users.size,
       automationRuns: automationRunCount,
@@ -769,8 +768,7 @@ async function buildAiOperationsDashboard(
     },
     systems: [...systems.values()]
       .map((item) => ({ ...item, successRate: successRate(item.passed, item.failed, item.blocked) }))
-      .sort((left, right) => right.totalTasks - left.totalTasks)
-      .slice(0, 20),
+      .sort((left, right) => right.totalTasks - left.totalTasks),
     timezone: dashboardTimezone,
     trend: [...trend.values()],
     trendUserId,
@@ -779,6 +777,6 @@ async function buildAiOperationsDashboard(
       totalTokens: tokens,
       userId,
     })),
-    users: userRows.slice(0, 50),
+    users: userRows,
   };
 }

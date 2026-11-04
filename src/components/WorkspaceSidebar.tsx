@@ -1,15 +1,15 @@
 'use client';
 
 import { Gauge, MessageCircleMore, PanelLeft, Settings, Workflow } from 'lucide-react';
-import { Tabs } from '@heroui/react/tabs';
-import { useRouter } from 'next/navigation';
-import { useEffect, useState, type ReactNode } from 'react';
+import Link from 'next/link';
+import type { ReactNode } from 'react';
 import type { ThemeMode } from '@/theme/ThemeProvider';
 import { WebPilotHelpCenter } from '@/components/WebPilotHelpCenter';
 import { AnimatedThemeToggler } from '@/components/ui/animated-theme-toggler';
 import { AuroraText } from '@/components/ui/aurora-text';
 import { useWorkspaceBrand } from '@/brand/WorkspaceBrandProvider';
 import { OrbitIcon } from '@/components/OrbitIcon';
+import { useWorkspaceAccess } from '@/components/WorkspaceAccessProvider';
 
 type WorkspaceSidebarProps = {
   children: ReactNode;
@@ -54,55 +54,24 @@ export function WorkspaceModeTabs({
   settingsLabel,
   showAiOperations = false,
 }: WorkspaceModeTabsProps) {
-  const router = useRouter();
-  const [desktopLayout, setDesktopLayout] = useState(false);
+  const { settingsMenuVisible } = useWorkspaceAccess();
   const visibleConversationLabel = conversationLabel.replace(/(?:模式| Mode)$/u, '');
-
-  useEffect(() => {
-    const desktopQuery = window.matchMedia('(min-width: 1025px)');
-    const syncDesktopLayout = () => setDesktopLayout(desktopQuery.matches);
-    syncDesktopLayout();
-    desktopQuery.addEventListener('change', syncDesktopLayout);
-    return () => desktopQuery.removeEventListener('change', syncDesktopLayout);
-  }, []);
+  const items = [
+    { path: '/browser-chat', label: visibleConversationLabel, ariaLabel: conversationLabel, icon: MessageCircleMore },
+    { path: '/automation', label: automationLabel, ariaLabel: automationLabel, icon: Workflow },
+    ...(showAiOperations ? [{ path: '/admin/ai-operations', label: aiOperationsLabel, ariaLabel: aiOperationsLabel, icon: Gauge }] : []),
+    ...(settingsMenuVisible ? [{ path: '/settings', label: settingsLabel, ariaLabel: settingsLabel, icon: Settings }] : []),
+  ];
 
   return (
-    <Tabs
-      className="workspace-mode-tabs"
-      onSelectionChange={(key) => {
-        const nextKey = String(key) as WorkspaceModeKey;
-        if (nextKey !== activeKey) router.push(nextKey);
-      }}
-      orientation={desktopLayout ? 'vertical' : 'horizontal'}
-      selectedKey={activeKey}
-    >
-      <Tabs.ListContainer>
-        <Tabs.List aria-label={ariaLabel}>
-          <Tabs.Tab aria-label={conversationLabel} id="/browser-chat">
-            <MessageCircleMore aria-hidden="true" />
-            <span className="workspace-mode-tab-label">{visibleConversationLabel}</span>
-            <Tabs.Indicator />
-          </Tabs.Tab>
-          <Tabs.Tab aria-label={automationLabel} id="/automation">
-            <Workflow aria-hidden="true" />
-            <span className="workspace-mode-tab-label">{automationLabel}</span>
-            <Tabs.Indicator />
-          </Tabs.Tab>
-          {showAiOperations ? (
-            <Tabs.Tab aria-label={aiOperationsLabel} id="/admin/ai-operations">
-              <Gauge aria-hidden="true" />
-              <span className="workspace-mode-tab-label">{aiOperationsLabel}</span>
-              <Tabs.Indicator />
-            </Tabs.Tab>
-          ) : null}
-          <Tabs.Tab aria-label={settingsLabel} id="/settings">
-            <Settings aria-hidden="true" />
-            <span className="workspace-mode-tab-label">{settingsLabel}</span>
-            <Tabs.Indicator />
-          </Tabs.Tab>
-        </Tabs.List>
-      </Tabs.ListContainer>
-    </Tabs>
+    <nav className="workspace-mode-tabs" aria-label={ariaLabel}>
+      <div data-slot="tabs-list-container"><div className="tabs__list-container__scroller"><div data-slot="tabs-list">
+        {items.map(({ path, label, ariaLabel: accessibleLabel, icon: Icon }) => <Link key={path} href={path} prefetch
+          aria-label={accessibleLabel} aria-current={activeKey === path ? 'page' : undefined} data-slot="tabs-tab" className="workspace-mode-link">
+          <Icon aria-hidden="true" /><span className="workspace-mode-tab-label">{label}</span>
+        </Link>)}
+      </div></div></div>
+    </nav>
   );
 }
 

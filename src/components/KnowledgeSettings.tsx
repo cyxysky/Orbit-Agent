@@ -10,7 +10,7 @@ import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 import './KnowledgeSettings.css';
 
 const endpoint = '/api/settings/knowledge';
-export function KnowledgeSettings() {
+export function KnowledgeSettings({ authorizationToken = '' }: { authorizationToken?: string }) {
   const { t } = useI18n();
   const fileInput = useRef<HTMLInputElement>(null);
   const [packages, setPackages] = useState<KnowledgePackageSummary[]>([]);
@@ -20,21 +20,26 @@ export function KnowledgeSettings() {
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<KnowledgePackageSummary | null>(null);
+  const request = useCallback((url: string, init: RequestInit = {}) => {
+    const headers = new Headers(init.headers);
+    if (authorizationToken) headers.set('Authorization', `Bearer ${authorizationToken}`);
+    return fetch(url, { ...init, headers });
+  }, [authorizationToken]);
   const load = useCallback(async (offset = 0) => {
     setLoading(true);
     try {
-      const response = await fetch(withWebPilotBasePath(endpoint + '?limit=50&offset=' + offset), { cache: 'no-store' });
+      const response = await request(withWebPilotBasePath(endpoint + '?limit=50&offset=' + offset), { cache: 'no-store' });
       const data = await readApiJson<{ packages: KnowledgePackageSummary[]; nextOffset: number | null }>(response, t('读取知识库失败'));
       setPackages(current => offset ? [...current, ...data.packages] : data.packages);
       setNextOffset(data.nextOffset);
     } finally { setLoading(false); }
-  }, [t]);
+  }, [request, t]);
   useEffect(() => { void load().catch(reason => setError(reason instanceof Error ? reason.message : t('读取知识库失败'))); }, [load, t]);
 
   async function downloadTemplate() {
     setBusy('template'); setError('');
     try {
-      const response = await fetch(withWebPilotBasePath(endpoint + '?template=1'), { cache: 'no-store' });
+      const response = await request(withWebPilotBasePath(endpoint + '?template=1'), { cache: 'no-store' });
       if (!response.ok) { await readApiJson(response, t('下载模板失败')); return; }
       const url = URL.createObjectURL(await response.blob());
       const anchor = document.createElement('a');
@@ -51,7 +56,7 @@ export function KnowledgeSettings() {
     setBusy('import');
     try {
       const body = new FormData(); body.append('file', file);
-      const response = await fetch(withWebPilotBasePath(endpoint), { method: 'POST', body });
+      const response = await request(withWebPilotBasePath(endpoint), { method: 'POST', body });
       const data = await readApiJson<{ package: KnowledgePackageSummary }>(response, t('导入知识包失败'));
       await load();
       setNotice(t('已导入 {name}，共 {count} 条记录。', { name: data.package.name, count: data.package.recordCount })
@@ -62,7 +67,7 @@ export function KnowledgeSettings() {
   async function toggle(pack: KnowledgePackageSummary) {
     setBusy(pack.id); setError(''); setNotice('');
     try {
-      const response = await fetch(withWebPilotBasePath(endpoint), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: pack.id, enabled: !pack.enabled }) });
+      const response = await request(withWebPilotBasePath(endpoint), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: pack.id, enabled: !pack.enabled }) });
       await readApiJson(response, t('更新知识包失败')); await load();
     } catch (reason) { setError(reason instanceof Error ? reason.message : t('更新知识包失败')); }
     finally { setBusy(''); }
@@ -71,7 +76,7 @@ export function KnowledgeSettings() {
     if (!deleteTarget) return;
     setBusy('delete'); setError('');
     try {
-      const response = await fetch(withWebPilotBasePath(endpoint + '?id=' + encodeURIComponent(deleteTarget.id)), { method: 'DELETE' });
+      const response = await request(withWebPilotBasePath(endpoint + '?id=' + encodeURIComponent(deleteTarget.id)), { method: 'DELETE' });
       await readApiJson(response, t('删除知识包失败'));
       setDeleteTarget(null); await load();
     } catch (reason) { setError(reason instanceof Error ? reason.message : t('删除知识包失败')); }
@@ -98,7 +103,7 @@ export function KnowledgeSettings() {
       {busy === 'import' ? <p role="status">{t('正在校验内容、来源和关联，并建立索引。完成后自动启用；包内脚本不会执行。')}</p> : null}
       {notice ? <p className="knowledge-settings-notice" role="status">{notice}</p> : null}
       {error && !deleteTarget ? <p className="knowledge-settings-error" role="alert">{error}</p> : null}
-      {loading && !packages.length ? <p role="status"><Loader2 className="spin" size={16} /> {t('正在读取知识库')}</p> : null}
+      {loading && !packages.length ? <div className="knowledge-settings-loading" role="status"><Loader2 aria-hidden="true" className="spin" size={22} /><span>{t('正在读取知识库')}</span></div> : null}
       {!loading && !packages.length ? <div className="knowledge-settings-empty"><BookOpen size={28} /><strong>{t('还没有知识包')}</strong><span>{t('先下载模板准备内容，或直接导入符合格式的业务知识包。')}</span></div> : null}
       <div className="knowledge-package-list">
         {packages.map(pack => (

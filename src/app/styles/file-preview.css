@@ -16,57 +16,39 @@
   padding: 0;
 }
 
-.file-preview-header {
+html .settlement-modal.file-preview-dialog .app-modal-header.file-preview-header {
   align-items: center;
   border-bottom: 1px solid var(--border);
-  display: grid;
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
   gap: 10px;
-  grid-template-columns: auto minmax(0, 1fr) auto;
   min-height: 58px;
-  padding: 9px 12px 9px 16px;
+  padding: 12px 16px 12px 20px;
+}
+html .settlement-modal.file-preview-dialog .app-modal-header.file-preview-header .file-preview-title { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; margin: 0; font-size: 14px; font-weight: 500; }
+.file-preview-title > svg { flex-shrink: 0; color: var(--muted-strong); }
+.file-preview-title > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+html .settlement-modal.file-preview-dialog .app-modal-header.file-preview-header .settlement-modal-close {
+  flex: 0 0 34px;
+  inset: auto;
+  position: static;
 }
 
-.file-preview-heading-icon {
-  color: var(--muted-strong);
-  display: inline-grid;
-  place-items: center;
-}
-
-.file-preview-heading-copy {
-  min-width: 0;
-}
-
-.file-preview-heading-copy h2,
-.file-preview-heading-copy p {
-  margin: 0;
-}
-
-.file-preview-heading-copy h2 {
-  font-size: 14px;
-  font-weight: 680;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.file-preview-heading-copy p {
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.file-preview-stage {
-  align-items: center;
+html .settlement-modal.file-preview-dialog .app-modal-body.file-preview-stage {
+  align-items: stretch;
   background: var(--panel-soft);
   display: flex;
-  justify-content: center;
+  flex: 1 1 0%;
+  justify-content: flex-start;
   min-height: 0;
   overflow: hidden;
+  padding: 0 !important;
   position: relative;
-  height: 100%;
   width: 100%;
 }
 
-.file-preview-header:has(> .file-preview-edit-button) { grid-template-columns: auto minmax(0, 1fr) auto auto; }
 .file-preview-edit-button { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .file-preview-video-editor-dialog .file-preview-stage { display: block; overflow: auto; padding: 16px; }
 .browser-chat-video-edit-panel { width: 100%; min-width: 0; }
@@ -103,6 +85,7 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  margin: auto;
   max-width: 520px;
   padding: 32px;
   text-align: center;

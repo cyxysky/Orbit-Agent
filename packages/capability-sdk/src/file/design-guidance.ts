@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { OfficeDesignBrief, OfficeDocumentDraft, OfficeVisualQaDeckChecks } from './office/types.ts';
+import { officeDesignSkillReferences } from './design-skills.ts';
 
 const sentence = z.string().trim().min(1).max(320);
 const sentenceList = z.preprocess(
@@ -48,6 +49,8 @@ export function officeDesignGuidance(draft: DesignContext) {
   const mode = draft.design?.mode || (bespokeRequested ? 'bespoke' : 'template');
   const selected = draft.design?.directions?.find((item) => item.id === draft.design?.selectedDirection);
   return {
+    skills: officeDesignSkillReferences(draft.documentType),
+    skillUsage: 'For a new document or requested redesign, read these two design Skills through skill(action="read", skillId=...) before authoring. Reuse their current content when already loaded. For a small edit, preserve the existing design and consult only the relevant guidance. These Skills describe design, not tool APIs; use the current sourceGuidance and selected native engine.',
     mode,
     briefRecorded: Boolean(draft.design),
     selectedDirection: selected?.id,

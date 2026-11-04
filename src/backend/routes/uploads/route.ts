@@ -9,6 +9,8 @@ import {
 
 import { storeUploadedFile, uploadMaxBytes } from '@/server/storage/upload-file';
 import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+import { store } from '@/server/db/store';
+import { acceptsChatAttachment, readChatInterfaceSettings } from '@/lib/chat-interface-settings';
 
 
 function decodedUploadName(value: string | null) {
@@ -33,6 +35,9 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
+    await store.applyRuntimeEnv();
+    const policy = readChatInterfaceSettings(process.env);
+    if (!policy.attachmentUploadEnabled) throw new ApiRequestError('附件上传已关闭', { status: 403 });
     const maxBytes = uploadMaxBytes();
     const contentLengthHeader = request.headers.get('content-length');
     const contentLength = contentLengthHeader ? Number(contentLengthHeader) : undefined;
@@ -66,6 +71,10 @@ export async function POST(request: Request) {
       source = Readable.fromWeb(file.stream() as Parameters<typeof Readable.fromWeb>[0]);
     }
 
+    if (!acceptsChatAttachment({ name, type }, policy.attachmentAccept)) {
+      source.destroy();
+      throw new ApiRequestError('不支持此附件类型，请查看设置中的附件支持类型', { status: 415 });
+    }
     const upload = await storeUploadedFile({ userId: requestApplicationUserId(request), name, type, source });
     return apiJson(request, upload);
   } catch (error) {

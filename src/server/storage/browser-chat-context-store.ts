@@ -1,6 +1,7 @@
 import { databaseDriver, sqliteDatabasePath, queryDatabase } from '@/server/db/database';
 import type { DatabaseWriteStatement } from './database-write-queue';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+import { runtimeOwnerStatement } from './runtime-owner';
 
 
 type ContextView = {
@@ -16,6 +17,12 @@ type ContextSnapshot = { modelContext?: ContextView & {
 // Populate only after a successful commit/read. A failed queued transaction must
 // never make a later checkpoint skip records that were rolled back.
 const committedRecords = new Map<string, Set<string>>();
+const maxCommittedRecordIds = 32_768;
+let committedRecordCount = 0;
+function forgetCommittedRecords(key: string) {
+  committedRecordCount -= committedRecords.get(key)?.size || 0;
+  committedRecords.delete(key);
+}
 function cacheKey(sessionId: string) {
   return `${databaseDriver() === 'sqlite' ? sqliteDatabasePath() : process.env.DATABASE_URL}/${sessionId}`;
 }
@@ -24,10 +31,13 @@ export function markBrowserChatContextWritten<T>(sessionId: string, snapshot: T)
   if (!context?.records) return;
   const key = cacheKey(sessionId);
   const known = committedRecords.get(key) || new Set<string>();
+  forgetCommittedRecords(key);
   for (const id of Object.keys(context.records)) known.add(id);
-  committedRecords.delete(key);
+  // This is only an insert-deduplication cache. Eviction safely falls back to ON CONFLICT.
+  if (known.size > maxCommittedRecordIds) return;
   committedRecords.set(key, known);
-  if (committedRecords.size > 128) committedRecords.delete(committedRecords.keys().next().value!);
+  committedRecordCount += known.size;
+  while (committedRecords.size > 128 || committedRecordCount > maxCommittedRecordIds) forgetCommittedRecords(committedRecords.keys().next().value!);
 }
 
 /** Header and immutable records must be committed in the SAME transaction. */
@@ -45,7 +55,7 @@ export function splitBrowserChatContextSnapshot<T>(sessionId: string, snapshot: 
   });
   return {
     snapshot: { ...snapshot, modelContext: { ...index, recordIds: Object.keys(records), externalRecords: true } },
-    statements: [...compactions, ...Object.entries(records).filter(([id]) => !known?.has(id)).map(([id, value]) => ({
+    statements: [...(compactions.length ? [runtimeOwnerStatement(sessionId)] : []), ...compactions, ...Object.entries(records).filter(([id]) => !known?.has(id)).map(([id, value]) => ({
       sql: `INSERT INTO browser_chat_context_record (session_id, id, record_json) VALUES (?, ?, ?)
         ON CONFLICT(session_id, id) DO NOTHING`,
       params: [sessionId, id, JSON.stringify(value)],
@@ -61,11 +71,18 @@ export function splitBrowserChatContextSnapshot<T>(sessionId: string, snapshot: 
 export async function hydrateBrowserChatContextSnapshot<T>(sessionId: string, snapshot: T): Promise<T> {
   const context = (snapshot as ContextSnapshot)?.modelContext;
   if (context?.version !== 2 || !context.externalRecords) return snapshot;
-  const rows = await queryDatabase<{ id: string; record_json: string }>(
-    'SELECT id, record_json FROM browser_chat_context_record WHERE session_id = ?', [sessionId],
-  );
-  const recordIds = context.recordIds ? new Set(context.recordIds) : undefined;
-  const records = Object.fromEntries(rows.filter((row) => !recordIds || recordIds.has(row.id)).map((row) => [row.id, JSON.parse(row.record_json)]));
+  const records: Record<string, unknown> = {};
+  const readRecords = async (ids?: string[]) => {
+    const rows = await queryDatabase<{ id: string; record_json: string }>(
+      `SELECT id, record_json FROM browser_chat_context_record WHERE session_id = ?${ids ? ` AND id IN (${ids.map(() => '?').join(',')})` : ''}`,
+      [sessionId, ...(ids || [])],
+    );
+    for (const row of rows) records[row.id] = JSON.parse(row.record_json);
+  };
+  if (context.recordIds) {
+    // Do not materialize archived records only to discard them in JavaScript.
+    for (let offset = 0; offset < context.recordIds.length; offset += 256) await readRecords(context.recordIds.slice(offset, offset + 256));
+  } else await readRecords();
   const referenced = Object.values({ main: context, ...context.branches }).flatMap(view => {
     const manifest = view.lastRequest;
     let state: { handoffRef?: string; pinnedUserRef?: string } = {};

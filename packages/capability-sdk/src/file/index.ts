@@ -10,6 +10,7 @@ import {
 } from '../index.ts';
 import { fileCapabilitySettings } from './settings.ts';
 import { fileRuntimeSkill, fileRuntimeReferenceSkills, fileDiagramReferenceSkills, fileAuthoringReferenceSkills } from './runtime-skill.ts';
+import { fileDesignSkills } from './design-skills.ts';
 import { createFileToolInput } from './schema.ts';
 import { fileActionInputIssues } from './action-guidance.ts';
 import { normalizeFileToolInput } from './transport.ts';
@@ -58,7 +59,7 @@ export const fileCapabilityManifest: CapabilityManifest = {
     },
   },
   configuration: { settings: fileCapabilitySettings },
-  skills: [fileRuntimeSkill, ...fileRuntimeReferenceSkills, ...fileDiagramReferenceSkills, ...fileAuthoringReferenceSkills],
+  skills: [fileRuntimeSkill, ...fileDesignSkills, ...fileRuntimeReferenceSkills, ...fileDiagramReferenceSkills, ...fileAuthoringReferenceSkills],
 };
 
 function isFileAction(value: string | undefined): value is FileAction {

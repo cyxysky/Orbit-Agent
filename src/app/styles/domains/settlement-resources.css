@@ -11,41 +11,16 @@
   overflow: hidden;
 }
 
-.settlement-files-dialog { height: min(640px, calc(100dvh - 64px)); max-height: calc(100dvh - 64px); width: min(880px, calc(100vw - 32px)); }
 .settlement-memory-dialog { max-height: min(760px, calc(100dvh - 64px)); width: min(680px, calc(100vw - 32px)); }
 html .settlement-modal.settlement-resource-dialog .app-modal-header { align-items: center; background: var(--panel); border-bottom: 1px solid var(--border); display: flex; flex: 0 0 auto; flex-direction: row; gap: 12px; padding: 24px 28px; }
-.settlement-resource-dialog :is(.browser-chat-files-heading-icon, .browser-chat-recovery-header-icon) { background: var(--panel-soft); border: 1px solid var(--border); border-radius: 12px; color: var(--foreground); display: grid; flex: 0 0 42px; height: 42px; place-items: center; width: 42px; }
+.settlement-resource-dialog :is(.browser-chat-recovery-header-icon) { background: var(--panel-soft); border: 1px solid var(--border); border-radius: 12px; color: var(--foreground); display: grid; flex: 0 0 42px; height: 42px; place-items: center; width: 42px; }
 .settlement-resource-dialog .settlement-resource-heading { display: grid; flex: 1; gap: 4px; min-width: 0; }
 html .settlement-modal.settlement-resource-dialog .app-modal-header .settlement-resource-heading h2 { align-items: center; color: var(--foreground); display: flex; flex-wrap: wrap; font-size: 16px; font-weight: 650; gap: 10px; letter-spacing: -.015em; line-height: 1.4; margin: 0; }
 .settlement-resource-heading p { color: var(--muted); font-size: 12px; line-height: 1.55; margin: 0; }
 .settlement-memory-pending { background: var(--menu-selected-bg); border-radius: 6px; color: var(--muted-strong); font-size: 11px; font-weight: 500; letter-spacing: 0; padding: 3px 7px; }
-.settlement-resource-dialog :is(.browser-chat-files-header, .browser-chat-recovery-header) > .ui-icon-button { background: var(--panel-soft); border: 0; border-radius: 10px; color: var(--muted); flex: 0 0 34px; height: 34px; width: 34px; }
-.settlement-resource-dialog :is(.browser-chat-files-header, .browser-chat-recovery-header) > .ui-icon-button:hover { background: var(--menu-selected-bg); color: var(--foreground); }
+.settlement-resource-dialog :is(.browser-chat-recovery-header) > .ui-icon-button { background: var(--panel-soft); border: 0; border-radius: 10px; color: var(--muted); flex: 0 0 34px; height: 34px; width: 34px; }
+.settlement-resource-dialog :is(.browser-chat-recovery-header) > .ui-icon-button:hover { background: var(--menu-selected-bg); color: var(--foreground); }
 
-.settlement-files-dialog .browser-chat-files-search { flex: 0 0 auto; padding: 18px 28px; }
-.settlement-files-dialog .browser-chat-files-columns { flex: 1; grid-template-columns: minmax(0, 230px) minmax(0, 1fr); height: auto; min-height: 0; }
-.settlement-files-dialog .browser-chat-files-messages { background: var(--panel-soft); padding: 14px 12px; }
-.settlement-files-dialog .browser-chat-files-message { border-radius: 10px; gap: 8px; padding: 12px; }
-.settlement-files-dialog .browser-chat-files-message strong { font-size: 13px; line-height: 1.6; }
-.settlement-files-dialog .browser-chat-files-message-meta { font-size: 11px; }
-.settlement-files-dialog .browser-chat-files-message.is-selected,
-.settlement-files-dialog .browser-chat-files-message.is-selected:hover { background: var(--menu-selected-bg); color: var(--foreground); }
-.settlement-files-dialog .browser-chat-files-message.is-selected strong { color: var(--foreground); }
-.settlement-files-dialog .browser-chat-files-results { padding: 18px 22px 8px; }
-.settlement-files-dialog .browser-chat-files-results > header { gap: 12px; margin-bottom: 12px; }
-.settlement-files-dialog .browser-chat-files-results > header strong { font-size: 13px; }
-.settlement-files-dialog .browser-chat-files-results > header > span { font-size: 11px; }
-.settlement-files-dialog .browser-chat-files-list { flex: 1; overscroll-behavior: contain; scrollbar-width: thin; }
-.settlement-files-dialog .browser-chat-files-file { border-radius: 8px; gap: 8px; padding: 4px 6px; }
-.settlement-files-dialog .browser-chat-files-file + .browser-chat-files-file { border-top-color: var(--border); }
-.settlement-files-dialog .browser-chat-files-file:hover { background: var(--panel-soft); }
-.settlement-files-dialog .browser-chat-files-file-main { gap: 12px; padding: 11px 0; }
-.settlement-files-dialog .browser-chat-files-file-main strong { font-size: 13px; line-height: 1.5; }
-.settlement-files-dialog .browser-chat-files-file-icon { color: var(--muted); height: 40px; width: 34px; }
-.settlement-files-dialog .browser-chat-files-download { background: transparent; color: var(--muted); height: 34px; width: 34px; }
-.settlement-files-dialog .browser-chat-files-download:hover { background: var(--menu-selected-bg); color: var(--foreground); }
-.settlement-files-dialog .browser-chat-files-empty { min-height: 0; padding: 36px 28px; }
-html .settlement-modal.settlement-files-dialog .app-modal-footer { background: var(--panel); font-size: 11px; gap: 12px; justify-content: space-between; padding: 16px 28px; }
 
 .settlement-memory-dialog .browser-chat-recovery-body { padding: 24px 28px; }
 .settlement-memory-dialog .browser-chat-recovery-body p { line-height: 1.75; }
@@ -72,15 +47,8 @@ html .settlement-modal.settlement-memory-dialog .app-modal-footer { background: 
 
 @media (max-width: 600px) {
   html .settlement-modal.settlement-resource-dialog .app-modal-header { gap: 10px; padding: 20px; }
-  .settlement-resource-dialog :is(.browser-chat-files-heading-icon, .browser-chat-recovery-header-icon) { flex-basis: 36px; height: 36px; width: 36px; }
-  .settlement-files-dialog { height: calc(100dvh - 40px); max-height: calc(100dvh - 40px); }
+  .settlement-resource-dialog :is(.browser-chat-recovery-header-icon) { flex-basis: 36px; height: 36px; width: 36px; }
   .settlement-memory-dialog { max-height: calc(100dvh - 40px); }
-  .settlement-files-dialog .browser-chat-files-search { padding: 14px 20px; }
-  .settlement-files-dialog .browser-chat-files-columns { display: flex; flex-direction: column; }
-  .settlement-files-dialog .browser-chat-files-messages { flex: 0 0 132px; padding: 8px 12px; }
-  .settlement-files-dialog .browser-chat-files-message { padding: 9px 12px; }
-  .settlement-files-dialog .browser-chat-files-results { flex: 1; padding: 16px 14px 6px; }
-  html .settlement-modal.settlement-files-dialog .app-modal-footer { flex-wrap: wrap; gap: 4px 12px; padding: 14px 20px; }
   .settlement-memory-dialog .browser-chat-recovery-body { padding: 20px; }
   .settlement-memory-dialog .browser-chat-recovery-actions { padding-top: 12px; }
   html .settlement-modal.settlement-memory-dialog .app-modal-footer { padding: 16px 20px; }

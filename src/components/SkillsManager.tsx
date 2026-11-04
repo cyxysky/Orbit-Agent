@@ -448,7 +448,6 @@ export function SkillsManager({
             <header className="ui-modal-header">
               <div className="ui-modal-heading">
                 <h2 className="ui-modal-title" id="skills-manager-modal-title">{editorMode === 'edit' ? t('编辑 Skill') : t('新建 Skill')}</h2>
-                <p className="ui-modal-subtitle">{editorMode === 'edit' ? editingSkillId : t('保存后即可在对话中使用')}</p>
               </div>
               <button aria-label={t('关闭')} className="ui-icon-button ui-modal-close" onClick={closeEditorModal} type="button">
                 <X size={16} />

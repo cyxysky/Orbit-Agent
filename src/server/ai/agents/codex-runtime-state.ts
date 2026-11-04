@@ -1,4 +1,5 @@
-import { queryDatabaseOne, executeDatabase } from '@/server/db/database';
+import { queryDatabaseOne, executeDatabase, runDatabaseTransaction } from '@/server/db/database';
+import { ensureRuntimeOwner } from '@/server/storage/runtime-owner';
 import type { ModelMessage } from 'ai';
 import type { RuntimeRequestContextStats } from './runtime-context-budget';
 import type { CodexDynamicTool } from '../codex-app-server';
@@ -35,8 +36,11 @@ export async function writeCodexRuntimeBinding(sessionId: string, scope: string,
   const previous = binding.revision;
   const next = { ...binding, revision: previous + 1 };
   if (!previous) {
-    await executeDatabase('INSERT INTO agent_runtime_state (session_id, scope_id, revision, record_json) VALUES (?, ?, ?, ?)',
-      [sessionId, `codex-app-server:${scope}`, next.revision, JSON.stringify(next)]);
+    await runDatabaseTransaction(async executor => {
+      await ensureRuntimeOwner(sessionId, executor);
+      await executeDatabase('INSERT INTO agent_runtime_state (session_id, scope_id, revision, record_json) VALUES (?, ?, ?, ?)',
+        [sessionId, `codex-app-server:${scope}`, next.revision, JSON.stringify(next)], executor);
+    });
   } else {
     const row = await queryDatabaseOne<{ revision: number }>(
       'UPDATE agent_runtime_state SET revision = ?, record_json = ? WHERE session_id = ? AND scope_id = ? AND revision = ? RETURNING revision',

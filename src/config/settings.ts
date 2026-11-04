@@ -2,7 +2,8 @@ import type { ModelConfigRecord, ModelProvider, ModelProviderSettings } from '@/
 import { normalizedModelCapabilities } from '@/lib/model-capabilities';
 import { browserChatInteractionModeOptions } from '@/lib/browser-chat-interaction-mode';
 import { toolCapabilitySettings } from '@/lib/tool-capability-settings';
-import { browserCapabilitySettings } from '@cjfclonedeep/capability-sdk/browser/settings';
+import { normalizeAttachmentAccept } from '@/lib/chat-interface-settings';
+import { browserCapabilitySettings, normalizeBrowserDomainRules } from '@cjfclonedeep/capability-sdk/browser/settings';
 import { chartCapabilitySettings } from '@cjfclonedeep/capability-sdk/chart/settings';
 import { mapsCapabilitySettings } from '@cjfclonedeep/capability-sdk/maps/settings';
 import { codeSandboxCapabilitySettings } from '@cjfclonedeep/capability-sdk/execution/code/settings';
@@ -46,7 +47,7 @@ export type RuntimeEnvDefinition = {
   key: string;
   label: string;
   description: string;
-  tab: Exclude<SettingsTab, 'general' | 'model' | 'skills' | 'memory' | 'accounts' | 'knowledge'>;
+  tab: Exclude<SettingsTab, 'model' | 'skills' | 'memory' | 'accounts' | 'knowledge'>;
   defaultValue: string;
   control: 'boolean' | 'number' | 'select' | 'text' | 'secret' | 'textarea';
   min?: number;
@@ -68,7 +69,13 @@ const capabilitySettingDefinitions: readonly CapabilitySettingDefinition[] = [
   ...mapsCapabilitySettings,
   ...fileCapabilitySettings,
   ...codeSandboxCapabilitySettings,
-  ...connectorsCapabilitySettings,
+  // Orbit exposes an MCP driver; keep the SDK's protocol-neutral definitions
+  // intact and adapt their display names at the application's metadata boundary.
+  ...connectorsCapabilitySettings.map((definition) => ({
+    ...definition,
+    label: definition.label.replace(definition.group, 'MCP'),
+    group: 'MCP',
+  })),
   ...knowledgeCapabilitySettings,
   ...dataCapabilitySettings,
   ...mediaCapabilitySettings,
@@ -344,6 +351,10 @@ const applicationRuntimeEnvDefinitions: RuntimeEnvDefinition[] = [
 ];
 
 export const runtimeEnvDefinitions: RuntimeEnvDefinition[] = [
+  { key: 'CHAT_SHOW_MORE_MENU', label: '显示对话更多菜单', description: '控制对话中的三个点入口，包括快捷管理和更多对话操作。', tab: 'general', group: '对话界面', defaultValue: 'true', control: 'boolean', applyMode: 'runtime', options: boolOptions },
+  { key: 'CHAT_SHOW_TOOL_CONFIGURATION', label: '显示工具配置入口', description: '控制输入区的工具配置按钮。工具是否可用仍由工具开关控制。', tab: 'general', group: '对话界面', defaultValue: 'true', control: 'boolean', applyMode: 'runtime', options: boolOptions },
+  { key: 'CHAT_ATTACHMENT_UPLOAD_ENABLED', label: '允许附件上传', description: '控制文件选择、拖放、粘贴上传，并在服务端拒绝关闭后的上传请求。', tab: 'general', group: '附件', defaultValue: 'true', control: 'boolean', applyMode: 'runtime', options: boolOptions },
+  { key: 'CHAT_ATTACHMENT_ACCEPT', label: '附件支持类型', description: '留空允许所有类型。使用逗号或换行分隔，例如 .pdf,.docx,.xlsx,.pptx,.txt,.md,image/*；扩展名与 MIME 类型任一匹配即可。', tab: 'general', group: '附件', defaultValue: '', control: 'textarea', applyMode: 'runtime' },
   ...applicationRuntimeEnvDefinitions,
   ...toolCapabilitySettings.map((tool): RuntimeEnvDefinition => ({
     key: tool.envKey, label: tool.label, description: tool.description,
@@ -356,6 +367,8 @@ export const runtimeEnvDefinitions: RuntimeEnvDefinition[] = [
 export const runtimeEnvKeys = runtimeEnvDefinitions.map((item) => item.key);
 
 export function normalizeRuntimeEnvValue(definition: RuntimeEnvDefinition, value: string) {
+  if (definition.key === 'CHAT_ATTACHMENT_ACCEPT') return normalizeAttachmentAccept(value);
+  if (definition.key === 'BROWSER_DOMAIN_ALLOWLIST' || definition.key === 'BROWSER_DOMAIN_DENYLIST') return normalizeBrowserDomainRules(value);
   const migratedValue = migrateRuntimeEnvValue(definition.key, value);
   if (definition.control !== 'number' || (definition.min === undefined && definition.max === undefined)) return migratedValue;
   return normalizeBoundedNumberSetting({

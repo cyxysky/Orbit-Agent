@@ -190,6 +190,7 @@ export async function deleteAutomationCase(id: string, userId?: string) {
   const record = await runDatabaseTransaction(async (manager) => {
     const current = await readCase(manager, id, userId);
     if (!current) return undefined;
+    await executeDatabase('DELETE FROM agent_runtime_owner WHERE id IN (SELECT id FROM automation_run WHERE case_id = ?)', [id], manager);
     const rows = userId === undefined
       ? await queryDatabase<{ id: string }>('DELETE FROM automation_case WHERE id = ? RETURNING id', [id], manager)
       : await queryDatabase<{ id: string }>('DELETE FROM automation_case WHERE id = ? AND user_id = ? RETURNING id', [id, userId], manager);

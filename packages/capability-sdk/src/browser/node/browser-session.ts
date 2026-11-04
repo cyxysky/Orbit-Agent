@@ -16,6 +16,8 @@ import type { Browser, BrowserContext, BrowserContextOptions, BrowserServer, Con
 import { raceWithAbort, type CapabilityConfiguration } from '../../index.ts';
 import { resolveBrowserOutputPixelRatio, resolveBrowserPreviewImageFormat } from '../output-settings.ts';
 import { browserSessionGroupLabel } from '../session-group.ts';
+import { browserNavigationAllowed } from '../access-policy.ts';
+import { ensureBrowserRedirectPolicy } from './browser-access-policy.ts';
 import { browserPreviewFrameIntervalMs, browserPreviewFramesPerSecond } from './browser-preview-cadence.ts';
 import { BrowserPreviewFramePump, type BrowserPreviewFramePumpMetrics } from './browser-preview-frame-pump.ts';
 import { browserPreviewVideoMaximumDimensions } from './browser-preview-video-settings.ts';
@@ -970,6 +972,9 @@ export type WindowWithAiDomRuntime = Window & {
   __aiDomRuntime?: AiDomRuntime;
   __aiDomMutationState?: AiDomMutationStateSnapshot & {
     observer?: MutationObserver;
+    observerVersion?: number;
+    mutationReleaseTimer?: number;
+    releaseOnHidden?: () => void;
     pendingMutations?: MutationRecord[];
     pendingMutationKeys?: WeakMap<Node, Set<string>>;
     pendingOverflow?: boolean;
@@ -1081,6 +1086,36 @@ type NativeTabGroupActivation = {
 };
 
 const preparedContextInitScripts = new WeakSet<BrowserContext>();
+const accessPolicyContexts = new WeakMap<BrowserContext, Parameters<BrowserContext['route']>[1]>();
+const contextAccessPolicyConfigurations = new WeakMap<BrowserContext, CapabilityConfiguration>();
+const pageAccessPolicyReaders = new WeakMap<Page, () => BrowserRuntimeEnvironment>();
+const navigationResponseGuards = new WeakMap<Page, Promise<void>>();
+const navigationResponseGuardDisposers = new WeakMap<Page, () => void>();
+
+function guardNavigationRedirects(context: BrowserContext, page: Page, fallback: () => BrowserRuntimeEnvironment, endpoint: string) {
+  let pending = navigationResponseGuards.get(page);
+  if (pending) return pending;
+  pending = (async () => {
+    const session = await context.newCDPSession(page);
+    let release: (() => void) | undefined;
+    try {
+      const { targetInfo } = await session.send('Target.getTargetInfo');
+      const browser = context.browser();
+      if (!browser) throw new Error('Browser policy requires a CDP browser connection');
+      release = await ensureBrowserRedirectPolicy(browser, endpoint, targetInfo.targetId, () => (pageAccessPolicyReaders.get(page) || fallback)());
+    } finally { await session.detach().catch(() => undefined); }
+    const dispose = () => {
+      page.off('close', dispose);
+      navigationResponseGuards.delete(page);
+      navigationResponseGuardDisposers.delete(page);
+      release?.();
+    };
+    navigationResponseGuardDisposers.set(page, dispose);
+    page.once('close', dispose);
+  })().catch(error => { navigationResponseGuards.delete(page); throw error; });
+  navigationResponseGuards.set(page, pending);
+  return pending;
+}
 const sharedPageOwners = new WeakMap<Page, string>();
 const livePreviewVisibilityRuntime = ((globalThis as typeof globalThis & {
   __webPilotLivePreviewVisibilityRuntime?: {
@@ -1640,6 +1675,7 @@ export class BrowserSession {
       ...this.capabilityConfiguration,
       ...configuration,
     });
+    if (this.context) contextAccessPolicyConfigurations.set(this.context, this.capabilityConfiguration);
     if (!this.automaticBrowserScreenshotEnabled()) {
       this.latestBrowserObservation = undefined;
       this.browserViewportEvidence = undefined;
@@ -1832,13 +1868,14 @@ export class BrowserSession {
     // can tear down the browser that the earlier caller has just started.
     const attempt = Promise.resolve().then(async () => {
       await pendingClose;
-      if (this.lifecycle === 'ready' && this.isUsable()) return;
+      if (this.lifecycle === 'ready' && this.isUsable()) { await this.prepareNavigationPolicy(); return; }
       // A missing tab does not mean the shared browser process is dead. Release
       // this session's lease without terminating other conversations' pages.
       if (this.lifecycle === 'ready') await this.closeNow({ preservePages: true });
       this.lifecycle = 'starting';
       try {
         await this.startNow();
+        await this.prepareNavigationPolicy();
         if (!this.isUsable()) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Browser startup completed without an owned, open page.');
         // Reclaimed tabs may arrive without an active-page selection.
         void this.activePage;
@@ -1859,6 +1896,18 @@ export class BrowserSession {
 
   async ensureStarted() {
     await this.start();
+  }
+
+  private async prepareNavigationPolicy() {
+    const policy = this.runtimeEnvironment();
+    const context = this.context;
+    if (!context) return;
+    await this.prepareContext(context, { claimPages: false });
+    if (!policy.BROWSER_DOMAIN_ALLOWLIST && !policy.BROWSER_DOMAIN_DENYLIST) return;
+    const connection = this.browserCodeConnection;
+    if (!context || connection?.protocol !== 'cdp') throw new Error('Browser policy requires a CDP connection');
+    await Promise.all([...this.ownedPages].filter(page => !page.isClosed()).map(page => guardNavigationRedirects(context, page,
+      () => ({ ...process.env, ...contextAccessPolicyConfigurations.get(context) }), connection.endpoint)));
   }
 
   private async startNow() {
@@ -2261,6 +2310,48 @@ export class BrowserSession {
   }
 
   private async prepareContext(context: BrowserContext, options: { claimPages?: boolean } = {}) {
+    contextAccessPolicyConfigurations.set(context, this.capabilityConfiguration);
+    const readContextPolicy: () => BrowserRuntimeEnvironment = () => ({ ...process.env, ...contextAccessPolicyConfigurations.get(context) });
+    const policyEndpoint = this.browserCodeConnection?.endpoint || '';
+    const hasRules = (policy: BrowserRuntimeEnvironment) => Boolean(policy.BROWSER_DOMAIN_ALLOWLIST?.trim() || policy.BROWSER_DOMAIN_DENYLIST?.trim());
+    const needsAccessPolicy = hasRules(readContextPolicy()) || context.pages().some(page => hasRules((pageAccessPolicyReaders.get(page) || readContextPolicy)()));
+    const previousPolicy = accessPolicyContexts.get(context);
+    // Playwright disables the HTTP cache whenever routing is enabled. Keep the
+    // interceptor absent when no page has site rules, and release it on clearing.
+    if (!needsAccessPolicy && previousPolicy) {
+      await context.unroute('**/*', previousPolicy);
+      accessPolicyContexts.delete(context);
+    }
+    if (needsAccessPolicy && !previousPolicy) {
+      // Context routing also covers the first request of popups and redirect hops.
+      // Read the policy for each navigation so already-open sessions see saved changes.
+      const routeHandler: Parameters<BrowserContext['route']>[1] = async route => {
+        const request = route.request();
+        if (request.isNavigationRequest()) {
+          // A popup's first request can precede its Frame/Page object.
+          let readPolicy = readContextPolicy;
+          let policyPage: Page | undefined;
+          try {
+            const page = request.frame().page();
+            policyPage = page;
+            const opener = pageAccessPolicyReaders.has(page) ? null : await page.opener();
+            readPolicy = pageAccessPolicyReaders.get(page) || (opener ? pageAccessPolicyReaders.get(opener) : undefined) || readPolicy;
+          } catch { /* Apply the context owner's policy until the popup is claimed. */ }
+          const policy = readPolicy();
+          if (!browserNavigationAllowed(request.url(), policy)) {
+            await route.abort('blockedbyclient');
+            return;
+          }
+          if (policyPage && (policy.BROWSER_DOMAIN_ALLOWLIST || policy.BROWSER_DOMAIN_DENYLIST)) {
+            try { await guardNavigationRedirects(context, policyPage, readPolicy, policyEndpoint); }
+            catch { await route.abort('blockedbyclient'); return; }
+          }
+        }
+        await route.fallback();
+      };
+      await context.route('**/*', routeHandler);
+      accessPolicyContexts.set(context, routeHandler);
+    }
     if (!preparedContextInitScripts.has(context)) {
       preparedContextInitScripts.add(context);
       await context.addInitScript(installAiBrowserPageRuntime, AI_DOM_RUNTIME_VERSION).catch((error) => {
@@ -2350,6 +2441,7 @@ export class BrowserSession {
     }
     const alreadyOwned = this.ownedPages.has(page);
     this.ownedPages.add(page);
+    pageAccessPolicyReaders.set(page, () => this.runtimeEnvironment());
     livePreviewVisibilityOwners.set(page, (visible) => this.handleLivePreviewVisibility(page, visible));
     if (!livePreviewVisibilityBindingPages.has(page)) {
       livePreviewVisibilityBindingPages.add(page);
@@ -4128,6 +4220,9 @@ export class BrowserSession {
   }
 
   private detachPageListeners(page: Page) {
+    pageAccessPolicyReaders.delete(page);
+    const pendingGuard = navigationResponseGuards.get(page);
+    if (pendingGuard) void pendingGuard.then(() => navigationResponseGuardDisposers.get(page)?.()).catch(() => undefined);
     this.networkDiagnostics.detach(page);
     this.pageListenerDisposers ||= new Map<Page, () => void>();
     this.livePreviewDownloadListeners ||= new Map<Page, (download: PlaywrightDownload) => void>();

@@ -20,7 +20,6 @@ import { EnvironmentSettings, type EnvironmentSettingsInitialData } from '@/comp
 import {
   environmentSettingsTabGroups,
   environmentSettingsTabsForUser,
-  isAdministratorOnlySettingsTab,
 } from '@/components/environment-settings-model';
 import { WorkspaceNavigationSidebar } from '@/components/WorkspaceSidebar';
 import type { SettingsTab } from '@/config/settings';
@@ -35,6 +34,7 @@ import { useTheme } from '@/theme/ThemeProvider';
 import { AppInput } from '@/components/ui/app-input';
 import { AppModal } from '@/components/ui/app-modal';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+import { useRouter } from 'next/navigation';
 
 
 function SettingsTabIcon({ tab }: { tab: SettingsTab }) {
@@ -63,12 +63,13 @@ export function SettingsWorkspace({
   initialSidebarCollapsed?: boolean;
 }) {
   const { t } = useI18n();
+  const router = useRouter();
   const { mode: themeMode, setMode } = useTheme();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(initialSidebarCollapsed);
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
   const [requestedSection, setRequestedSection] = useState<string>();
   const [adminSettingsAccessToken, setAdminSettingsAccessToken] = useState('');
-  const [pendingAdminSettingsTab, setPendingAdminSettingsTab] = useState<SettingsTab | null>(null);
+  const [pendingAdminSettingsTab, setPendingAdminSettingsTab] = useState<SettingsTab | null>(adminSettingsPasswordRequired ? 'general' : null);
   const [adminSettingsPassword, setAdminSettingsPassword] = useState('');
   const [adminSettingsPasswordError, setAdminSettingsPasswordError] = useState('');
   const [adminSettingsPasswordSubmitting, setAdminSettingsPasswordSubmitting] = useState(false);
@@ -95,6 +96,7 @@ export function SettingsWorkspace({
     setPendingAdminSettingsTab(null);
     setAdminSettingsPassword('');
     setAdminSettingsPasswordError('');
+    if (adminSettingsLocked) router.replace('/browser-chat');
   }
 
   function selectSettingsTab(requestedTab: SettingsTab, section?: string) {
@@ -102,7 +104,7 @@ export function SettingsWorkspace({
     const nextSection = requestedTab === 'browser' ? 'capability:browser' : section;
     if (!visibleSettingsTabs.some((item) => item.id === tab)) return;
     setRequestedSection(nextSection);
-    if (adminSettingsLocked && isAdministratorOnlySettingsTab(tab)) {
+    if (adminSettingsLocked) {
       setPendingAdminSettingsTab(tab);
       setAdminSettingsPassword('');
       setAdminSettingsPasswordError('');
@@ -172,7 +174,7 @@ export function SettingsWorkspace({
         themeMode={themeMode}
         translate={t}
       >
-        <section className="browser-chat-sidebar-section browser-chat-settings-section">
+        {!adminSettingsLocked ? <section className="browser-chat-sidebar-section browser-chat-settings-section">
           <nav className="browser-chat-subnav" aria-label={t('环境配置分类')}>
             {environmentSettingsTabGroups.map((group) => {
               const tabs = group.tabs.flatMap((tabId) => {
@@ -195,21 +197,18 @@ export function SettingsWorkspace({
                     >
                       <SettingsTabIcon tab={tab.id} />
                       <span>{t(tab.label)}</span>
-                      {adminSettingsLocked && isAdministratorOnlySettingsTab(tab.id)
-                        ? <Lock className="browser-chat-settings-tab-lock" size={13} />
-                        : null}
                     </button>
                   ))}
                 </div>
               );
             })}
           </nav>
-        </section>
+        </section> : null}
       </WorkspaceNavigationSidebar>
 
       <main className="browser-chat-main">
         <div className="browser-chat-settings-pane">
-          <EnvironmentSettings
+          {!adminSettingsLocked ? <EnvironmentSettings
             activeTab={selectedTab}
             adminSettingsAccessToken={adminSettingsAccessToken}
             adminSettingsPasswordRequired={adminSettingsPasswordRequired}
@@ -221,7 +220,7 @@ export function SettingsWorkspace({
             onActiveTabChange={selectSettingsTab}
             showTabs
             userId={defaultUserId}
-          />
+          /> : null}
         </div>
       </main>
 
@@ -237,7 +236,6 @@ export function SettingsWorkspace({
             <header className="ui-modal-header">
               <div className="ui-modal-heading">
                 <h2 className="ui-modal-title" id="admin-settings-password-title">{t('管理员设置验证')}</h2>
-                <p className="ui-modal-subtitle">{t('这些配置仅供管理员使用。进入前需要验证管理员密码。')}</p>
               </div>
               <button
                 aria-label={t('关闭')}

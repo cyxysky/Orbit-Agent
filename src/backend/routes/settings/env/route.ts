@@ -54,7 +54,10 @@ export async function POST(request: Request) {
           key: definition.key,
           value: secret && !submittedValue
             ? savedByKey.get(definition.key)?.value ?? process.env[definition.key] ?? definition.defaultValue
-            : typeof item?.value === 'string' ? normalizeRuntimeEnvValue(definition, submittedValue) : definition.defaultValue,
+            : typeof item?.value === 'string' ? (() => {
+              try { return normalizeRuntimeEnvValue(definition, submittedValue); }
+              catch (error) { throw new ApiRequestError(error instanceof Error ? error.message : '配置值无效'); }
+            })() : definition.defaultValue,
           enabled: true,
           secret,
         };

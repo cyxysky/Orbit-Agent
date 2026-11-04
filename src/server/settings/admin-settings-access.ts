@@ -1,5 +1,8 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+import { requestApplicationUserId } from '@/server/auth/user-context';
+import { isAiOperationsAdmin } from '@/server/auth/ai-operations-admin';
+import { ApiRequestError, apiError } from '@/server/http/api-request';
 
 
 const ADMIN_SETTINGS_ACCESS_TOKEN_LIFETIME_MS = 4 * 60 * 60 * 1000;
@@ -95,7 +98,28 @@ export function verifyAdminSettingsAccessToken(
 
 export function requestHasAdminSettingsAccess(request: Request, env: AdminSettingsEnvironment = process.env) {
   if (!adminSettingsPasswordEnabled(env)) return true;
+  if (!requestCanAccessSettings(request, env)) return false;
   const authorization = request.headers.get('authorization') || '';
   const match = /^Bearer\s+(.+)$/i.exec(authorization.trim());
   return verifyAdminSettingsAccessToken(match?.[1], env);
+}
+
+export function requestCanAccessSettings(request: Pick<Request, 'headers'>, env: AdminSettingsEnvironment = process.env) {
+  if (!adminSettingsPasswordEnabled(env)) return true;
+  try { return isAiOperationsAdmin(requestApplicationUserId(request)); }
+  catch { return false; }
+}
+
+export function authorizeSettingsMenuRequest(request: Request) {
+  if (!requestCanAccessSettings(request)) {
+    return apiError(request, new ApiRequestError('仅管理员可以访问设置。', { code: ERROR_CODES.FORBIDDEN, status: 403 }), { fallback: '无法访问设置。' });
+  }
+}
+
+export function authorizeAdminSettingsRequest(request: Request) {
+  const denied = authorizeSettingsMenuRequest(request);
+  if (denied) return denied;
+  if (!requestHasAdminSettingsAccess(request)) {
+    return apiError(request, new ApiRequestError('请先输入管理员设置密码。', { code: ERROR_CODES.ADMIN_ACCESS_REQUIRED, status: 401 }), { fallback: '无法访问设置。' });
+  }
 }

@@ -1789,12 +1789,12 @@
 
 .resource-sharing-field {
   align-items: center;
-  border-top: 1px solid var(--border);
   display: flex;
   gap: 20px;
+  grid-column: 1 / -1;
   justify-content: space-between;
-  min-height: 66px;
-  padding: 14px 2px 2px;
+  min-height: 54px;
+  padding: 0 2px;
 }
 
 .resource-sharing-field > div {
@@ -2094,7 +2094,7 @@
   color: var(--muted-strong);
   display: grid;
   font-size: 12px;
-  font-weight: 850;
+  font-weight: 400;
   gap: 6px;
   min-width: 0;
 }
@@ -2445,7 +2445,7 @@
   color: var(--muted-strong);
   display: grid;
   font-size: 12px;
-  font-weight: 850;
+  font-weight: 400;
   gap: 6px;
   min-width: 0;
 }

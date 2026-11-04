@@ -52,12 +52,15 @@ import { Checkbox } from '@heroui/react/checkbox';
 import { Popover } from '@heroui/react/popover';
 import { HoverCard } from '@/components/HoverCard';
 import { BrowserChatToolsHelp } from '@/components/BrowserChatToolsHelp';
+import { useToolCapabilityCatalog } from './useToolCapabilityCatalog';
+import { acceptsChatAttachment } from '@/lib/chat-interface-settings';
 import { BrowserChatReasoning } from '@/components/BrowserChatReasoning';
 import { browserChatHasPendingHumanInput, browserChatRequestedUserInput, normalizeDisabledBrowserChatTools } from '@/lib/browser-chat-tools';
 import { browserChatOrderedResponseParts } from '@/components/browser-chat-markdown';
 import { IconAction } from '@/components/ui/icon-action';
 import { ExpandableActionLabel } from '@/components/ui/expandable-action-label';
 import { CopyTextButton } from '@/components/ui/copy-text-button';
+import { ConfirmActionPopover } from './ui/confirm-action-popover';
 import { TextArea } from '@heroui/react/textarea';
 import dynamic from 'next/dynamic';
 import {
@@ -139,6 +142,8 @@ import {
 import { useRouter, useSearchParams } from 'next/navigation';
 import { CustomSelect } from '@/components/CustomSelect';
 import { BrowserChatHistoryRow } from '@/components/BrowserChatHistoryRow';
+import { browserChatDeliveredArtifacts } from '@/lib/browser-chat-delivered-artifacts';
+import { RESPONSE_LAYOUT_EVENT, RESPONSE_LAYOUT_PENDING_SELECTOR } from '@cjfclonedeep/capability-sdk/responses/react';
 import { ConfirmDeleteModal } from '@/components/ConfirmDeleteModal';
 import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { ModelBrandIcon } from '@/components/ModelBrandIcon';
@@ -230,6 +235,7 @@ import {
   type BrowserChatSessionListPage,
 } from '@/components/useBrowserChatSessionPagination';
 import { useBrowserChatRealtime } from '@/components/useBrowserChatRealtime';
+import { BoundedEventBuffer } from '@/lib/bounded-event-buffer';
 import type { RealtimeRefreshEvent } from '@/lib/realtime-refresh';
 import {
   readSidebarCollapsedPreference,
@@ -1062,7 +1068,7 @@ function browserChatToolLabel(name: string, input: unknown, t: (value: string) =
     codeSandbox: '代码沙箱',
     communication: '通信',
     computer: '计算机',
-    connectors: '连接器',
+    connectors: 'MCP',
     data: '数据',
     file: '文件操作',
     fileVisual: '视觉检查',
@@ -3098,8 +3104,6 @@ function BrowserChatMessageArtifactCards({
   const { openFilePreview } = useFilePreview();
   const files = useMemo(() => {
     return mergeBrowserChatArtifactSummaries(artifacts).flatMap((artifact) => {
-      // Browser observations belong to their tool records, not the deliverable list.
-      if (artifact.kind === 'screenshot') return [];
       const openUrl = browserChatArtifactOpenUrl(artifact);
       if (!openUrl) return [];
       const kind = fileFormatForName(artifact.fileName)?.kind;
@@ -4652,6 +4656,7 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
     : mergeBrowserChatRealtimeSubagents(transientRecords.subagents, liveSubagents),
   [liveSubagents, running, transientRecords]);
   const markdownArtifacts = useSharedBrowserChatValue(message.artifacts || emptyBrowserChatArtifacts);
+  const deliveredArtifacts = useMemo(() => browserChatDeliveredArtifacts({ artifacts: message.artifacts, content: message.content, parts: message.parts, role: message.role, status: message.status }), [message.artifacts, message.content, message.parts, message.role, message.status]);
   const confirmationLogs = useSharedBrowserChatValue(useMemo(() => logs.filter((log) =>
     log.phase.startsWith('tool:confirmation:')), [logs]));
   // Confirmation headers and tool/log updates use different transports. An
@@ -5037,7 +5042,7 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
       ) : null}
       {!running ? (
         <BrowserChatMessageArtifactCards
-          artifacts={message.artifacts}
+          artifacts={deliveredArtifacts}
           expandedByDefault={artifactFilesExpanded}
         />
       ) : null}
@@ -5710,15 +5715,46 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
       followLatestRef.current = true;
       setShowScrollToBottom(false);
     };
+    messageList?.removeAttribute('data-scroll-ready');
     scrollToBottom();
-    // Streaming updates can render more frequently than animation frames. Waiting for
-    // several stable frames here allowed every update to cancel the ready callback,
-    // leaving the conversation permanently hidden behind the positioning overlay.
-    // The first bottom alignment is synchronous; ResizeObserver below keeps it pinned
-    // while images and streamed content continue changing height.
-    messageList?.setAttribute('data-scroll-ready', 'true');
-    onInitialPositioned?.(sessionId);
-    return undefined;
+    // Async response frames must report their real size before first reveal.
+    // Offscreen history does not delay the viewport; later size changes publish
+    // their own layout event. Streamed text never restarts this positioning work.
+    let frame = 0, passes = 2, finished = false;
+    const pendingResponse = () => {
+      if (!messageList) return false;
+      const viewport = messageList.getBoundingClientRect();
+      return [...messageList.querySelectorAll(RESPONSE_LAYOUT_PENDING_SELECTOR)].some(element => {
+        const bounds = element.getBoundingClientRect();
+        return bounds.bottom > viewport.top && bounds.top < viewport.bottom;
+      });
+    };
+    const position = () => {
+      frame = 0;
+      scrollToBottom();
+      if (pendingResponse()) return;
+      if (--passes > 0) { frame = requestAnimationFrame(position); return; }
+      finished = true;
+      observer.disconnect();
+      messageList?.removeEventListener(RESPONSE_LAYOUT_EVENT, schedule);
+      messageList?.setAttribute('data-scroll-ready', 'true');
+      onInitialPositioned?.(sessionId);
+    };
+    const schedule = () => {
+      if (frame || finished) return;
+      passes = 2;
+      frame = requestAnimationFrame(position);
+    };
+    const observer = new MutationObserver(schedule);
+    if (messageList) observer.observe(messageList, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-capability-response-layout'] });
+    messageList?.addEventListener(RESPONSE_LAYOUT_EVENT, schedule);
+    schedule();
+    return () => {
+      finished = true;
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+      messageList?.removeEventListener(RESPONSE_LAYOUT_EVENT, schedule);
+    };
   }, [firstMessageId, getScrollContainer, onInitialPositioned, sessionId, settleHistoryHeight]);
 
   useLayoutEffect(() => {
@@ -5799,6 +5835,22 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
     }
     setShowScrollToBottom(!followLatestRef.current && distanceFromBottom > 72);
   }, [getScrollContainer, stopFollowingLatest]);
+
+  useLayoutEffect(() => {
+    const container = getScrollContainer();
+    if (!container) return;
+    const pinResponseLayout = () => {
+      if (!followLatestRef.current || earlierLoadInFlightRef.current) return;
+      trackScrollPosition();
+      if (!followLatestRef.current) return;
+      // The SDK dispatches after committing an embedded view's measured height.
+      // Pin in this layout phase, rather than painting once at the old position.
+      container.scrollTo({ behavior: 'instant', top: Math.max(0, container.scrollHeight - container.clientHeight) });
+      lastObservedScrollTopRef.current = container.scrollTop;
+    };
+    container.addEventListener(RESPONSE_LAYOUT_EVENT, pinResponseLayout);
+    return () => container.removeEventListener(RESPONSE_LAYOUT_EVENT, pinResponseLayout);
+  }, [getScrollContainer, trackScrollPosition]);
 
   useLayoutEffect(() => {
     const previousLastMessageId = previousLastMessageIdRef.current;
@@ -6253,6 +6305,7 @@ function BrowserChatSafetySelector({
   safetyMode: BrowserChatSafetyMode;
 }) {
   const { t } = useI18n();
+  const { interfaceSettings } = useToolCapabilityCatalog();
   const safetyLabel = safetyMode === 'full' ? t('完全模式') : t('严格模式');
 
   return (
@@ -6275,7 +6328,7 @@ function BrowserChatSafetySelector({
         )}
       </HoverCard>
 
-      <BrowserChatToolsHelp userId={userId} sessionId={sessionId} disabledTools={disabledTools} onChange={onDisabledToolsChange} busy={disabled} />
+      {interfaceSettings?.showToolConfiguration ? <BrowserChatToolsHelp userId={userId} sessionId={sessionId} disabledTools={disabledTools} onChange={onDisabledToolsChange} busy={disabled} /> : null}
     </div>
   );
 }
@@ -6357,6 +6410,7 @@ const BrowserChatComposer = memo(function BrowserChatComposer({
 }) {
   const { t } = useI18n();
   const editorRef = useRef<HTMLDivElement | null>(null);
+  const { interfaceSettings } = useToolCapabilityCatalog();
   const [draft, setDraft] = useState('');
   const [referenceTokens, setReferenceTokens] = useState<Array<{ node: HTMLElement; attachment: BrowserChatAttachment }>>([]);
   const referenceTokenNodes = useRef(new WeakSet<HTMLElement>());
@@ -6896,6 +6950,8 @@ const BrowserChatComposer = memo(function BrowserChatComposer({
           ref={imageInputRef}
           className="browser-chat-image-input"
           type="file"
+          accept={interfaceSettings?.attachmentAccept || undefined}
+          disabled={!interfaceSettings?.attachmentUploadEnabled}
           multiple
           onChange={(event) => {
             const files = event.currentTarget.files;
@@ -7031,7 +7087,7 @@ const BrowserChatComposer = memo(function BrowserChatComposer({
         />
         <div className="browser-chat-compose-actions">
           <div className="browser-chat-compose-tools">
-            <button
+            {interfaceSettings?.attachmentUploadEnabled ? <button
               aria-label={t('上传文件')}
               className="browser-chat-attach glass attach"
               disabled={currentBusy || uploadingImage || attachments.length >= BROWSER_CHAT_MAX_REFERENCES}
@@ -7039,7 +7095,7 @@ const BrowserChatComposer = memo(function BrowserChatComposer({
               type="button"
             >
               {uploadingImage ? <Loader2 className="spin" size={20} /> : <Paperclip size={20} />}
-            </button>
+            </button> : null}
             <BrowserChatSafetySelector
               userId={userId}
               sessionId={sessionId}
@@ -8866,36 +8922,51 @@ export function BrowserChatWorkspace({
   }), [browserChatApiUrl]);
   // Execution records bypass SDK message state: otherwise every text/metadata
   // chunk structuredClones all previous tool payloads. Merge once per frame.
-  const pendingUIRecordsRef = useRef(new Map<string, Map<string, BrowserChatUIMessagePart>>());
+  const pendingUIRecordsRef = useRef(new BoundedEventBuffer<string, { sessionId: string; part: BrowserChatUIMessagePart }>());
+  const realtimeInvalidationRef = useRef<(sessionIds?: readonly string[]) => void>(() => undefined);
   const uiRecordsFrameRef = useRef(0);
   const uiRecordsMountedRef = useRef(true);
+  const invalidateUIRecords = useCallback((sessionId?: string) => {
+    const sessionIds = new Set([...pendingUIRecordsRef.current.values()].map(record => record.sessionId));
+    if (sessionId) sessionIds.add(sessionId);
+    pendingUIRecordsRef.current.clear();
+    if (uiRecordsFrameRef.current) cancelAnimationFrame(uiRecordsFrameRef.current);
+    uiRecordsFrameRef.current = 0;
+    if (sessionIds.size) realtimeInvalidationRef.current([...sessionIds]);
+  }, []);
   const queueUIRecord = useCallback((sessionId: string, part: BrowserChatUIMessagePart) => {
     if (!uiRecordsMountedRef.current || (part.type !== 'data-step' && part.type !== 'data-outputCycle' && part.type !== 'data-subagent')) return;
-    const records = pendingUIRecordsRef.current.get(sessionId) || new Map<string, BrowserChatUIMessagePart>();
-    const recordKey = part.type + ':' + part.id;
-    const previous = records.get(recordKey);
+    if (document.visibilityState === 'hidden') {
+      invalidateUIRecords(sessionId);
+      return;
+    }
+    const recordKey = sessionId + ':' + part.type + ':' + part.id;
+    const previous = pendingUIRecordsRef.current.get(recordKey)?.part;
+    let nextPart: BrowserChatUIMessagePart = part;
     // Preserve terminal/results evidence before coalescing events for the frame.
     // Keeping only the last packet can discard completion if a late start lands
     // in the same frame, before the session-level monotonic merge sees it.
     if (previous?.type === 'data-step' && part.type === 'data-step') {
-      records.set(recordKey, { ...part, data: mergeBrowserChatRealtimeCollections(
+      nextPart = { ...part, data: mergeBrowserChatRealtimeCollections(
         { messages: [], logs: [], steps: [previous.data] }, { steps: [part.data] },
-      ).steps[0] });
+      ).steps[0] };
     } else if (previous?.type === 'data-subagent' && part.type === 'data-subagent') {
-      records.set(recordKey, { ...part, data: mergeBrowserChatRealtimeSubagents([previous.data], [part.data])[0] });
+      nextPart = { ...part, data: mergeBrowserChatRealtimeSubagents([previous.data], [part.data])[0] };
     } else if (previous?.type === 'data-outputCycle' && part.type === 'data-outputCycle') {
-      records.set(recordKey, { ...part, data: mergeBrowserChatOutputCycleStreams([previous.data], [part.data])[0] });
-    } else records.set(recordKey, part);
-    pendingUIRecordsRef.current.set(sessionId, records);
+      nextPart = { ...part, data: mergeBrowserChatOutputCycleStreams([previous.data], [part.data])[0] };
+    }
+    if (!pendingUIRecordsRef.current.set(recordKey, { sessionId, part: nextPart })) {
+      invalidateUIRecords(sessionId);
+      return;
+    }
     if (uiRecordsFrameRef.current) return;
     uiRecordsFrameRef.current = requestAnimationFrame(() => {
       uiRecordsFrameRef.current = 0;
-      const pending = pendingUIRecordsRef.current;
-      pendingUIRecordsRef.current = new Map();
+      const pending = pendingUIRecordsRef.current.take();
       setSession(current => {
-        const batch = current && pending.get(current.id);
-        if (!current || !batch) return current;
-        const parts = [...batch.values()];
+        if (!current) return current;
+        const parts = pending.filter(record => record.sessionId === current.id).map(record => record.part);
+        if (!parts.length) return current;
         const merged = mergeBrowserChatRealtimeCollections({ messages: current.messages, steps: current.steps, logs: current.logs || [] }, {
           steps: parts.flatMap(part => part.type === 'data-step' ? [part.data] : []),
         });
@@ -8907,29 +8978,46 @@ export function BrowserChatWorkspace({
         return {...current, steps: merged.steps, outputCycles, subagents};
       });
     });
-  }, []);
+  }, [invalidateUIRecords]);
   useEffect(() => {
     uiRecordsMountedRef.current = true;
+    const pending = pendingUIRecordsRef.current;
+    const visibilityChanged = () => {
+      if (document.visibilityState === 'hidden') invalidateUIRecords();
+    };
+    document.addEventListener('visibilitychange', visibilityChanged);
     return () => {
       uiRecordsMountedRef.current = false;
+      document.removeEventListener('visibilitychange', visibilityChanged);
       if (uiRecordsFrameRef.current) cancelAnimationFrame(uiRecordsFrameRef.current);
       uiRecordsFrameRef.current = 0;
-      pendingUIRecordsRef.current.clear();
+      pending.clear();
     };
-  }, []);
+  }, [invalidateUIRecords]);
+  const { isEnabled: toolCapabilityEnabled, loaded: toolCatalogLoaded, interfaceSettings } = useToolCapabilityCatalog();
+  const browserToolEnabled = toolCapabilityEnabled('browser');
   const uiChatsRef = useRef(new Map<string, Chat<BrowserChatUIMessage>>());
+  const pruneUIChats = useCallback((keepId?: string) => {
+    for (const [id, chat] of uiChatsRef.current) {
+      if (id !== keepId && id !== (activeSessionIdRef.current || 'unbound') && chat.status !== 'submitted' && chat.status !== 'streaming') {
+        uiChatsRef.current.delete(id);
+      }
+    }
+  }, []);
   const uiChatForSession = useCallback((sessionId: string) => {
+    pruneUIChats(sessionId);
     const existing = uiChatsRef.current.get(sessionId);
     if (existing) return existing;
     const chat = new Chat<BrowserChatUIMessage>({
       id: `browser-chat:${sessionId}`,
       transport: uiChatTransport,
       onData: part => queueUIRecord(sessionId, part),
-      onError: (chatError) => setError(chatError.message),
+      onError: (chatError) => { setError(chatError.message); setTimeout(() => pruneUIChats(), 0); },
+      onFinish: () => { setTimeout(() => pruneUIChats(), 0); },
     });
     uiChatsRef.current.set(sessionId, chat);
     return chat;
-  }, [queueUIRecord, uiChatTransport]);
+  }, [pruneUIChats, queueUIRecord, uiChatTransport]);
   const currentUIChat = useMemo(() => uiChatForSession(session?.id || 'unbound'), [session?.id, uiChatForSession]);
   const {
     messages: receivedRequestUIMessages,
@@ -8939,6 +9027,10 @@ export function BrowserChatWorkspace({
     throttle: 32,
   });
   const currentRequestUIMessages = useSharedBrowserChatValue(receivedRequestUIMessages);
+  useEffect(() => { pruneUIChats(session?.id || 'unbound'); }, [session?.id, pruneUIChats]);
+  useEffect(() => {
+    if (toolCatalogLoaded && !browserToolEnabled) { setWebPreviewOpen(false); setBrowserGroupPickerOpen(false); setDownloadCenterOpen(false); }
+  }, [toolCatalogLoaded, browserToolEnabled]);
   const sessionUiKey = `${session?.userId || requestUserId}:${session?.id || 'new'}`;
   const selectedSessionRunning = isBrowserChatSessionRunning(session);
   const selectedRunningSession = selectedSessionRunning ? session : undefined;
@@ -9874,15 +9966,19 @@ export function BrowserChatWorkspace({
     if (sessionIds) {
       // Oversized realtime packets only invalidate their own session. Merge
       // fresh records in the background without restarting list/viewport loading.
-      await Promise.all(sessionIds.map(async sessionId => {
-        const data = await readBrowserChatInitialRequest(
-          browserChatApiUrl(`/api/browser-chat/${sessionId}`),
-          '更新对话失败',
-        );
-        upsertSession(data.session as BrowserChatSession, {
-          activate: activeSessionIdRef.current === sessionId,
-        });
+      const pendingIds = [...sessionIds];
+      await Promise.all(Array.from({ length: Math.min(4, pendingIds.length) }, async () => {
+        for (let sessionId = pendingIds.shift(); sessionId; sessionId = pendingIds.shift()) {
+          const data = await readBrowserChatInitialRequest(
+            browserChatApiUrl(`/api/browser-chat/${sessionId}`),
+            '更新对话失败',
+          );
+          upsertSession(data.session as BrowserChatSession, {
+            activate: activeSessionIdRef.current === sessionId,
+          });
+        }
       }));
+      await loadToolConfirmations();
       return;
     }
     const activeSessionId = activeSessionIdRef.current;
@@ -9892,10 +9988,11 @@ export function BrowserChatWorkspace({
     });
   }, [browserChatApiUrl, loadSessions, refreshSession, loadToolConfirmations, upsertSession]);
 
-  useBrowserChatRealtime({
+  const invalidateRealtimeSessions = useBrowserChatRealtime({
     onRefresh: handleRealtimeRefresh,
     onResync: resyncRealtimeSessions,
   });
+  realtimeInvalidationRef.current = invalidateRealtimeSessions;
 
   async function createSession() {
     sessionSelectionIntentRef.current += 1;
@@ -9951,7 +10048,12 @@ export function BrowserChatWorkspace({
   }
 
   async function uploadChatFiles(files: FileList | File[]) {
+    if (!interfaceSettings?.attachmentUploadEnabled) { setError(t('附件上传已关闭')); return []; }
     const selectedFiles = Array.from(files);
+    if (selectedFiles.some(file => !acceptsChatAttachment(file, interfaceSettings.attachmentAccept))) {
+      setError(t('不支持此附件类型，请查看设置中的附件支持类型'));
+      return [];
+    }
     const rejectedImages = selectedFiles.filter((file) => file.type.startsWith('image/'));
     const uploadableFiles = selectedModelSupportsImageInput
       ? selectedFiles
@@ -10322,7 +10424,7 @@ export function BrowserChatWorkspace({
   }
 
   async function deleteSessionHistory(sessionId: string) {
-    if (deletingSessionIdsRef.current.has(sessionId) || deletingSelectedSessions) return;
+    if (deletingSessionIdsRef.current.has(sessionId) || deletingSelectedSessions) return false;
     const deletingActiveSession = activeSessionIdRef.current === sessionId || session?.id === sessionId;
     deletingSessionIdsRef.current.add(sessionId);
     setDeletingSessionIds((current) => new Set(current).add(sessionId));
@@ -10336,8 +10438,10 @@ export function BrowserChatWorkspace({
       setSelectedSessionIds((current) => current.filter((id) => id !== sessionId));
       if (deletingActiveSession) clearDeletedActiveSession();
       if (deletedSession) await discardEmbeddedBrowserDataForSessions([deletedSession]);
+      return true;
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : '删除历史对话失败');
+      return false;
     } finally {
       deletingSessionIdsRef.current.delete(sessionId);
       setDeletingSessionIds((current) => {
@@ -10772,16 +10876,16 @@ export function BrowserChatWorkspace({
                       ariaLabel={running ? `${displayTitle}，${t('AI 正在处理')}` : displayTitle}
                       collapsed={sidebarCollapsed}
                       collapsedAction={(
-                        <button
-                          aria-label={t('删除对话“{name}”', { name: displayTitle })}
+                        <ConfirmActionPopover
+                          label={t('删除对话“{name}”', { name: displayTitle })}
+                          title={t('删除对话')}
+                          description={t('确认删除对话“{name}”？此操作无法撤销。', { name: displayTitle })}
                           className="workspace-sidebar-archive-row-delete browser-chat-collapsed-delete"
                           disabled={item.busy || deletingSessionIds.has(item.id) || deletingSelectedSessions}
-                          onClick={() => void deleteSessionHistory(item.id)}
-                          title={item.busy ? t('执行中，无法删除') : t('删除对话')}
-                          type="button"
+                          onConfirm={() => deleteSessionHistory(item.id)}
                         >
                           {deletingSessionIds.has(item.id) ? <Loader2 className="spin" size={10} /> : <X size={11} />}
-                        </button>
+                        </ConfirmActionPopover>
                       )}
                       collapsedIcon={running
                         ? <Loader2 className="spin" size={17} />
@@ -10959,11 +11063,11 @@ export function BrowserChatWorkspace({
       <div className="browser-chat-conversation-header-actions">
         <div className="browser-chat-conversation-tools" role="group" aria-label={t('对话工具')}>
           <BrowserChatRecoveryPanel key={`recovery-${session.id}`} sessionId={session.id} busy={currentBusy} />
-          <BrowserChatTextEditorButton />
-          <BrowserChatFilesPanel key={`files-${session.id}`} sessionId={session.id} busy={currentBusy} />
-          <BrowserChatTerminalPanel key={`terminals-${session.id}`} sessionId={session.id} closed={session.status === 'closed'} />
+          {toolCapabilityEnabled('textEditor') && <BrowserChatTextEditorButton />}
+          {toolCapabilityEnabled('file') && <BrowserChatFilesPanel key={`files-${session.id}`} sessionId={session.id} busy={currentBusy} />}
+          {toolCapabilityEnabled('terminal') && <BrowserChatTerminalPanel key={`terminals-${session.id}`} sessionId={session.id} closed={session.status === 'closed'} />}
           <BrowserChatExportButton key={`export-${session.id}`} sessionId={session.id} onError={setError} />
-          {webPreviewRuntime || subagentPreviewTarget?.sessionId === session.id ? (
+          {browserToolEnabled && (webPreviewRuntime || subagentPreviewTarget?.sessionId === session.id) ? (
             <button
               aria-label={t('打开实时界面')}
               aria-pressed={webPreviewOpen}
@@ -10983,7 +11087,7 @@ export function BrowserChatWorkspace({
           ) : null}
         </div>
         <BrowserChatRuntimeStateControl active={currentBusy} sessionId={session.id}>
-          <button
+          {browserToolEnabled && <button
             aria-label={t('结束会话并关闭浏览器')}
             className="browser-chat-conversation-direct-action is-danger"
             disabled={session.status === 'closed' || currentBusy}
@@ -10992,9 +11096,9 @@ export function BrowserChatWorkspace({
           >
             <Power aria-hidden="true" size={17} />
             <ExpandableActionLabel>{t('关闭浏览器')}</ExpandableActionLabel>
-          </button>
+          </button>}
         </BrowserChatRuntimeStateControl>
-        {!webPreviewRuntime ? (
+        {interfaceSettings?.showMoreMenu && browserToolEnabled && !webPreviewRuntime ? (
           <WorkspaceOverflowMenu
             className="browser-chat-conversation-more"
             icon={<MoreHorizontal size={17} />}
@@ -11011,7 +11115,7 @@ export function BrowserChatWorkspace({
               </button>
           </WorkspaceOverflowMenu>
         ) : null}
-        {!webPreviewRuntime ? (
+        {browserToolEnabled && !webPreviewRuntime ? (
           <div aria-hidden="true" className="browser-chat-conversation-popover-anchors">
             <BrowserChatGroupBindingCenter
               anchorOnly
@@ -11154,7 +11258,7 @@ export function BrowserChatWorkspace({
           loading={Boolean(loadingSessionId)}
           loadingMoreSkills={loadingMoreSkills}
           managementActions={(
-            <BrowserChatManagementMenu onSelect={setManagementTab} />
+            interfaceSettings?.showMoreMenu ? <BrowserChatManagementMenu onSelect={setManagementTab} /> : null
           )}
           modelSelection={modelSelection}
           modelSelectionTitle={modelSelectionDiagnostic}
