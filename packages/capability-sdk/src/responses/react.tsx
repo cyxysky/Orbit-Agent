@@ -11,6 +11,7 @@ import { CodedError, ERROR_CODES } from '../errors.ts';
 // Static export hosts use the same safe document and declarative layout renderers.
 export { DeclarativeResponseView } from './data-ui.tsx';
 export { createHTMLResponseDocument, HTML_FRAME_MESSAGE, HTML_FRAME_SANDBOX } from './html-document.ts';
+export { RESPONSE_LAYOUT_EVENT, RESPONSE_LAYOUT_PENDING_SELECTOR } from './layout.ts';
 
 export type ResponseRenderContext = {
   identity: string;

@@ -8,8 +8,6 @@
 
 @import "./beautiful-ai.css";
 
-@import "./file-preview.css";
-
 /* Class suppliers are frontend modules and SDK views. Keep UI helper files in
  * scope while keeping backend implementations, runtime manuals and assertions
  * out of the global stylesheet's watched dependency graph. */
@@ -36,9 +34,9 @@ html {
 
 :root[data-theme="dark"] {
   --background: #000000;
-  --foreground: #f5f5f5;
+  --foreground: #d4d4d4;
   --muted: #a3a3a3;
-  --muted-strong: #d4d4d4;
+  --muted-strong: #bdbdbd;
   --muted-foreground: var(--muted);
   --border: #262626;
   --border-strong: #404040;
@@ -46,20 +44,25 @@ html {
   --panel-soft: #111111;
   --panel-warm: #171717;
   --panel-elevated: #171717;
+  --input-surface: #262626;
+  --input-filled-surface: #262626;
+  --input-border: #454545;
+  --input-filled-border: #454545;
+  --field-hover: #303030;
   --sidebar: #0a0a0a;
   --sidebar-hover: #171717;
   --sidebar-active: #262626;
-  --sidebar-foreground: #e5e5e5;
+  --sidebar-foreground: #d4d4d4;
   --sidebar-muted: #a3a3a3;
-  --sidebar-selected-foreground: #fafafa;
+  --sidebar-selected-foreground: #dedede;
   --sidebar-border: #262626;
   --sidebar-border-strong: #525252;
   --sidebar-scrollbar-thumb: #525252;
   --sidebar-scrollbar-hover: #737373;
   --sidebar-scrollbar-active: #a3a3a3;
-  --accent: #e5e5e5;
-  --accent-hover: #d4d4d4;
-  --accent-strong: #bdbdbd;
+  --accent: #d4d4d4;
+  --accent-hover: #bdbdbd;
+  --accent-strong: #a3a3a3;
   --accent-soft: color-mix(in srgb, var(--accent) 14%, var(--panel));
   --accent-border: color-mix(in srgb, var(--accent) 34%, var(--border));
   --action-bg: var(--accent);
@@ -72,7 +75,7 @@ html {
   --body-gradient: linear-gradient(transparent, transparent);
   --app-overlay: rgba(0, 0, 0, 0.58);
   --code-panel: #050505;
-  --code-foreground: #f5f5f5;
+  --code-foreground: #d4d4d4;
   --inverse-foreground: #000000;
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.28);
   --shadow-sm: 0 6px 18px rgba(0, 0, 0, 0.28);
@@ -85,14 +88,14 @@ html {
   --button-neutral-border: #404040;
   --accent-foreground: #171717;
   --button-neutral-active-bg: #333333;
-  --button-neutral-foreground: #e5e5e5;
+  --button-neutral-foreground: #d4d4d4;
   --control-hover-bg: #262626;
-  --control-hover-foreground: #f5f5f5;
+  --control-hover-foreground: #dedede;
   --scrollbar-thumb: #525252;
   --scrollbar-thumb-hover: #737373;
   --scrollbar-thumb-active: #a3a3a3;
   --selection-bg: #404040;
-  --selection-foreground: #fafafa;
+  --selection-foreground: #dedede;
   --disabled-bg: #262626;
   --disabled-foreground: #737373;
   --table-header-bg: #1c1c1c;
@@ -173,12 +176,24 @@ body {
   font-family: var(--app-font-mono);
 }
 
-::selection {
+::selection,
+:root :is(input, textarea, select, [contenteditable])::selection {
   background: var(--selection-bg);
   color: var(--selection-foreground);
 }
 
+/* HeroUI fields and native fields use the same selection and caret palette. */
+:root :is(input, textarea, [contenteditable]) { caret-color: var(--foreground); }
+:root :is(select option:checked, [data-slot="list-box-item"][aria-selected="true"]) {
+  background-color: var(--menu-selected-bg);
+  color: var(--menu-selected-foreground);
+}
+
 /* Adornments share the input shell without internal dividers. */
+:is([data-slot="input"], [data-slot="input-group-input"], [data-slot="textarea"], .custom-select-button) {
+  font-weight: 400;
+}
+
 :is([data-slot="input-group"], [data-slot="input"], [data-slot="textarea"]) {
   border-width: 1px;
   box-shadow: none;
@@ -218,6 +233,28 @@ body {
   white-space: nowrap;
   word-break: keep-all;
 }
+
+.app-data-table-region { min-width: 0; }
+.app-data-table-heading { display: grid; gap: 8px; min-width: 72px; }
+.app-data-table-filter,
+.app-data-table-pagination :is(input, select) {
+  background: var(--field-background);
+  border: 1px solid var(--field-border);
+  border-radius: 6px;
+  color: var(--field-foreground);
+  font: inherit;
+  font-weight: 400;
+  min-height: 32px;
+  padding: 4px 8px;
+}
+.app-data-table-filter { width: 100%; min-width: 60px; max-width: 180px; font-size: 12px; }
+.app-data-table-pagination { align-items: center; border-top: 1px solid var(--table-border); color: var(--muted-strong); display: flex; flex-wrap: wrap; gap: 12px; padding: 12px 16px; font-size: 12px; }
+.app-data-table-pagination > span { margin-inline-end: auto; }
+.app-data-table-pagination label, .app-data-table-page-controls { align-items: center; display: flex; gap: 6px; }
+.app-data-table-page-controls input { width: 64px; }
+.app-data-table-page-controls button { align-items: center; background: var(--panel); border: 1px solid var(--table-border); border-radius: 6px; display: inline-flex; justify-content: center; min-height: 32px; width: 32px; }
+.app-data-table-page-controls button:disabled { opacity: .35; cursor: default; }
+.app-data-table-page-controls button:not(:disabled):hover { background: var(--hover); }
 
 /* Shared by Markdown tables and the data-table component. */
 .table-root--primary {
@@ -362,8 +399,8 @@ html :is(.ui-icon-button--danger, .settings-model-row-button.danger, .browser-ch
   .settings-workspace .input,
   .settings-workspace .textarea
 ):not([data-slot], [data-slot] *) {
-  background: var(--panel);
-  border: 1px solid var(--border);
+  background: var(--input-surface);
+  border: 1px solid var(--input-border);
   border-radius: var(--control-radius);
   box-shadow: var(--shadow-xs);
   color: var(--foreground);
@@ -508,15 +545,15 @@ input[type="checkbox"]:not([data-slot], [data-slot] *):focus-visible {
     color 140ms ease-out,
     background-color 140ms ease-out,
     box-shadow 140ms ease-out;
-  background: var(--panel-soft);
-  border: 1px solid transparent;
+  background: var(--input-filled-surface);
+  border: 1px solid var(--input-filled-border);
   border-radius: var(--app-radius-sm);
   color: var(--muted);
 }
 
 .custom-select-search:focus-within {
   color: var(--foreground);
-  background: var(--panel);
+  background: var(--input-surface);
   border-color: var(--focus-ring);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus-ring) 13%, transparent);
 }
@@ -553,7 +590,7 @@ input[type="checkbox"]:not([data-slot], [data-slot] *):focus-visible {
   cursor: pointer;
   display: grid;
   font-family: inherit;
-  font-weight: 500;
+  font-weight: 400;
   gap: 10px;
   grid-template-columns: minmax(0, 1fr) 20px;
   letter-spacing: 0;
@@ -584,6 +621,10 @@ input[type="checkbox"]:not([data-slot], [data-slot] *):focus-visible {
 }
 
 .custom-select-option > span > b,
+.custom-select-option .custom-select-option-copy > b {
+  font-weight: inherit;
+}
+
 .custom-select-group {
   font-weight: 600;
 }
@@ -873,8 +914,8 @@ svg:is(.spin, .animate-spin, .editor-spin) {
 /* Compact form dialogs use one quiet, input-first card language. */
 .ui-modal:is(.ui-modal--form, .automation-dialog, .login-account-modal, .ui-modal--personal-memory, .browser-chat-message-generation-dialog) {
   --form-dialog-surface: var(--panel-elevated);
-  --form-dialog-field: var(--panel-soft);
-  --form-dialog-field-border: var(--border);
+  --form-dialog-field: var(--input-filled-surface);
+  --form-dialog-field-border: var(--input-border);
   --form-dialog-title: var(--foreground);
   --form-dialog-label: var(--muted-strong);
   --form-dialog-value: var(--foreground);

@@ -29,7 +29,8 @@ function isWorkspaceViewPathname(pathname: string) {
   pathname = withoutWebPilotBasePath(pathname);
   return pathname === '/automation'
     || pathname === '/browser-chat'
-    || pathname === '/settings';
+    || pathname === '/settings'
+    || pathname === '/admin/ai-operations';
 }
 
 type NavigationLoadingScope = 'viewport' | 'workspace';

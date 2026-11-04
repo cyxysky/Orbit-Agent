@@ -17,6 +17,7 @@ import {
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { CustomSelect } from '@/components/CustomSelect';
 import { BackendRuntimePanel } from '@/components/BackendRuntimePanel';
+import { AiOperationsLoading } from '@/components/AiOperationsLoading';
 import { DataTable } from '@/components/ui/data-table';
 import { WorkspaceNavigationSidebar } from '@/components/WorkspaceSidebar';
 import { useI18n } from '@/i18n/I18nProvider';
@@ -208,7 +209,23 @@ function EmptyState({ children }: { children: ReactNode }) {
   return <div className="ai-operations-empty">{children}</div>;
 }
 
-export function AiOperationsWorkspace({
+export function AiOperationsWorkspace({ initialSidebarCollapsed = false }: { initialSidebarCollapsed?: boolean }) {
+  const [data, setData] = useState<AiOperationsDashboardData>();
+  const [error, setError] = useState('');
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetch(withWebPilotBasePath('/api/admin/ai-operations?days=30'), { cache: 'no-store', signal: controller.signal })
+      .then(response => readApiJson<AiOperationsDashboardData>(response, '加载 AI 运营指标失败'))
+      .then(next => { if (!controller.signal.aborted) setData(next); })
+      .catch(failure => { if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : '加载 AI 运营指标失败'); });
+    return () => controller.abort();
+  }, [attempt]);
+  return data ? <AiOperationsDashboard initialData={data} initialSidebarCollapsed={initialSidebarCollapsed} />
+    : <AiOperationsLoading initialSidebarCollapsed={initialSidebarCollapsed} error={error} onRetry={() => { setError(''); setAttempt(value => value + 1); }} />;
+}
+
+function AiOperationsDashboard({
   initialData,
   initialSidebarCollapsed = false,
 }: {
@@ -276,7 +293,6 @@ export function AiOperationsWorkspace({
   }, []);
 
   const overview = data.overview;
-  const maximumSystemTasks = Math.max(1, ...data.systems.map((item) => item.totalTasks));
   const trendUserOptions = useMemo(() => [
     { label: t('全部用户'), description: t('查看公司整体使用趋势'), value: '' },
     ...data.trendUsers.map((item) => ({
@@ -418,6 +434,7 @@ export function AiOperationsWorkspace({
               </header>
               {data.incidents.length ? (
                 <DataTable<AiOperationsDashboardData['incidents'][number]>
+                  pagination filterable
                   columns={[
                     {
                       accessor: (item) => item.title,
@@ -426,11 +443,11 @@ export function AiOperationsWorkspace({
                       id: 'task',
                     },
                     { accessor: (item) => item.userId, cell: (item) => item.userId, header: t('用户'), id: 'user' },
-                    { accessor: (item) => item.status, cell: (item) => <span className={`ai-operations-status is-${item.status}`}>{t(statusLabel(item.status))}</span>, header: t('状态'), id: 'status' },
+                    { accessor: (item) => item.status, filterAccessor: item => `${item.status} ${t(statusLabel(item.status))}`, cell: (item) => <span className={`ai-operations-status is-${item.status}`}>{t(statusLabel(item.status))}</span>, header: t('状态'), id: 'status' },
                     { accessor: (item) => item.target, cell: (item) => item.target, header: t('目标'), id: 'target' },
-                    { accessor: (item) => item.time, cell: (item) => dateTime(item.time), header: t('时间'), id: 'time' },
+                    { accessor: (item) => item.time, filterAccessor: item => `${item.time} ${dateTime(item.time)}`, cell: (item) => dateTime(item.time), header: t('时间'), id: 'time' },
                   ]}
-                  data={data.incidents.slice(0, 20)}
+                  data={data.incidents}
                   emptyText={t('当前范围内没有异常任务')}
                   getRowId={(item) => item.id}
                   minWidth={650}
@@ -443,14 +460,15 @@ export function AiOperationsWorkspace({
                 <div><h2>{t('目标系统')}</h2><p>{t('按浏览器目标域名统计任务量和成功率')}</p></div>
               </header>
               {data.systems.length ? (
-                <div className="ai-operations-system-list">
-                  {data.systems.slice(0, 10).map((item) => (
-                    <div className="ai-operations-system-row" key={item.target}>
-                      <div><strong>{item.target}</strong><span>{item.totalTasks} · {percent(item.successRate)}</span></div>
-                      <div className="ai-operations-horizontal-track"><span style={{ width: `${Math.max(3, item.totalTasks / maximumSystemTasks * 100)}%` }} /></div>
-                    </div>
-                  ))}
-                </div>
+                <DataTable<AiOperationsDashboardData['systems'][number]>
+                  pagination filterable compact
+                  columns={[
+                    { id: 'target', header: t('目标'), accessor: item => item.target, cell: item => item.target },
+                    { id: 'tasks', header: t('任务'), accessor: item => item.totalTasks, cell: item => item.totalTasks },
+                    { id: 'success', header: t('成功率'), accessor: item => item.successRate, cell: item => percent(item.successRate) },
+                  ]}
+                  data={data.systems} emptyText={t('暂无目标系统使用数据')} getRowId={item => item.target} minWidth={360}
+                />
               ) : <EmptyState>{t('暂无目标系统使用数据')}</EmptyState>}
             </section>
           </div>
@@ -460,6 +478,7 @@ export function AiOperationsWorkspace({
               <header className="ai-operations-panel-header"><div><h2>{t('用户使用情况')}</h2><p>{t('按用户统计任务量和执行结果')}</p></div></header>
               {data.users.length ? (
                 <DataTable<AiOperationsDashboardData['users'][number]>
+                  pagination filterable
                   columns={[
                     { accessor: (item) => item.userId, cell: (item) => <strong>{item.userId}</strong>, header: t('用户'), id: 'user' },
                     { accessor: (item) => item.totalTasks, cell: (item) => item.totalTasks, header: t('任务'), id: 'tasks' },
@@ -472,7 +491,7 @@ export function AiOperationsWorkspace({
                     { accessor: (item) => item.chatTasks, cell: (item) => item.chatTasks, header: t('对话'), id: 'chat' },
                     { accessor: (item) => item.automationRuns, cell: (item) => item.automationRuns, header: t('自动化'), id: 'automation' },
                     { accessor: (item) => item.successRate, cell: (item) => percent(item.successRate), header: t('成功率'), id: 'success' },
-                    { accessor: (item) => item.lastActiveAt, cell: (item) => dateTime(item.lastActiveAt), header: t('最近使用'), id: 'recent' },
+                    { accessor: (item) => item.lastActiveAt, filterAccessor: item => `${item.lastActiveAt} ${dateTime(item.lastActiveAt)}`, cell: (item) => dateTime(item.lastActiveAt), header: t('最近使用'), id: 'recent' },
                   ]}
                   compact
                   data={data.users}
@@ -487,6 +506,7 @@ export function AiOperationsWorkspace({
               <header className="ai-operations-panel-header"><div><h2>{t('模型使用情况')}</h2><p>{t('历史任务与当前服务进程 Token 指标')}</p></div></header>
               {data.models.length ? (
                 <DataTable<AiOperationsDashboardData['models'][number]>
+                  pagination filterable
                   columns={[
                     { accessor: (item) => item.model, cell: (item) => <><strong>{item.model}</strong><br /><small>{item.provider}</small></>, header: t('模型'), id: 'model' },
                     { accessor: (item) => item.taskCount, cell: (item) => item.taskCount, header: t('任务'), id: 'tasks' },

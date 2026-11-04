@@ -1,12 +1,12 @@
 'use client';
 
 import { Activity, CircleStop, RefreshCw } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { DataTable } from '@/components/ui/data-table';
 import { readApiJson } from '@/lib/api-client';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 import { useI18n } from '@/i18n/I18nProvider';
 import type { BackendRuntimeStatus } from '@/server/observability/backend-runtime-status';
-import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 
 
 export function BackendRuntimePanel() {
@@ -15,22 +15,31 @@ export function BackendRuntimePanel() {
   const [loading, setLoading] = useState(true);
   const [closing, setClosing] = useState('');
   const [error, setError] = useState('');
+  const requestRef = useRef<AbortController | null>(null);
   const load = useCallback(async () => {
+    requestRef.current?.abort();
+    const controller = new AbortController();
+    requestRef.current = controller;
+    setLoading(true);
     try {
-      const response = await fetch(withWebPilotBasePath('/api/admin/ai-operations/runtime'), { cache: 'no-store' });
-      setData(await readApiJson<BackendRuntimeStatus>(response, '加载后端状态失败'));
+      const response = await fetch(withWebPilotBasePath('/api/admin/ai-operations/runtime'), { cache: 'no-store', signal: controller.signal });
+      const next = await readApiJson<BackendRuntimeStatus>(response, '加载后端状态失败');
+      if (controller.signal.aborted) return;
+      setData(next);
       setError('');
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : '加载后端状态失败');
+      if (!controller.signal.aborted) setError(loadError instanceof Error ? loadError.message : '加载后端状态失败');
     } finally {
-      setLoading(false);
+      if (!controller.signal.aborted) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     void load();
-    const timer = window.setInterval(() => void load(), 10_000);
-    return () => window.clearInterval(timer);
+    const refresh = () => { if (document.visibilityState === 'visible' && !requestRef.current?.signal.aborted) void load(); };
+    const timer = window.setInterval(refresh, 10_000);
+    document.addEventListener('visibilitychange', refresh);
+    return () => { window.clearInterval(timer); document.removeEventListener('visibilitychange', refresh); requestRef.current?.abort(); };
   }, [load]);
 
   const closeBrowser = async (browserId: string) => {
@@ -62,15 +71,18 @@ export function BackendRuntimePanel() {
       <section className="ai-operations-panel ai-runtime-browser-panel">
         <header className="ai-operations-panel-header"><div><h2>{t("当前测试浏览器")}</h2><p>{t("展示所属用户、会话、页面与实时状态")}</p></div><span>{data?.browsers.length || 0}</span></header>
         {data?.browsers.length ? (
-          <div className="ai-runtime-browser-list">
-            {data.browsers.map((browser) => (
-              <article key={browser.id}>
-                <div><strong>{browser.title || browser.sessionId}</strong><span>{t('用户 {id} · {kind} · {count} 个标签页', { id: browser.userId || t('未知'), kind: t(browser.kind === 'subagent' ? '子 Agent' : '主会话'), count: browser.tabCount })}</span><code title={browser.currentUrl}>{browser.currentUrl || 'about:blank'}</code></div>
-                <span className={browser.busy ? 'is-busy' : undefined}>{browser.busy ? t('使用中') : t(({ initializing: '正在初始化', ready: '就绪', running: '执行中', completed: '已完成', interrupted: '已中断', failed: '失败', closed: '已结束', blocked: '阻塞' } as Record<string, string>)[browser.status] || browser.status)}</span>
-                <button disabled={closing === browser.id} onClick={() => void closeBrowser(browser.id)} type="button"><CircleStop size={15} />{t(closing === browser.id ? '关闭中…' : '关闭浏览器')}</button>
-              </article>
-            ))}
-          </div>
+          <DataTable<BackendRuntimeStatus['browsers'][number]>
+            pagination filterable compact
+            columns={[
+              { id: 'page', header: t('页面'), accessor: item => item.title || item.sessionId, cell: item => <><strong>{item.title || item.sessionId}</strong><br /><small title={item.currentUrl}>{item.currentUrl || 'about:blank'}</small></> },
+              { id: 'user', header: t('用户'), accessor: item => item.userId || '', cell: item => item.userId || t('未知') },
+              { id: 'kind', header: t('类型'), accessor: item => t(item.kind === 'subagent' ? '子 Agent' : '主会话'), cell: item => t(item.kind === 'subagent' ? '子 Agent' : '主会话') },
+              { id: 'tabs', header: t('标签页'), accessor: item => item.tabCount, cell: item => item.tabCount },
+              { id: 'status', header: t('状态'), accessor: item => item.busy ? t('使用中') : t(({ initializing: '正在初始化', ready: '就绪', running: '执行中', completed: '已完成', interrupted: '已中断', failed: '失败', closed: '已结束', blocked: '阻塞' } as Record<string, string>)[item.status] || item.status), cell: item => item.busy ? t('使用中') : t(({ initializing: '正在初始化', ready: '就绪', running: '执行中', completed: '已完成', interrupted: '已中断', failed: '失败', closed: '已结束', blocked: '阻塞' } as Record<string, string>)[item.status] || item.status) },
+              { id: 'actions', header: t('操作'), cell: item => <button className="ui-button" disabled={closing === item.id} onClick={() => void closeBrowser(item.id)} type="button"><CircleStop size={15} />{t(closing === item.id ? '关闭中…' : '关闭浏览器')}</button> },
+            ]}
+            data={data.browsers} emptyText={t('当前没有测试浏览器')} getRowId={item => item.id} minWidth={700}
+          />
         ) : <div className="ai-operations-empty">{t("当前没有测试浏览器")}</div>}
       </section>
     </div>

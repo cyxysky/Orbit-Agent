@@ -1,6 +1,6 @@
 import { databaseDriver, queryDatabase, queryDatabaseOne } from '@/server/db/database';
-import { browserChatArtifactOpenUrl, mergeBrowserChatArtifactSummaries,
-  type BrowserChatArtifactSummary, type BrowserChatMessageFileGroup } from '@/lib/browser-chat-artifacts';
+import type { BrowserChatArtifactSummary, BrowserChatMessageFileGroup } from '@/lib/browser-chat-artifacts';
+import { browserChatDeliveredArtifacts } from '@/lib/browser-chat-delivered-artifacts';
 
 /** Include every output message in this conversation, independently of loaded history pages. */
 export async function readBrowserChatMessageFileGroups(sessionId: string, userId: string): Promise<BrowserChatMessageFileGroup[] | undefined> {
@@ -11,8 +11,10 @@ export async function readBrowserChatMessageFileGroups(sessionId: string, userId
   const field = (key: string) => databaseDriver() === 'postgres'
     ? `CAST(m.record_json AS jsonb)->>'${key}'` : `json_extract(m.record_json, '$.${key}')`;
   const rows = await queryDatabase<{
-    id: string; role: string; content: string | null; created_at: string; record_json: string | null;
-  }>(`SELECT m.id, ${field('role')} AS role, SUBSTR(${field('content')}, 1, 320) AS content,
+    id: string; role: string; status: string | null; content: string | null; parts_json: string | null; created_at: string; record_json: string | null;
+  }>(`SELECT m.id, ${field('role')} AS role, ${field('status')} AS status,
+      CASE WHEN ${field('role')} = 'user' THEN SUBSTR(${field('content')}, 1, 320) ELSE ${field('content')} END AS content,
+      CASE WHEN f.id IS NOT NULL THEN ${field('parts')} ELSE NULL END AS parts_json,
       COALESCE(${field('createdAt')}, m.time) AS created_at, f.record_json
       FROM browser_chat_message m JOIN browser_chat_session s ON s.id = m.session_id
       LEFT JOIN browser_chat_file_message f ON f.session_id = m.session_id AND f.id = m.id
@@ -26,8 +28,10 @@ export async function readBrowserChatMessageFileGroups(sessionId: string, userId
     if (!row.record_json) continue;
     const message = JSON.parse(row.record_json) as { artifacts?: BrowserChatArtifactSummary[] };
     // Deduplicate within a message; the same file may legitimately appear in another message.
-    const files = mergeBrowserChatArtifactSummaries(message.artifacts)
-      .filter(artifact => artifact.kind !== 'screenshot' && browserChatArtifactOpenUrl(artifact));
+    const files = browserChatDeliveredArtifacts({
+      ...message, role: row.role, status: row.status || undefined, content: row.content || '',
+      parts: row.parts_json ? JSON.parse(row.parts_json) : [],
+    });
     if (files.length) groups.push({
       messageId: row.id,
       title: prompt || (row.content || '').trim().replace(/\s+/g, ' ').slice(0, 160) || files[0].title || files[0].fileName,

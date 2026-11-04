@@ -5,7 +5,7 @@ export const toolCapabilitySettings = [
   { name: 'chart', envKey: 'AGENT_TOOL_CHART_ENABLED', label: '图表与画布', description: '创建和更新二维、三维图表，以及可编辑的 Excalidraw 画布。' },
   { name: 'maps', envKey: 'AGENT_TOOL_MAPS_ENABLED', label: '地图', description: '搜索 Google 地点，规划驾车、步行和骑行路线，并展示交互地图。' },
   { name: 'codeSandbox', envKey: 'AGENT_TOOL_CODE_SANDBOX_ENABLED', label: '代码沙箱', description: '运行隔离代码，计算和转换数据，执行自定义程序。普通 PDF 和 Office 内容读取使用文件工具。' },
-  { name: 'connectors', envKey: 'AGENT_TOOL_CONNECTORS_ENABLED', label: '连接器', description: '调用已配置外部服务的接口和操作。' },
+  { name: 'connectors', envKey: 'AGENT_TOOL_CONNECTORS_ENABLED', label: 'MCP', description: '连接 MCP 服务，发现并调用其提供的工具。' },
   { name: 'knowledge', envKey: 'AGENT_TOOL_KNOWLEDGE_ENABLED', label: '知识库', description: '保存、检索和维护可复用的参考资料。' },
   { name: 'data', envKey: 'AGENT_TOOL_DATA_ENABLED', label: '数据源', description: '查询已配置的数据源，读取结构并分析数据。' },
   { name: 'media', envKey: 'AGENT_TOOL_MEDIA_ENABLED', label: '多媒体', description: '按模型和服务配置生成、转写或处理图片、音频和视频。' },

@@ -1,10 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { textFormatSchema, type TextDocument } from '@cjfclonedeep/capability-sdk/text-editor';
-import { textDocumentSummary } from '@cjfclonedeep/capability-sdk/text-editor/node';
+import { listTextDocumentSummaries } from '@cjfclonedeep/capability-sdk/text-editor/node';
 import type { TextEditProposal } from '@/lib/text-editor';
 import { createUserTextDocumentStore } from './text-storage';
-import { rewriteTextSelection } from '@/server/ai/text-edit';
 import { ApiRequestError } from '@/server/http/api-request';
 
 const identity = { documentId: z.string().regex(/^text_[a-f0-9-]{36}$/) };
@@ -20,13 +19,15 @@ export const textWorkspaceInput = z.discriminatedUnion('action', [
   z.object({ action: z.literal('apply'), ...identity, proposalId: z.string().uuid() }).strict(),
 ]);
 type StoredProposal = TextEditProposal & { format: TextDocument['format'] };
+const rewriteTextSelection: typeof import('@/server/ai/text-edit').rewriteTextSelection = async (...args) =>
+  (await import('@/server/ai/text-edit')).rewriteTextSelection(...args);
 export async function executeTextWorkspace(raw: unknown, userId: string, signal?: AbortSignal, services = { rewrite: rewriteTextSelection }) {
   const input = textWorkspaceInput.parse(raw), store = createUserTextDocumentStore(userId);
   function get(id: string) { const document = store.get(id); if (!document) throw new ApiRequestError('文档不存在，或当前账号无权访问。', { status: 404 }); return document; }
   try {
     signal?.throwIfAborted();
     const db = store.database();
-    if (input.action === 'list') return { documents: db.prepare('SELECT record_json FROM records ORDER BY updated_at DESC, id DESC').all().map(row => textDocumentSummary(JSON.parse(String(row.record_json)) as TextDocument)) };
+    if (input.action === 'list') return { documents: listTextDocumentSummaries(store) };
     if (input.action === 'create') return store.transaction(() => {
       const now = new Date().toISOString(), document: TextDocument = { ...input.document, id: `text_${randomUUID()}`, createdAt: now, updatedAt: now };
       store.save(document); return { document };

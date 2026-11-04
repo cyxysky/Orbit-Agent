@@ -130,7 +130,6 @@ export function LoginAccountModal({
             <span className="ui-modal-heading-icon login-account-modal-icon" aria-hidden="true"><ShieldCheck size={18} /></span>
             <div className="ui-modal-heading-copy">
               <h2 className="ui-modal-title" id="login-account-modal-title">{t(editing ? '编辑登录账号' : '新增登录账号')}</h2>
-              <p className="ui-modal-subtitle">{t('账号可用于任意站点；默认站点仅用于识别账号和提供登录地址')}</p>
             </div>
           </div>
           <button aria-label={t('关闭')} className="ui-icon-button ui-modal-close" disabled={saving} onClick={onClose} type="button">

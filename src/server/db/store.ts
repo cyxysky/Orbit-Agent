@@ -469,7 +469,6 @@ export const store = {
       );
       const deploymentValue = process.env[definition.key];
       if (!item && deploymentValue !== undefined && configuredValue === deploymentValue) continue;
-      if (!configuredValue.trim() && deploymentValue?.trim()) continue;
       process.env[definition.key] = configuredValue;
       updateInitialEnv({ [definition.key]: configuredValue });
     }

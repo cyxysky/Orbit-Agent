@@ -23,6 +23,7 @@ import { BeautifulLoadingState } from '@/components/BeautifulLoadingState';
 import { CreativeEditorLoading } from './CreativeEditorLoading';
 import { useI18n } from '@/i18n/I18nProvider';
 import { useTheme } from '@/theme/ThemeProvider';
+import { useToolCapabilityCatalog } from './useToolCapabilityCatalog';
 import { AppModal } from '@/components/ui/app-modal';
 import { FloatingWindow } from '@cjfclonedeep/capability-sdk/ui/floating-window';
 import '@/app/styles/creative-editors.css';
@@ -72,6 +73,8 @@ export function FilePreviewProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState('');
   const [editingVideo, setEditingVideo] = useState(false);
   const editingText = request?.mode === 'editText';
+  const { loaded: toolCatalogLoaded, isEnabled: toolEnabled } = useToolCapabilityCatalog();
+  const textEditorEnabled = toolEnabled('textEditor');
   const editor = useRef<VideoEditorHandle>(null);
   const handleSurfaceError = useCallback((reason: Error) => setError(reason.message), []);
 
@@ -83,6 +86,9 @@ export function FilePreviewProvider({ children }: { children: ReactNode }) {
     setError('');
     setEditingVideo(false);
   }, []);
+  useEffect(() => {
+    if (toolCatalogLoaded && !textEditorEnabled && editingText) void closeFilePreview();
+  }, [toolCatalogLoaded, textEditorEnabled, editingText, closeFilePreview]);
   const openFilePreview = useCallback(async (nextRequest: FilePreviewRequest) => {
     try { await editor.current?.flush(); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); return; }
     setRequest({
@@ -173,11 +179,7 @@ export function FilePreviewProvider({ children }: { children: ReactNode }) {
       size="preview"
     >
       <header className="ui-modal-header file-preview-header">
-        <span aria-hidden="true" className="file-preview-heading-icon"><FileText size={18} /></span>
-        <div className="file-preview-heading-copy">
-          <h2 id={titleId}>{request.fileName}</h2>
-          <p>{t('文件预览')}</p>
-        </div>
+        <h2 id={titleId} className="file-preview-title"><FileText aria-hidden="true" size={18} /><span title={request.fileName}>{request.fileName}</span></h2>
         {typeof resolvedSource === 'string' && /\.(txt|md|markdown|html?)$/i.test(request.fileName) ? <button className="ui-button file-preview-edit-button" type="button" onClick={() => { setRequest({ ...request, mode: 'editText' }); setError(''); }}><FileText size={16} />编辑文本</button> : null}
         {typeof resolvedSource === 'string' && /\/api\/artifacts\//.test(resolvedSource) && /\.(mp4|webm|mov|mkv|avi)$/i.test(request.fileName) && !editingVideo ? (
           <button className="ui-button file-preview-edit-button" onClick={() => { setEditingVideo(true); setError(''); }} type="button"><Scissors size={16} />{t('剪辑视频')}</button>

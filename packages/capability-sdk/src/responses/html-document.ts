@@ -2,6 +2,8 @@ import type { HTMLResponseParams } from './index.ts';
 
 export const HTML_FRAME_SANDBOX = 'allow-scripts allow-popups allow-popups-to-escape-sandbox allow-downloads';
 export const HTML_FRAME_MESSAGE = 'capability-html-height';
+export const HTML_FRAME_THEME_MESSAGE = 'capability-html-theme';
+export const HTML_FRAME_THEME_PROPERTIES = ['--foreground', '--muted', '--panel', '--border', '--accent', '--accent-strong', '--app-font-sans', 'color-scheme'];
 
 /** Browser-only document creation. The frame has an opaque origin; only our size observer can execute. */
 export function createHTMLResponseDocument(
@@ -114,20 +116,35 @@ export function createHTMLResponseDocument(
     trimBoundary('body > [data-capability-html-head]', 'start');
     trimBoundary('body > [data-capability-html-tail]', 'end');
     let previous = -1;
+    let ready = false;
+    let previousReady = false;
     let scheduled = false;
     const report = () => {
       scheduled = false;
       const height = Math.ceil(Math.max(document.body.getBoundingClientRect().height, document.body.scrollHeight));
-      if (height !== previous) {
+      if (height !== previous || ready !== previousReady) {
         previous = height;
-        parent.postMessage({ type: '${HTML_FRAME_MESSAGE}', nonce: '${options.nonce}', height }, '*');
+        previousReady = ready;
+        parent.postMessage({ type: '${HTML_FRAME_MESSAGE}', nonce: '${options.nonce}', height, ready }, '*');
       }
     };
-    const schedule = () => { if (!scheduled) { scheduled = true; requestAnimationFrame(report); } };
+    // Hosts may keep the frame invisible until this measurement arrives.
+    // Hidden frames can suspend animation frames, so sizing must not depend on one.
+    const schedule = () => { if (!scheduled) { scheduled = true; queueMicrotask(report); } };
     new ResizeObserver(schedule).observe(document.body);
     window.addEventListener('resize', schedule);
-    window.addEventListener('load', schedule);
-    document.fonts.ready.then(schedule);
+    const loaded = new Promise(resolve => document.readyState === 'complete' ? resolve()
+      : window.addEventListener('load', resolve, { once: true }));
+    Promise.all([loaded, document.fonts.ready]).then(() => { ready = true; schedule(); });
+    window.addEventListener('message', event => {
+      if (event.source !== parent || event.data?.type !== '${HTML_FRAME_THEME_MESSAGE}' || event.data?.nonce !== '${options.nonce}') return;
+      if (!event.data.theme || typeof event.data.theme !== 'object') return;
+      for (const name of ${JSON.stringify(HTML_FRAME_THEME_PROPERTIES)}) {
+        const value = event.data.theme[name];
+        if (typeof value === 'string') document.documentElement.style.setProperty(name, value);
+      }
+      schedule();
+    });
     document.addEventListener('toggle', schedule, true);
     schedule();
   })();`;

@@ -2,13 +2,14 @@
 
 import { EmptyState } from '@heroui/react/empty-state';
 import { Table } from '@heroui/react/table';
-import { Layers } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Layers } from 'lucide-react';
 import type { SortDescriptor } from 'react-aria-components';
 import { useDeferredValue, useMemo, useState, type ReactNode } from 'react';
 import { useI18n } from '@/i18n/I18nProvider';
 
 export type DataTableColumn<T> = {
   accessor?: (item: T) => number | string | null | undefined;
+  filterAccessor?: (item: T) => number | string | null | undefined;
   cell: (item: T) => ReactNode;
   className?: string;
   header: ReactNode;
@@ -49,6 +50,8 @@ export function DataTable<T>({
   emptyText,
   getRowId,
   minWidth,
+  pagination = false,
+  filterable = false,
   renderExpandedRow,
   rowClassName,
 }: {
@@ -61,26 +64,43 @@ export function DataTable<T>({
   emptyText: string;
   getRowId: (item: T) => string;
   minWidth?: number;
+  pagination?: boolean;
+  filterable?: boolean;
   renderExpandedRow?: (item: T) => ReactNode;
   rowClassName?: (item: T) => string | undefined;
 }) {
   const { t } = useI18n();
   const [sortDescriptor, setSortDescriptor] = useState<SortDescriptor>();
+  const [filters, setFilters] = useState<Record<string, string>>({});
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const deferredFilters = useDeferredValue(filters);
+  const filteredData = useMemo(() => {
+    if (!filterable) return data;
+    const active = columns.filter(column => column.accessor && deferredFilters[column.id]?.trim());
+    return active.length ? data.filter(item => active.every(column => String((column.filterAccessor || column.accessor)!(item) ?? '')
+      .toLocaleLowerCase().includes(deferredFilters[column.id].trim().toLocaleLowerCase()))) : data;
+  }, [columns, data, deferredFilters, filterable]);
   const deferredSortDescriptor = useDeferredValue(sortDescriptor);
   const sortedData = useMemo(() => {
-    if (!deferredSortDescriptor) return data;
+    if (!deferredSortDescriptor) return filteredData;
     const column = columns.find((candidate) => candidate.id === String(deferredSortDescriptor.column));
-    if (!column?.accessor || column.sortable === false) return data;
+    if (!column?.accessor || column.sortable === false) return filteredData;
     const accessor = column.accessor;
     const multiplier = deferredSortDescriptor.direction === 'descending' ? -1 : 1;
-    return data
+    return filteredData
       .map((item, index) => ({ index, item, value: accessor(item) }))
       .sort((left, right) => (
         multiplier * compareValues(left.value, right.value) || left.index - right.index
       ))
       .map(({ item }) => item);
-  }, [columns, data, deferredSortDescriptor]);
-  const rows = useMemo<RenderRow<T>[]>(() => sortedData.flatMap((item) => {
+  }, [columns, filteredData, deferredSortDescriptor]);
+  const pageCount = Math.max(1, Math.ceil(sortedData.length / pageSize));
+  const currentPage = Math.min(page, pageCount);
+  const visibleData = useMemo(() => pagination
+    ? sortedData.slice((currentPage - 1) * pageSize, currentPage * pageSize)
+    : sortedData, [currentPage, pageSize, pagination, sortedData]);
+  const rows = useMemo<RenderRow<T>[]>(() => visibleData.flatMap((item) => {
     const id = getRowId(item);
     const content = renderExpandedRow?.(item);
     return content
@@ -89,7 +109,7 @@ export function DataTable<T>({
         { content, id: `${id}:expanded`, item, kind: 'expanded' as const },
       ]
       : [{ id, item, kind: 'data' as const }];
-  }), [getRowId, renderExpandedRow, sortedData]);
+  }), [getRowId, renderExpandedRow, visibleData]);
 
   if (data.length === 0) {
     return <EmptyState className="management-table-empty-state">
@@ -103,11 +123,12 @@ export function DataTable<T>({
   }
 
   return (
+    <div className="app-data-table-region">
     <Table variant="primary" className={['app-data-table', compact ? 'is-compact' : '', className || ''].filter(Boolean).join(' ')}>
       <Table.ScrollContainer>
         <Table.Content
           aria-label={t('数据表')}
-          onSortChange={setSortDescriptor}
+          onSortChange={next => { setSortDescriptor(next); setPage(1); }}
           sortDescriptor={sortDescriptor}
           style={minWidth ? { minWidth } : undefined}
         >
@@ -120,15 +141,27 @@ export function DataTable<T>({
                 isRowHeader={index === (columns[0]?.id === '__selection' ? 1 : 0)}
                 key={column.id}
               >
-                {({ sortDirection }) => column.sortable !== false && column.accessor ? (
+                {({ sortDirection }) => <div className="app-data-table-heading">
+                {column.sortable !== false && column.accessor ? (
                   <Table.SortableColumnHeader sortDirection={sortDirection}>
                     <span className="app-data-table-header-label">{column.header}</span>
                   </Table.SortableColumnHeader>
                 ) : <span className="app-data-table-header-label">{column.header}</span>}
+                {filterable && column.accessor ? <input
+                  aria-label={`${typeof column.header === 'string' ? column.header : column.id} · ${t('筛选')}`}
+                  className="app-data-table-filter"
+                  onChange={event => { const value = event.currentTarget.value; setFilters(current => ({ ...current, [column.id]: value })); setPage(1); }}
+                  onClick={event => event.stopPropagation()}
+                  onKeyDown={event => event.stopPropagation()}
+                  placeholder={t('筛选')}
+                  type="search"
+                  value={filters[column.id] || ''}
+                /> : null}
+                </div>}
               </Table.Column>
             ))}
           </Table.Header>
-          <Table.Body items={rows} dependencies={[columns, rowClassName]}>
+          <Table.Body items={rows} dependencies={[columns, rowClassName]} renderEmptyState={() => t('没有符合条件的记录')}>
             {(row) => row.kind === 'expanded' ? (
               <Table.Row id={row.id}>
                 <Table.Cell colSpan={columns.length}>{row.content}</Table.Cell>
@@ -144,5 +177,17 @@ export function DataTable<T>({
         </Table.Content>
       </Table.ScrollContainer>
     </Table>
+    {pagination ? <nav className="app-data-table-pagination" aria-label={t('表格分页')}>
+      <span role="status">{t('共 {count} 条', { count: sortedData.length })}</span>
+      <label>{t('每页')} <select aria-label={t('每页条数')} value={pageSize} onChange={event => { setPageSize(Number(event.target.value)); setPage(1); }}>
+        {[10, 20, 50, 100].map(size => <option key={size} value={size}>{size}</option>)}
+      </select></label>
+      <div className="app-data-table-page-controls">
+        <button aria-label={t('上一页')} disabled={currentPage <= 1} onClick={() => setPage(currentPage - 1)} type="button"><ChevronLeft size={16} /></button>
+        <label>{t('第')} <input aria-label={t('页码')} type="number" min={1} max={pageCount} value={currentPage} onChange={event => { const value = event.target.valueAsNumber; if (Number.isFinite(value)) setPage(Math.max(1, Math.min(pageCount, Math.trunc(value)))); }} /> / {pageCount}</label>
+        <button aria-label={t('下一页')} disabled={currentPage >= pageCount} onClick={() => setPage(currentPage + 1)} type="button"><ChevronRight size={16} /></button>
+      </div>
+    </nav> : null}
+    </div>
   );
 }

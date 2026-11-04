@@ -1,6 +1,5 @@
 import { SettingsWorkspace } from '@/components/SettingsWorkspace';
-import { readBackendPageData, readWorkspacePageContext } from '@/lib/backend-page-data';
-import type { ComponentProps } from 'react';
+import { readWorkspacePageContext } from '@/lib/backend-page-data';
 import '../../styles/domains/settings-workspace.css';
 
 export default async function SettingsPage() {
@@ -11,7 +10,6 @@ export default async function SettingsPage() {
       <SettingsWorkspace
         adminSettingsPasswordRequired={adminPasswordRequired}
         defaultUserId={context.userId}
-        initialData={adminPasswordRequired ? undefined : await readBackendPageData<NonNullable<ComponentProps<typeof SettingsWorkspace>['initialData']>>('/api/settings/bootstrap')}
         initialSidebarCollapsed={context.sidebarCollapsed}
       />
     </main>

@@ -90,7 +90,14 @@
 }
 
 .settings-toggle {
+  --toggle-thumb-size: 22px;
+  --toggle-thumb-travel: 22px;
+  --toggle-thumb-bg: #ffffff;
+  --toggle-thumb-foreground: #222222;
+  --toggle-thumb-inset: 3px;
   align-items: center;
+  appearance: none;
+  box-sizing: border-box;
   border: 1px solid var(--border);
   border-radius: 999px;
   cursor: pointer;
@@ -99,59 +106,57 @@
   height: 30px;
   justify-content: flex-start;
   overflow: hidden;
-  padding: 3px;
+  padding: 0;
+  position: relative;
   width: 52px;
   transition:
     background-color var(--motion-normal) ease,
     border-color var(--motion-normal) ease,
-    box-shadow var(--motion-normal) ease,
-    color var(--motion-fast) ease,
-    transform var(--motion-normal) var(--ease-emphasized);
+    color var(--motion-fast) ease;
   background: var(--panel-warm);
   border-color: var(--border-strong);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, #ffffff 18%, transparent);
+  box-shadow: none;
 }
 
-.settings-toggle span {
+.settings-toggle > span {
   align-items: center;
-  background: #ffffff;
-  border-radius: 999px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+  background: var(--toggle-thumb-bg);
+  color: var(--toggle-thumb-foreground);
+  border: 0;
+  border-radius: 50%;
+  box-sizing: border-box;
+  box-shadow: none;
   display: inline-flex;
-  flex: 0 0 22px;
-  height: 22px;
+  flex: 0 0 var(--toggle-thumb-size);
+  height: var(--toggle-thumb-size);
   justify-content: center;
-  transform: translateX(0);
+  inset-block-start: 50%;
+  inset-inline-start: var(--toggle-thumb-inset);
+  position: absolute;
+  transform: translate(0, -50%);
   transition:
     background-color var(--motion-normal) ease,
-    box-shadow var(--motion-normal) ease,
     transform var(--motion-normal) var(--ease-emphasized);
-  width: 22px;
+  width: var(--toggle-thumb-size);
 }
 
 .settings-toggle.on {
+  --toggle-thumb-bg: var(--inverse-foreground);
+  --toggle-thumb-foreground: var(--accent);
   background: var(--action-bg);
   border-color: var(--action-bg);
 }
 
-.settings-toggle.on span {
-  transform: translateX(22px);
+.settings-toggle.on > span {
+  transform: translate(var(--toggle-thumb-travel), -50%);
 }
 
 .settings-toggle--status {
+  --toggle-thumb-size: 18px;
+  --toggle-thumb-travel: 18px;
+  --toggle-thumb-inset: 2px;
   height: 24px;
-  padding: 2px;
   width: 42px;
-}
-
-.settings-toggle--status span {
-  flex-basis: 18px;
-  height: 18px;
-  width: 18px;
-}
-
-.settings-toggle--status.on span {
-  transform: translateX(18px);
 }
 
 .settings-toggle--status.is-loading:disabled {
@@ -159,29 +164,25 @@
 }
 
 .settings-toggle--status span svg {
-  color: #222222;
+  color: inherit;
 }
 
 .settings-toggle:focus-visible {
-  box-shadow:
-    0 0 0 3px color-mix(in srgb, var(--focus-ring) 18%, transparent),
-    inset 0 0 0 1px color-mix(in srgb, #ffffff 18%, transparent);
-  outline: none;
+  box-shadow: none;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 3px;
 }
 
 :root[data-theme="dark"] .settings-toggle {
-  background: var(--panel-warm);
-  border-color: var(--border-strong);
+  --toggle-thumb-bg: var(--inverse-foreground);
+  --toggle-thumb-foreground: var(--foreground);
+  background: #525252;
+  border-color: #737373;
 }
 
 :root[data-theme="dark"] .settings-toggle.on {
   background: var(--accent);
   border-color: var(--accent);
-}
-
-:root[data-theme="dark"] .settings-toggle span,
-:root[data-theme="dark"] .settings-toggle.on span {
-  background: #ffffff;
 }
 
 .skills-manager-list,
@@ -1122,7 +1123,8 @@
 .settings-provider-row {
   align-items: center;
   border-radius: 9px;
-  display: flex;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) 30px;
   min-width: 0;
   position: relative;
 }
@@ -1142,6 +1144,8 @@
   cursor: pointer;
   display: inline-flex;
   flex: 0 0 26px;
+  grid-column: 3;
+  grid-row: 1;
   height: 28px;
   justify-content: center;
   margin-right: 4px;
@@ -1274,6 +1278,7 @@
   background: #7b8798;
   border-radius: 999px;
   height: 6px;
+  justify-self: center;
   width: 6px;
 }
 

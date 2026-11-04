@@ -8,6 +8,7 @@ import { NavigationLoading } from '@/components/NavigationLoading';
 import { I18nProvider } from '@/i18n/I18nProvider';
 import { ThemeProvider } from '@/theme/ThemeProvider';
 import './styles/foundation.css';
+import './styles/file-preview.css';
 import './styles/settlement-surfaces.css';
 import './styles/domains/settlement-settings.css';
 import './styles/domains/settlement-resources.css';

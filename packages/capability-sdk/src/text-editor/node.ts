@@ -12,6 +12,14 @@ export function createTextDocumentStore(directory: string) {
 export function textDocumentSummary(document: TextDocument): TextDocumentSummary {
   const { content, ...metadata } = document; return { ...metadata, contentChars: content.length };
 }
+/** Iterate one source document at a time; listing must not retain every full body. */
+export function listTextDocumentSummaries(store: ReturnType<typeof createTextDocumentStore>): TextDocumentSummary[] {
+  const summaries: TextDocumentSummary[] = [];
+  for (const row of store.database().prepare('SELECT record_json FROM records ORDER BY updated_at DESC, id DESC').iterate()) {
+    summaries.push(textDocumentSummary(JSON.parse(String(row.record_json)) as TextDocument));
+  }
+  return summaries;
+}
 export function replaceDocumentText(content: string, edits: readonly { oldText: string; newText: string }[]) {
   let result = content;
   for (const edit of edits) {
@@ -31,8 +39,7 @@ export function createFileTextEditorOperations(options: {
   function get(id: string) { const document = store.get(id); if (!document) throw new CodedError(ERROR_CODES.TEXT_EDITOR_OPERATION_FAILED, 'Text document not found. Use list to find an existing document.'); return document; }
   return { async execute(raw, context) {
     const input = textEditorInput.parse(raw); context.abortSignal?.throwIfAborted(); options.prepareStore?.(store);
-    if (input.action === 'list') return { documents: store.database().prepare('SELECT record_json FROM records ORDER BY updated_at DESC, id DESC').all()
-      .map(row => textDocumentSummary(JSON.parse(String(row.record_json)) as TextDocument)) };
+    if (input.action === 'list') return { documents: listTextDocumentSummaries(store) };
     if (input.action === 'create') return store.transaction(() => {
       const now = new Date().toISOString(), document: TextDocument = { id: `text_${randomUUID()}`, title: input.title || '未命名文档', format: input.format || 'markdown', content: input.content ?? '', createdAt: now, updatedAt: now };
       store.save(document); return { documentId: document.id, saved: true, document: textDocumentSummary(document) };

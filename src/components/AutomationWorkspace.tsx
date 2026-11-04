@@ -6,7 +6,6 @@ import { FormEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, us
 import {
   CalendarDays,
   CheckCircle2,
-  ChevronDown,
   ChevronRight,
   Clock3,
   Download,
@@ -41,7 +40,6 @@ import { useI18n } from '@/i18n/I18nProvider';
 import type { Language } from '@/i18n/language';
 import { readApiJson } from '@/lib/api-client';
 import { artifactApiUrl } from '@/lib/artifacts';
-import { waitForMinimumLoading } from '@/lib/minimum-loading';
 import { subscribeRealtimeRefresh } from '@/lib/realtime-refresh';
 import { asRecord } from '@/lib/unknown-value';
 import {
@@ -165,9 +163,6 @@ const weekdayOptions = [
 
 const activeRunStatuses = new Set<AutomationRunStatus>(['queued', 'running']);
 
-function automationRunTimestamp(run: AutomationRun) {
-  return run.startedAt;
-}
 
 function textValue(value: unknown) {
   return typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
@@ -329,8 +324,9 @@ async function fetchCollection<T>(
   keys: string[],
   normalize: (value: unknown) => T | undefined,
   fallback: string,
+  signal?: AbortSignal,
 ) {
-  const response = await fetch(apiUrl(path, userId), { cache: 'no-store' });
+  const response = await fetch(apiUrl(path, userId), { cache: 'no-store', signal });
   const payload = await readApiJson<unknown>(response, fallback);
   return collectionItems(payload, keys).map(normalize).filter((item): item is T => Boolean(item));
 }
@@ -339,8 +335,9 @@ async function fetchAutomationCasePage(
   userId: string,
   t: Translate,
   params: Record<string, string> = { limit: '10' },
+  signal?: AbortSignal,
 ) {
-  const response = await fetch(apiUrl('/api/automation/cases', userId, params), { cache: 'no-store' });
+  const response = await fetch(apiUrl('/api/automation/cases', userId, params), { cache: 'no-store', signal });
   const payload = await readApiJson<unknown>(response, t('加载自动化任务失败'));
   const record = asRecord(payload);
   return {
@@ -515,15 +512,17 @@ function summarizeStep(step: AutomationRunStep, t: Translate) {
   return { text: t('步骤已完成') };
 }
 
-function RunTimeline({ language, steps, t }: { language: Language; steps: AutomationRunStep[]; t: Translate }) {
+function RunTimeline({ language, steps, t, active }: { language: Language; steps: AutomationRunStep[]; t: Translate; active: boolean }) {
+  const [expandedSteps, setExpandedSteps] = useState<Set<number>>(() => new Set());
   if (!steps.length) {
-    return <div className="automation-trace-empty">{t('执行轨迹将在任务开始后实时出现。')}</div>;
+    return <p className="execution-trace-empty">{t(active ? '等待第一个执行步骤…' : '本次运行未生成执行步骤。')}</p>;
   }
   return (
-    <ol className="automation-timeline">
+    <ol className="execution-step-list">
       {steps.map((step, position) => {
-        const summary = summarizeStep(step, t);
-        const duration = formatDuration(t, step.startedAt, step.finishedAt, summary.elapsedMs);
+        const expanded = expandedSteps.has(position);
+        const summary = expanded ? summarizeStep(step, t) : undefined;
+        const duration = formatDuration(t, step.startedAt, step.finishedAt, summary?.elapsedMs);
         const finalVerification = step.name === 'finalVerification';
         const title = finalVerification ? t('AI 最终验收') : step.name;
         const phaseLabel = finalVerification
@@ -532,30 +531,30 @@ function RunTimeline({ language, steps, t }: { language: Language; steps: Automa
             : step.status === 'blocked' ? t('需要处理')
               : step.status === 'failed' ? t('执行失败') : t('已完成');
         return (
-          <li className={`automation-timeline-item is-${step.status}`} key={`${step.index}:${step.name}:${position}`}>
-            <span className="automation-timeline-marker" aria-hidden="true">
+          <li className={`execution-step is-${step.status}`} key={`${step.index}:${step.name}:${position}`}>
+            <span className="execution-step-marker" aria-hidden="true">
               {step.status === 'running'
                 ? <Loader2 className="spin" size={14} />
                 : step.status === 'failed' || step.status === 'blocked'
                   ? <XCircle size={14} />
                   : <CheckCircle2 size={14} />}
             </span>
-            <details className="automation-timeline-content">
-              <summary className="automation-timeline-summary">
-                <span className="automation-timeline-heading">
+            <details className="execution-step-content" onToggle={event => { const open = event.currentTarget.open; setExpandedSteps(previous => { if (previous.has(position) === open) return previous; const next = new Set(previous); if (open) next.add(position); else next.delete(position); return next; }); }}>
+              <summary className="execution-step-summary">
+                <span className="execution-step-heading">
                   <strong>{title}</strong>
                   <span>{phaseLabel}</span>
                 </span>
                 {(step.startedAt || duration) ? (
-                  <span className="automation-timeline-meta">
+                  <span className="execution-step-meta">
                     {step.startedAt ? <span>{formatTime(step.startedAt, language)}</span> : null}
                     {duration ? <span>{t('耗时 {duration}', { duration })}</span> : null}
                   </span>
                 ) : null}
-                <ChevronRight className="automation-timeline-toggle" size={15} aria-hidden="true" />
+                <ChevronRight className="execution-step-chevron" size={15} aria-hidden="true" />
               </summary>
-              <div className="automation-timeline-details">
-                <p>{summary.text}</p>
+              {expanded && <div className="execution-step-details">
+                <p>{summary?.text}</p>
                 {step.screenshotUrl ? (
                   <figure className="automation-step-evidence">
                     <a href={step.screenshotUrl} rel="noreferrer" target="_blank" title={t('查看 {title} 完成截图', { title })}>
@@ -569,13 +568,74 @@ function RunTimeline({ language, steps, t }: { language: Language; steps: Automa
                 ) : step.screenshotError ? (
                   <p className="automation-step-evidence-error">{t('截图失败：{error}', { error: compactText(step.screenshotError, 120) })}</p>
                 ) : null}
-              </div>
+              </div>}
             </details>
           </li>
         );
       })}
     </ol>
   );
+}
+
+function AutomationExecutionHistory({ runs, language, summary, openRunIds, onToggle, abortingRunId, onAbort, t }: {
+  runs: AutomationRun[]; language: Language; summary: string; openRunIds: string[]; onToggle(id: string): void;
+  abortingRunId: string | null; onAbort(run: AutomationRun): Promise<void>; t: Translate;
+}) {
+  const [filter, setFilter] = useState('all');
+  const latest = runs[0];
+  const latestOutputId = latest ? `execution-latest-output-${latest.id.replace(/[^a-zA-Z0-9_-]/g, '-')}` : undefined;
+  const visible = runs.filter(run => filter === 'all' || (filter === 'active' ? activeRunStatuses.has(run.status) : filter === 'passed' ? run.status === 'passed' : ['failed', 'blocked', 'interrupted'].includes(run.status)));
+  const active = runs.some(run => activeRunStatuses.has(run.status));
+  return <div className="execution-history">
+    <header className="execution-history-heading">
+      <div><h3>{t('执行记录')}</h3><span>{runs.length}</span>{active && <span className="execution-live"><Loader2 size={13} className="spin" />{t('执行中')}</span>}</div>
+      <CustomSelect ariaLabel={t('筛选执行记录')} value={filter} onChange={setFilter} options={[
+        { value: 'all', label: t('全部记录') }, { value: 'active', label: t('执行中') },
+        { value: 'passed', label: t('已完成') }, { value: 'issues', label: t('需要关注') },
+      ]} />
+    </header>
+    {latest ? <div className={`execution-latest is-${latest.status}`}>
+      <div className="execution-latest-heading"><span className="execution-status"><span aria-hidden="true" className={`execution-status-dot is-${latest.status}`} />{statusLabel(latest.status, t)}</span><span>{t('最近一次运行')}</span><time>{formatDateTime(latest.finishedAt || latest.startedAt, language)}</time></div>
+      <div id={latestOutputId} className="execution-latest-output automation-result-content" role="region" aria-label={t('任务输出')} tabIndex={0}>
+        <BrowserChatAutomationRunIdContext.Provider value={latest.id}>
+          <BrowserChatOrderedResponse fallbackText={summary} parts={browserChatFinalBlocksToParts(latest.outputBlocks || [])} />
+        </BrowserChatAutomationRunIdContext.Provider>
+      </div>
+      <button type="button" className="execution-detail-link" onClick={() => { setFilter('all'); if (!openRunIds.includes(latest.id)) onToggle(latest.id); }}>{t('查看本次详情')}<ChevronRight size={14} /></button>
+    </div> : <div className="execution-empty"><History size={24} /><h4>{t('等待第一次运行')}</h4><p>{t('点击“立即运行”，结果和执行轨迹会显示在这里。')}</p></div>}
+    {runs.length > 0 && <>
+      <div className="execution-columns" aria-hidden="true"><span>{t('运行状态')}</span><span>{t('开始时间')}</span><span>{t('触发方式')}</span><span>{t('耗时')}</span><span>{t('步骤')}</span><span /></div>
+      <ol className="execution-run-list">
+        {visible.map(run => {
+          const expanded = openRunIds.includes(run.id), running = activeRunStatuses.has(run.status);
+          const traceId = `execution-detail-${run.id.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+          return <li key={run.id} className={`execution-run is-${run.status}${expanded ? ' is-expanded' : ''}`}>
+            <div className="execution-run-row">
+              <button type="button" className="execution-run-toggle" aria-expanded={expanded} aria-controls={traceId} onClick={() => onToggle(run.id)}>
+                <span className="execution-run-state"><ChevronRight size={14} className="execution-run-chevron" /><span aria-hidden="true" className={`execution-status-dot is-${run.status}`} /><span className="execution-run-status-copy"><span>{statusLabel(run.status, t)}</span>{run.error && <small>{compactText(t(run.error), 60)}</small>}</span><span className="execution-run-step-count">{t('{steps} 步', { steps: run.steps.length })}</span></span>
+                <time data-label={t('开始时间')}>{formatDateTime(run.startedAt, language)}</time>
+                <span data-label={t('触发方式')}>{triggerLabel(run.trigger, t)}</span>
+                <span data-label={t('耗时')}>{formatDuration(t, run.startedAt, run.finishedAt) || '—'}</span>
+                <span data-label={t('步骤')}>{run.steps.length}</span>
+              </button>
+              <div className="execution-run-actions">
+                {running && <button type="button" className="automation-icon-action is-danger" aria-label={t('中止本次运行')} title={t('中止本次运行')} disabled={abortingRunId === run.id} onClick={() => void onAbort(run)}>{abortingRunId === run.id ? <Loader2 size={15} className="spin" /> : <StopCircle size={15} />}</button>}
+                {run.sessionId && <Link className="automation-icon-action" href={`/browser-chat?sessionId=${encodeURIComponent(run.sessionId)}`} aria-label={t('打开关联对话')} title={t('打开关联对话')}><ExternalLink size={15} /></Link>}
+              </div>
+            </div>
+            {expanded && <div className="execution-run-detail" id={traceId}>
+              {run.error && <div className="execution-run-error" role="status"><XCircle size={16} /><div><strong>{t('失败原因')}</strong><p>{run.error}</p></div></div>}
+              {(run.output || run.outputBlocks?.length) ? (run.id === latest?.id
+                ? <a className="execution-detail-link execution-output-reference" href={`#${latestOutputId}`}>{t('查看运行结果')}<ChevronRight size={14} /></a>
+                : <section className="execution-output"><h4>{t('任务输出')}</h4><div className="automation-result-content"><BrowserChatAutomationRunIdContext.Provider value={run.id}><BrowserChatOrderedResponse fallbackText={run.output || ''} parts={browserChatFinalBlocksToParts(run.outputBlocks || [])} /></BrowserChatAutomationRunIdContext.Provider></div></section>) : null}
+              <section className="execution-trace"><header><h4>{t('执行轨迹')}</h4><span>{run.finishedAt ? t('完成于 {time}', { time: formatDateTime(run.finishedAt, language) }) : t(running ? '实时更新中' : '本次运行已结束')}</span></header><RunTimeline key={run.id} language={language} steps={run.steps} active={running} t={t} /></section>
+            </div>}
+          </li>;
+        })}
+      </ol>
+      {!visible.length && <p className="execution-trace-empty">{t('没有符合筛选条件的运行记录。')}</p>}
+    </>}
+  </div>;
 }
 
 export function AutomationWorkspace({
@@ -624,29 +684,36 @@ export function AutomationWorkspace({
   const [formError, setFormError] = useState('');
   const [notice, setNotice] = useState('');
 
-  const loadAll = useCallback(async (silent = false) => {
+  const loadRequest = useRef<{ controller: AbortController; promise: Promise<void> } | null>(null);
+  const loadAll = useCallback((silent = false): Promise<void> => {
+    if (loadRequest.current) return loadRequest.current.promise;
+    const controller = new AbortController();
     const loadingSequence = silent ? 0 : ++loadSequenceRef.current;
-    const loadingStartedAt = Date.now();
     if (!silent) setLoading(true);
+    const promise = (async () => {
     try {
       const [casePage, nextSchedules, nextRuns] = await Promise.all([
-        fetchAutomationCasePage(userId, t),
-        fetchCollection('/api/automation/schedules', userId, ['schedules'], (value) => normalizeSchedule(value, t), t('加载执行计划失败')),
-        fetchCollection('/api/automation/runs', userId, ['runs'], (value) => normalizeRun(value, t), t('加载运行历史失败')),
+        fetchAutomationCasePage(userId, t, { limit: '10' }, controller.signal),
+        fetchCollection('/api/automation/schedules', userId, ['schedules'], (value) => normalizeSchedule(value, t), t('加载执行计划失败'), controller.signal),
+        fetchCollection('/api/automation/runs', userId, ['runs'], (value) => normalizeRun(value, t), t('加载运行历史失败'), controller.signal),
       ]);
+      if (controller.signal.aborted) return;
       setCases(casePage.cases);
       setCaseListPage(casePage.page || {});
       setSchedules(nextSchedules);
       setRuns(nextRuns);
       setError('');
     } catch (loadError) {
-      if (!silent) setError(loadError instanceof Error ? t(loadError.message) : t('加载自动化数据失败'));
+      if (!controller.signal.aborted && !silent) setError(loadError instanceof Error ? t(loadError.message) : t('加载自动化数据失败'));
     } finally {
-      if (!silent) {
-        await waitForMinimumLoading(loadingStartedAt);
+      if (loadRequest.current?.controller === controller) loadRequest.current = null;
+      if (!controller.signal.aborted && !silent) {
         if (loadSequenceRef.current === loadingSequence) setLoading(false);
       }
     }
+    })();
+    loadRequest.current = { controller, promise };
+    return promise;
   }, [t, userId]);
 
   const loadMoreCases = useCallback(async () => {
@@ -683,6 +750,7 @@ export function AutomationWorkspace({
 
   useEffect(() => {
     void loadAll();
+    return () => { loadRequest.current?.controller.abort(); loadRequest.current = null; };
   }, [loadAll]);
 
   useEffect(() => {
@@ -694,7 +762,6 @@ export function AutomationWorkspace({
           const record = normalizeCase(event.patch, t);
           if (record) setCases((current) => [record, ...current.filter((item) => item.id !== record.id)]);
         }
-        void loadAll(true);
         return;
       }
       if (event.entityType === 'automationSchedule') {
@@ -755,9 +822,10 @@ export function AutomationWorkspace({
 
   useEffect(() => {
     if (!initialCaseId || loading) return;
-    window.requestAnimationFrame(() => {
+    const frame = window.requestAnimationFrame(() => {
       document.getElementById(`automation-case-${initialCaseId}`)?.scrollIntoView({ block: 'start' });
     });
+    return () => window.cancelAnimationFrame(frame);
   }, [initialCaseId, loading]);
 
   const caseNameById = useMemo(() => new Map(cases.map((item) => [item.id, item.name])), [cases]);
@@ -895,7 +963,6 @@ export function AutomationWorkspace({
       const payload = await readApiJson<unknown>(response, t('启动自动化任务失败'));
       const payloadRecord = asRecord(payload);
       const createdRun = normalizeRun(payloadRecord?.run ?? payload, t);
-      setNotice(t('“{name}”已进入执行队列。', { name: item.name }));
       setSelectedCaseId(item.id);
       if (createdRun) setOpenRunIds((current) => current.includes(createdRun.id) ? current : [...current, createdRun.id]);
       await loadAll(true);
@@ -1304,130 +1371,11 @@ export function AutomationWorkspace({
 
                     <div className="automation-case-detail-sections">
                       <section className="automation-case-subsection automation-run-history">
-                        <div className="automation-results-heading">
-                          <h3>{t('运行结果')}</h3>
-                          <span>{t('最近一次运行')}</span>
-                        </div>
-                        {latestRun ? (
-                          <div className={`automation-latest-result automation-run-state-${latestRun.status}`}>
-                            <div className="automation-result-status">
-                              <span className="automation-run-status-dot" aria-hidden="true" />
-                              <h4>{statusLabel(latestRun.status, t)}</h4>
-                              <span>{formatDateTime(latestRun.finishedAt || latestRun.startedAt, language)}</span>
-                            </div>
-                            <div className="automation-result-content">
-                              <BrowserChatAutomationRunIdContext.Provider value={latestRun.id}>
-                                <BrowserChatOrderedResponse fallbackText={latestRunSummary} parts={browserChatFinalBlocksToParts(latestRun.outputBlocks || [])} />
-                              </BrowserChatAutomationRunIdContext.Provider>
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="automation-results-empty">
-                            <History size={28} aria-hidden="true" />
-                            <h4>{t('等待第一次运行')}</h4>
-                            <p>{t('点击“立即运行”，结果和执行轨迹会显示在这里。')}</p>
-                          </div>
-                        )}
-                        <div className="automation-subsection-heading">
-                          <div>
-                            <History size={15} />
-                            <h3>{t('执行记录')}</h3>
-                            <span className="automation-section-count">{selectedCaseRuns.length}</span>
-                          </div>
-                          {selectedCaseActiveRuns.length ? (
-                            <span className="automation-history-live"><span aria-hidden="true" />{t('执行中')}</span>
-                          ) : null}
-                        </div>
-                        {selectedCaseRuns.length ? (
-                          <WorkspaceHistoryList
-                            className="automation-run-list"
-                            getKey={(run) => run.id}
-                            getTimestamp={automationRunTimestamp}
-                            items={selectedCaseRuns}
-                            language={language}
-                            renderItem={(run) => {
-                              const runExpanded = openRunIds.includes(run.id);
-                              const runTraceId = `automation-run-trace-${run.id.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
-                              const active = activeRunStatuses.has(run.status);
-                              const duration = formatDuration(t, run.startedAt, run.finishedAt);
-                              return (
-                                <article className={`automation-run-item automation-run-state-${run.status}`}>
-                                  <div className="automation-run-summary">
-                                    <button
-                                      aria-controls={runTraceId}
-                                      aria-expanded={runExpanded}
-                                      className="automation-run-expand"
-                                      onClick={() => setOpenRunIds((current) => current.includes(run.id) ? [] : [run.id])}
-                                      type="button"
-                                    >
-                                      {runExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                                      <span className="automation-run-status-dot" aria-hidden="true" />
-                                      <span className="automation-run-copy">
-                                        <strong>{statusLabel(run.status, t)}</strong>
-                                        <small>
-                                          {run.error
-                                            ? compactText(t(run.error), 72)
-                                            : t('{steps} 步', {
-                                              steps: run.steps.length,
-                                            })}
-                                        </small>
-                                      </span>
-                                    </button>
-                                    <div className="automation-run-meta">
-                                      {duration ? <span>{duration}</span> : null}
-                                      <span>{triggerLabel(run.trigger, t)}</span>
-                                      <span><Clock3 size={13} /> {formatDateTime(run.startedAt, language)}</span>
-                                    </div>
-                                    <div className="automation-run-item-actions">
-                                      {active ? (
-                                        <button
-                                          className="automation-icon-action is-danger"
-                                          disabled={abortingRunId === run.id}
-                                          onClick={() => void abortRun(run)}
-                                          type="button"
-                                        >
-                                          {abortingRunId === run.id ? <Loader2 className="spin" size={15} /> : <StopCircle size={15} />}
-                                          <span>{t('中止')}</span>
-                                        </button>
-                                      ) : null}
-                                      {run.sessionId ? (
-                                        <Link
-                                          aria-label={t('打开关联对话')}
-                                          className="automation-icon-action"
-                                          href={`/browser-chat?sessionId=${encodeURIComponent(run.sessionId)}`}
-                                          title={t('打开关联对话')}
-                                        >
-                                          <ExternalLink size={15} />
-                                        </Link>
-                                      ) : null}
-                                    </div>
-                                  </div>
-                                  {runExpanded ? (
-                                    <div className="automation-run-trace" id={runTraceId}>
-                                      {run.output || run.outputBlocks?.length ? (
-                                        <div className="automation-result-content automation-record-output">
-                                          <h4>{t('任务输出')}</h4>
-                                          <BrowserChatAutomationRunIdContext.Provider value={run.id}>
-                                            <BrowserChatOrderedResponse fallbackText={run.output || ''} parts={browserChatFinalBlocksToParts(run.outputBlocks || [])} />
-                                          </BrowserChatAutomationRunIdContext.Provider>
-                                        </div>
-                                      ) : null}
-                                      <div className="automation-trace-heading">
-                                        <h4>{t('执行轨迹')}</h4>
-                                        <span>{run.finishedAt
-                                          ? t('完成于 {time}', { time: formatDateTime(run.finishedAt, language) })
-                                          : t('实时更新中')}</span>
-                                      </div>
-                                      <RunTimeline language={language} steps={run.steps} t={t} />
-                                    </div>
-                                  ) : null}
-                                </article>
-                              );
-                            }}
-                          />
-                        ) : (
-                          <p className="automation-history-empty">{t('运行后，可在这里查看每一步操作与验收详情。')}</p>
-                        )}
+                        <AutomationExecutionHistory
+                          key={selectedCase.id} runs={selectedCaseRuns} language={language} summary={latestRunSummary}
+                          openRunIds={openRunIds} onToggle={id => setOpenRunIds(current => current.includes(id) ? [] : [id])}
+                          abortingRunId={abortingRunId} onAbort={abortRun} t={t}
+                        />
                       </section>
                       <aside className="automation-case-configuration" aria-label={t('执行配置')}>
                         {selectedCase.prompt ? (

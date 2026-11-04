@@ -332,6 +332,8 @@ type SettingsSecondaryNavItem = {
 // Section IDs stay stable when the displayed labels are translated.
 const settingsSectionIcons: Record<string, LucideIcon> = {
   'general:appearance': Palette,
+  '对话界面': MessagesSquare,
+  '附件': Files,
   'capability:overview': SlidersHorizontal,
   'capability:browser': Monitor,
   'integration:connector': Plug,
@@ -370,13 +372,14 @@ const settingsSectionIcons: Record<string, LucideIcon> = {
 
 const customRuntimeSettingKeys = new Set(['AGENT_COMMUNICATION_ALLOW_SEND', 'AGENT_DATA_ALLOW_WRITES']);
 const integrationSettingsSections: Record<string, string> = {
-  '连接器': 'integration:connector',
+  'MCP': 'integration:connector',
   '通信': 'integration:communication',
   '数据': 'integration:data',
 };
-const browserRuntimeGroups = new Set(['浏览器观察', '实时预览', '浏览器实例', '导航与诊断', '浏览器 Agent', '浏览器调试']);
+const browserRuntimeGroups = new Set(['站点访问规则', '浏览器观察', '实时预览', '浏览器实例', '导航与诊断', '浏览器 Agent', '浏览器调试']);
 const capabilityRuntimeGroups = new Set(['代码沙箱', '计算机', '文件能力', '本地终端', '知识库', '媒体', '地图', '数据与文件', ...Object.keys(integrationSettingsSections)]);
 const browserSettingsPages = [
+  { id: 'access', label: '站点访问规则' },
   { id: 'interaction', label: '操作与观察' },
   { id: 'instance', label: '实例与会话' },
   { id: 'preview', label: '实时预览' },
@@ -527,6 +530,7 @@ function envSettingSectionId(setting: VisibleEnvSetting) {
 
 function browserSettingsPageFor(setting: VisibleEnvSetting): BrowserSettingsPage {
   const group = envSettingGroup(setting);
+  if (group === '站点访问规则') return 'access';
   const key = setting.item.key;
   if (group === '实时预览') return 'preview';
   if (group === '浏览器实例' || key === 'BROWSER_CHAT_KEEP_BROWSER_OPEN_AFTER_TURN') return 'instance';
@@ -1090,9 +1094,12 @@ export function EnvironmentSettings({
 
   function updateToolCapability(key: string, enabled: boolean) {
     if (!toolCapabilitySettings.some((tool) => tool.envKey === key)) return;
-    const index = items.findIndex((item) => item.key === key);
-    if (index >= 0) update(index, { value: String(enabled) });
-    else setItems((current) => [...current, { key, value: String(enabled), enabled: true, secret: false }]);
+    setItems((current) => {
+      const index = current.findIndex((item) => item.key === key);
+      return index < 0
+        ? [...current, { key, value: String(enabled), enabled: true, secret: false }]
+        : current.map((item, itemIndex) => itemIndex === index ? { ...item, value: String(enabled), enabled: true } : item);
+    });
   }
 
   async function chooseRuntimeDirectory(index: number, item: EnvRow) {
@@ -2093,7 +2100,6 @@ export function EnvironmentSettings({
           <header className="ui-modal-header">
             <div className="ui-modal-heading">
               <h2 className="ui-modal-title" id="personal-memory-modal-title">{t(editing ? '编辑记忆' : '新增记忆')}</h2>
-              <p className="ui-modal-subtitle">{editing ? personalMemoryDraft.id : t('保存后即可在后续对话中召回')}</p>
             </div>
             <button aria-label={t('关闭')} className="ui-icon-button ui-modal-close" disabled={savingPersonalMemory} onClick={closePersonalMemoryEditor} type="button">
               <X size={16} />
@@ -2771,11 +2777,12 @@ export function EnvironmentSettings({
   const browserEnvItems = visibleEnvItems.filter((setting) => envSettingSectionId(setting) === 'capability:browser');
   const activeBrowserEnvItems = browserEnvItems.filter((setting) => browserSettingsPageFor(setting) === activeBrowserSettingsPage);
   const settingsSecondaryItems: SettingsSecondaryNavItem[] = [
+    ...(activeTab === 'general' ? [{ id: 'general:appearance', label: t('基础设置') }] : []),
     ...(activeTab === 'sensitive-data' ? [{ id: 'sensitive:runtime', label: t('本地组件下载') }] : []),
     ...(activeTab === 'capabilities' ? [
       { id: 'capability:overview', label: t('工具开关'), meta: String(toolCapabilitySettings.length) },
       { id: 'capability:browser', label: t('浏览器') },
-      { id: 'integration:connector', label: t('连接器') },
+      { id: 'integration:connector', label: t('MCP') },
       { id: 'integration:communication', label: t('通信') },
       { id: 'integration:data', label: t('数据') },
     ] : []),
@@ -2801,7 +2808,8 @@ export function EnvironmentSettings({
   const dataWriteSetting = items
     .map((item, index) => ({ item, index }))
     .find(({ item }) => item.key === 'AGENT_DATA_ALLOW_WRITES');
-  const activeTabUsesEnvSave = ['runtime', 'browser', 'capabilities', 'sensitive-data', 'memory'].includes(activeTab);
+  const activeTabUsesEnvSave = ['runtime', 'browser', 'capabilities', 'sensitive-data', 'memory'].includes(activeTab)
+    || (activeTab === 'general' && activeSettingsSection !== 'general:appearance');
   const normalizedSettingsSearch = settingsSearch.trim().toLocaleLowerCase();
   const settingsSearchResults = normalizedSettingsSearch ? [
     ...environmentSettingsTabs.map((tab) => ({
@@ -2977,12 +2985,12 @@ export function EnvironmentSettings({
             <section>
               <div className="settings-detail-workspace">
                 <SettingsSecondaryNav
-                  activeId="general:appearance"
-                  items={[{ id: 'general:appearance', label: t('基础设置') }]}
+                  activeId={activeSettingsSection}
+                  items={settingsSecondaryItems}
                   label={t('设置项')}
-                  onChange={() => undefined}
+                  onChange={section => setActiveSettingsSections(current => ({ ...current, general: section }))}
                 />
-                <section className="settings-detail-panel">
+                {activeSettingsSection === 'general:appearance' ? <section className="settings-detail-panel">
                   <header className="settings-detail-panel-head">
                     <h3>{t('基础设置')}</h3>
                     <span>{t('调整品牌、界面语言与主题色。')}</span>
@@ -3037,7 +3045,10 @@ export function EnvironmentSettings({
                   </div>
                   <ThemeColorControl />
                 </div>
-                </section>
+                </section> : activeEnvGroup ? <section className="settings-detail-panel">
+                  <header className="settings-detail-panel-head"><h3>{t(activeEnvGroup.title)}</h3><span>{t('{count} 项设置，修改后自动保存。', { count: activeEnvGroup.items.length })}</span></header>
+                  {renderEnvSettingList(activeEnvGroup.items)}
+                </section> : null}
               </div>
             </section>
           ) : null}
@@ -3329,7 +3340,7 @@ export function EnvironmentSettings({
                 <div className="settings-detail-content">
                   {activeSettingsSection === 'capability:overview' ? (
                     <ToolCapabilitySettings
-                      disabled={savingEnv || loading}
+                      disabled={loading}
                       items={items}
                       onChange={updateToolCapability}
                       onConfigure={(section) => setActiveSettingsSections((current) => ({ ...current, capabilities: section }))}
@@ -3361,7 +3372,7 @@ export function EnvironmentSettings({
 
                   {activeSettingsSection === 'integration:connector' ? (
                     <section className="settings-detail-panel">
-                      <header className="settings-detail-panel-head"><h3>{t('连接器')}</h3><span>{t('配置第三方服务入口和授权信息。')}</span></header>
+                      <header className="settings-detail-panel-head"><h3>{t('MCP')}</h3><span>{t('配置 MCP 服务地址与授权，供 Agent 发现和调用工具。')}</span></header>
                       <ExternalIntegrationSettings accessToken={adminSettingsAccessToken} category="connector" />
                       {renderEnvSettingList(activeIntegrationSettings)}
                     </section>

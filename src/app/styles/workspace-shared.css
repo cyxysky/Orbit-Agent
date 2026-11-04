@@ -2381,7 +2381,7 @@
     z-index: 3;
   }
 
-  .browser-chat-layout.sidebar-collapsed .workspace-sidebar-archive-row:is(:hover, :focus-within) .workspace-sidebar-archive-row-action {
+  .browser-chat-layout.sidebar-collapsed .workspace-sidebar-archive-row:is(:hover, :focus-within, :has([aria-expanded="true"])) .workspace-sidebar-archive-row-action {
     opacity: 1;
     pointer-events: none;
     visibility: visible;

@@ -627,6 +627,7 @@ async function pruneBrowserChatRows(
 
 export function deleteBrowserChatSessionRecordQueued(sessionId: string) {
   return queueDatabaseWrite([
+    { sql: 'DELETE FROM agent_runtime_owner WHERE id = ?', params: [sessionId] },
     { sql: 'DELETE FROM browser_code_runtime_state WHERE session_id = ?', params: [sessionId] },
     { sql: 'DELETE FROM browser_chat_session WHERE id = ?', params: [sessionId] },
   ]);

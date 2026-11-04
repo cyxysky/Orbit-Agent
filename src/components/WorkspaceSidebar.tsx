@@ -3,7 +3,7 @@
 import { Gauge, MessageCircleMore, PanelLeft, Settings, Workflow } from 'lucide-react';
 import { Tabs } from '@heroui/react/tabs';
 import { useRouter } from 'next/navigation';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState, useTransition, type ReactNode } from 'react';
 import type { ThemeMode } from '@/theme/ThemeProvider';
 import { WebPilotHelpCenter } from '@/components/WebPilotHelpCenter';
 import { AnimatedThemeToggler } from '@/components/ui/animated-theme-toggler';
@@ -55,6 +55,7 @@ export function WorkspaceModeTabs({
   showAiOperations = false,
 }: WorkspaceModeTabsProps) {
   const router = useRouter();
+  const [navigating, startNavigation] = useTransition();
   const [desktopLayout, setDesktopLayout] = useState(false);
   const visibleConversationLabel = conversationLabel.replace(/(?:模式| Mode)$/u, '');
 
@@ -69,33 +70,34 @@ export function WorkspaceModeTabs({
   return (
     <Tabs
       className="workspace-mode-tabs"
+      aria-busy={navigating}
       onSelectionChange={(key) => {
         const nextKey = String(key) as WorkspaceModeKey;
-        if (nextKey !== activeKey) router.push(nextKey);
+        if (nextKey !== activeKey) startNavigation(() => router.push(nextKey));
       }}
       orientation={desktopLayout ? 'vertical' : 'horizontal'}
       selectedKey={activeKey}
     >
       <Tabs.ListContainer>
         <Tabs.List aria-label={ariaLabel}>
-          <Tabs.Tab aria-label={conversationLabel} id="/browser-chat">
+          <Tabs.Tab aria-label={conversationLabel} id="/browser-chat" onHoverStart={() => router.prefetch('/browser-chat')} onFocus={() => router.prefetch('/browser-chat')}>
             <MessageCircleMore aria-hidden="true" />
             <span className="workspace-mode-tab-label">{visibleConversationLabel}</span>
             <Tabs.Indicator />
           </Tabs.Tab>
-          <Tabs.Tab aria-label={automationLabel} id="/automation">
+          <Tabs.Tab aria-label={automationLabel} id="/automation" onHoverStart={() => router.prefetch('/automation')} onFocus={() => router.prefetch('/automation')}>
             <Workflow aria-hidden="true" />
             <span className="workspace-mode-tab-label">{automationLabel}</span>
             <Tabs.Indicator />
           </Tabs.Tab>
           {showAiOperations ? (
-            <Tabs.Tab aria-label={aiOperationsLabel} id="/admin/ai-operations">
+            <Tabs.Tab aria-label={aiOperationsLabel} id="/admin/ai-operations" onHoverStart={() => router.prefetch('/admin/ai-operations')} onFocus={() => router.prefetch('/admin/ai-operations')}>
               <Gauge aria-hidden="true" />
               <span className="workspace-mode-tab-label">{aiOperationsLabel}</span>
               <Tabs.Indicator />
             </Tabs.Tab>
           ) : null}
-          <Tabs.Tab aria-label={settingsLabel} id="/settings">
+          <Tabs.Tab aria-label={settingsLabel} id="/settings" onHoverStart={() => router.prefetch('/settings')} onFocus={() => router.prefetch('/settings')}>
             <Settings aria-hidden="true" />
             <span className="workspace-mode-tab-label">{settingsLabel}</span>
             <Tabs.Indicator />
