@@ -3,6 +3,8 @@ import { readBoundedResponseText } from '../../index.ts';
 import { createConnectorRegistry, createConnectorsCapability, type AgentConnector, type ConnectorOperation } from './index.ts';
 import type { CapabilityExecutionContext, CapabilityRunContext } from '../../index.ts';
 import { CodedError, ERROR_CODES } from '../../errors.ts';
+import { mcpConfigurationMetaKey, parseMcpConfigurationDescriptor, connectorConfigurationStateSchema,
+  connectorConfigurationPatchSchema, publicConnectorConfiguration } from './configuration.ts';
 
 
 type JsonRpcResponse = { id?: string | number; method?: string; result?: unknown; error?: { code?: number; message?: string; data?: unknown } };
@@ -45,12 +47,14 @@ async function rpcResponse(response: Response, id: string, changed: () => void):
   } finally { await reader.cancel().catch(() => undefined); reader.releaseLock(); }
 }
 
-export function createMcpStreamableHttpConnector(input: { id: string; name?: string; url: string; headers?: Readonly<Record<string, string>>; fetchImpl?: typeof fetch; timeoutMs?: number }): AgentConnector {
+export function createMcpStreamableHttpConnector(input: { id: string; name?: string; url: string; headers?: Readonly<Record<string, string>>; fetchImpl?: typeof fetch; timeoutMs?: number;
+  argumentDefaults?: (operationId: string, context: CapabilityExecutionContext) => Promise<Record<string, unknown>> | Record<string, unknown> }): AgentConnector {
   const fetchImpl = input.fetchImpl || fetch;
   let sessionId = '', protocolVersion = '2025-06-18';
   let initialization: Promise<void> | undefined;
-  let operationRequest: Promise<ConnectorOperation[]> | undefined;
-  let cachedOperations: ConnectorOperation[] | undefined;
+  type Operation = ConnectorOperation & { configurationMeta?: Record<string, unknown> };
+  let operationRequest: Promise<Operation[]> | undefined;
+  let cachedOperations: Operation[] | undefined;
   let cachedAt = 0;
   const lifetime = new AbortController();
   const request = async (method: string, params: Record<string, unknown>, context: CapabilityExecutionContext, notification = false) => {
@@ -76,19 +80,18 @@ export function createMcpStreamableHttpConnector(input: { id: string; name?: str
     if (typeof result?.protocolVersion === 'string') protocolVersion = result.protocolVersion;
     await request('notifications/initialized', {}, context, true);
   })().catch((error) => { initialization = undefined; throw error; });
-  return {
-    id: input.id, name: input.name || input.id, kind: 'mcp',
-    async listOperations(context) {
+  async function allOperations(context: CapabilityExecutionContext): Promise<Operation[]> {
       await ensureInitialized(context);
       if (cachedOperations && Date.now() - cachedAt < 60_000) return cachedOperations;
       if (operationRequest) return operationRequest;
       operationRequest = (async () => {
-        const operations: ConnectorOperation[] = [];
+        const operations: Operation[] = [];
         const seen = new Set<string>();
         let cursor: string | undefined;
         do {
-          const result = await request('tools/list', cursor ? { cursor } : {}, context) as { nextCursor?: string; tools?: Array<{ name?: string; title?: string; description?: string; inputSchema?: Record<string, unknown>; annotations?: { readOnlyHint?: boolean } }> };
-          operations.push(...(result?.tools || []).flatMap((tool) => tool.name ? [{ id: tool.name, title: tool.title, description: tool.description, inputSchema: tool.inputSchema, readOnly: tool.annotations?.readOnlyHint }] : []));
+          const result = await request('tools/list', cursor ? { cursor } : {}, context) as { nextCursor?: string; tools?: Array<{ name?: string; title?: string; description?: string; inputSchema?: Record<string, unknown>; _meta?: Record<string, unknown>; annotations?: { readOnlyHint?: boolean } }> };
+          operations.push(...(result?.tools || []).flatMap((tool) => tool.name ? [{ id: tool.name, title: tool.title, description: tool.description, inputSchema: tool.inputSchema, readOnly: tool.annotations?.readOnlyHint,
+            configurationMeta: tool._meta && Object.hasOwn(tool._meta, mcpConfigurationMetaKey) ? tool._meta : undefined }] : []));
           if (operations.length > 10_000) throw new CodedError(ERROR_CODES.CONNECTOR_OPERATION_FAILED, 'MCP tool listing exceeded 10,000 tools.');
           cursor = result.nextCursor;
           if (cursor) {
@@ -100,8 +103,43 @@ export function createMcpStreamableHttpConnector(input: { id: string; name?: str
         return operations;
       })().finally(() => { operationRequest = undefined; });
       return operationRequest;
+  }
+  async function configurationDescriptor(id: string, context: CapabilityExecutionContext) {
+    const operation = (await allOperations(context)).find(operation => operation.id === id && operation.configurationMeta);
+    const descriptor = operation && parseMcpConfigurationDescriptor(operation.id, operation.configurationMeta);
+    if (!descriptor) throw new CodedError(ERROR_CODES.CONNECTOR_OPERATION_NOT_FOUND, 'MCP configuration interface is unavailable.');
+    return descriptor;
+  }
+  async function configurationCall(id: string, args: Record<string, unknown>, context: CapabilityExecutionContext) {
+    const descriptor = await configurationDescriptor(id, context);
+    if (args.action === 'set' && !descriptor.writable) throw new CodedError(ERROR_CODES.FORBIDDEN, 'MCP configuration is read-only.');
+    const response = await request('tools/call', { name: id, arguments: args }, context) as {
+      isError?: boolean; structuredContent?: unknown; content?: Array<{ type: string; text?: string }>;
+    };
+    if (response?.isError) throw new CodedError(ERROR_CODES.CONNECTOR_OPERATION_FAILED, 'MCP configuration request failed. Read its current state before retrying.');
+    const payload = response?.structuredContent ?? JSON.parse(response?.content?.find(item => item.type === 'text')?.text || 'null');
+    return publicConnectorConfiguration(descriptor.schema, connectorConfigurationStateSchema.parse(payload));
+  }
+  return {
+    id: input.id, name: input.name || input.id, kind: 'mcp',
+    async listOperations(context) {
+      // Management operations belong to administrator settings, not model discovery.
+      return (await allOperations(context)).filter(operation => !operation.configurationMeta)
+        .map(({ configurationMeta: _metadata, ...operation }) => operation);
     },
-    async call(operationId, args, context) { await ensureInitialized(context); return request('tools/call', { name: operationId, arguments: args }, context); },
+    settings: {
+      async list(context) { return (await allOperations(context)).filter(operation => operation.configurationMeta)
+        .map(operation => parseMcpConfigurationDescriptor(operation.id, operation.configurationMeta)!); },
+      read(id, context) { return configurationCall(id, { action: 'get' }, context); },
+      write(id, patch, context) { return configurationCall(id, { action: 'set', ...connectorConfigurationPatchSchema.parse(patch) }, context); },
+    },
+    async call(operationId, args, context) {
+      const operation = (await allOperations(context)).find(item => item.id === operationId);
+      if (!operation || operation.configurationMeta) throw new CodedError(ERROR_CODES.CONNECTOR_OPERATION_NOT_FOUND, 'MCP operation is unavailable for model calls.');
+      const defaults = await input.argumentDefaults?.(operationId, context) || {};
+      context.abortSignal?.throwIfAborted();
+      return request('tools/call', { name: operationId, arguments: { ...defaults, ...args } }, context);
+    },
     async health() { return lifetime.signal.aborted ? { status: 'unhealthy', message: 'Connector disposed.' } : { status: 'healthy' }; },
     async dispose() {
       lifetime.abort();

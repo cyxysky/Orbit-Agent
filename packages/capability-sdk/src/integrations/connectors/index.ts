@@ -3,10 +3,12 @@ import { z } from 'zod';
 import { defineCapabilityInput, defineCapabilityTool, normalizeBoundedInteger, type CapabilityExecutionContext, type CapabilityHealth, type CapabilityManifest, type CapabilityProvider, type CapabilityRunContext } from '../../index.ts';
 import { connectorsRuntimeSkill } from './runtime-skill.ts';
 import { connectorsCapabilitySettings } from './settings.ts';
+import type { ConnectorConfigurationDescriptor, ConnectorConfigurationPatch, ConnectorConfigurationState } from './configuration.ts';
 import { CodedError, ERROR_CODES } from '../../errors.ts';
 
 export * from './runtime-skill.ts';
 export * from './settings.ts';
+export * from './configuration.ts';
 
 export const connectorsCapabilityToolNames = Object.freeze({ connectors: 'connectors' } as const);
 export type ConnectorOperation = { id: string; title?: string; description?: string; inputSchema?: Readonly<Record<string, unknown>>; readOnly?: boolean };
@@ -16,6 +18,11 @@ export interface AgentConnector {
   kind: 'mcp' | 'openapi' | 'custom';
   listOperations(context: CapabilityExecutionContext): Promise<ConnectorOperation[]>;
   call(operationId: string, args: Record<string, unknown>, context: CapabilityExecutionContext): Promise<unknown>;
+  settings?: {
+    list(context: CapabilityExecutionContext): Promise<ConnectorConfigurationDescriptor[]>;
+    read(id: string, context: CapabilityExecutionContext): Promise<ConnectorConfigurationState>;
+    write(id: string, patch: ConnectorConfigurationPatch, context: CapabilityExecutionContext): Promise<ConnectorConfigurationState>;
+  };
   health?(): Promise<CapabilityHealth>;
   dispose?(): Promise<void>;
 }

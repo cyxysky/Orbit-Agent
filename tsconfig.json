@@ -178,6 +178,9 @@
       "@cjfclonedeep/capability-sdk/integrations/connectors": [
         "./packages/capability-sdk/src/integrations/connectors/index.ts"
       ],
+      "@cjfclonedeep/capability-sdk/integrations/connectors/configuration-mcp": [
+        "./packages/capability-sdk/src/integrations/connectors/configuration-mcp.ts"
+      ],
       "@cjfclonedeep/capability-sdk/integrations/connectors/node": [
         "./packages/capability-sdk/src/integrations/connectors/node.ts"
       ],

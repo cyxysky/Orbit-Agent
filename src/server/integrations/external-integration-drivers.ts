@@ -16,6 +16,7 @@ import {
 import type { CommunicationChannel, CommunicationDraft, CommunicationMediaOperations, CommunicationReceipt } from '@cjfclonedeep/capability-sdk/integrations/communication';
 import { CommunicationDeliveryError } from '@cjfclonedeep/capability-sdk/integrations/communication';
 import { getWeComConnection, weComConnectionStatus } from './wecom-connections';
+import { connectorDefaultsKey, currentConnectorToolDefaults } from './connector-tool-defaults';
 import { listCommunicationConversations } from '@/server/storage/communication-conversation-store';
 import type {
   ExternalIntegrationCategory,
@@ -492,6 +493,7 @@ function connectorDriver(): ExternalIntegrationDriver {
       return {
         endpoint: httpEndpoint(configuration.endpoint, 'MCP 服务地址'),
         ...authenticationConfiguration(configuration),
+        ...(configuration[connectorDefaultsKey] ? { [connectorDefaultsKey]: configuration[connectorDefaultsKey] } : {}),
       };
     },
     summarize(configuration) {
@@ -504,6 +506,7 @@ function connectorDriver(): ExternalIntegrationDriver {
         url: integration.configuration.endpoint,
         headers: authorizationHeader(integration.configuration),
         timeoutMs,
+        argumentDefaults: operationId => currentConnectorToolDefaults(integration.id, operationId),
       });
     },
     async test(integration, timeoutMs) {

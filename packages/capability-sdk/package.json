@@ -263,6 +263,10 @@
       "types": "./dist/integrations/connectors/index.d.ts",
       "import": "./dist/integrations/connectors/index.js"
     },
+    "./integrations/connectors/configuration-mcp": {
+      "types": "./dist/integrations/connectors/configuration-mcp.d.ts",
+      "import": "./dist/integrations/connectors/configuration-mcp.js"
+    },
     "./integrations/connectors/node": {
       "types": "./dist/integrations/connectors/node.d.ts",
       "import": "./dist/integrations/connectors/node.js"

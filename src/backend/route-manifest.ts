@@ -9,6 +9,7 @@ const settingsRoutes = [
   { path: '/api/settings/runtime', load: () => import('./routes/settings/runtime/route') },
   { path: '/api/settings/secret', load: () => import('./routes/settings/secret/route') },
   { path: '/api/settings/integrations', load: () => import('./routes/settings/integrations/route') },
+  { path: '/api/settings/integrations/configuration', load: () => import('./routes/settings/integrations/configuration/route') },
   { path: '/api/settings/integrations/test', load: () => import('./routes/settings/integrations/test/route') },
   { path: '/api/settings/model', load: () => import('./routes/settings/model/route') },
   { path: '/api/settings/sensitive-data-evaluation', load: () => import('./routes/settings/sensitive-data-evaluation/route') },

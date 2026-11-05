@@ -9,6 +9,7 @@ import {
   PencilLine,
   Plus,
   Send,
+  SlidersHorizontal,
   Trash2,
   UserRound,
   UsersRound,
@@ -18,6 +19,7 @@ import { SettingsFieldControl, useSettingsForms } from '@/components/SettingsFie
 import { integrationDriverForm, integrationPanels } from '@/config/integration-settings';
 import { AppModal } from '@/components/ui/app-modal';
 import { ConfirmDeleteModal } from '@/components/ConfirmDeleteModal';
+import { McpToolSettings } from '@/components/McpToolSettings';
 import { useI18n } from '@/i18n/I18nProvider';
 import { readApiJson } from '@/lib/api-client';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
@@ -167,6 +169,7 @@ export function ExternalIntegrationSettings({
   const [drivers, setDrivers] = useState<IntegrationDriverDescriptor[]>([]);
   const [editor, setEditor] = useState<IntegrationDraft | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<IntegrationSummary | null>(null);
+  const [toolSettingsTarget, setToolSettingsTarget] = useState<IntegrationSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -208,7 +211,7 @@ export function ExternalIntegrationSettings({
   }, [load]);
 
   useEffect(() => {
-    if (editor || saving || testing || deleting || updatingId) return;
+    if (editor || toolSettingsTarget || saving || testing || deleting || updatingId) return;
     const controller = new AbortController();
     let pending = false;
     const timer = setInterval(async () => {
@@ -222,7 +225,7 @@ export function ExternalIntegrationSettings({
       finally { pending = false; }
     }, 3000);
     return () => { controller.abort(); clearInterval(timer); };
-  }, [category, headers, t, editor, saving, testing, deleting, updatingId]);
+  }, [category, headers, t, editor, toolSettingsTarget, saving, testing, deleting, updatingId]);
 
   useEffect(() => {
     setHasFilePicker(Boolean(window.webPilotSystem?.selectFile));
@@ -541,6 +544,7 @@ export function ExternalIntegrationSettings({
                     type="button"
                   ><span /></button>
                   <button className="ui-icon-button" aria-label={t('编辑 {name}', { name: item.name })} onClick={() => openEditor(item)} type="button"><PencilLine size={15} /></button>
+                  {category === 'connector' ? <button className="ui-icon-button" aria-label={t('工具设置 {name}', { name: item.name })} title={t('工具设置')} onClick={() => setToolSettingsTarget(item)} type="button"><SlidersHorizontal size={15} /></button> : null}
                   <button className="ui-icon-button danger" aria-label={t('删除 {name}', { name: item.name })} onClick={() => setDeleteTarget(item)} type="button"><Trash2 size={15} /></button>
                 </div>
               </div>
@@ -556,6 +560,7 @@ export function ExternalIntegrationSettings({
         </div>
       )}
 
+      {toolSettingsTarget ? <McpToolSettings key={toolSettingsTarget.id} integration={toolSettingsTarget} headers={headers} onClose={() => setToolSettingsTarget(null)} /> : null}
       {editor && activeDriver ? (
         <AppModal
           ariaLabelledBy={`${category}-integration-modal-title`}

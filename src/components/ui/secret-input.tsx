@@ -64,7 +64,7 @@ export function SecretInput({ value, onChange, label, placeholder, storedPreview
       if (!controller.signal.aborted) setError(error instanceof Error ? error.message : t('操作失败'));
     } finally { if (!controller.signal.aborted) setPendingAction(null); }
   }
-  const available = Boolean(value || storedPreview);
+  const available = Boolean(value || revealed !== null || (storedPreview && source));
   return <div className="settings-secret-control">
     <AppInput ref={input} aria-label={label} aria-describedby={error ? `${id}-error` : undefined}
       autoComplete="new-password" spellCheck={false} disabled={disabled}

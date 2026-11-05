@@ -18,6 +18,56 @@ tools/list 支持 nextCursor 分页，拒绝重复 cursor、超过 100 分页或
 
 dispose 先取消 lifetime，再以短截止时间 DELETE 会话；404/405 视为已经结束/服务不支持会话删除，其余异常报告清理失败。配置的 headers 和会话 headers 只用于该连接器地址。
 
+## MCP 工具设置（2026-11-05）
+
+入口：设置 → 工具能力 → MCP → 已保存服务旁的「工具设置」。管理接口仅允许管理员访问，并遵守管理员设置密码校验。
+
+- **工具参数默认值**：从 `tools/list` 的 `inputSchema.properties` 生成字段，按工具名保存到 Orbit 的加密集成 vault；调用时按顶层键合并 `{ ...defaults, ...modelArguments }`。模型显式传入的值优先，嵌套对象整体替换。每次调用重新读取默认值，已有连接器也能使用新值。此配置不修改远端服务的环境变量或全局状态。
+- **服务配置**：服务需要显式声明下述可选协议。普通 MCP 标准没有通用的 `/settings` 远端配置接口；没有声明的服务会显示「此服务未声明配置接口」。
+- 字段支持布尔值、数字、枚举、文本、JSON；复杂结构由 JSON 编辑。`writeOnly: true` 或 `format: "password"` 为密钥字段；包含此类子字段的整个顶层字段作为密钥处理。密钥不回传，留空保留，显式清除并保存才删除。
+- 配置表单最多 64 个顶层字段、8 层 JSON。工具默认值合计最多 20,000 字符。客户端做有界结构校验，完整 JSON Schema 语义与业务校验由 MCP 服务负责；不会执行远端正则或解析外部 `$ref`。
+- 列表每页 20 项并支持搜索。保存携带读取时的 revision；冲突后重新读取。远端写操作不会自动重试，连接中断时应重新读取确认结果。
+
+### 可选服务配置协议
+
+使用标准 `tools/list` / `tools/call`，在管理工具的 `_meta` 中声明 Orbit 命名空间；这不是 MCP 的通用配置标准：
+
+```json
+{
+  "name": "service_settings",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "action": { "type": "string", "enum": ["get", "set"] },
+      "values": { "type": "object" },
+      "clearKeys": { "type": "array", "items": { "type": "string" } },
+      "expectedRevision": { "type": "string" }
+    },
+    "required": ["action"]
+  },
+  "_meta": {
+    "com.webpilot/configuration": {
+      "version": 1,
+      "title": "服务设置",
+      "writable": true,
+      "schema": {
+        "type": "object",
+        "properties": {
+          "limit": { "type": "integer", "minimum": 1, "maximum": 100 },
+          "apiKey": { "type": "string", "writeOnly": true }
+        }
+      }
+    }
+  }
+}
+```
+
+读取参数为 `{ "action": "get" }`；修改参数为 `{ "action": "set", "values": { "limit": 10 }, "clearKeys": [], "expectedRevision": "7" }`。两者都返回 `structuredContent: { values, configuredSecrets, revision }`，也可用一个文本块承载相同 JSON。`values` 中不含密钥，`configuredSecrets` 只包含已设置密钥的字段名。revision 必须是不包含敏感值的版本标识。管理工具不会出现在 Orbit 的模型工具目录，也不能通过普通 connector.call 调用；服务端仍必须独立校验读写权限。
+
+Capability SDK 服务可以使用 `@cjfclonedeep/capability-sdk/integrations/connectors/configuration-mcp` 导出的 `registerMcpConfigurationTool(server, host)`。宿主提供 `name/title/schema/authorize/read`，可写时再提供 `write(values, expectedRevision, context)`。`read` 返回包含真实密钥的内部快照与 revision，SDK 在返回前脱敏。`write` 必须持久化配置、原子比较 revision，并应用配置到实际运行时；省略 `write` 即只读。SDK 会串行化同一注册实例的操作、保留未修改字段并在写入后读回，跨请求实例/进程的并发控制仍由持久层负责。不会隐式改写其他 MCP 工具的配置或重启服务。
+
+相关入口：`src/server/settings/integration-tool-settings.ts`、`src/backend/routes/settings/integrations/configuration/route.ts`、`src/components/McpToolSettings.tsx`。
+
 ## OpenAPI
 
 遍历 paths 的合法 HTTP method 建立 operationId 映射，没有 operationId 时由 method/path 派生。describe 返回 summary、description、readOnly 和 arguments 对象入口。call 用 args.path 替换路径变量并编码，args.query 支持数组重复键，args.body 对非 GET/HEAD 序列化为 JSON；拼接配置 baseUrl/servers，组合调用取消与 30 秒默认截止时间。
