@@ -2,8 +2,10 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Brain, ChevronDown } from 'lucide-react';
+import { useStreamingText } from './useStreamingText';
 
 export function BrowserChatReasoning({ text, streaming, running = streaming, label }: { text: string; streaming: boolean; running?: boolean; label: string }) {
+  const displayed = useStreamingText(text, streaming);
   const phase = streaming ? 'streaming' : running ? 'responding' : 'complete';
   const [disclosure, setDisclosure] = useState({ phase, open: streaming });
   // A completed stream/answer closes even a manually expanded section. Users
@@ -24,7 +26,7 @@ export function BrowserChatReasoning({ text, streaming, running = streaming, lab
       element.scrollTop = element.scrollHeight;
       lastScrollTop.current = element.scrollTop;
     }
-  }, [text, streaming, open]);
+  }, [displayed, streaming, open]);
   return <details className={`browser-chat-ai-line-collapse browser-chat-reasoning${streaming ? ' is-streaming' : ''}`} open={open}>
     <summary className="browser-chat-ai-collapse-summary" onClick={event => {
       event.preventDefault();
@@ -53,6 +55,6 @@ export function BrowserChatReasoning({ text, streaming, running = streaming, lab
       if (element.scrollTop < lastScrollTop.current - 0.5 && distanceFromBottom > 1) follow.current = false;
       else if (distanceFromBottom <= 1) follow.current = true;
       lastScrollTop.current = element.scrollTop;
-    }}><p>{text}</p></div>
+    }}><p>{displayed}</p></div>
   </details>;
 }

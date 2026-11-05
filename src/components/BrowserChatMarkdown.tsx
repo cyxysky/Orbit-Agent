@@ -15,9 +15,12 @@ import {
   type ReactNode,
   useContext,
   useMemo,
+  useRef,
+  useDeferredValue,
 } from 'react';
 import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown';
-import { browserChatMarkdownBlocks } from './browser-chat-markdown-blocks';
+import { browserChatMarkdownBlocks, type BrowserChatMarkdownSnapshot } from './browser-chat-markdown-blocks';
+import { useStreamingText } from './useStreamingText';
 import { resolveBrowserChatArtifactReference, type BrowserChatArtifactSummary } from '@/lib/browser-chat-artifacts';
 import { BrowserChatCodeBlock } from '@/components/BrowserChatCodeBlock';
 import { PixelImage } from '@/components/ui/pixel-image';
@@ -174,10 +177,19 @@ const BrowserChatMarkdownBlock = memo(function BrowserChatMarkdownBlock({ markdo
   );
 });
 
-export const BrowserChatMarkdown = memo(function BrowserChatMarkdown({ markdown }: { markdown: string }) {
-  const blocks = useMemo(() => browserChatMarkdownBlocks(normalizeBrowserChatMarkdown(markdown)), [markdown]);
+export const BrowserChatMarkdown = memo(function BrowserChatMarkdown({ markdown, streaming = false }: { markdown: string; streaming?: boolean }) {
+  const displayed = useStreamingText(markdown, streaming);
+  const deferred = useDeferredValue(displayed);
+  const content = streaming ? deferred : markdown;
+  const previous = useRef<BrowserChatMarkdownSnapshot | undefined>(undefined);
+  const blocks = useMemo(() => {
+    const normalized = normalizeBrowserChatMarkdown(content);
+    const blocks = browserChatMarkdownBlocks(normalized, previous.current);
+    previous.current = { markdown: normalized, blocks };
+    return blocks;
+  }, [content]);
   return (
-    <div className="browser-chat-agent-markdown">
+    <div className={`browser-chat-agent-markdown${streaming ? ' is-streaming' : ''}`}>
       {blocks.map((block, index) => (
         <Fragment key={index}>
           {index > 0 ? '\n' : null}
@@ -191,21 +203,23 @@ export const BrowserChatMarkdown = memo(function BrowserChatMarkdown({ markdown 
 export const BrowserChatOrderedResponse = memo(function BrowserChatOrderedResponse({
   fallbackText,
   parts,
+  streaming = false,
 }: {
   fallbackText: string;
   parts?: BrowserChatUIMessagePart[];
+  streaming?: boolean;
 }) {
   const sessionId = useContext(BrowserChatSessionIdContext);
   const automationRunId = useContext(BrowserChatAutomationRunIdContext);
   const { t, language } = useI18n();
   const responseContext = useMemo(() => createResponseContext({
     sessionId, automationRunId, translate: t, locale: language,
-    renderMarkdown: text => <BrowserChatMarkdown markdown={text} />,
-  }), [sessionId, automationRunId, t, language]);
+    renderMarkdown: text => <BrowserChatMarkdown markdown={text} streaming={streaming} />,
+  }), [sessionId, automationRunId, t, language, streaming]);
   const responseParts = useMemo(() => browserChatOrderedResponseParts(parts, fallbackText), [parts, fallbackText]);
   if (!responseParts.length) return null;
   return <div className="browser-chat-ordered-response">{responseParts.map((part, index) => {
-    if (part.type === 'text') return <BrowserChatMarkdown key={`text:${index}`} markdown={part.text} />;
+    if (part.type === 'text') return <BrowserChatMarkdown key={`text:${index}`} markdown={part.text} streaming={streaming} />;
     if (part.type === 'data-response') return <RegisteredResponse
       key={`${automationRunId || sessionId}:${part.id || index}:${part.data.type}`}
       block={part.data} registry={responseRenderers} context={responseContext} />;

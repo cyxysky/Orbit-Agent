@@ -551,6 +551,10 @@ input[type="checkbox"]:not([data-slot], [data-slot] *):focus-visible {
   transform-origin: top right;
 }
 
+.ui-floating-layer[data-floating-placement="right"] { transform-origin: left center; }
+.ui-floating-layer[data-floating-placement="left"] { transform-origin: right center; }
+.ui-floating-layer[data-floating-state="closing"] { pointer-events: none; }
+
 .custom-select-search {
   align-items: center;
   display: grid;

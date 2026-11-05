@@ -107,11 +107,14 @@ export function FloatingLayer({
   const internalLayerRef = useRef<HTMLDivElement | null>(null);
   const dismissRef = useRef(onDismiss);
   const [portalReady, setPortalReady] = useState(false);
+  const [retained, setRetained] = useState(present);
+  const rendered = present || retained;
   const [layoutStyle, setLayoutStyle] = useState<CSSProperties>(hiddenLayoutStyle);
   const [resolvedPlacement, setResolvedPlacement] = useState<'bottom' | 'left' | 'right' | 'top'>('bottom');
   const draggedPosition = useRef<{ left: number; top: number; height: number } | null>(null);
   const dragGesture = useRef<{ pointerId: number; offsetX: number; offsetY: number } | null>(null);
   const [dragging, setDragging] = useState(false);
+  const motionStart = useRef<{ opacity: string; transform: string } | null>(null);
 
   useEffect(() => {
     dismissRef.current = onDismiss;
@@ -122,13 +125,14 @@ export function FloatingLayer({
   }, []);
 
   useEffect(() => {
-    if (!present) {
+    if (present) setRetained(true);
+    else if (!retained) {
       setLayoutStyle(hiddenLayoutStyle);
       draggedPosition.current = null;
       dragGesture.current = null;
       setDragging(false);
     }
-  }, [present]);
+  }, [present, retained]);
 
   const setLayerNode = useCallback((node: HTMLDivElement | null) => {
     internalLayerRef.current = node;
@@ -217,13 +221,16 @@ export function FloatingLayer({
   }, [align, anchorRef, gap, matchAnchorWidth, maxHeight, placement, preferredWidth]);
 
   useLayoutEffect(() => {
-    if (!portalReady || !present) return undefined;
-    let frame = window.requestAnimationFrame(updateLayout);
-    const scheduleLayout = () => {
-      window.cancelAnimationFrame(frame);
-      frame = window.requestAnimationFrame(updateLayout);
+    if (!portalReady || !rendered) return undefined;
+    let frame = window.requestAnimationFrame(() => { frame = 0; updateLayout(); });
+    const scheduleLayout = (event?: Event) => {
+      // Scrolling the layer itself or a sibling pane cannot move its anchor.
+      if (event?.type === 'scroll' && event.target instanceof Element
+        && !event.target.contains(anchorRef.current)) return;
+      if (frame) return;
+      frame = window.requestAnimationFrame(() => { frame = 0; updateLayout(); });
     };
-    const resizeObserver = new ResizeObserver(scheduleLayout);
+    const resizeObserver = new ResizeObserver(() => scheduleLayout());
     if (anchorRef.current) resizeObserver.observe(anchorRef.current);
     if (internalLayerRef.current) resizeObserver.observe(internalLayerRef.current);
     document.addEventListener('scroll', scheduleLayout, true);
@@ -238,7 +245,29 @@ export function FloatingLayer({
       window.visualViewport?.removeEventListener('resize', scheduleLayout);
       window.visualViewport?.removeEventListener('scroll', scheduleLayout);
     };
-  }, [anchorRef, portalReady, present, updateLayout]);
+  }, [anchorRef, portalReady, rendered, updateLayout]);
+
+  useLayoutEffect(() => {
+    const node = internalLayerRef.current;
+    if (!portalReady || !node || layoutStyle.visibility !== 'visible') return;
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const dx = reduced ? 0 : resolvedPlacement === 'right' ? -5 : resolvedPlacement === 'left' ? 5 : 0;
+    const dy = reduced ? 0 : resolvedPlacement === 'bottom' ? -4 : resolvedPlacement === 'top' ? 4 : 0;
+    const offset = `translate3d(${dx}px, ${dy}px, 0) scale(${reduced ? 1 : 0.98})`;
+    const computed = window.getComputedStyle(node);
+    const from = motionStart.current || (present ? { opacity: '0', transform: offset }
+      : { opacity: computed.opacity, transform: computed.transform });
+    if (reduced) from.transform = 'none';
+    motionStart.current = null;
+    const animation = node.animate([from, present ? { opacity: '1', transform: 'none' } : { opacity: '0', transform: offset }],
+    { duration: reduced ? 60 : present ? 160 : 110, easing: 'cubic-bezier(0.16, 1, 0.3, 1)', fill: 'both' });
+    animation.onfinish = () => { if (!present) setRetained(false); };
+    return () => {
+      const current = window.getComputedStyle(node);
+      motionStart.current = node.isConnected && current.opacity ? { opacity: current.opacity, transform: current.transform } : null;
+      animation.cancel();
+    };
+  }, [layoutStyle.visibility, portalReady, present, resolvedPlacement]);
 
   useEffect(() => {
     if (!active || !present) return undefined;
@@ -263,7 +292,7 @@ export function FloatingLayer({
     };
   }, [active, allowNestedFloatingLayers, anchorRef, present, role]);
 
-  if (!portalReady || !present) return null;
+  if (!portalReady || !rendered) return null;
   const portalTarget = floatingLayerPortalTarget(anchorRef.current);
   if (!portalTarget) return null;
   return createPortal((
@@ -272,6 +301,9 @@ export function FloatingLayer({
       className={`ui-floating-layer ${className}`}
       data-dragging={dragging || undefined}
       data-floating-placement={resolvedPlacement}
+      data-floating-state={present ? 'open' : 'closing'}
+      aria-hidden={!present || undefined}
+      inert={!present || undefined}
       id={id}
       onPointerEnter={onPointerEnter}
       onPointerLeave={onPointerLeave}

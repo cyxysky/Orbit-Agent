@@ -249,6 +249,11 @@ export function remarkBrowserChatCjkStrong() {
 }
 
 export function normalizeBrowserChatMarkdown(markdown: string) {
+  // Most streamed prose is already valid Markdown. Avoid allocating several
+  // whole-document line arrays and running repair passes when none can change it.
+  const needsRepair = /[|｜\\`~\r#]|\${2,}|\n{3,}|\*\*https?:\/\/|[。！？；;][ \t]+\*\*|[:：。！？；;][ \t]+-[ \t]+|(?<![ \t])[ \t]+---[ \t]+|(^|\n)[ \t>]*(?:[-+*]|\d+[.)])[ \t]+/mi;
+  const prose = markdown.replace(/^#{1,6}(?=[ \t]+)/gm, '');
+  if (!needsRepair.test(prose)) return markdown.replace(/^(?:[ \t]*\n)+|(?:\n[ \t]*)+$/g, '');
   // Inline code belongs to its surrounding block. Normalizing either side
   // separately turns a single table into fragments and invents new headers.
   const normalizeProse = (prose: string) => {

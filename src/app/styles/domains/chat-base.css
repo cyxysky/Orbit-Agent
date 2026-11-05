@@ -2052,7 +2052,16 @@
   max-width: max-content;
 }
 
-.browser-chat-answer.is-streaming .browser-chat-agent-markdown > :last-child::after {
+.browser-chat-draft-status {
+  color: var(--muted-strong);
+  display: block;
+  font-size: 12px;
+  line-height: 1.5;
+  margin-bottom: 8px;
+}
+
+.browser-chat-answer.is-streaming .browser-chat-agent-markdown > :last-child::after,
+.browser-chat-agent-markdown.is-streaming > :last-child::after {
   animation: browser-chat-streaming-caret 0.9s steps(1, end) infinite;
   background: var(--accent-strong);
   border-radius: 999px;

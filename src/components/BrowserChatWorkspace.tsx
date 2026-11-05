@@ -3448,12 +3448,17 @@ const BrowserChatFinalResponseDraft = memo(function BrowserChatFinalResponseDraf
 }) {
   const { t } = useI18n();
   const live = useContext(BrowserChatResponseDraftContext);
-  const [expanded, setExpanded] = useState(false);
+  const streaming = tool.ok === undefined;
+  const [disclosure, setDisclosure] = useState<{ streaming: boolean; expanded: boolean }>();
   const bodyId = useId();
   const input = tool.input && typeof tool.input === 'object' ? tool.input as { blocks?: BrowserChatFinalBlock[] } : undefined;
   const blocks = tool.name === 'finalResponse'
     ? live && live.id === (tool.id || toolCallId) ? live.blocks : input?.blocks
     : undefined;
+  // Markdown can stream in place. Rich previews remain opt-in until committed,
+  // so partial HTML does not recreate an iframe for every argument delta.
+  const expanded = disclosure?.streaming === streaming ? disclosure.expanded
+    : streaming && Boolean(blocks?.length && blocks.every(block => block.type === 'core.markdown'));
   const parts = useMemo(() => expanded && Array.isArray(blocks) ? browserChatFinalBlocksToParts(blocks.filter(block =>
     block && typeof block.type === 'string' && block.params && typeof block.params === 'object')) : [], [expanded, blocks]);
   const hasDraft = Array.isArray(blocks) && blocks.length > 0;
@@ -3463,10 +3468,11 @@ const BrowserChatFinalResponseDraft = memo(function BrowserChatFinalResponseDraf
       {hasDraft ? <button type="button" className="browser-chat-tool-draft-toggle"
         aria-expanded={expanded} aria-controls={expanded ? bodyId : undefined}
         aria-label={t(tool.ok === true ? '回复内容' : '回复草稿 · 尚未通过完成校验')}
-        onClick={() => setExpanded(value => !value)}>{t(expanded ? '收起' : '展开')}</button> : null}
+        onClick={() => setDisclosure({ streaming, expanded: !expanded })}>{t(expanded ? '收起' : '展开')}</button> : null}
     </div>
     {hasDraft && expanded ? <div id={bodyId} className="browser-chat-tool-response-draft browser-chat-answer is-draft">
-      <BrowserChatOrderedResponse fallbackText="" parts={parts} />
+      <span className="browser-chat-draft-status">{t('回复草稿 · 尚未通过完成校验')}</span>
+      <BrowserChatOrderedResponse fallbackText="" parts={parts} streaming={streaming} />
     </div> : null}
   </>;
 });
@@ -3648,8 +3654,8 @@ type BrowserChatAiCycleCommonProps = {
 };
 
 function sameAiCycleLineProps(
-  previous: BrowserChatAiCycleCommonProps & { cycle: BrowserChatAiOutputCycle },
-  next: BrowserChatAiCycleCommonProps & { cycle: BrowserChatAiOutputCycle },
+  previous: BrowserChatAiCycleCommonProps & { cycle: BrowserChatAiOutputCycle; streaming?: boolean },
+  next: BrowserChatAiCycleCommonProps & { cycle: BrowserChatAiOutputCycle; streaming?: boolean },
 ) {
   for (const key of Object.keys(next) as Array<keyof typeof next>) {
     if (key !== 'toolDetails' && previous[key] !== next[key]) return false;
@@ -3668,6 +3674,7 @@ function sameAiCycleLineProps(
 
 const BrowserChatAiCycleLine = memo(function BrowserChatAiCycleLine({
   cycle,
+  streaming = false,
   logs,
   onLoadSubagentRecords,
   onResolveToolConfirmation,
@@ -3684,6 +3691,7 @@ const BrowserChatAiCycleLine = memo(function BrowserChatAiCycleLine({
   toolDetails,
 }: BrowserChatAiCycleCommonProps & {
   cycle: BrowserChatAiOutputCycle;
+  streaming?: boolean;
 }) {
   const showReasoning = useContext(BrowserChatReasoningVisibilityContext);
   const { t } = useI18n();
@@ -3724,7 +3732,7 @@ const BrowserChatAiCycleLine = memo(function BrowserChatAiCycleLine({
         if (entry.kind === 'text') {
           return (
             <div className="browser-chat-ai-cycle-text" key={`text-${entry.part.index}-${orderedIndex}`}>
-              <BrowserChatMarkdown markdown={entry.text} />
+              <BrowserChatMarkdown markdown={entry.text} streaming={streaming && orderedIndex === orderedParts.length - 1} />
             </div>
           );
         }
@@ -4976,6 +4984,7 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
               <BrowserChatAiCycleLine
                 {...aiCycleCommonProps}
                 cycle={entry.cycle}
+                streaming={running && entry.cycle.id === renderAiOutputCycles.at(-1)?.id}
                 key={entry.cycle.id}
               />
             )}
@@ -5471,7 +5480,13 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [selectedSubagentId, setSelectedSubagentId] = useState<string | null>(null);
   const [screenshotPreview, setScreenshotPreview] = useState<BrowserChatScreenshotPreview | null>(null);
-  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  const [showScrollToBottom, updateShowScrollToBottom] = useState(false);
+  const scrollButtonVisible = useRef(false);
+  const setShowScrollToBottom = useCallback((visible: boolean) => {
+    if (scrollButtonVisible.current === visible) return;
+    scrollButtonVisible.current = visible;
+    updateShowScrollToBottom(visible);
+  }, []);
   const followLatestRef = useRef(true);
   const lastObservedScrollTopRef = useRef(0);
   const userScrollIntentUntilRef = useRef(0);
@@ -5802,19 +5817,20 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
     const container = getScrollContainer();
     if (!container) return;
     const previousScrollTop = lastObservedScrollTopRef.current;
-    lastObservedScrollTopRef.current = container.scrollTop;
-    if (container.scrollTop > 0) earlierLoadArmedRef.current = true;
+    const scrollTop = container.scrollTop;
+    lastObservedScrollTopRef.current = scrollTop;
+    if (scrollTop > 0) earlierLoadArmedRef.current = true;
     if (earlierLoadInFlightRef.current) {
       followLatestRef.current = false;
       return;
     }
-    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    const distanceFromBottom = container.scrollHeight - scrollTop - container.clientHeight;
     if (cancelTurnScrollRef.current) {
       followLatestRef.current = false;
       setShowScrollToBottom(distanceFromBottom > 72);
       return;
     }
-    const scrolledUp = container.scrollTop < previousScrollTop - 0.5;
+    const scrolledUp = scrollTop < previousScrollTop - 0.5;
     const hasUserScrollIntent = performance.now() <= userScrollIntentUntilRef.current;
     const userScrolledUp = hasUserScrollIntent && userScrollDirectionRef.current === 'up';
     // Scrollbar dragging and touch inertia can outlast the input intent window.
@@ -5828,7 +5844,7 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
       setShowScrollToBottom(false);
       return;
     }
-    if (distanceFromBottom <= 16 && (container.scrollTop > previousScrollTop + 0.5
+    if (distanceFromBottom <= 16 && (scrollTop > previousScrollTop + 0.5
       || (performance.now() <= userScrollIntentUntilRef.current && userScrollDirectionRef.current === 'down'))) {
       followLatestRef.current = true;
     }
@@ -5932,6 +5948,7 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
     const scrollContainer = getScrollContainer();
     if (!messageList || !scrollContainer) return undefined;
     let frame = 0;
+    let scrollFrame = 0;
     const observedChildren = new Set<Element>();
     const scheduleScrollToBottom = () => {
       if (!followLatestRef.current || earlierLoadInFlightRef.current) return;
@@ -5998,7 +6015,10 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
       }
     };
     const markPointerDrag = (event: PointerEvent) => { if (event.buttons) markUserScrollIntent(event); };
-    scrollContainer.addEventListener('scroll', trackScrollPosition, { passive: true });
+    const scheduleScrollPosition = () => {
+      if (!scrollFrame) scrollFrame = requestAnimationFrame(() => { scrollFrame = 0; trackScrollPosition(); });
+    };
+    scrollContainer.addEventListener('scroll', scheduleScrollPosition, { passive: true });
     scrollContainer.addEventListener('wheel', markUserScrollIntent, { passive: true });
     scrollContainer.addEventListener('touchstart', markUserScrollIntent, { passive: true });
     scrollContainer.addEventListener('touchmove', markUserScrollIntent, { passive: true });
@@ -6008,7 +6028,7 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
     syncObservedChildren();
     mutationObserver.observe(messageList, { childList: true });
     return () => {
-      scrollContainer.removeEventListener('scroll', trackScrollPosition);
+      scrollContainer.removeEventListener('scroll', scheduleScrollPosition);
       scrollContainer.removeEventListener('wheel', markUserScrollIntent);
       scrollContainer.removeEventListener('touchstart', markUserScrollIntent);
       scrollContainer.removeEventListener('touchmove', markUserScrollIntent);
@@ -6018,6 +6038,7 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
       mutationObserver.disconnect();
       resizeObserver.disconnect();
       if (frame) cancelAnimationFrame(frame);
+      if (scrollFrame) cancelAnimationFrame(scrollFrame);
     };
   }, [getScrollContainer, stopFollowingLatest, trackScrollPosition]);
 
@@ -7714,10 +7735,12 @@ const BrowserChatEmbeddedBrowser = memo(function BrowserChatEmbeddedBrowser({
     const viewport = viewportRef.current;
     if (!enabled || !active || !viewport) return undefined;
 
-    const update = () => {
-      void syncEmbeddedBrowser();
+    let frame = 0;
+    const update = (event?: Event) => {
+      if (event?.type === 'scroll' && event.target instanceof Element && !event.target.contains(viewport)) return;
+      if (!frame) frame = requestAnimationFrame(() => { frame = 0; void syncEmbeddedBrowser(); });
     };
-    const resizeObserver = new ResizeObserver(update);
+    const resizeObserver = new ResizeObserver(() => update());
     resizeObserver.observe(viewport);
     window.addEventListener('resize', update);
     window.addEventListener('scroll', update, true);
@@ -7736,6 +7759,7 @@ const BrowserChatEmbeddedBrowser = memo(function BrowserChatEmbeddedBrowser({
 
     return () => {
       resizeObserver.disconnect();
+      cancelAnimationFrame(frame);
       window.removeEventListener('resize', update);
       window.removeEventListener('scroll', update, true);
       window.clearTimeout(restoreTimer);
