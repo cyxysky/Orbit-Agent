@@ -75,6 +75,14 @@
       "types": "./dist/host/index.d.ts",
       "import": "./dist/host/index.js"
     },
+    "./extensions": {
+      "types": "./dist/extensions/index.d.ts",
+      "import": "./dist/extensions/index.js"
+    },
+    "./extensions/node": {
+      "types": "./dist/extensions/node.d.ts",
+      "import": "./dist/extensions/node.js"
+    },
     "./typeorm": {
       "types": "./dist/host/typeorm.d.ts",
       "import": "./dist/host/typeorm.js"
@@ -578,6 +586,7 @@
     "pdf-parse": "^2.4.5",
     "postcss": "8.5.23",
     "pptxgenjs": "^4.0.1",
+    "quickjs-emscripten": "0.32.0",
     "remotion": "4.0.532",
     "sharp": "^0.34.5",
     "smol-toml": "^1.9.0",

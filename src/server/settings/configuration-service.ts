@@ -4,7 +4,7 @@ import { integrationDriverForm } from '@/config/integration-settings';
 import { configurationRequestSchema, preferenceSettingDefinitions, validateSettingValue } from '@/config/settings-schema';
 import { store } from '@/server/db/store';
 import { runtimeSetting } from './runtime-configuration';
-import { selfBootstrapEnabled } from '@/server/runtime/self-bootstrap-policy';
+import { selfBootstrapEnabled, hostExecutionEnabled } from '@/server/runtime/self-bootstrap-policy';
 import { ApiRequestError } from '@/server/http/api-request';
 import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 import { isAiOperationsAdmin } from '@/server/auth/ai-operations-admin';
@@ -41,7 +41,7 @@ export async function configurationCatalog() {
     preferences: preferenceSettingDefinitions,
     modelProviders: modelProviderDefinitionsForConfig((await store.getModelConfig())?.providers),
     integrationDrivers: listExternalIntegrationDrivers(),
-    permissions: { selfBootstrapEnabled: selfBootstrapEnabled() },
+    permissions: { selfBootstrapEnabled: selfBootstrapEnabled(), hostExecutionEnabled: hostExecutionEnabled() },
   };
 }
 

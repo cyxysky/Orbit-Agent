@@ -1,6 +1,7 @@
 'use client';
 
 import type { ReactNode } from 'react';
+import { TextArea } from '@heroui/react/textarea';
 import { FolderOpen, Plus, Trash2 } from 'lucide-react';
 import type { SettingsField, SettingsForm } from '@/config/settings-schema';
 import { settingsForms } from '@/config/settings-forms';
@@ -102,7 +103,7 @@ export function SettingsFieldControl({ field, value, onChange, disabled, secretP
     );
   }
   if (field.control === 'textarea' || field.control === 'json') return (
-    <textarea aria-label={t(field.label)} className="settings-textarea-control" disabled={disabled}
+    <TextArea fullWidth aria-label={t(field.label)} className="settings-textarea-control" disabled={disabled}
       required={field.required} value={text} onChange={event => onChange(event.target.value)}
       maxLength={field.maxLength} placeholder={t(field.placeholder || '未设置')} rows={5} />
   );

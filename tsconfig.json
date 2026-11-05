@@ -41,6 +41,8 @@
       "@cjfclonedeep/capability-sdk/host": [
         "./packages/capability-sdk/src/host/index.ts"
       ],
+      "@cjfclonedeep/capability-sdk/extensions": ["./packages/capability-sdk/src/extensions/index.ts"],
+      "@cjfclonedeep/capability-sdk/extensions/node": ["./packages/capability-sdk/src/extensions/node.ts"],
       "@cjfclonedeep/capability-sdk/typeorm": [
         "./packages/capability-sdk/src/host/typeorm.ts"
       ],

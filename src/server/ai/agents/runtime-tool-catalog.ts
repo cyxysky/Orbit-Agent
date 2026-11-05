@@ -3,6 +3,7 @@ import { capabilityRuntimeToolCatalog, hiddenRuntimeToolCatalog, hiddenRuntimeSk
 import { normalizeDisabledBrowserChatTools } from '@/lib/browser-chat-tools';
 import { toolCapabilitySettings, type ToolCapabilityEnvironment } from '@/lib/tool-capability-settings';
 import { isRuntimeToolEnabled } from '@/server/runtime/self-bootstrap-policy';
+import { isExtensionToolName } from '@cjfclonedeep/capability-sdk/extensions';
 
 // Internal instructions shared with the runtime tool definitions.
 export const runtimeBuiltinToolPrompts = {
@@ -76,10 +77,11 @@ export function nativeRuntimeToolNames() {
     .filter(name => isRuntimeToolEnabled(name, runtimeConfiguration()));
 }
 
-const capabilityToolNames = new Set(capabilityRuntimeToolCatalog().map((tool) => tool.name));
-
 export function normalizeDisabledCapabilityTools(value: unknown) {
-  return normalizeDisabledBrowserChatTools(value).filter((name) => capabilityToolNames.has(name));
+  const capabilityToolNames = new Set(capabilityRuntimeToolCatalog().map((tool) => tool.name));
+  // Preserve dynamic-tool preferences before startup discovery, and while an
+  // extension is inactive. Availability must not erase the user's restriction.
+  return normalizeDisabledBrowserChatTools(value).filter((name) => capabilityToolNames.has(name) || isExtensionToolName(name));
 }
 
 /** Runtime-only union; never persist this list as the user's session preferences. */

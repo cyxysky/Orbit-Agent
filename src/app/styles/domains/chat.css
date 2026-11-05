@@ -3821,11 +3821,11 @@ html .browser-chat-sidebar .browser-chat-sidebar-footer .browser-chat-theme-togg
 }
 
 .browser-chat-subagent-tool.browser-chat-tool-chips {
-  align-self: flex-start;
+  align-self: stretch;
   max-width: 100%;
   min-width: 0;
   overflow: visible;
-  width: max-content;
+  width: 100%;
 }
 
 .browser-chat-subagent-tool > .browser-chat-tool-card-row > .browser-chat-subagent-tool-chip {
@@ -3893,7 +3893,8 @@ html .browser-chat-sidebar .browser-chat-sidebar-footer .browser-chat-theme-togg
     visibility 0s linear 190ms;
   visibility: hidden;
   max-width: 100%;
-  width: max-content;
+  min-width: 0;
+  width: 100%;
 }
 
 .browser-chat-subagent-tool.is-expanded > .browser-chat-subagent-body-shell {
@@ -3912,14 +3913,16 @@ html .browser-chat-sidebar .browser-chat-sidebar-footer .browser-chat-theme-togg
   max-width: 100%;
   min-height: 0;
   overflow: visible;
-  width: max-content;
+  min-width: 0;
+  width: 100%;
 }
 
 .browser-chat-subagent-tool .browser-chat-subagent-list {
   gap: 4px;
   max-width: 100%;
-  padding: 4px 2px 3px 20px;
-  width: max-content;
+  min-width: 0;
+  padding: 4px 0 3px 24px;
+  width: 100%;
 }
 
 .browser-chat-subagent-list .browser-chat-subagent-row {
@@ -3956,6 +3959,7 @@ html .browser-chat-sidebar .browser-chat-sidebar-footer .browser-chat-theme-togg
 .browser-chat-subagent-list .browser-chat-subagent-row-copy {
   align-items: center;
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
 }
 
@@ -3965,6 +3969,8 @@ html .browser-chat-sidebar .browser-chat-sidebar-footer .browser-chat-theme-togg
   font-weight: 580;
   line-height: 1.25;
   min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .browser-chat-subagent-list .browser-chat-subagent-row-meta {
@@ -4214,8 +4220,7 @@ html .browser-chat-sidebar .browser-chat-sidebar-footer .browser-chat-theme-togg
   opacity: .78;
 }
 
-.browser-chat-single-tool-group > .browser-chat-ai-cycle,
-.browser-chat-single-tool-group .browser-chat-executed-body {
+.browser-chat-single-tool-group > .browser-chat-ai-cycle {
   margin: 0;
   padding: 0;
 }

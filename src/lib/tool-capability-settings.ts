@@ -1,5 +1,6 @@
 /** Shared settings metadata. Global switches do not replace per-session choices. */
 export const toolCapabilitySettings = [
+  { name: 'selfBootstrap', envKey: 'AGENT_TOOL_SELF_BOOTSTRAP_ENABLED', label: '自举与扩展', description: '在受限工作区编写、验证和启用可执行扩展；需要管理员身份和部署自举授权。' },
   { name: 'configuration', envKey: 'AGENT_TOOL_CONFIGURATION_ENABLED', label: '配置管理', description: '查询配置描述和当前值，自举开启时按权限修改和注册配置。' },
   { name: 'browser', envKey: 'AGENT_TOOL_BROWSER_ENABLED', label: '浏览器', description: '搜索并读取网页、操作页面、检查界面和截图。' },
   { name: 'file', envKey: 'AGENT_TOOL_FILE_ENABLED', label: '文件', description: '下载文件，读取 PDF、Word、Excel、PPT 的文本和表格，以及创建、修改和预览文档。' },

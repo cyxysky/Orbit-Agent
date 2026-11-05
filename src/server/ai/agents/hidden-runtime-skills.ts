@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 import { configurationCapabilityManifest } from '@/config/configuration-capability';
+import { extensionCapabilityManifest } from '@cjfclonedeep/capability-sdk/extensions';
+import { extensionToolCatalog } from '@/server/capabilities/extension-catalog';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 import { browserInteractionSkill } from './runtime-browser-interaction';
 import type { BrowserActionResult } from '@cjfclonedeep/capability-sdk/browser/node';
@@ -29,6 +31,7 @@ function manifestRuntimeSkill(manifest: { id: string; skills?: readonly Capabili
 const browserRuntimeSkill = browserInteractionSkill;
 const capabilityRuntimeSkills = [
   configurationCapabilityManifest,
+  extensionCapabilityManifest,
   browserCapabilityManifest,
   fileCapabilityManifest,
   chartCapabilityManifest,
@@ -93,11 +96,11 @@ export function hiddenRuntimeSkillContent(skillId: string) {
 }
 
 export function hiddenRuntimeToolCatalog() {
-  return toolCatalogFromSkills(Object.values(hiddenRuntimeSkills));
+  return [...toolCatalogFromSkills(Object.values(hiddenRuntimeSkills)), ...extensionToolCatalog()];
 }
 
 export function capabilityRuntimeToolCatalog() {
-  return toolCatalogFromSkills(capabilityRuntimeSkills);
+  return [...toolCatalogFromSkills(capabilityRuntimeSkills), ...extensionToolCatalog()];
 }
 
 function toolCatalogFromSkills(skills: readonly CapabilitySkill[]) {

@@ -1,6 +1,8 @@
 import { runtimeSetting } from '@/server/settings/runtime-configuration';
 import { createConfigurationCapability } from './configuration';
-import { remoteSandboxAllowed, selfBootstrapEnabled } from '@/server/runtime/self-bootstrap-policy';
+import { orbitExtensions, refreshExtensionToolCatalog } from './extensions';
+import { isAiOperationsAdmin } from '@/server/auth/ai-operations-admin';
+import { remoteSandboxAllowed, selfBootstrapEnabled, hostExecutionEnabled } from '@/server/runtime/self-bootstrap-policy';
 import { mediaModelsForConfig } from '@/lib/model-selection';
 import { resolveCodexCliPath } from '@/server/ai/codex-cli';
 import { prepareCodexIdentityHome } from '@/server/ai/codex-identity';
@@ -185,10 +187,13 @@ export async function agentMediaToolTimeoutMs() {
   ) + 30_000;
 }
 
-export function createAgentInfrastructureProviders(input: {
+export async function createAgentInfrastructureProviders(input: {
   attachmentBindings?: readonly BrowserCodeAttachmentBinding[];
-} = {}): CapabilityProvider[] {
+  userId?: string;
+} = {}): Promise<CapabilityProvider[]> {
+  const extensionProviders = await refreshExtensionToolCatalog();
   return [
+    ...(selfBootstrapEnabled() && isAiOperationsAdmin(input.userId) ? [orbitExtensions.capability(), ...extensionProviders] : []),
     createConfigurationCapability(),
     createAgentCodeSandboxCapability(),
     createNodeConnectorsCapability({ connectors: configuredConnectors }),
@@ -214,7 +219,7 @@ export function createAgentInfrastructureProviders(input: {
     createDataCapability({ createRegistry: async () => createDataSourceRegistry(await configuredDataSources()) }),
     createMediaCapability({ createOperations: (context) => createConfiguredMediaOperations({ context, attachments: input.attachmentBindings || [] }) }),
     createNodeCommunicationCapability({ channels: configuredCommunicationChannels, draftDirectory: (context) => artifactPath('agent-infrastructure', 'communication', safeSegment(context.userId, 'shared')) }),
-    ...(selfBootstrapEnabled() ? [conversationTerminals.capability(), createNodeComputerCapability({
+    ...(hostExecutionEnabled() ? [conversationTerminals.capability(), createNodeComputerCapability({
       screenshotDirectory: (context) => artifactPath(
         safeSegment(context.runId, 'shared'),
         'computer',

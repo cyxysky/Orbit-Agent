@@ -8,6 +8,7 @@ import { SettingsFieldControl, useSettingsForms } from '@/components/SettingsFie
 import { isToolCapabilityEnabled, toolCapabilitySettings, toolConfigurationTargets } from '@/lib/tool-capability-settings';
 
 const toolIcons: Record<string, LucideIcon> = {
+  selfBootstrap: CodeXml,
   browser: Globe2, file: Files, chart: ChartNoAxesCombined, maps: MapPin,
   codeSandbox: CodeXml, connectors: Plug, knowledge: BookOpen, data: Database,
   media: Image, textEditor: FileText, communication: MessageSquareText, terminal: SquareTerminal, computer: Monitor,

@@ -256,7 +256,6 @@ import {
 import { LiquidGlassLoader } from '@/components/LiquidGlassLoader';
 import { AnimatedCircularProgressBar } from '@/components/ui/animated-circular-progress-bar';
 import { BlurFade } from '@/components/ui/blur-fade';
-import { BorderBeam } from '@/components/ui/border-beam';
 import { stripBrowserChatContextMarkers } from '@/lib/browser-chat-visible-text';
 import { NumberTicker } from '@/components/ui/number-ticker';
 import { ProgressiveBlur } from '@/components/ui/progressive-blur';
@@ -1060,6 +1059,7 @@ function browserChatToolLabel(name: string, input: unknown, t: (value: string) =
     return t('执行浏览器代码');
   }
   const labels: Record<string, string> = {
+    selfBootstrap: '自举与扩展',
     browserCode: '执行浏览器代码',
     contextCompression: '压缩上下文',
     contextRead: '读取内容',
@@ -3229,7 +3229,6 @@ const BrowserChatConfirmationPanel = memo(function BrowserChatConfirmationPanel(
 }: { title: string; description: ReactNode; children: ReactNode }) {
   return (
     <BlurFade className="browser-chat-tool-confirmation" duration={0.34} offset={8} role="group" aria-label={title}>
-      <BorderBeam colorFrom="#d79a18" colorTo="#f5d584" duration={7.5} size={82} />
       <div className="browser-chat-tool-confirmation-copy">
         <span aria-hidden="true" className="browser-chat-tool-confirmation-icon">
           <svg viewBox="0 0 16 16">
@@ -3293,15 +3292,15 @@ const BrowserChatToolConfirmationActions = memo(function BrowserChatToolConfirma
             {resolvingCancel ? <Loader2 className="spin" size={13} /> : <X size={13} />}
             {resolvingCancel ? t('取消中') : t('取消')}
           </button>
-          <RainbowButton
-            className="browser-chat-tool-confirm"
+          <button
+            className="ui-button ui-button--primary browser-chat-tool-confirm"
             disabled={resolving}
             onClick={() => void onResolveToolConfirmation(pending.id, 'confirm')}
-            size="default"
+            type="button"
           >
             {resolvingConfirm ? <Loader2 className="spin" size={13} /> : <BadgeCheck size={13} />}
             {resolvingConfirm ? t('确认中') : t('确认执行')}
-          </RainbowButton>
+          </button>
       </BrowserChatConfirmationPanel>
       {screenshotOpen && pending.screenshotUrl ? (
         <AppModal

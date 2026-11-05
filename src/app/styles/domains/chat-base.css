@@ -2653,18 +2653,22 @@ button.browser-chat-output-file-main {
 .browser-chat-confirmation-notification-error {
   pointer-events: auto;
   border: 1px solid var(--border);
-  border-radius: 18px;
+  border-radius: 16px;
   background: var(--panel);
   color: var(--foreground);
   box-shadow: 0 12px 36px rgba(15, 23, 42, 0.16);
-  padding: 10px;
+  padding: 0;
+  min-width: 0;
+  overflow: hidden;
 }
 .browser-chat-confirmation-notification-source {
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 2px 2px 10px;
+  min-height: 44px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
   text-align: left;
   color: var(--foreground);
   font-size: 13px;
@@ -2678,8 +2682,10 @@ button.browser-chat-output-file-main {
 }
 .browser-chat-confirmation-notification .browser-chat-tool-confirmation {
   border: 0;
+  border-radius: 0;
   box-shadow: none;
-  padding: 4px 0 0;
+  margin: 0;
+  padding: 14px;
   width: 100%;
 }
 .browser-chat-confirmation-notification .browser-chat-novel-plan-review {
@@ -2691,6 +2697,7 @@ button.browser-chat-output-file-main {
   align-items: center;
   gap: 10px;
   font-size: 13px;
+  padding: 12px 14px;
 }
 .browser-chat-confirmation-notification-error span { flex: 1; }
 
@@ -2701,13 +2708,13 @@ button.browser-chat-output-file-main {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 16px;
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
+  box-shadow: none;
   color: var(--foreground);
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 16px;
   max-width: min(100%, 760px);
-  padding: 10px;
+  padding: 16px;
   position: relative;
   width: min(100%, 760px);
 }
@@ -2720,7 +2727,7 @@ button.browser-chat-output-file-main {
   border-radius: 0;
   gap: 12px;
   min-width: 0;
-  padding: 14px;
+  padding: 0;
 }
 
 .browser-chat-tool-confirmation-icon {
@@ -2761,17 +2768,17 @@ button.browser-chat-output-file-main {
 .browser-chat-tool-confirmation-message {
   color: var(--muted-strong);
   display: grid;
-  font-size: 13.5px;
+  font-size: 13px;
   gap: 4px;
-  line-height: 1.5;
+  line-height: 1.65;
   min-width: 0;
   overflow-wrap: anywhere;
 }
 
 .browser-chat-tool-confirmation-message > strong {
   color: var(--foreground);
-  font-size: 15px;
-  font-weight: 680;
+  font-size: 14px;
+  font-weight: 600;
 }
 
 .browser-chat-tool-confirmation-message .browser-chat-agent-markdown {
@@ -2784,9 +2791,10 @@ button.browser-chat-output-file-main {
   align-items: center;
   border-top: 0;
   display: flex;
-  gap: 7px;
+  flex-wrap: wrap;
+  gap: 8px;
   justify-content: flex-end;
-  padding: 0 2px 2px;
+  padding: 0;
 }
 
 .browser-chat-tool-confirm,

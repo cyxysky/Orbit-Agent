@@ -11,6 +11,8 @@ const en: Record<string, string> = {
   '设置侧边栏中显示的产品名称。': 'Set the product name shown in the sidebar.',
   '工具开关': 'Tool switches',
   '配置管理': 'Configuration management',
+  '自举与扩展': 'Self-bootstrap and extensions',
+  '在受限工作区编写、验证和启用可执行扩展；需要管理员身份和部署自举授权。': 'Write, validate and activate executable extensions in a restricted workspace. Requires administrator identity and deployment self-bootstrap permission.',
   '查询配置描述和当前值，自举开启时按权限修改和注册配置。': 'Query settings schemas and values. Update and register settings when self-bootstrap is enabled and permissions allow.',
   '启用的工具可在每个对话中单独选择；关闭后，该工具将从对话工具列表中移除，也不会提供给 AI。': 'Enabled tools can be selected in each conversation. Turning a tool off removes it from the conversation tool list and from AI access.',
   '按内容筛选': 'Filter by content',

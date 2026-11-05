@@ -175,15 +175,17 @@ Open-tab state is restored by the application rather than Chromium's native tab-
 
 During Agent execution, `getHttpRequests` is available as a read-only diagnostic tool for the current tab. The Agent can use it to verify API status codes, failed requests, and missing-resource evidence before deciding the next browser action.
 
-## Self-bootstrap permission
+## Executable extension self-bootstrap
 
-`ORBIT_SELF_BOOTSTRAP_ENABLED=false` is the default service mode. The backend removes local terminal and computer tools from the model catalogue and rejects direct terminal API calls. Local code execution and application-managed loopback Runners are disabled. Browsing, managed files and independently deployed remote Runners remain available.
+`ORBIT_SELF_BOOTSTRAP_ENABLED=true` enables the independent `selfBootstrap` tool for administrators. It writes, validates, probes, activates, disables, rolls back and removes executable TypeScript/JavaScript extensions. It works independently of the terminal, browser and knowledge switches. The tool's own global switch is `AGENT_TOOL_SELF_BOOTSTRAP_ENABLED`.
 
-Managed files support text writes, downloads, reading and static HTML-based PDF/DOCX/PPTX generation in service mode. Authored Python/JavaScript Office programs, including existing scripted drafts, require self-bootstrap permission or an independent remote execution service. Native model helpers use application-owned login profiles and read-only workspaces in service mode.
+The fixed workspace is `<APP_DATA_DIR>/extensions` (by default `<project>/runtime/extensions`). Drafts and immutable validated revisions are separate from the active registry. Activation takes effect in the next mounted Agent execution, including a later turn in the same conversation. Running executions retain their mounted version. Syntax/schema validation is explicitly separate from functional probes and acceptance.
 
-Set `ORBIT_SELF_BOOTSTRAP_ENABLED=true` in the deployment environment to permit project changes through enabled host tools. Existing tool switches and approvals continue to apply. Changes to this startup permission require reloading the service. Runtime configuration, custom prompts and individual conversations cannot elevate it. Enabling the permission allows user-requested changes and does not start an autonomous background development loop.
+Extensions execute in QuickJS/WASM inside bounded, disposable workers. They have no Node, shell, network or environment access. Declared permissions allow private per-user storage and read-only access to the project root through path-checked APIs; hidden paths, runtime data and generated distributions are protected. Extensions cannot write core source files. See the [SDK extension contract](packages/capability-sdk/docs/extensions.md) for module format and lifecycle actions. Packaged installations include the loader and runtime dependencies, so executable extensions do not require the original TypeScript/TSX application source tree or rebuilding the application.
 
-Independent Runner and MCP deployments must enforce their own filesystem permissions and keep Orbit source directories outside their writable mounts. The application flag controls Orbit's host execution entry points. Deployment isolation supplies the filesystem boundary for external services.
+`ORBIT_HOST_EXECUTION_ENABLED` is a **separate** startup permission for local terminal/computer/code execution, application-managed loopback Runners, scripted local document generation and native model host tools. Its default is `false`; enabling extensions never grants host execution. Both deployment grants are captured at process startup and cannot be elevated by runtime configuration or prompts. Existing capability switches and approvals still apply. Without host execution, managed documents, browsing and independently deployed remote runners remain available. Independent Runner/MCP services must enforce their own isolation.
+
+Updating core application code remains a source/build/release operation. No extension operation patches installed bundles, restarts the service, publishes a release or starts an autonomous development loop.
 
 ## Configuration registry and model access
 

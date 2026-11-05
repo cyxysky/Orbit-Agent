@@ -4,6 +4,7 @@ const { hostname, networkInterfaces } = require('node:os');
 // Capture the deployment grant once. Runtime settings and model-authored rules
 // cannot turn a service process into a self-modifying development process.
 let enabled;
+let hostEnabled;
 const localHosts = new Set([hostname().toLowerCase(), ...Object.values(networkInterfaces())
   .flatMap(addresses => (addresses || []).map(address => address.address.toLowerCase()))]);
 
@@ -12,8 +13,12 @@ function selfBootstrapEnabled() {
   return enabled ??= String(process.env.ORBIT_SELF_BOOTSTRAP_ENABLED || '').trim().toLowerCase() === 'true';
 }
 
+function hostExecutionEnabled() {
+  return hostEnabled ??= String(process.env.ORBIT_HOST_EXECUTION_ENABLED || '').trim().toLowerCase() === 'true';
+}
+
 function remoteSandboxAllowed(configuration) {
-  if (selfBootstrapEnabled()) return true;
+  if (hostExecutionEnabled()) return true;
   if (configuration.AGENT_CODE_SANDBOX_BACKEND === 'local') return false;
   try {
     const url = new URL(configuration.AGENT_CODE_SANDBOX_RUNNER_URL || 'http://127.0.0.1:18100');
@@ -27,4 +32,4 @@ function remoteSandboxAllowed(configuration) {
   }
 }
 
-module.exports = { selfBootstrapEnabled, remoteSandboxAllowed };
+module.exports = { selfBootstrapEnabled, hostExecutionEnabled, remoteSandboxAllowed };

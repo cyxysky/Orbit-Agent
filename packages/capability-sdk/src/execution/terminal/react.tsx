@@ -294,7 +294,7 @@ export function TerminalWorkspace({ client, onClose, closed = false, orderStorag
   const selectedRef = useRef(selected); selectedRef.current = selected;
   useEffect(() => {
     const view = selected && views.current.get(selected.terminalId);
-    if (view) view.terminal.options.disableStdin = !enabled || !connected || closed || selected?.status === 'closed' || selected?.status === 'starting';
+    if (view) view.terminal.options.disableStdin = !inputAllowed.current || selected?.transport !== 'pty' || selected.status === 'closed' || selected.status === 'starting';
   }, [selected, enabled, connected, closed, ready]);
 
   useEffect(() => {
@@ -331,7 +331,7 @@ export function TerminalWorkspace({ client, onClose, closed = false, orderStorag
       viewport.replaceChildren(element); terminal.open(element);
       const createdView: TerminalView = { terminal, fit, element, pendingReplays: 0, writes: [], writing: false, disposed: false };
       terminal.onData(input => {
-        if (createdView.pendingReplays || !inputAllowed.current) return;
+        if (selected.transport !== 'pty' || createdView.pendingReplays || !inputAllowed.current) return;
         // The client coalesces input per terminal while preserving its order.
         void send({ action: 'write', reason: '用户终端输入', terminalId: id, input }).catch(reason => {
           if (!(reason instanceof Error && reason.name === 'AbortError')) setError(String(reason));
@@ -345,7 +345,7 @@ export function TerminalWorkspace({ client, onClose, closed = false, orderStorag
     updateTheme();
     const themeObserver = new MutationObserver(updateTheme);
     themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style', 'data-theme'] });
-    currentView.terminal.options.disableStdin = !inputAllowed.current || selected.status === 'closed' || selected.status === 'starting';
+    currentView.terminal.options.disableStdin = !inputAllowed.current || selected.transport !== 'pty' || selected.status === 'closed' || selected.status === 'starting';
     let frame = 0, fitTimer = 0;
     const fit = () => {
       if (!viewport.clientWidth || !viewport.clientHeight) return;
@@ -355,6 +355,14 @@ export function TerminalWorkspace({ client, onClose, closed = false, orderStorag
       const rows = Math.max(5, Math.min(200, dimensions.rows));
       const geometry = `${cols}:${rows}`;
       if (currentView.requestedGeometry === geometry || (!currentView.requestedGeometry && geometry === `${currentView.terminal.cols}:${currentView.terminal.rows}`)) return;
+      if (selected.transport === 'pipe') {
+        // A pipe has no remote screen or stdin. Resize only its output viewer,
+        // in order with pending output writes, without issuing a PTY operation.
+        currentView.requestedGeometry = geometry;
+        currentView.writes.push({ geometry: { cols, rows } });
+        drainTerminal(currentView);
+        return;
+      }
       if (selectedRef.current?.status !== 'closed') {
         currentView.requestedGeometry = geometry;
         void send({ action: 'resize', reason: '适应终端窗口', terminalId: id, cols, rows }).catch(reason => {

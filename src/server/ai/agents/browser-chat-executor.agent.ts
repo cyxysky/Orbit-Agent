@@ -1046,12 +1046,13 @@ async function makeBrowserTools(
     return queued;
   }
 
+  const infrastructureProviders = await createAgentInfrastructureProviders({
+    attachmentBindings: referenceOptions?.attachmentBindings,
+    userId: referenceOptions?.userId,
+  });
   const allowedCapabilityToolNames = new Set(
     (referenceOptions?.allowedToolTypes ?? nativeRuntimeToolNames()).filter(name => isRuntimeToolEnabled(name, runtimeConfiguration())),
   );
-  const infrastructureProviders = createAgentInfrastructureProviders({
-    attachmentBindings: referenceOptions?.attachmentBindings,
-  });
   const enabledCapabilityIds = allowedCapabilityToolNames
     ? new Set([
         ...(allowedCapabilityToolNames.has(browserCapabilityToolNames.browser) ? [browserCapabilityManifest.id] : []),
