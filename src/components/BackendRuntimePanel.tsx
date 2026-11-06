@@ -3,6 +3,9 @@
 import { Activity, CircleStop, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { DataTable } from '@/components/ui/data-table';
+import { DataTableStatus, DataTableText } from '@/components/ui/data-table-cells';
+import { Button } from '@heroui/react/button';
+import { EmptyState } from '@heroui/react/empty-state';
 import { WorkspacePageSkeleton } from '@/components/WorkspacePageSkeleton';
 import { readApiJson } from '@/lib/api-client';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
@@ -17,6 +20,7 @@ export function BackendRuntimePanel() {
   const [closing, setClosing] = useState('');
   const [error, setError] = useState('');
   const requestRef = useRef<AbortController | null>(null);
+  const memorySize = (bytes: number) => `${(bytes / 1024 / 1024).toLocaleString(undefined, { maximumFractionDigits: 1 })} MiB`;
   const load = useCallback(async () => {
     requestRef.current?.abort();
     const controller = new AbortController();
@@ -68,6 +72,20 @@ export function BackendRuntimePanel() {
       <section className="ai-runtime-metrics">
         <article><Activity size={18} /><span>{t("活跃对话")}</span><strong>{data?.activeConversations || 0}</strong><small>{t("当前正在执行或排队")}</small></article>
         <article><CircleStop size={18} /><span>{t("测试浏览器")}</span><strong>{data?.browserCount || 0}</strong><small>{t("主会话与子 Agent 浏览器")}</small></article>
+        <article><Activity size={18} /><span>{t('Node 进程 RSS 合计')}</span><strong>{data ? memorySize(data.memory.nodeRssBytes) : '—'}</strong><small>{t('API 与执行进程，每 5 秒采样')}</small></article>
+        <article><Activity size={18} /><span>{t('系统可用内存')}</span><strong>{data ? memorySize(data.memory.host.freeBytes) : '—'}</strong><small>{data ? `${t('系统总内存')} ${memorySize(data.memory.host.totalBytes)}` : '—'}</small></article>
+      </section>
+      <section className="ai-operations-panel">
+        <header className="ai-operations-panel-header"><div><h2>{t('进程内存')}</h2><p>{t('RSS 为常驻内存，JS 堆、外部内存分别展示。')}</p></div></header>
+        <DataTable<BackendRuntimeStatus['memory']['processes'][number]> pagination filterable compact data={data?.memory.processes || []}
+          emptyText={t('正在读取后端状态…')} getRowId={item => String(item.pid)} minWidth={700} columns={[
+            { id: 'role', header: t('进程'), accessor: item => item.role, cell: item => <DataTableText primary={t(item.role === 'api' ? 'API 进程' : '执行进程')} secondary={`PID ${item.pid}`} /> },
+            { id: 'rss', header: 'RSS', accessor: item => item.rss, cell: item => memorySize(item.rss) },
+            { id: 'heapUsed', header: t('JS 堆已用'), accessor: item => item.heapUsed, cell: item => memorySize(item.heapUsed) },
+            { id: 'heapTotal', header: t('JS 堆已分配'), accessor: item => item.heapTotal, cell: item => memorySize(item.heapTotal) },
+            { id: 'heapLimit', header: t('JS 堆上限'), accessor: item => item.heapLimit, cell: item => memorySize(item.heapLimit) },
+            { id: 'external', header: t('外部内存'), accessor: item => item.external, cell: item => memorySize(item.external) },
+          ]} />
       </section>
       <section className="ai-operations-panel ai-runtime-browser-panel">
         <header className="ai-operations-panel-header"><div><h2>{t("当前测试浏览器")}</h2><p>{t("展示所属用户、会话、页面与实时状态")}</p></div><span>{data?.browsers.length || 0}</span></header>
@@ -75,16 +93,16 @@ export function BackendRuntimePanel() {
           <DataTable<BackendRuntimeStatus['browsers'][number]>
             pagination filterable compact
             columns={[
-              { id: 'page', header: t('页面'), accessor: item => item.title || item.sessionId, cell: item => <><strong>{item.title || item.sessionId}</strong><br /><small title={item.currentUrl}>{item.currentUrl || 'about:blank'}</small></> },
+              { id: 'page', header: t('页面'), accessor: item => item.title || item.sessionId, cell: item => <DataTableText primary={item.title || item.sessionId} secondary={item.currentUrl || 'about:blank'} /> },
               { id: 'user', header: t('用户'), accessor: item => item.userId || '', cell: item => item.userId || t('未知') },
               { id: 'kind', header: t('类型'), accessor: item => t(item.kind === 'subagent' ? '子 Agent' : '主会话'), cell: item => t(item.kind === 'subagent' ? '子 Agent' : '主会话') },
               { id: 'tabs', header: t('标签页'), accessor: item => item.tabCount, cell: item => item.tabCount },
-              { id: 'status', header: t('状态'), accessor: item => item.busy ? t('使用中') : t(({ initializing: '正在初始化', ready: '就绪', running: '执行中', completed: '已完成', interrupted: '已中断', failed: '失败', closed: '已结束', blocked: '阻塞' } as Record<string, string>)[item.status] || item.status), cell: item => item.busy ? t('使用中') : t(({ initializing: '正在初始化', ready: '就绪', running: '执行中', completed: '已完成', interrupted: '已中断', failed: '失败', closed: '已结束', blocked: '阻塞' } as Record<string, string>)[item.status] || item.status) },
-              { id: 'actions', header: t('操作'), cell: item => <button className="ui-button" disabled={closing === item.id} onClick={() => void closeBrowser(item.id)} type="button"><CircleStop size={15} />{t(closing === item.id ? '关闭中…' : '关闭浏览器')}</button> },
+              { id: 'status', header: t('状态'), accessor: item => item.busy ? t('使用中') : t(({ initializing: '正在初始化', ready: '就绪', running: '执行中', completed: '已完成', interrupted: '已中断', failed: '失败', closed: '已结束', blocked: '阻塞' } as Record<string, string>)[item.status] || item.status), cell: item => <DataTableStatus status={item.busy ? 'busy' : item.status}>{item.busy ? t('使用中') : t(({ initializing: '正在初始化', ready: '就绪', running: '执行中', completed: '已完成', interrupted: '已中断', failed: '失败', closed: '已结束', blocked: '阻塞' } as Record<string, string>)[item.status] || item.status)}</DataTableStatus> },
+              { id: 'actions', header: t('操作'), cell: item => <Button variant="secondary" size="sm" isDisabled={closing === item.id} onPress={() => void closeBrowser(item.id)}><CircleStop size={15} />{t(closing === item.id ? '关闭中…' : '关闭浏览器')}</Button> },
             ]}
             data={data.browsers} emptyText={t('当前没有测试浏览器')} getRowId={item => item.id} minWidth={700}
           />
-        ) : <div className="ai-operations-empty">{t("当前没有测试浏览器")}</div>}
+        ) : <EmptyState className="ai-operations-empty">{t("当前没有测试浏览器")}</EmptyState>}
       </section>
     </div>
   );

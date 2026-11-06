@@ -5,6 +5,7 @@ import { store } from '@/server/db/store';
 import { joinWebPilotUrl } from '@/lib/webpilot-base-path';
 import { selectEmbeddedBrowserChatSessionId } from '@/server/embed/browser-chat-init';
 import { createMountIdentityTicket } from '@/server/auth/mount-identity';
+import { assertUserIdentityCookie } from '@/server/auth/user-cookie-identity';
 import {
   createEmbedToken,
   embedErrorJson,
@@ -39,6 +40,7 @@ export async function POST(request: Request) {
     const body = await parseJsonRequest(request, initSchema, { maxBytes: 64 * 1024 });
     await store.refreshRuntimeSettings();
 
+    await assertUserIdentityCookie(request, String(body.userId).trim());
     const mountedIdentity = createMountIdentityTicket({
       origin: requestOrigin(request),
       userId: body.userId,

@@ -3,6 +3,20 @@ import type { Language } from '@/i18n/language';
 export type { Language } from '@/i18n/language';
 
 const en: Record<string, string> = {
+  'Node 进程 RSS 合计': 'Combined Node process RSS',
+  'API 与执行进程，每 5 秒采样': 'API and execution processes, sampled every 5 seconds',
+  '系统可用内存': 'Available system memory',
+  '系统总内存': 'Total system memory',
+  '进程内存': 'Process memory',
+  'RSS 为常驻内存，JS 堆、外部内存分别展示。': 'RSS is resident memory. JavaScript heap and external memory are shown separately.',
+  '进程': 'Process',
+  'API 进程': 'API process',
+  '执行进程': 'Execution process',
+  'JS 堆已用': 'JS heap used',
+  'JS 堆已分配': 'JS heap allocated',
+  'JS 堆上限': 'JS heap limit',
+  '外部内存': 'External memory',
+  '正在加载运行结果': 'Loading run output',
   '工具设置': 'Tool settings',
   '工具设置 {name}': 'Tool settings for {name}',
   '配置范围': 'Configuration scope',

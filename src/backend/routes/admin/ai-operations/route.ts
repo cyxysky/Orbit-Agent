@@ -29,7 +29,7 @@ function trendUserId(request: Request) {
 export async function GET(request: Request) {
   try {
     requireAiOperationsAdmin(request);
-    return apiJson(request, await readAiOperationsDashboard(rangeDays(request), trendUserId(request)));
+    return apiJson(request, await readAiOperationsDashboard(rangeDays(request), trendUserId(request), request.signal));
   } catch (error) {
     return apiError(request, error, {
       fallback: 'Unable to load AI operations metrics',

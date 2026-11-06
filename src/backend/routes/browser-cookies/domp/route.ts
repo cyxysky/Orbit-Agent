@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { requestApplicationUserId } from '@/server/auth/user-context';
-import { saveBrowserDomainCookie } from '@/server/credentials/browser-domain-cookie-vault';
+import { bindUserIdentityCookie } from '@/server/auth/user-cookie-identity';
 import { ApiRequestError, apiError, apiJson, parseJsonRequest } from '@/server/http/api-request';
 import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 
@@ -35,7 +35,7 @@ export async function POST(request: Request) {
         status: 413,
       });
     }
-    const saved = await saveBrowserDomainCookie(authenticatedUserId, body.domain, cookie);
+    const saved = await bindUserIdentityCookie(request, body.domain);
     return apiJson(request, saved, { status: 201 });
   } catch (error) {
     const normalized = error instanceof ApiRequestError

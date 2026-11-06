@@ -15,9 +15,8 @@ import Link from 'next/link';
 import { AlertCircle, ArrowLeft, BookOpen, Bot, Brain, Bug, ChartNoAxesCombined, ChevronDown, CircleCheck, ClipboardCheck, CodeXml, Copy, Database, Files, Gauge, ImageIcon, KeyRound, Layers, Loader2, Maximize2, MessagesSquare, Monitor, Navigation, Network, Palette, PencilLine, PlayCircle, Plug, Plus, RefreshCw, Save, ScanSearch, Search, Server, ShieldCheck, SlidersHorizontal, Terminal, Trash2, X, type LucideIcon } from 'lucide-react';
 import { CustomSelect } from '@/components/CustomSelect';
 import { ConfirmDeleteModal } from '@/components/ConfirmDeleteModal';
-import { SkillsManager } from '@/components/SkillsManager';
-import { KnowledgeSettings } from '@/components/KnowledgeSettings';
-import { SensitiveDataRuntimeSettings } from '@/components/SensitiveDataRuntimeSettings';
+import dynamic from 'next/dynamic';
+import { WorkspaceContentSkeleton } from '@/components/WorkspaceContentSkeleton';
 import {
   defaultModelForProvider,
   isOpenAICompatibleProvider,
@@ -63,7 +62,6 @@ import {
 import type { SensitiveDataEvaluationCase } from '@/lib/sensitive-data-evaluation';
 import { WorkspaceSidebarArchiveRow } from '@/components/WorkspaceSidebarArchive';
 import { useWorkspaceBrand } from '@/brand/WorkspaceBrandProvider';
-import { ExternalIntegrationSettings } from '@/components/ExternalIntegrationSettings';
 import { ModelTypeSettings } from '@/components/ModelTypeSettings';
 import { ToolCapabilitySettings } from '@/components/ToolCapabilitySettings';
 import { toolCapabilitySettings, TOOL_CAPABILITY_SETTINGS_CHANGED_EVENT } from '@/lib/tool-capability-settings';
@@ -75,6 +73,16 @@ import { CSS as DndCSS } from '@dnd-kit/utilities';
 import { GripVertical } from 'lucide-react';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 
+
+function SettingsSectionLoading() {
+  const { t } = useI18n();
+  return <WorkspaceContentSkeleton label={t('正在读取配置')} />;
+}
+
+const SkillsManager = dynamic(() => import('@/components/SkillsManager').then(module => module.SkillsManager), { loading: SettingsSectionLoading });
+const KnowledgeSettings = dynamic(() => import('@/components/KnowledgeSettings').then(module => module.KnowledgeSettings), { loading: SettingsSectionLoading });
+const SensitiveDataRuntimeSettings = dynamic(() => import('@/components/SensitiveDataRuntimeSettings').then(module => module.SensitiveDataRuntimeSettings), { loading: SettingsSectionLoading });
+const ExternalIntegrationSettings = dynamic(() => import('@/components/ExternalIntegrationSettings').then(module => module.ExternalIntegrationSettings), { loading: SettingsSectionLoading });
 
 export {
   environmentSettingsTabs,

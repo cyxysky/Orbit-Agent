@@ -6,6 +6,8 @@ import { routes } from './route-manifest';
 import { createRouter, sendWebResponse, webRequest } from './http-adapter';
 import { createExecutionSupervisor, executionRequest } from './execution-supervisor';
 import { startExecutionServices } from './bootstrap';
+import { authorizeRequestCookie } from '@/server/auth/request-cookie-access';
+import { receiveParentProcessMemory } from '@/server/observability/process-memory';
 
 function authorized(value: unknown) {
   const expected = Buffer.from(process.env.WEBPILOT_INTERNAL_REQUEST_TOKEN || '');
@@ -22,9 +24,10 @@ type CodeSandboxLifecycle = {
 export async function startBackend({ codeSandbox }: { codeSandbox?: CodeSandboxLifecycle } = {}) {
   // Complete migrations before the execution child opens the same database.
   const { store } = await import('@/server/db/store');
-  let refreshing: Promise<void> = Promise.resolve();
+  let refreshing: Promise<void> | undefined;
   const refreshRuntime = () => {
-    const operation = refreshing.then(async () => {
+    if (refreshing) return refreshing;
+    const operation = (async () => {
       await store.refreshRuntimeSettings();
       if (!codeSandbox) return;
       try {
@@ -38,9 +41,9 @@ export async function startBackend({ codeSandbox }: { codeSandbox?: CodeSandboxL
         // A misconfigured sandbox must not prevent opening Settings to repair it.
         console.error('[code-sandbox] Runner startup failed', error);
       }
-    });
-    refreshing = operation.catch(() => undefined);
-    return operation;
+    })();
+    refreshing = operation.finally(() => { refreshing = undefined; });
+    return refreshing;
   };
   await refreshRuntime();
   // Shared persistence is the source of truth for API and execution processes,
@@ -56,6 +59,10 @@ export async function startBackend({ codeSandbox }: { codeSandbox?: CodeSandboxL
   });
   await syncCodeSandbox();
   const execution = process.env.WEBPILOT_SERVER_ROLE === 'execution';
+  const parentMemory = (message: { type?: string; snapshot?: unknown }) => {
+    if (message?.type === 'parent-process-memory') receiveParentProcessMemory(message.snapshot);
+  };
+  if (execution) process.on('message', parentMemory);
   const supervisor = execution ? undefined : createExecutionSupervisor();
   const route = createRouter(routes);
   const basePath = '/' + String(process.env.ORBIT_BASE_PATH ?? process.env.WEBPILOT_BASE_PATH ?? '').replace(/^\/+|\/+$/g, '');
@@ -77,6 +84,10 @@ export async function startBackend({ codeSandbox }: { codeSandbox?: CodeSandboxL
       // Runner health/recovery must not hold up unrelated page/API requests.
       // Its manager coalesces concurrent checks and monitors recovery itself.
       void syncCodeSandbox();
+      const identityHeaders = new Headers();
+      for (let i = 0; i < incoming.rawHeaders.length; i += 2) identityHeaders.append(incoming.rawHeaders[i], incoming.rawHeaders[i + 1]);
+      const identityDenied = await authorizeRequestCookie(new Request(url, { headers: identityHeaders, method: incoming.method }), pathname);
+      if (identityDenied) { await sendWebResponse(identityDenied, outgoing); return; }
       if (supervisor && executionRequest(pathname, incoming.method)) {
         if (supervisor.configurationBarrierRequired(pathname, incoming.method)) await syncCodeSandbox();
         await supervisor.proxy(incoming, outgoing, pathname);
@@ -85,6 +96,7 @@ export async function startBackend({ codeSandbox }: { codeSandbox?: CodeSandboxL
       const request = webRequest(incoming, outgoing);
       const response = await route(request, pathname);
       if (pathname === '/api/settings/runtime' && incoming.method === 'POST' && response.ok) {
+        await refreshing;
         await refreshRuntime();
         void syncCodeSandbox();
       }
@@ -117,6 +129,7 @@ export async function startBackend({ codeSandbox }: { codeSandbox?: CodeSandboxL
   return { port, executionIdle: () => supervisor?.isIdle() ?? true, async close() {
     closing = true;
     clearInterval(configurationTimer);
+    process.off('message', parentMemory);
     server.close();
     try {
       await supervisor?.close();

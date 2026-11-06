@@ -17,6 +17,7 @@ let status: 'saved' | 'saving' | 'error' = 'saved';
 const statusListeners = new Set<() => void>();
 
 function setStatus(next: typeof status) {
+  if (status === next) return;
   status = next;
   for (const listener of statusListeners) listener();
 }
@@ -28,7 +29,10 @@ export function subscribeSettingsPreferencesStatus(listener: () => void) {
 }
 
 function publish(next: Preferences) {
-  values = { ...next, ...pending };
+  const merged = { ...next, ...pending };
+  if (values && Object.keys(values).length === Object.keys(merged).length
+    && Object.entries(merged).every(([key, value]) => values![key] === value)) return;
+  values = merged;
   for (const [key, cache] of Object.entries(cacheKeys)) {
     try { window.localStorage.setItem(cache, values[key] || ''); } catch { /* Cache is optional. */ }
   }

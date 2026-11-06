@@ -64,7 +64,7 @@ function createBrowserChatStreamHub({ getRuntime, authenticateRequest }) {
               'content-length': body.length,
               'x-webpilot-backend-token': process.env.WEBPILOT_INTERNAL_REQUEST_TOKEN,
             };
-            for (const name of ['cookie', 'x-webpilot-identity-user-id', 'x-webpilot-identity-username', 'x-webpilot-identity-roles', 'x-webpilot-identity-proof']) {
+            for (const name of ['cookie', 'x-webpilot-identity-user-id', 'x-webpilot-identity-username', 'x-webpilot-identity-roles', 'x-webpilot-identity-proof', 'x-webpilot-identity-source']) {
               if (request.headers[name]) headers[name] = request.headers[name];
             }
             upstream = http.request({ hostname: runtime.hostname, port: runtime.port, path: request.url, method: 'POST', headers });

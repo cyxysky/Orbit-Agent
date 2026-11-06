@@ -218,7 +218,7 @@ export async function createAgentInfrastructureProviders(input: {
     } }),
     createDataCapability({ createRegistry: async () => createDataSourceRegistry(await configuredDataSources()) }),
     createMediaCapability({ createOperations: (context) => createConfiguredMediaOperations({ context, attachments: input.attachmentBindings || [] }) }),
-    createNodeCommunicationCapability({ channels: configuredCommunicationChannels, draftDirectory: (context) => artifactPath('agent-infrastructure', 'communication', safeSegment(context.userId, 'shared')) }),
+    createNodeCommunicationCapability({ channels: configuredCommunicationChannels, draftDirectory: (context) => artifactPath('users', safeSegment(context.userId, 'shared'), 'communication') }),
     ...(hostExecutionEnabled() ? [conversationTerminals.capability(), createNodeComputerCapability({
       screenshotDirectory: (context) => artifactPath(
         safeSegment(context.runId, 'shared'),

@@ -1,7 +1,4 @@
-import { HybridRuntime1790000200000 } from './migrations/1790000200000-hybrid-runtime';
-import { RuntimeExecutionOwners1793836800000 } from './migrations/1793836800000-runtime-execution-owners';
-import { MemoryJobResults1790600000000 } from './migrations/1790600000000-memory-job-results';
-import { CommunicationConversations1788832800000 } from './migrations/1788832800000-communication-conversations';
+import { applicationMigrations } from './migrations';
 import 'reflect-metadata';
 
 import { mkdir } from 'node:fs/promises';
@@ -13,10 +10,6 @@ import {
   type QueryRunner,
 } from 'typeorm';
 import { appDataRoot } from '@/server/storage/paths';
-import { InitialBackendSchema1788307200000 } from './migrations/1788307200000-initial-backend-schema';
-import { BrowserChatContextRecords1788566400000 } from './migrations/1788566400000-browser-chat-context-records';
-import { RuntimeReadIndexes1788652800000 } from './migrations/1788652800000-runtime-read-indexes';
-import { PersonalMemoryReceipts1789084800000 } from './migrations/1789084800000-personal-memory-receipts';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 
 
@@ -28,6 +21,7 @@ type DatabaseRuntimeState = {
   initialization?: Promise<DataSource>;
   identity?: string;
   sqliteTransactionQueue?: Promise<void>;
+  disposers?: Set<() => void | Promise<void>>;
 };
 
 const databaseFileName = 'webpilot.db';
@@ -81,7 +75,7 @@ function dataSourceOptions(): DataSourceOptions {
     synchronize: false,
     migrationsRun: true,
     migrationsTableName: 'typeorm_migration',
-    migrations: [InitialBackendSchema1788307200000, BrowserChatContextRecords1788566400000, RuntimeReadIndexes1788652800000, CommunicationConversations1788832800000, PersonalMemoryReceipts1789084800000, HybridRuntime1790000200000, MemoryJobResults1790600000000, RuntimeExecutionOwners1793836800000],
+    migrations: applicationMigrations,
     logging: booleanEnv('DATABASE_LOGGING'),
   };
   if (driver === 'postgres') {
@@ -116,7 +110,10 @@ export async function getDatabase() {
   if (runtimeState.dataSource?.isInitialized && runtimeState.identity === identity) return runtimeState.dataSource;
   if (runtimeState.initialization && runtimeState.identity === identity) return runtimeState.initialization;
 
-  if (runtimeState.dataSource?.isInitialized) await runtimeState.dataSource.destroy();
+  if (runtimeState.dataSource?.isInitialized) {
+    await Promise.all([...(runtimeState.disposers || [])].map(dispose => dispose()));
+    await runtimeState.dataSource.destroy();
+  }
   runtimeState.dataSource = undefined;
   runtimeState.identity = identity;
   if (configuredDriver() === 'sqlite') await mkdir(path.dirname(sqliteDatabasePath()), { recursive: true });
@@ -140,7 +137,13 @@ async function deleteExpiredWebSocketTickets(executor: DatabaseExecutor) {
   );
 }
 
+export function registerDatabaseDisposer(dispose: () => void | Promise<void>) {
+  (runtimeState.disposers ??= new Set()).add(dispose);
+  return () => { runtimeState.disposers?.delete(dispose); };
+}
+
 export async function closeDatabase() {
+  await Promise.all([...(runtimeState.disposers || [])].map(dispose => dispose()));
   const dataSource = runtimeState.dataSource;
   runtimeState.dataSource = undefined;
   runtimeState.initialization = undefined;

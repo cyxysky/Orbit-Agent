@@ -10,6 +10,7 @@
   },
   "main": "electron/main.js",
   "scripts": {
+    "db:postgres:init-sql": "node --no-warnings --loader ./server/backend-loader.mjs scripts/export-postgresql-schema.mjs",
     "mcp:setup": "node packages/capability-sdk/scripts/setup.mjs",
     "code-sandbox:start": "node server/start-code-sandbox-runner.js",
     "dev": "node --max-old-space-size=8144 server/webpilot-server.js --dev",

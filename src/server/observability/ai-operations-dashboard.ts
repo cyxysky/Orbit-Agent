@@ -1,4 +1,7 @@
 import { databaseDriver, queryDatabase, queryDatabaseOne } from '@/server/db/database';
+import { projectDatabaseJsonFields } from '@/server/db/json-projection';
+import { queryReadOnlyDatabase } from '@/server/db/read-only-query';
+import { createSharedRead } from '@/server/http/shared-read';
 import { runtimeMetricsSnapshot } from '@/server/observability/runtime-observability';
 import { databaseWriteQueueSnapshot } from '@/server/storage/database-write-queue';
 import { fileTextExtractionPoolSnapshot } from '@/server/capabilities/webpilot-file-observability';
@@ -126,6 +129,7 @@ type MessageRow = {
 
 type StepRow = {
   record_json: string;
+  recovered_count?: number;
   session_id: string;
   user_id?: string | null;
 };
@@ -374,40 +378,42 @@ function boundedRangeDays(value: number) {
 }
 
 /** Keyset pages release raw tool results and logs as soon as they are counted. */
-async function* dashboardRows<T>(sql: string, parameters: unknown[], keys: string[]): AsyncGenerator<Awaited<T>> {
+async function* dashboardRows<T>(sql: string, parameters: unknown[], keys: string[], signal: AbortSignal): AsyncGenerator<Awaited<T>> {
   let cursor: unknown[] | undefined;
   for (;;) {
+    signal.throwIfAborted();
     const comparison = keys.length === 1 ? `${keys[0]} > ?` : `(${keys.join(', ')}) > (${keys.map(() => '?').join(', ')})`;
-    const rows = await queryDatabase<Awaited<T> & Record<string, unknown>>(
+    const rows = await queryReadOnlyDatabase<Awaited<T> & Record<string, unknown>>(
       `${sql} ${cursor ? `AND ${comparison}` : ''} ORDER BY ${keys.join(', ')} LIMIT 8`,
-      [...parameters, ...(cursor || [])],
+      [...parameters, ...(cursor || [])], signal,
     );
+    signal.throwIfAborted();
     if (!rows.length) return;
     for (const row of rows) yield (await row) as Awaited<T>;
     const last = rows[rows.length - 1];
     cursor = keys.map(key => last[key.split('.').at(-1)!]);
     if (rows.length < 8) return;
-    // SQLite queries resolve synchronously; let other API requests run between pages.
+    // Yield between pages as well as moving synchronous SQLite reads off the API thread.
     await new Promise<void>(resolve => setImmediate(resolve));
   }
 }
 
-const pendingDashboards = new Map<string, Promise<AiOperationsDashboardData>>();
+const readDashboard = createSharedRead<string, AiOperationsDashboardData>((key, signal) => {
+  const [rangeDays, trendUserId] = JSON.parse(key) as [number, string | null];
+  return buildAiOperationsDashboard(rangeDays, trendUserId || undefined, signal);
+});
 
-export function readAiOperationsDashboard(rangeDaysValue = 30, trendUserIdValue?: unknown): Promise<AiOperationsDashboardData> {
+export function readAiOperationsDashboard(rangeDaysValue = 30, trendUserIdValue?: unknown, signal?: AbortSignal): Promise<AiOperationsDashboardData> {
   const rangeDays = boundedRangeDays(rangeDaysValue);
   const trendUserId = text(trendUserIdValue) || undefined;
   const key = JSON.stringify([rangeDays, trendUserId]);
-  const pending = pendingDashboards.get(key);
-  if (pending) return pending;
-  const result = buildAiOperationsDashboard(rangeDays, trendUserId).finally(() => pendingDashboards.delete(key));
-  pendingDashboards.set(key, result);
-  return result;
+  return readDashboard(key, signal);
 }
 
 async function buildAiOperationsDashboard(
   rangeDaysValue = 30,
   trendUserIdValue?: unknown,
+  signal = new AbortController().signal,
 ): Promise<AiOperationsDashboardData> {
   const rangeDays = boundedRangeDays(rangeDaysValue);
   const trendUserId = text(trendUserIdValue) || undefined;
@@ -417,7 +423,7 @@ async function buildAiOperationsDashboard(
   const sinceIso = since.toISOString();
   const [sessions, allLiveSessions, archivedChatSessions, automationCases, scheduleCount] = await Promise.all([
     queryDatabase<SessionRow>(`
-    SELECT id, user_id, title, status, summary_json, created_at, updated_at
+    SELECT id, user_id, title, status, ${projectDatabaseJsonFields('summary_json', ['model', 'modelProvider', 'userId', 'targetUrl', 'error', 'title'])} AS summary_json, created_at, updated_at
     FROM browser_chat_session
     WHERE updated_at >= ?
   `, [sinceIso]),
@@ -426,12 +432,13 @@ async function buildAiOperationsDashboard(
   `),
     readArchivedAiOperationsChatSessions(),
     queryDatabase<AutomationCaseRow>(`
-    SELECT id, title, record_json FROM automation_case
+    SELECT id, title, ${projectDatabaseJsonFields('record_json', ['targetUrl', 'title'])} AS record_json FROM automation_case
   `),
     queryDatabaseOne<{ count?: number }>(`
       SELECT COUNT(*) AS count FROM automation_schedule WHERE enabled = ?
     `, [true]),
   ]);
+  signal.throwIfAborted();
   const liveSessionIds = new Set(allLiveSessions.map((row) => row.id));
   const enabledSchedules = numberValue(scheduleCount?.count);
 
@@ -480,7 +487,7 @@ async function buildAiOperationsDashboard(
       (SELECT user_id FROM browser_chat_session WHERE id = message.session_id) AS user_id
     FROM browser_chat_message AS message
     WHERE message.time >= ?
-  `, [sinceIso], ['message.session_id', 'message.id'])) {
+  `, [sinceIso], ['message.session_id', 'message.id'], signal)) {
     const message = parseRecord(row.record_json);
     const role = text(message.role);
     const session = sessionById.get(row.session_id);
@@ -539,7 +546,7 @@ async function buildAiOperationsDashboard(
       (SELECT user_id FROM browser_chat_session WHERE id = log.session_id) AS user_id
     FROM browser_chat_log AS log
     WHERE log.time >= ? AND ${logPhase} IN ('ai:runtime:object', 'ai:runtime:response')
-  `, [sinceIso], ['log.session_id', 'log.id'])) {
+  `, [sinceIso], ['log.session_id', 'log.id'], signal)) {
     const usage = usageFromLog(row.record_json);
     if (!usage) continue;
     const session = sessionById.get(row.session_id);
@@ -552,11 +559,18 @@ async function buildAiOperationsDashboard(
   }
 
   let repairs = 0;
+  // Count flags inside SQLite instead of transferring tool results/screenshots.
+  const recovered = databaseDriver() === 'sqlite' ? `
+    (SELECT COUNT(*) FROM json_each(CASE WHEN json_valid(step.record_json) THEN
+      CASE WHEN json_type(step.record_json, '$.tools') = 'array' THEN step.record_json -> '$.tools' ELSE '[]' END ELSE '[]' END) AS tool
+      WHERE json_type(CASE WHEN json_valid(tool.value) THEN tool.value ELSE '{}' END, '$.recovered') = 'true') AS recovered_count
+  ` : 'step.record_json';
   for await (const row of dashboardRows<StepRow>(`
-    SELECT step.session_id, step.step_index, step.record_json
+    SELECT step.session_id, step.step_index, ${recovered}
     FROM browser_chat_step AS step
     WHERE EXISTS (SELECT 1 FROM browser_chat_session WHERE id = step.session_id AND updated_at >= ?)
-  `, [sinceIso], ['step.session_id', 'step.step_index'])) {
+  `, [sinceIso], ['step.session_id', 'step.step_index'], signal)) {
+    if (row.recovered_count !== undefined) { repairs += numberValue(row.recovered_count); continue; }
     const step = parseRecord(row.record_json);
     for (const tool of arrayValue(step.tools)) {
       const record = parseRecord(tool);
@@ -566,6 +580,7 @@ async function buildAiOperationsDashboard(
 
   const sinceTimestamp = timestampMs(sinceIso);
   for (const archive of archivedChatSessions) {
+    signal.throwIfAborted();
     if (liveSessionIds.has(archive.sessionId)) continue;
     const identity = {
       model: text(archive.model) || 'unknown-model',
@@ -638,7 +653,7 @@ async function buildAiOperationsDashboard(
     SELECT id, user_id, case_id, status, record_json, created_at, updated_at
     FROM automation_run
     WHERE updated_at >= ?
-  `, [sinceIso], ['id'])) {
+  `, [sinceIso], ['id'], signal)) {
     automationRunCount += 1;
     const run = parseRecord(row.record_json);
     const automationCase = caseById.get(row.case_id);

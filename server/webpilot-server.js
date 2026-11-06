@@ -15,6 +15,7 @@ const { createRealtimeRefreshHub } = require('./realtime-refresh-hub');
 const { applyOrbitEnvironment } = require('./orbit-environment');
 const { stopProcessTree } = require('./process-tree.cjs');
 const { browserChatStreamPath, createBrowserChatStreamHub } = require('./browser-chat-stream');
+const { userCookieCheckEnabled, validateUpgradeCookieIdentity } = require('./user-cookie-access');
 
 function normalizeBasePath(value) {
   const normalized = String(value || '').trim().replace(/^\/+|\/+$/g, '');
@@ -146,6 +147,7 @@ const identityHeaderNames = new Set([
   'x-webpilot-identity-username',
   'x-webpilot-identity-roles',
   'x-webpilot-identity-proof',
+  'x-webpilot-identity-source',
 ]);
 
 function applyTrustedIdentityHeaders(request, principal, proof) {
@@ -170,6 +172,7 @@ function applyTrustedIdentityHeaders(request, principal, proof) {
     'x-webpilot-identity-username': username,
     'x-webpilot-identity-roles': roles.join(','),
     'x-webpilot-identity-proof': trustedProof,
+    'x-webpilot-identity-source': principal.source === 'mounted' ? 'mounted' : principal.source === 'internal' ? 'internal' : 'default',
   };
   for (const [name, value] of Object.entries(values)) {
     request.headers[name] = value;
@@ -448,7 +451,7 @@ function internalPrincipal(request, pathname) {
   if (!internalRequestAuthorized(request, pathname)) return undefined;
   const userId = String(request.headers['x-webpilot-internal-user-id'] || '').trim();
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(userId)) return undefined;
-  return { userId, username: 'internal-scheduler', roles: ['user'] };
+  return { userId, username: 'internal-scheduler', roles: ['user'], source: 'internal' };
 }
 
 function rejectMissingIdentity(response) {
@@ -635,8 +638,16 @@ async function main() {
   });
 
   server.on('upgrade', (request, socket, head) => {
+    void (async () => {
     removeUntrustedProxyHeaders(request);
     const requestUrl = new URL(request.url || '/', `http://${request.headers.host || `${hostname}:${port}`}`);
+    if (userCookieCheckEnabled() && (browserChatStreamPath(stripBasePath(requestUrl.pathname, basePath)) || webSocketUpgradeTarget(requestUrl, basePath))) {
+      const principal = requestIdentity(request);
+      applyTrustedIdentityHeaders(request, principal, identityHeaderSecret);
+      if (!principal || !await validateUpgradeCookieIdentity(request, await apiRuntimeSupervisor.ensure(), requestUrl.searchParams.get('ticket'))) {
+        socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n'); return;
+      }
+    }
     if (browserChatStreamPath(stripBasePath(requestUrl.pathname, basePath))) {
       chatStreamHub.acceptUpgrade(request, socket, head);
       return;
@@ -658,6 +669,7 @@ async function main() {
       return;
     }
     refreshHub.acceptUpgrade(request, socket, requestUrl);
+    })().catch(() => socket.destroy());
   });
 
   server.listen(port, hostname, () => {

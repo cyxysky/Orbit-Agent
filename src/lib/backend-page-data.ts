@@ -15,7 +15,7 @@ export async function readBackendPageData<T>(pathname: string): Promise<T> {
   const origin = process.env.WEBPILOT_API_ORIGIN;
   if (!origin) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'The Node API origin is not configured. Start the application with its public launcher.');
   const forwarded = new Headers();
-  for (const name of ['x-webpilot-identity-user-id', 'x-webpilot-identity-username', 'x-webpilot-identity-roles', 'x-webpilot-identity-proof', 'cookie']) {
+  for (const name of ['x-webpilot-identity-user-id', 'x-webpilot-identity-username', 'x-webpilot-identity-roles', 'x-webpilot-identity-proof', 'x-webpilot-identity-source', 'cookie']) {
     const value = incoming.get(name);
     if (value) forwarded.set(name, value);
   }

@@ -5,6 +5,7 @@ import { recoverExecutionTasks } from './execution-recovery';
 import { setBrowserChatExecutionOwner, type ExecutionTask } from '@/server/runtime/execution-ownership';
 import { authorizeInterrupt, isInterruptRequest } from './interrupt-authorization';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+import { processMemorySnapshot } from '@/server/observability/process-memory';
 
 
 const executionPrefixes = ['/api/browser-chat', '/api/embed/browser-chat', '/api/automation', '/api/communication',
@@ -27,6 +28,11 @@ export function createExecutionSupervisor() {
   let stopped = false;
   let restart: ReturnType<typeof setTimeout> | undefined;
   let recovering: Promise<void> = Promise.resolve();
+  const sendMemory = () => {
+    if (worker?.child.connected) worker.child.send({ type: 'parent-process-memory', snapshot: processMemorySnapshot('api') }, () => undefined);
+  };
+  const memoryTimer = setInterval(sendMemory, 5000);
+  memoryTimer.unref();
   setBrowserChatExecutionOwner(sessionId => [...(worker?.tasks.values() || [])]
     .some(task => task.kind === 'chat' && task.id === sessionId));
   const forceStop = () => { if (worker) killTree(worker.child); };
@@ -59,7 +65,7 @@ export function createExecutionSupervisor() {
         const timer = setTimeout(() => { reject(new CodedError(ERROR_CODES.HTTP_REQUEST_FAILED, 'Execution startup timed out')); killTree(child); }, 60_000);
         child.once('error', error => { clearTimeout(timer); reject(error); });
         child.on('message', (message: { type?: string; port?: number; task?: ExecutionTask; active?: boolean }) => {
-          if (message?.type === 'ready' && message.port) { clearTimeout(timer); current.port = message.port; resolve(); }
+          if (message?.type === 'ready' && message.port) { clearTimeout(timer); current.port = message.port; sendMemory(); resolve(); }
           if (message?.type === 'execution-task' && message.task) {
             const key = `${message.task.kind}:${message.task.id}:${message.task.turnId || ''}`;
             if (message.active) current.tasks.set(key, message.task); else current.tasks.delete(key);
@@ -142,6 +148,7 @@ export function createExecutionSupervisor() {
     },
     async close() {
       stopped = true;
+      clearInterval(memoryTimer);
       if (restart) clearTimeout(restart);
       const current = worker;
       if (!current || current.child.exitCode !== null) { await recovering; process.off('exit', forceStop); return; }

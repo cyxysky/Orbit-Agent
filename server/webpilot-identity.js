@@ -90,10 +90,10 @@ function mountTicketClaims(ticket) {
 function requestIdentity(request) {
   const cookie = parseCookies(request.headers.cookie).get(IDENTITY_COOKIE_NAME);
   const mounted = cookie ? verifiedClaims(cookie, 'identity-session') : undefined;
-  if (mounted) return { userId: mounted.userId, username: mounted.userId, roles: ['user'] };
+  if (mounted) return { userId: mounted.userId, username: mounted.userId, roles: ['user'], source: 'mounted' };
   if (String(process.env.WEBPILOT_REQUIRE_MOUNT_USER_ID || '').trim().toLowerCase() === 'true') return undefined;
   const userId = defaultUserId();
-  return { userId, username: userId, roles: ['user'] };
+  return { userId, username: userId, roles: ['user'], source: 'default' };
 }
 
 module.exports = {

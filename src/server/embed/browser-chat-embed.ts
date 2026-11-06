@@ -2,6 +2,7 @@ import { runtimeSetting } from '@/server/settings/runtime-configuration';
 import crypto from 'node:crypto';
 import { joinWebPilotUrl, WEBPILOT_BASE_PATH } from '@/lib/webpilot-base-path';
 import { ERROR_CODES, getErrorCode, withErrorCode } from '@cjfclonedeep/capability-sdk';
+import { ApiRequestError } from '@/server/http/api-request';
 
 type EmbedTokenClaims = {
   version: 1;
@@ -166,7 +167,7 @@ export function readEmbedAuth(request: Request | Request, expectedSessionId?: st
 }
 
 export function embedErrorJson(error: unknown, fallback = 'Embed request failed') {
-  if (error instanceof EmbedAuthError) {
+  if (error instanceof EmbedAuthError || error instanceof ApiRequestError) {
     return embedJson({ code: error.code, error: error.message }, { status: error.status });
   }
   return embedJson(

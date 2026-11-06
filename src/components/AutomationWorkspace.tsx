@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
 import { TextArea } from '@heroui/react/textarea';
 import { FormEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -50,7 +51,6 @@ import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 import { useTheme } from '@/theme/ThemeProvider';
 import { AppInput } from '@/components/ui/app-input';
 import { AppModal } from '@/components/ui/app-modal';
-import { BrowserChatOrderedResponse, BrowserChatAutomationRunIdContext } from '@/components/BrowserChatMarkdown';
 import { browserChatFinalBlockSchema, browserChatFinalBlocksToParts, type BrowserChatFinalBlock } from '@/lib/browser-chat-ui-message';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 
@@ -163,6 +163,15 @@ const weekdayOptions = [
 
 const activeRunStatuses = new Set<AutomationRunStatus>(['queued', 'running']);
 
+
+function RunOutputLoading() {
+  const { t } = useI18n();
+  return <p className="execution-trace-empty" role="status">{t('正在加载运行结果')}</p>;
+}
+
+const AutomationRunOutput = dynamic(() => import('@/components/AutomationRunOutput').then(module => module.AutomationRunOutput), {
+  loading: RunOutputLoading,
+});
 
 function textValue(value: unknown) {
   return typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
@@ -597,9 +606,7 @@ function AutomationExecutionHistory({ runs, language, summary, openRunIds, onTog
     {latest ? <div className={`execution-latest is-${latest.status}`}>
       <div className="execution-latest-heading"><span className="execution-status"><span aria-hidden="true" className={`execution-status-dot is-${latest.status}`} />{statusLabel(latest.status, t)}</span><span>{t('最近一次运行')}</span><time>{formatDateTime(latest.finishedAt || latest.startedAt, language)}</time></div>
       <div id={latestOutputId} className="execution-latest-output automation-result-content" role="region" aria-label={t('任务输出')} tabIndex={0}>
-        <BrowserChatAutomationRunIdContext.Provider value={latest.id}>
-          <BrowserChatOrderedResponse fallbackText={summary} parts={browserChatFinalBlocksToParts(latest.outputBlocks || [])} />
-        </BrowserChatAutomationRunIdContext.Provider>
+        <AutomationRunOutput runId={latest.id} fallbackText={summary} parts={browserChatFinalBlocksToParts(latest.outputBlocks || [])} />
       </div>
       <button type="button" className="execution-detail-link" onClick={() => { setFilter('all'); if (!openRunIds.includes(latest.id)) onToggle(latest.id); }}>{t('查看本次详情')}<ChevronRight size={14} /></button>
     </div> : <div className="execution-empty"><History size={24} /><h4>{t('等待第一次运行')}</h4><p>{t('点击“立即运行”，结果和执行轨迹会显示在这里。')}</p></div>}
@@ -627,7 +634,7 @@ function AutomationExecutionHistory({ runs, language, summary, openRunIds, onTog
               {run.error && <div className="execution-run-error" role="status"><XCircle size={16} /><div><strong>{t('失败原因')}</strong><p>{run.error}</p></div></div>}
               {(run.output || run.outputBlocks?.length) ? (run.id === latest?.id
                 ? <a className="execution-detail-link execution-output-reference" href={`#${latestOutputId}`}>{t('查看运行结果')}<ChevronRight size={14} /></a>
-                : <section className="execution-output"><h4>{t('任务输出')}</h4><div className="automation-result-content"><BrowserChatAutomationRunIdContext.Provider value={run.id}><BrowserChatOrderedResponse fallbackText={run.output || ''} parts={browserChatFinalBlocksToParts(run.outputBlocks || [])} /></BrowserChatAutomationRunIdContext.Provider></div></section>) : null}
+                : <section className="execution-output"><h4>{t('任务输出')}</h4><div className="automation-result-content"><AutomationRunOutput runId={run.id} fallbackText={run.output || ''} parts={browserChatFinalBlocksToParts(run.outputBlocks || [])} /></div></section>) : null}
               <section className="execution-trace"><header><h4>{t('执行轨迹')}</h4><span>{run.finishedAt ? t('完成于 {time}', { time: formatDateTime(run.finishedAt, language) }) : t(running ? '实时更新中' : '本次运行已结束')}</span></header><RunTimeline key={run.id} language={language} steps={run.steps} active={running} t={t} /></section>
             </div>}
           </li>;

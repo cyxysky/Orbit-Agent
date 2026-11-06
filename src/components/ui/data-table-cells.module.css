@@ -1,0 +1,4 @@
+.copy { display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.primary { color: var(--foreground); font-size: inherit; font-weight: 500; line-height: 1.5; }
+a.primary:hover { text-decoration: underline; text-underline-offset: 3px; }
+.secondary { color: var(--muted); font-size: 12px; line-height: 1.5; max-width: 65ch; }

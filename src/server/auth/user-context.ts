@@ -17,11 +17,18 @@ export function normalizeApplicationUserId(value: unknown) {
   return normalized || DEFAULT_APPLICATION_USER_ID;
 }
 
+/** Missing resource ownership must never inherit the default login identity. */
+export function applicationUserOwnsResource(ownerId: unknown, userId: unknown) {
+  const owner = typeof ownerId === 'string' || typeof ownerId === 'number' ? String(ownerId).trim() : '';
+  return Boolean(owner) && owner === normalizeApplicationUserId(userId);
+}
+
 export function applicationUserRuntimeKey(value: unknown) {
   return `user:${normalizeApplicationUserId(value)}`;
 }
 
 export type ApplicationPrincipal = {
+  source: 'mounted' | 'internal' | 'default';
   roles: string[];
   userId: string;
   username: string;
@@ -42,6 +49,8 @@ export function requestApplicationPrincipal(request: Pick<Request, 'headers'>): 
   const username = String(request.headers.get('x-webpilot-identity-username') || '').trim();
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(userId) || !username) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Authentication required');
   return {
+    source: request.headers.get('x-webpilot-identity-source') === 'mounted' ? 'mounted'
+      : request.headers.get('x-webpilot-identity-source') === 'internal' ? 'internal' : 'default',
     userId: normalizeApplicationUserId(userId),
     username,
     roles: String(request.headers.get('x-webpilot-identity-roles') || '')
@@ -65,6 +74,7 @@ export function requestWorkspaceApplicationPrincipal(request: Pick<Request, 'hea
     const username = String(request.headers.get('x-webpilot-identity-username') || '').trim();
     if (/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(userId) && username) {
       return {
+        source: 'default',
         userId: normalizeApplicationUserId(userId),
         username,
         roles: String(request.headers.get('x-webpilot-identity-roles') || '')
@@ -75,7 +85,7 @@ export function requestWorkspaceApplicationPrincipal(request: Pick<Request, 'hea
     }
     if (String(process.env.WEBPILOT_REQUIRE_MOUNT_USER_ID || '').trim().toLowerCase() === 'true') throw error;
     const fallbackUserId = defaultApplicationUserId();
-    return { userId: fallbackUserId, username: fallbackUserId, roles: ['user'] };
+    return { userId: fallbackUserId, username: fallbackUserId, roles: ['user'], source: 'default' };
   }
 }
 

@@ -2,9 +2,10 @@ import path from 'node:path';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { artifactContentType } from '@cjfclonedeep/capability-sdk/file';
 import type { CommunicationMediaOperations } from '@cjfclonedeep/capability-sdk/integrations/communication';
-import { normalizeApplicationUserId } from '@/server/auth/user-context';
+import { applicationUserOwnsResource, normalizeApplicationUserId } from '@/server/auth/user-context';
 import type { BrowserChatSessionSnapshot } from '@/server/ai/agents/browser-chat.service';
 import { readBrowserChatSessionHeader } from './browser-chat-history-store';
+import { getAutomationRun } from './automation-store';
 import { artifactsRoot } from './paths';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 
@@ -14,13 +15,15 @@ export async function resolveOwnedArtifact(segments: string[], userId: string | 
   if (!segments.length || segments.some(segment => !segment || segment === '.' || segment === '..' || /[\\/:\0]/.test(segment))) {
     throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED, 'Invalid artifact path.');
   }
+  if (!userId?.trim()) throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED, 'Artifact not found.');
   const ownerId = normalizeApplicationUserId(userId);
-  let owned = ownerId === normalizeApplicationUserId(undefined);
-  if (segments[0] === 'uploads' || segments[0] === 'media-projects') {
+  let owned = false;
+  if (['uploads', 'media-projects', 'users'].includes(segments[0])) {
     owned = segments.length >= 3 && segments[1] === ownerId;
-  } else if (segments[0].startsWith('chat_')) {
+  } else {
     const session = await readBrowserChatSessionHeader<BrowserChatSessionSnapshot>(segments[0]);
-    owned = Boolean(session && normalizeApplicationUserId(session.userId) === ownerId);
+    owned = Boolean(session && applicationUserOwnsResource(session.userId, ownerId));
+    if (!owned) owned = Boolean(await getAutomationRun(segments[0], ownerId));
   }
   if (!owned) throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED, 'Artifact not found.');
   const root = await realpath(artifactsRoot());

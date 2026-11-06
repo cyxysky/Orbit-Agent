@@ -16,7 +16,9 @@ import {
   Wrench,
   X,
 } from 'lucide-react';
-import { EnvironmentSettings, type EnvironmentSettingsInitialData } from '@/components/EnvironmentSettings';
+import type { EnvironmentSettingsInitialData } from '@/components/EnvironmentSettings';
+import dynamic from 'next/dynamic';
+import { WorkspaceContentSkeleton } from '@/components/WorkspaceContentSkeleton';
 import {
   environmentSettingsTabGroups,
   environmentSettingsTabsForUser,
@@ -36,6 +38,15 @@ import { AppModal } from '@/components/ui/app-modal';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 import { useRouter } from 'next/navigation';
 
+
+function SettingsContentLoading() {
+  const { t } = useI18n();
+  return <WorkspaceContentSkeleton label={t('正在读取配置')} />;
+}
+
+const EnvironmentSettings = dynamic(() => import('@/components/EnvironmentSettings').then(module => module.EnvironmentSettings), {
+  loading: SettingsContentLoading,
+});
 
 function SettingsTabIcon({ tab }: { tab: SettingsTab }) {
   if (tab === 'general') return <Palette size={15} />;

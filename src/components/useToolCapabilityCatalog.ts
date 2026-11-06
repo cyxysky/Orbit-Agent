@@ -25,8 +25,12 @@ function subscribe(listener: () => void) {
           if (!response.ok) throw new Error('Catalog unavailable');
           const data = await response.json();
           if (!request.signal.aborted && Array.isArray(data.tools)) {
-            catalog = { enabled: new Set(data.tools.map((tool: { name: string }) => tool.name)), interfaceSettings: data.interfaceSettings ?? defaultChatInterfaceSettings };
+            const enabled = new Set<string>(data.tools.map((tool: { name: string }) => tool.name));
+            const interfaceSettings = data.interfaceSettings ?? defaultChatInterfaceSettings;
             retryMs = 1000;
+            if (catalog && catalog.enabled.size === enabled.size && [...enabled].every(name => catalog!.enabled.has(name))
+              && JSON.stringify(catalog.interfaceSettings) === JSON.stringify(interfaceSettings)) return;
+            catalog = { enabled, interfaceSettings };
             for (const notify of listeners) notify();
           }
         }).catch(() => {

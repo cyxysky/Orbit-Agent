@@ -17,7 +17,7 @@ import type {
   BrowserCodeCredentialBinding,
 } from '@cjfclonedeep/capability-sdk/browser/node';
 import { browserInstanceConfigurationKey, browserRuntimeConfiguration, createWebPilotBrowserSession } from '@/server/capabilities/webpilot-browser';
-import { normalizeApplicationUserId } from '@/server/auth/user-context';
+import { applicationUserOwnsResource, normalizeApplicationUserId } from '@/server/auth/user-context';
 import { normalizeDisabledCapabilityTools } from './runtime-tool-catalog';
 import { readBrowserDomainCookies } from '@/server/credentials/browser-domain-cookie-vault';
 import { incrementMetric, structuredLog } from '@/server/observability/runtime-observability';
@@ -1207,7 +1207,7 @@ function normalizeUserId(value: unknown) {
 }
 
 function sessionBelongsToUser(session: Pick<BrowserChatSessionSnapshot, 'userId'>, userId?: unknown) {
-  return normalizeUserId(session.userId) === normalizeUserId(userId);
+  return applicationUserOwnsResource(session.userId, userId);
 }
 
 function normalizeAttachments(value: unknown, userId?: unknown): BrowserChatAttachment[] {

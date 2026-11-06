@@ -1,5 +1,5 @@
 import { normalizeApplicationUserId } from '@/server/auth/user-context';
-import { executeDatabase, queryDatabase } from '@/server/db/database';
+import { executeDatabase, queryDatabase, type DatabaseExecutor } from '@/server/db/database';
 import { decryptCredentialSecret, encryptCredentialSecret } from './credential-master-key';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 
@@ -93,7 +93,7 @@ export function parseBrowserCookieHeader(value: string, domainValue: unknown): B
   return [...cookies.values()];
 }
 
-export async function saveBrowserDomainCookie(userIdValue: unknown, domainValue: unknown, cookie: string) {
+export async function saveBrowserDomainCookie(userIdValue: unknown, domainValue: unknown, cookie: string, executor?: DatabaseExecutor) {
   const userId = normalizeApplicationUserId(userIdValue);
   const domain = normalizeBrowserCookieDomain(domainValue);
   const cookies = parseBrowserCookieHeader(cookie, domain);
@@ -105,7 +105,7 @@ export async function saveBrowserDomainCookie(userIdValue: unknown, domainValue:
     ON CONFLICT(user_id, domain) DO UPDATE SET
       cookie_envelope = excluded.cookie_envelope,
       updated_at = excluded.updated_at
-  `, [userId, domain, encryptCookie(cookie, userId, domain), timestamp, timestamp]);
+  `, [userId, domain, encryptCookie(cookie, userId, domain), timestamp, timestamp], executor);
   return { cookieCount: cookies.length, domain, updatedAt: timestamp, userId };
 }
 

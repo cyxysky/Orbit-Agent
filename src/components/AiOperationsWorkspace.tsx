@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import {
   Activity,
   Bot,
@@ -19,6 +18,8 @@ import { CustomSelect } from '@/components/CustomSelect';
 import { BackendRuntimePanel } from '@/components/BackendRuntimePanel';
 import { AiOperationsLoading } from '@/components/AiOperationsLoading';
 import { DataTable } from '@/components/ui/data-table';
+import { EmptyState } from '@heroui/react/empty-state';
+import { DataTableStatus, DataTableText } from '@/components/ui/data-table-cells';
 import { WorkspaceNavigationSidebar } from '@/components/WorkspaceSidebar';
 import { useI18n } from '@/i18n/I18nProvider';
 import { readApiJson } from '@/lib/api-client';
@@ -203,10 +204,6 @@ function OutcomeTrendChart({ points }: { points: AiOperationsTrendPoint[] }) {
       </div>
     </div>
   );
-}
-
-function EmptyState({ children }: { children: ReactNode }) {
-  return <div className="ai-operations-empty">{children}</div>;
 }
 
 export function AiOperationsWorkspace({ initialSidebarCollapsed = false }: { initialSidebarCollapsed?: boolean }) {
@@ -438,12 +435,12 @@ function AiOperationsDashboard({
                   columns={[
                     {
                       accessor: (item) => item.title,
-                      cell: (item) => <>{item.href ? <Link href={item.href}>{item.title}</Link> : <strong>{item.title}</strong>}<br /><small title={item.reason}>{item.reason}</small></>,
+                      cell: (item) => <DataTableText primary={item.title} href={item.href} secondary={item.reason} />,
                       header: t('任务'),
                       id: 'task',
                     },
                     { accessor: (item) => item.userId, cell: (item) => item.userId, header: t('用户'), id: 'user' },
-                    { accessor: (item) => item.status, filterAccessor: item => `${item.status} ${t(statusLabel(item.status))}`, cell: (item) => <span className={`ai-operations-status is-${item.status}`}>{t(statusLabel(item.status))}</span>, header: t('状态'), id: 'status' },
+                    { accessor: (item) => item.status, filterAccessor: item => `${item.status} ${t(statusLabel(item.status))}`, cell: (item) => <DataTableStatus status={item.status}>{t(statusLabel(item.status))}</DataTableStatus>, header: t('状态'), id: 'status' },
                     { accessor: (item) => item.target, cell: (item) => item.target, header: t('目标'), id: 'target' },
                     { accessor: (item) => item.time, filterAccessor: item => `${item.time} ${dateTime(item.time)}`, cell: (item) => dateTime(item.time), header: t('时间'), id: 'time' },
                   ]}
@@ -484,7 +481,7 @@ function AiOperationsDashboard({
                     { accessor: (item) => item.totalTasks, cell: (item) => item.totalTasks, header: t('任务'), id: 'tasks' },
                     {
                       accessor: (item) => item.totalTokens,
-                      cell: (item) => <><strong>{compactNumber(item.totalTokens)}</strong><br /><small>{t('输入 {input} · 输出 {output}', { input: compactNumber(item.inputTokens), output: compactNumber(item.outputTokens) })}</small></>,
+                      cell: (item) => <DataTableText primary={compactNumber(item.totalTokens)} secondary={t('输入 {input} · 输出 {output}', { input: compactNumber(item.inputTokens), output: compactNumber(item.outputTokens) })} />,
                       header: t('Token 用量'),
                       id: 'tokens',
                     },
@@ -508,7 +505,7 @@ function AiOperationsDashboard({
                 <DataTable<AiOperationsDashboardData['models'][number]>
                   pagination filterable
                   columns={[
-                    { accessor: (item) => item.model, cell: (item) => <><strong>{item.model}</strong><br /><small>{item.provider}</small></>, header: t('模型'), id: 'model' },
+                    { accessor: (item) => item.model, cell: (item) => <DataTableText primary={item.model} secondary={item.provider} />, header: t('模型'), id: 'model' },
                     { accessor: (item) => item.taskCount, cell: (item) => item.taskCount, header: t('任务'), id: 'tasks' },
                     { accessor: (item) => item.calls, cell: (item) => compactNumber(item.calls), header: t('调用'), id: 'calls' },
                     { accessor: (item) => item.inputTokens, cell: (item) => compactNumber(item.inputTokens), header: t('输入 Token'), id: 'input' },

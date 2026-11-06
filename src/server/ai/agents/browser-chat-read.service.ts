@@ -1,4 +1,4 @@
-import { normalizeApplicationUserId } from '@/server/auth/user-context';
+import { applicationUserOwnsResource, normalizeApplicationUserId } from '@/server/auth/user-context';
 import type { StepExecutionResult, StepToolCall } from '@/server/ai/schemas/runtime.schema';
 import {
   compactBrowserChatLogsForClient,
@@ -165,7 +165,7 @@ function mergeBrowserChatRecoveredToolSteps(
 }
 
 function belongsToUser(session: Pick<BrowserChatSessionSnapshot, 'userId'>, userId?: string | number) {
-  return normalizeApplicationUserId(session.userId) === normalizeApplicationUserId(userId);
+  return applicationUserOwnsResource(session.userId, userId);
 }
 
 function compactStepForClient(step: StepExecutionResult): StepExecutionResult {
