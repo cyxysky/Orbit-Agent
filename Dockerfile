@@ -60,7 +60,7 @@ ENV WEBPILOT_CAPABILITY_SOURCE=${ORBIT_CAPABILITY_SOURCE}
 COPY --from=build /app/package*.json ./
 COPY --from=build /app/scripts/prune-runtime-dependencies.cjs ./scripts/prune-runtime-dependencies.cjs
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libreoffice-nogui fonts-noto-cjk python3 python3-venv python3-uno ca-certificates \
+    && apt-get install -y --no-install-recommends libreoffice-nogui fonts-noto-cjk python3 python3-venv python3-uno ca-certificates util-linux \
     && rm -rf /var/lib/apt/lists/*
 
 ENV NODE_ENV=production
@@ -96,7 +96,7 @@ COPY --from=build /app/.capability-runtime/computer ./capability-runtime/compute
 COPY --from=build /app/packages/capability-sdk/runtime/execution ./capability-runtime/execution
 
 RUN find ./server -type f -name '*.test.js' -delete \
-    && useradd --no-create-home --user-group --uid 10001 --shell /usr/sbin/nologin sandbox \
+    && node capability-runtime/execution/isolation.cjs --provision \
     && mkdir -p .data artifacts
 
 EXPOSE 3000

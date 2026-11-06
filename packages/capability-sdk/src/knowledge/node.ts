@@ -275,8 +275,8 @@ export function createFileKnowledgeStore(input: { directory: string }): Knowledg
   };
   return result;
 }
-export function createNodeKnowledgeCapability(input: { directory: string | ((context: CapabilityRunContext) => string) }) {
-  return createKnowledgeCapability({ createStore(context) {
+export function createNodeKnowledgeCapability(input: { directory: string | ((context: CapabilityRunContext) => string); readOnly?: boolean }) {
+  return createKnowledgeCapability({ readOnly: input.readOnly, createStore(context) {
     return createFileKnowledgeStore({ directory: typeof input.directory === 'function' ? input.directory(context) : input.directory });
   } });
 }

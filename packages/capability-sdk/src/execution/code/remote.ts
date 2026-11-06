@@ -46,14 +46,21 @@ function connectionError(error: unknown, baseUrl: string, healthCheck = false) {
 export function createHttpCodeSandboxExecutor(input: {
   url: string;
   token?: string;
+  requiredIsolation?: string;
 }): CodeSandboxExecutor {
   const baseUrl = runnerUrl(input.url);
   const headers = {
     'content-type': 'application/json',
     ...(input.token?.trim() ? { authorization: `Bearer ${input.token.trim()}` } : {}),
   };
-  return {
+  const executor: CodeSandboxExecutor = {
     async run(execution: CodeSandboxExecution, context): Promise<CodeSandboxExecutionResult> {
+      if (input.requiredIsolation) {
+        const readiness = await executor.health?.();
+        if (readiness?.status !== 'healthy') throw new CodeSandboxRunnerError(ERROR_CODES.CODE_SANDBOX_RUNNER_UNAVAILABLE,
+          `${readiness?.message || 'Runner isolation is unavailable.'} No code execution request was sent.`);
+      }
+      context.abortSignal?.throwIfAborted();
       const responseTimeoutMs = execution.timeoutMs + (execution.packages.length ? execution.installTimeoutMs : 0) + 10_000;
       const signal = context.abortSignal ? AbortSignal.any([context.abortSignal, AbortSignal.timeout(responseTimeoutMs)]) : AbortSignal.timeout(responseTimeoutMs);
       let response: Response;
@@ -82,25 +89,28 @@ export function createHttpCodeSandboxExecutor(input: {
     async health() {
       try {
         const response = await fetch(`${baseUrl}/health`, { headers: input.token?.trim() ? { authorization: `Bearer ${input.token.trim()}` } : {}, signal: AbortSignal.timeout(3_000) });
-        const payload = await readJson(response) as { status?: string; message?: string };
+        const payload = await readJson(response) as { status?: string; message?: string; isolation?: string };
         if (!response.ok) return { status: 'unhealthy', message: payload.message || `Runner returned HTTP ${response.status}.` };
+        if (input.requiredIsolation && payload.isolation !== input.requiredIsolation) return { status: 'needs-runtime', message: `Runner must support isolation policy ${input.requiredIsolation}. Upgrade the runner before executing code.` };
         return payload.status === 'healthy' ? { status: 'healthy' } : { status: 'needs-runtime', message: payload.message || 'Code Sandbox runner is not ready.' };
       } catch (error) {
         return { status: 'needs-runtime', message: connectionError(error, baseUrl, true).message };
       }
     },
   };
+  return executor;
 }
 
 export function createHttpCodeSandboxCapability(input: {
   url: string | ((context: CapabilityRunContext) => string);
   token?: string | ((context: CapabilityRunContext) => string | undefined);
+  requiredIsolation?: string;
 }) {
   return createCodeSandboxCapability({
     createExecutor(context) {
       const url = typeof input.url === 'function' ? input.url(context) : input.url;
       const token = typeof input.token === 'function' ? input.token(context) : input.token;
-      return createHttpCodeSandboxExecutor({ url, token });
+      return createHttpCodeSandboxExecutor({ url, token, requiredIsolation: input.requiredIsolation });
     },
   });
 }

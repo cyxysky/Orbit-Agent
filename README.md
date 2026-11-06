@@ -8,6 +8,8 @@ An agent workspace with a Next.js UI, an independent Node.js API, and a separate
 
 See [Node backend architecture](docs/node-backend-architecture.md) for process boundaries, source/production entry points, packaging, and recovery behavior.
 
+See [user data boundaries and shared knowledge](docs/architecture/user-data-isolation.md) for ownership checks, Linux code runner isolation, and multi-user deployment requirements.
+
 Orbit combines an Agent Harness for persistent sessions, context management, tool execution, and recovery with a workspace for reviewing results and controlling tasks.
 
 Google Maps is available as the independent `@cjfclonedeep/capability-sdk/maps` package for place searches, basic routes, and interactive chat maps. Configure separate browser/server keys under **设置 → 工具能力 → 地图**. See the [Google Maps setup guide](packages/capability-sdk/docs/maps/README.md) for API enablement, key restrictions, usage limits, and examples.

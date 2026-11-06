@@ -334,6 +334,34 @@ export const provider = createCodeSandboxCapability({
 });
 ```
 
+## Linux runner isolation
+
+The HTTP runner provisions reserved execution accounts at image build time with
+`node runtime/execution/isolation.cjs --provision` (use the staged runtime path in
+a packaged application). Jobs lease distinct UID/GID pairs using OS file locks.
+They receive a private workspace, HOME and TMP directory, plus an inherited
+Landlock policy allowing writes only in that workspace and reads from the
+required system runtime. Output collection follows process cleanup; workspace
+cleanup completes before a user identity can be leased again.
+
+Linux isolation requires Landlock ABI 3 or newer, `flock`, Python 3, a root
+coordinator with CHOWN, DAC_OVERRIDE, KILL, SETGID and SETUID, and
+`no-new-privileges`. The task processes receive none of those coordinator
+capabilities. Use an exec-enabled temporary mount for virtual environments and
+native dependencies, and an init process to reap children. Missing isolation
+prerequisites produce an unhealthy runner instead of falling back to a shared
+user. Non-Linux local execution remains a trusted development capability, not
+this Linux isolation boundary.
+
+The HTTP runner declares `isolation: "linux-landlock-v1"` in healthy responses.
+Hosts that require this boundary pass `requiredIsolation: 'linux-landlock-v1'`
+to `createHttpCodeSandboxExecutor` or `createHttpCodeSandboxCapability`. The
+executor verifies the requirement before dispatching code; an older or
+misconfigured runner cannot silently satisfy the deployment policy.
+
+The runner still shares the configured network and container resource limits.
+This is not a separate network or resource container for each job.
+
 ## Additional package reference
 
 The following pre-existing reference includes focused API fragments and application integration notes. The complete runnable entrypoints are the numbered tutorial above; do not concatenate unrelated snippets.

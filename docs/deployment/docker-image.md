@@ -4,6 +4,8 @@
 
 ## 一个发布镜像
 
+代码沙箱的任务隔离与公共知识库变更见[用户数据边界](../architecture/user-data-isolation.md)。升级时先重建镜像，再用当前 Compose 启动；沙箱需要预置执行身份、Landlock 和新增的协调进程权限，不能继续使用旧镜像。
+
 构建、分发和加载只需要 `orbit:latest`。Docker Compose 从同一镜像启动两个容器：
 
 | 容器 | 入口 | 职责 |
@@ -60,7 +62,7 @@ docker build --build-arg ORBIT_BASE_PATH=webpilot --build-arg BUILD_BUNDLER=webp
 ## 独立本地运行
 
 ```powershell
-docker run -d --name orbit -p 127.0.0.1:3001:3000 -e ORBIT_REQUIRE_MOUNT_USER_ID=false -v orbit-data:/app/.data -v orbit-artifacts:/app/artifacts orbit:latest
+docker run -d --name orbit -p 127.0.0.1:3001:3000 -e ORBIT_REQUIRE_MOUNT_USER_ID=false -v orbit-data:/app/.data -v orbit-artifacts:/app/artifacts -v orbit-knowledge:/app/knowledge orbit:latest
 ```
 
 访问 `http://localhost:3001/webpilot`。示例使用默认本地身份；挂载到宿主应用时使用项目已有的挂载身份配置。模型等配置可在设置页保存到新实例数据库。
@@ -91,7 +93,7 @@ Compose 沿用已有的 `CODE_SANDBOX_RUNNER_TOKEN` 配置，不对外发布沙�
 
 镜像仅构建到本地 Docker，没有发布到远端镜像仓库。
 
-## 本机验证范围
+## 上次发行镜像验证（隔离修复前）
 
 2026-11-06，Linux amd64。最终 `orbit:latest` 为 `a99db9405875`：Docker 本地磁盘占用约 4.00GB（4001827175 字节），压缩内容约 1.01GB；本轮开始时分别约 4.91GB、1.21GB。使用同一个 Docker 显示口径，主镜像减少约 0.91GB；删除旧辅助标签释放的空间不包含在这个减重数字内。
 

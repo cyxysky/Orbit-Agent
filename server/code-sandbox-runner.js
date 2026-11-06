@@ -78,7 +78,8 @@ const server = http.createServer(async (request, response) => {
     return;
   }
   if (request.method === 'GET' && (request.url === '/health' || request.url === '/healthz')) {
-    sendJson(response, 200, { status: 'healthy', network: 'full', concurrency: MAX_CONCURRENCY });
+    const health = await engine.health();
+    sendJson(response, health.status === 'healthy' ? 200 : 503, { ...health, isolation: health.status === 'healthy' ? 'linux-landlock-v1' : undefined, network: 'full', concurrency: MAX_CONCURRENCY });
     return;
   }
   if (request.method !== 'POST' || request.url !== '/v1/execute') {

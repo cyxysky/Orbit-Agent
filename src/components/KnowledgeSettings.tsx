@@ -98,7 +98,7 @@ export function KnowledgeSettings({ authorizationToken = '' }: { authorizationTo
       </header>
       <div className="knowledge-settings-help">
         <p>{t('支持 ZIP、RAR。下载模板可获取清单、字段定义、JSONL 示例和生成说明。同一包 ID 的新导入会替换现有内容。')}</p>
-        <p>{t('原包、知识正文和索引保存在当前 Orbit 部署的数据目录，按用户隔离，不自动提交或上传 GitHub。检索到的内容会按当前模型配置发送给模型。')}</p>
+        <p>{t('知识库对当前部署的所有用户共享，所有对话均可检索。导入、停用和删除仍需设置权限；原包、正文和索引保存在本机数据目录，不自动上传 GitHub。检索内容会发送给当前配置的模型。')}</p>
       </div>
       {busy === 'import' ? <p role="status">{t('正在校验内容、来源和关联，并建立索引。完成后自动启用；包内脚本不会执行。')}</p> : null}
       {notice ? <p className="knowledge-settings-notice" role="status">{notice}</p> : null}

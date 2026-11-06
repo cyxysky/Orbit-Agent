@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 import { createKnowledgePackageTemplate, parseKnowledgePackageArchive, knowledgePackageUploadLimit } from '@cjfclonedeep/capability-sdk/knowledge/node';
 import { requestApplicationUserId } from '@/server/auth/user-context';
-import { withUserKnowledgeStore } from '@/server/capabilities/knowledge-storage';
+import { withSharedKnowledgeStore } from '@/server/capabilities/knowledge-storage';
 import { ApiRequestError, apiError, apiJson, boundedQueryInteger, parseJsonRequest } from '@/server/http/api-request';
 
 const packageId = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}$/);
@@ -11,7 +11,8 @@ function failure(request: Request, error: unknown, fallback: string) {
 }
 export async function GET(request: Request) {
   try {
-    const userId = requestApplicationUserId(request), query = new URL(request.url).searchParams;
+    requestApplicationUserId(request);
+    const query = new URL(request.url).searchParams;
     if (query.get('template') === '1') {
       const bytes = await createKnowledgePackageTemplate();
       return new Response(new Uint8Array(bytes).buffer, { headers: {
@@ -21,7 +22,7 @@ export async function GET(request: Request) {
     }
     const limit = boundedQueryInteger(query.get('limit'), { fallback: 50, max: 100 });
     const offset = boundedQueryInteger(query.get('offset'), { fallback: 0, max: 1_000_000, min: 0 });
-    return await withUserKnowledgeStore(userId, async store => {
+    return await withSharedKnowledgeStore(async store => {
       const packages = await store.packages(limit + 1, offset);
       return apiJson(request, { packages: packages.slice(0, limit), nextOffset: packages.length > limit ? offset + limit : null });
     });
@@ -29,7 +30,7 @@ export async function GET(request: Request) {
 }
 export async function POST(request: Request) {
   try {
-    const userId = requestApplicationUserId(request);
+    requestApplicationUserId(request);
     const maximum = knowledgePackageUploadLimit + 1024 * 1024;
     if (Number(request.headers.get('content-length')) > maximum) throw new ApiRequestError('知识包不能超过 32 MB。', { status: 413 });
     if (!request.body) throw new ApiRequestError('请选择 ZIP 或 RAR 知识包。');
@@ -50,7 +51,7 @@ export async function POST(request: Request) {
     let candidate;
     try { candidate = await parseKnowledgePackageArchive(new Uint8Array(await file.arrayBuffer()), file.name); }
     catch (error) { throw new ApiRequestError(error instanceof Error ? error.message : '知识包校验失败。', { code: ERROR_CODES.INVALID_KNOWLEDGE_PACKAGE }); }
-    return await withUserKnowledgeStore(userId, async store => {
+    return await withSharedKnowledgeStore(async store => {
       const pack = await store.importPackage(candidate);
       return apiJson(request, { package: pack });
     });
@@ -58,9 +59,9 @@ export async function POST(request: Request) {
 }
 export async function PATCH(request: Request) {
   try {
-    const userId = requestApplicationUserId(request);
+    requestApplicationUserId(request);
     const body = await parseJsonRequest(request, z.object({ id: packageId, enabled: z.boolean() }).strict(), { maxBytes: 4096 });
-    return await withUserKnowledgeStore(userId, async store => {
+    return await withSharedKnowledgeStore(async store => {
       if (!await store.setPackageEnabled(body.id, body.enabled)) throw new ApiRequestError('知识包不存在。', { status: 404 });
       return apiJson(request, { ok: true });
     });
@@ -68,8 +69,9 @@ export async function PATCH(request: Request) {
 }
 export async function DELETE(request: Request) {
   try {
-    const userId = requestApplicationUserId(request), id = packageId.parse(new URL(request.url).searchParams.get('id'));
-    return await withUserKnowledgeStore(userId, async store => {
+    requestApplicationUserId(request);
+    const id = packageId.parse(new URL(request.url).searchParams.get('id'));
+    return await withSharedKnowledgeStore(async store => {
       if (!await store.deletePackage(id)) throw new ApiRequestError('知识包不存在。', { status: 404 });
       return apiJson(request, { ok: true });
     });

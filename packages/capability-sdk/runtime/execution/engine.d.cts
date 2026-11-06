@@ -15,6 +15,8 @@ export function createCodeExecutionEngine(options: {
   pipCacheDirectory?: string;
   maxConcurrent?: number;
   dropPrivileges?: boolean;
+  /** Trusted host runtime resources, never taken from a task's execution payload. */
+  runtimeReadOnlyPaths?: string[];
 }): {
   run(payload: CodeSandboxExecution, signal?: AbortSignal): Promise<CodeSandboxExecutionResult>;
   health(): Promise<CapabilityHealth>;

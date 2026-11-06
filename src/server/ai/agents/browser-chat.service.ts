@@ -1385,7 +1385,7 @@ async function createBrowserChatRuntimeOperationalContext(input: {
     ]));
     const credentials = await browserChatCredentialContext(input.session, credentialReferences);
     const officeDraftCatalog = await officeDraftCatalogForPrompt(input.session.id);
-    const knowledgeCatalog = await knowledgeCatalogForPrompt(input.session.userId);
+    const knowledgeCatalog = await knowledgeCatalogForPrompt();
     return {
       operationalContext: [conversationFileRegistry(input.session, input.historicalMessages), officeDraftCatalog, knowledgeCatalog,
         browserChatCredentialPrompt(credentials.credentials, input.session.browserInteractionMode)].filter(Boolean).join('\n\n'),

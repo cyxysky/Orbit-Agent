@@ -17,7 +17,7 @@ import { createHttpCodeSandboxExecutor } from '@cjfclonedeep/capability-sdk/exec
 import { createNodeConnectorsCapability } from '@cjfclonedeep/capability-sdk/integrations/connectors/node';
 import type { AgentConnector } from '@cjfclonedeep/capability-sdk/integrations/connectors';
 import { createNodeKnowledgeCapability } from '@cjfclonedeep/capability-sdk/knowledge/node';
-import { userKnowledgeDirectory } from './knowledge-storage';
+import { sharedKnowledgeDirectory } from './knowledge-storage';
 import { createTextEditorCapability } from '@cjfclonedeep/capability-sdk/text-editor';
 import { createFileTextEditorOperations } from '@cjfclonedeep/capability-sdk/text-editor/node';
 import { importLegacyTextDocuments, textUserDirectory } from './text-storage';
@@ -62,6 +62,7 @@ function createAgentCodeSandboxCapability(): CapabilityProvider {
         return withCodeSandboxArtifacts(createHttpCodeSandboxExecutor({
           url: String(context.configuration.AGENT_CODE_SANDBOX_RUNNER_URL || '').trim(),
           token: String(context.configuration.AGENT_CODE_SANDBOX_RUNNER_TOKEN || '').trim() || undefined,
+          requiredIsolation: 'linux-landlock-v1',
         }), context);
       }
       return withCodeSandboxArtifacts(createNodeProcessCodeSandbox({
@@ -197,7 +198,7 @@ export async function createAgentInfrastructureProviders(input: {
     createConfigurationCapability(),
     createAgentCodeSandboxCapability(),
     createNodeConnectorsCapability({ connectors: configuredConnectors }),
-    createNodeKnowledgeCapability({ directory: (context) => userKnowledgeDirectory(context.userId) }),
+    createNodeKnowledgeCapability({ directory: sharedKnowledgeDirectory(), readOnly: true }),
     createTextEditorCapability({ createOperations(context) {
       return createFileTextEditorOperations({
         directory: textUserDirectory(context.userId),

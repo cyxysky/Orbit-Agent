@@ -3,6 +3,7 @@ import type { Language } from '@/i18n/language';
 export type { Language } from '@/i18n/language';
 
 const en: Record<string, string> = {
+  '知识库对当前部署的所有用户共享，所有对话均可检索。导入、停用和删除仍需设置权限；原包、正文和索引保存在本机数据目录，不自动上传 GitHub。检索内容会发送给当前配置的模型。': 'Knowledge is shared across all users of this deployment and can be retrieved in every conversation. Importing, disabling and deleting require settings access. Packages, content and indexes stay in local storage and are not automatically uploaded to GitHub. Retrieved content is sent to the configured model.',
   'Node 进程 RSS 合计': 'Combined Node process RSS',
   'API 与执行进程，每 5 秒采样': 'API and execution processes, sampled every 5 seconds',
   '系统可用内存': 'Available system memory',

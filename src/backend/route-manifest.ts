@@ -19,6 +19,7 @@ const settingsRoutes = [
 
 export const routes = [
   ...settingsRoutes,
+  { path: '/api/knowledge', load: () => import('./routes/knowledge/route') },
   { path: '/api/settings/preferences', load: () => import('./routes/settings/preferences/route') },
   { path: '/api/text-documents/workspace', load: () => import('./routes/text-documents/workspace/route') },
   { path: '/api/media/video-projects', load: () => import('./routes/media/video-projects/route') },
