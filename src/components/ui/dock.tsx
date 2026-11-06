@@ -48,7 +48,11 @@ export function DockIcon({ children, className, size = 40, magnification = 60, d
   const focused = useMotionValue(false);
   const offset = useTransform(() => {
     const x = pointerX.get();
+    // Idle and fixed-size docks do not need geometry. Reading it here forces
+    // layout during route mounting and again after every pointer leave.
+    if (disableMagnification) return Infinity;
     if (focused.get()) return 0;
+    if (!Number.isFinite(x)) return Infinity;
     const bounds = ref.current?.getBoundingClientRect();
     return bounds ? x - bounds.x - bounds.width / 2 : Infinity;
   });

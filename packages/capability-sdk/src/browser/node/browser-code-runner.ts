@@ -407,7 +407,7 @@ type PendingExecution = {
 const maxDiagnosticChars = 4_000;
 const defaultBrowserCodeKernelReadyTimeoutMs = 10_000;
 const defaultBrowserCodeExecutionTimeoutMs = 90_000;
-export const BROWSER_CODE_KERNEL_RUNTIME_REVISION = 60;
+export const BROWSER_CODE_KERNEL_RUNTIME_REVISION = 62;
 
 function boundedInteger(value: unknown, fallback: number, min: number, max: number) {
   const parsed = typeof value === 'number' ? value : Number(value);
@@ -1321,15 +1321,20 @@ function browserCodeKernelMain() {
 
   const ownerDisabled = (element: Element) => {
     const runtime = (window as Window & { __aiDomRuntime?: { isDisabledElement?: (target: Element) => boolean } }).__aiDomRuntime;
-    if (!runtime?.isDisabledElement) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'BROWSER_INPUT_PREFLIGHT_FAILED: containing frame state is not ready.');
+    if (!runtime?.isDisabledElement) return undefined;
     return runtime.isDisabledElement(element);
+  };
+
+  const assertOwnerEnabled = (disabled: boolean | undefined) => {
+    if (disabled === undefined) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'BROWSER_INPUT_PREFLIGHT_FAILED: containing frame state is not ready.');
+    if (disabled) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'BROWSER_INPUT_PREFLIGHT_FAILED: containing frame belongs to a disabled control.');
   };
 
   const assertContainingFramesEnabled = async (frame: import('patchright').Frame | undefined) => {
     for (let currentFrame = frame; currentFrame?.parentFrame(); currentFrame = currentFrame.parentFrame() || undefined) {
       const owner = await currentFrame.frameElement();
       try {
-        if (await owner.evaluate(ownerDisabled)) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'BROWSER_INPUT_PREFLIGHT_FAILED: containing frame belongs to a disabled control.');
+        assertOwnerEnabled(await owner.evaluate(ownerDisabled));
       } finally { await owner.dispose(); }
     }
   };
@@ -1365,9 +1370,7 @@ function browserCodeKernelMain() {
       const rootFrame = locatorFrame(originalCandidate);
       const marker = ' >> internal:control=enter-frame >> ';
       for (let index = selector.indexOf(marker); rootFrame && index >= 0; index = selector.indexOf(marker, index + marker.length)) {
-        if (await rootFrame.locator(selector.slice(0, index)).evaluate(ownerDisabled)) {
-          throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'BROWSER_INPUT_PREFLIGHT_FAILED: containing frame belongs to a disabled control.');
-        }
+        assertOwnerEnabled(await rootFrame.locator(selector.slice(0, index)).evaluate(ownerDisabled));
       }
     }
     if (String(Reflect.get(originalCandidate, '_selector') || '').includes(browserCodeUidAttribute)) {
@@ -1418,16 +1421,19 @@ function browserCodeKernelMain() {
       }
       await waitForTargetRendering();
     }
-    let results = await candidateSet.evaluateAll((elements, operation) => {
+    const inspected = await candidateSet.evaluateAll((elements, operation) => {
       const runtime = (window as Window & { __aiDomRuntime?: { actionability?: (
         element: Element, options?: { action?: string },
       ) => { ok: boolean; reason: string; descriptor: string; coveredBy?: string;
         coveredBySurfaceId?: string; activeSurfaceId?: string; failureKind?: 'occluded'; preserveScroll?: boolean } } }).__aiDomRuntime;
-      if (!runtime?.actionability) {
-        throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'BROWSER_INPUT_PREFLIGHT_FAILED: actionability runtime is not ready; refresh state before input.');
-      }
+      // This callback runs in the page and cannot access Node imports.
+      if (!runtime?.actionability) return undefined;
       return elements.map(element => runtime.actionability!(element, { action: operation }));
     }, action);
+    if (!inspected) {
+      throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'BROWSER_INPUT_PREFLIGHT_FAILED: actionability runtime is not ready; refresh state before input.');
+    }
+    let results = inspected;
     const normalizedAction = action.toLowerCase();
     const trialMethod = normalizedAction === 'setchecked'
       || normalizedAction === 'dragto'
@@ -3314,6 +3320,17 @@ function browserCodeChildArgs(
     '--permission',
     '--experimental-vm-modules',
     ...moduleReadRoots.map((root) => `--allow-fs-read=${root}`),
+    // Patchright probes Linux container/WSL metadata while loading. Even
+    // existsSync on an absent path requires permission; allow these probes
+    // without exposing /proc, /run or the host filesystem as a whole.
+    ...(process.platform === 'linux' ? [
+      '/proc/version',
+      '/proc/self/cgroup',
+      '/proc/sys/fs/binfmt_misc/WSLInterop',
+      '/.dockerenv',
+      '/run/.containerenv',
+      '/run/WSL',
+    ].map((file) => `--allow-fs-read=${file}`) : []),
     `--allow-fs-read=${tempDir}`,
     `--allow-fs-write=${tempDir}`,
     `--max-old-space-size=${hardHeapMb}`,

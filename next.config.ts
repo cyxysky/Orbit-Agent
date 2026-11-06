@@ -15,11 +15,13 @@ const configRevision = createHash('sha256').update(readFileSync(configFilePath))
 const configuredBasePath = String(process.env.ORBIT_BASE_PATH ?? process.env.WEBPILOT_BASE_PATH ?? '').trim().replace(/^\/+|\/+$/g, '');
 const basePath = configuredBasePath ? `/${configuredBasePath}` : '';
 const capabilitySource = process.env.WEBPILOT_CAPABILITY_SOURCE === 'npm' ? 'npm' : 'workspace';
+const buildCpus = Number(process.env.ORBIT_BUILD_CPUS);
 
 export default function nextConfig(phase: string): NextConfig {
   return {
     basePath,
     typescript: {
+      ignoreBuildErrors: process.env.ORBIT_BUILD_TYPECHECK === 'false',
       tsconfigPath: capabilitySource === 'npm' ? 'tsconfig.npm.json'
         : phase === PHASE_DEVELOPMENT_SERVER ? 'tsconfig.json' : 'tsconfig.production.json',
     },
@@ -44,6 +46,7 @@ export default function nextConfig(phase: string): NextConfig {
       pagesBufferLength: 10,
     },
     experimental: {
+      ...(Number.isInteger(buildCpus) && buildCpus > 0 ? { cpus: buildCpus, webpackBuildWorker: true } : {}),
       // Keep development Flight debug metadata in the HTTP response. A blocked
       // HMR WebSocket must not leave the initial React tree waiting forever.
       reactDebugChannel: false,

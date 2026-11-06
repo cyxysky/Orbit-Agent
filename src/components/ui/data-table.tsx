@@ -1,8 +1,16 @@
 'use client';
 
 import { EmptyState } from '@heroui/react/empty-state';
+import { Button } from '@heroui/react/button';
+import { Chip } from '@heroui/react/chip';
+import { CloseButton } from '@heroui/react/close-button';
+import { ListBox } from '@heroui/react/list-box';
+import { ListBoxItem } from '@heroui/react/list-box-item';
+import { NumberField } from '@heroui/react/number-field';
+import { Pagination } from '@heroui/react/pagination';
+import { Select } from '@heroui/react/select';
 import { Table } from '@heroui/react/table';
-import { ChevronLeft, ChevronRight, Layers, X } from 'lucide-react';
+import { Layers } from 'lucide-react';
 import { TableColumnFilter } from '@/components/ui/table-column-filter';
 import type { SortDescriptor } from 'react-aria-components';
 import { useDeferredValue, useMemo, useState, type ReactNode } from 'react';
@@ -127,10 +135,11 @@ export function DataTable<T>({
   return (
     <div className="app-data-table-region">
     {activeFilters.length ? <div className="app-data-table-active-filters" aria-label={t('筛选条件')}>
-      {activeFilters.map(column => <button className="app-data-table-filter-chip" key={column.id} onClick={() => { setFilters(current => ({ ...current, [column.id]: '' })); setPage(1); }} type="button" aria-label={`${t('清除')} ${typeof column.header === 'string' ? column.header : column.id} · ${filters[column.id]}`}>
-        <span>{column.header}: {filters[column.id]}</span><X aria-hidden="true" size={12} />
-      </button>)}
-      <button className="app-data-table-clear-filters" onClick={() => { setFilters({}); setPage(1); }} type="button">{t('清除全部')}</button>
+      {activeFilters.map(column => <Chip className="app-data-table-filter-chip" color="accent" key={column.id} size="sm" variant="soft">
+        <Chip.Label>{column.header}: {filters[column.id]}</Chip.Label>
+        <CloseButton aria-label={`${t('清除')} ${typeof column.header === 'string' ? column.header : column.id} · ${filters[column.id]}`} onPress={() => { setFilters(current => ({ ...current, [column.id]: '' })); setPage(1); }} />
+      </Chip>)}
+      <Button className="app-data-table-clear-filters" onPress={() => { setFilters({}); setPage(1); }} size="sm" variant="ghost">{t('清除全部')}</Button>
     </div> : null}
     <Table variant="primary" className={['app-data-table', compact ? 'is-compact' : '', className || ''].filter(Boolean).join(' ')}>
       <Table.ScrollContainer>
@@ -180,17 +189,29 @@ export function DataTable<T>({
         </Table.Content>
       </Table.ScrollContainer>
     </Table>
-    {pagination ? <nav className="app-data-table-pagination" aria-label={t('表格分页')}>
-      <span role="status">{t('共 {count} 条', { count: sortedData.length })}</span>
-      <label>{t('每页')} <select aria-label={t('每页条数')} value={pageSize} onChange={event => { setPageSize(Number(event.target.value)); setPage(1); }}>
-        {[10, 20, 50, 100].map(size => <option key={size} value={size}>{size}</option>)}
-      </select></label>
+    {pagination ? <Pagination className="app-data-table-pagination" size="sm" aria-label={t('表格分页')}>
+      <Pagination.Summary role="status">{t('共 {count} 条', { count: sortedData.length })}</Pagination.Summary>
       <div className="app-data-table-page-controls">
-        <button aria-label={t('上一页')} disabled={currentPage <= 1} onClick={() => setPage(currentPage - 1)} type="button"><ChevronLeft size={16} /></button>
-        <label>{t('第')} <input aria-label={t('页码')} type="number" min={1} max={pageCount} value={currentPage} onChange={event => { const value = event.target.valueAsNumber; if (Number.isFinite(value)) setPage(Math.max(1, Math.min(pageCount, Math.trunc(value)))); }} /> / {pageCount}</label>
-        <button aria-label={t('下一页')} disabled={currentPage >= pageCount} onClick={() => setPage(currentPage + 1)} type="button"><ChevronRight size={16} /></button>
+        <span>{t('每页')}</span>
+        <Select className="app-data-table-page-size" aria-label={t('每页条数')} value={String(pageSize)} onChange={value => { if (value !== null) { setPageSize(Number(value)); setPage(1); } }}>
+          <Select.Trigger><Select.Value /><Select.Indicator /></Select.Trigger>
+          <Select.Popover placement="top end"><ListBox>
+            {[10, 20, 50, 100].map(size => <ListBoxItem id={String(size)} key={size} textValue={String(size)}>{size}<ListBoxItem.Indicator /></ListBoxItem>)}
+          </ListBox></Select.Popover>
+        </Select>
+        <Pagination.Content>
+          <Pagination.Item><Pagination.Previous aria-label={t('上一页')} isDisabled={currentPage <= 1} onPress={() => setPage(currentPage - 1)}><Pagination.PreviousIcon /></Pagination.Previous></Pagination.Item>
+          <Pagination.Item className="app-data-table-page-jump">
+            <span>{t('第')}</span>
+            <NumberField className="app-data-table-page-number" aria-label={t('页码')} minValue={1} maxValue={pageCount} value={currentPage} formatOptions={{ useGrouping: false }} onChange={value => { if (Number.isFinite(value)) setPage(Math.max(1, Math.min(pageCount, Math.trunc(value)))); }}>
+              <NumberField.Group><NumberField.Input /></NumberField.Group>
+            </NumberField>
+            <span>/ {pageCount}</span>
+          </Pagination.Item>
+          <Pagination.Item><Pagination.Next aria-label={t('下一页')} isDisabled={currentPage >= pageCount} onPress={() => setPage(currentPage + 1)}><Pagination.NextIcon /></Pagination.Next></Pagination.Item>
+        </Pagination.Content>
       </div>
-    </nav> : null}
+    </Pagination> : null}
     </div>
   );
 }

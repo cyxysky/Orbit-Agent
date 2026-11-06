@@ -66,7 +66,7 @@ export function WorkspaceModeTabs({
   return (
     <nav className="workspace-mode-tabs" aria-label={ariaLabel}>
       <div data-slot="tabs-list-container"><div className="tabs__list-container__scroller"><div data-slot="tabs-list">
-        {items.map(({ path, label, ariaLabel: accessibleLabel, icon: Icon }) => <Link key={path} href={path} prefetch
+        {items.map(({ path, label, ariaLabel: accessibleLabel, icon: Icon }) => <Link key={path} href={path} prefetch scroll={false}
           aria-label={accessibleLabel} aria-current={activeKey === path ? 'page' : undefined} data-slot="tabs-tab" className="workspace-mode-link">
           <Icon aria-hidden="true" /><span className="workspace-mode-tab-label">{label}</span>
         </Link>)}

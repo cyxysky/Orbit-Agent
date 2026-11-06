@@ -11,17 +11,41 @@ const options = source.backendCompilerOptions(root, ts);
 const resolveSource = source.sourceResolver(root, options.paths || {});
 const seen = new Set();
 const files = new Map();
+const moduleFormats = new Map();
+function commonJsSource(file) {
+  if (moduleFormats.has(file)) return moduleFormats.get(file);
+  let commonJs = /\.c(?:js|ts)$/.test(file);
+  if (/\.js$/.test(file)) {
+    let directory = path.dirname(file), packageType;
+    for (;;) {
+      const manifest = path.join(directory, 'package.json');
+      if (fs.existsSync(manifest)) { packageType = JSON.parse(fs.readFileSync(manifest, 'utf8')).type; break; }
+      const parent = path.dirname(directory);
+      if (parent === directory) break;
+      directory = parent;
+    }
+    commonJs = packageType === 'commonjs' || packageType !== 'module'
+      && !ts.isExternalModule(ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS));
+  }
+  moduleFormats.set(file, commonJs);
+  return commonJs;
+}
 function outputPath(file) {
   const relative = path.relative(root, file);
   if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error(`Backend source outside workspace: ${file}`);
-  return path.join(output, relative.replace(/\.[cm]?tsx?$/, '.js'));
+  // The output tree is ESM. Preserve CommonJS semantics explicitly instead of
+  // letting its package.json reinterpret copied .js files as ES modules.
+  return path.join(output, commonJsSource(file)
+    ? relative.replace(/\.(?:js|cts)$/, '.cjs')
+    : relative.replace(/\.[cm]?tsx?$/, '.js'));
 }
 function visit(file) {
   if (seen.has(file)) return;
   seen.add(file);
   const input = fs.readFileSync(file, 'utf8');
   const compiled = /\.[cm]?tsx?$/.test(file)
-    ? ts.transpileModule(input, { fileName: file, compilerOptions: options, reportDiagnostics: true })
+    ? ts.transpileModule(input, { fileName: file, compilerOptions: { ...options,
+      module: commonJsSource(file) ? ts.ModuleKind.CommonJS : ts.ModuleKind.ESNext }, reportDiagnostics: true })
     : { outputText: input, diagnostics: [] };
   const errors = (compiled.diagnostics || []).filter(d => d.category === ts.DiagnosticCategory.Error);
   if (errors.length) throw new Error(`${file}: ${errors.map(d => ts.flattenDiagnosticMessageText(d.messageText, '\n')).join('\n')}`);

@@ -8,10 +8,12 @@ dist-backend/
 .sandbox-runner-work/
 .capability-runtime/
 .capability-sdk/
+**/.capability-sdk/
 .workspace-manifests/
 output/
 packages/*/dist/
 node_modules/
+**/node_modules/
 npm-debug.log*
 *.log
 .env
@@ -40,5 +42,9 @@ npm-debug.log*
 **/__pycache__/
 *.py[cod]
 *.tsbuildinfo
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
 Dockerfile
 docker-compose*.yml

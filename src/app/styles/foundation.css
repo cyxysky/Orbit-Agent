@@ -236,44 +236,20 @@ body {
 
 .app-data-table-region { min-width: 0; }
 .app-data-table-heading { align-items: center; display: flex; justify-content: space-between; gap: 8px; min-width: 64px; }
-.app-data-table-pagination :is(input, select) {
-  background: var(--field-background);
-  border: 1px solid var(--field-border);
-  border-radius: 6px;
-  color: var(--field-foreground);
-  font: inherit;
-  font-weight: 400;
-  min-height: 32px;
-  padding: 4px 8px;
-}
-.app-table-filter-trigger { position: relative; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 28px; width: 28px; height: 28px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; }
-.app-table-filter-trigger:is(:hover, [aria-expanded="true"]) { background: var(--menu-hover-bg); color: var(--foreground); }
-.app-table-filter-trigger.is-active { background: var(--accent-soft); color: var(--accent-strong); }
-.app-table-filter-trigger.is-active::after { position: absolute; top: 4px; right: 4px; width: 4px; height: 4px; border-radius: 50%; background: currentColor; content: ''; }
-.app-table-filter-popover { padding: 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-elevated); color: var(--foreground); }
+.app-table-filter-trigger { flex-shrink: 0; }
+.app-table-filter-popover { width: min(288px, calc(100vw - 24px)); }
 .app-table-filter-popover form { display: grid; gap: 16px; }
-.app-table-filter-popover header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-.app-table-filter-popover header strong { font-size: 14px; font-weight: 600; }
-.app-table-filter-popover header > span, .app-table-filter-field > span { color: var(--muted-strong); font-size: 12px; }
-.app-table-filter-field { display: grid; gap: 7px; }
-.app-table-filter-field > div { display: flex; align-items: center; gap: 7px; padding-inline: 10px; border: 1px solid var(--field-border); border-radius: 6px; background: var(--field-background); color: var(--muted); }
-.app-table-filter-field input { width: 100%; min-width: 0; min-height: 36px; border: 0; background: transparent; color: var(--field-foreground); font: inherit; font-size: 13px; outline: none; }
-.app-table-filter-field input:focus-visible { outline: none; box-shadow: none; }
-.app-table-filter-field > div:focus-within { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
 .app-table-filter-popover footer { display: flex; justify-content: flex-end; gap: 8px; }
-.app-table-filter-popover footer .ui-button { min-height: 32px; padding: 5px 12px; font-size: 12px; }
 .app-data-table-active-filters { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; padding: 10px 16px; border-bottom: 1px solid var(--table-border); }
-.app-data-table-filter-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 5px 8px; border: 0; border-radius: 5px; background: var(--accent-soft); color: var(--accent-strong); font-size: 12px; cursor: pointer; }
-.app-data-table-filter-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.app-data-table-filter-chip svg { flex-shrink: 0; }
-.app-data-table-clear-filters { margin-inline-start: auto; padding: 5px 0 5px 8px; background: transparent; border: 0; color: var(--muted-strong); font-size: 12px; cursor: pointer; }
-.app-data-table-pagination { align-items: center; border-top: 1px solid var(--table-border); color: var(--muted-strong); display: flex; flex-wrap: wrap; gap: 12px; padding: 12px 16px; font-size: 12px; }
-.app-data-table-pagination > span { margin-inline-end: auto; }
-.app-data-table-pagination label, .app-data-table-page-controls { align-items: center; display: flex; gap: 6px; }
-.app-data-table-page-controls input { width: 64px; }
-.app-data-table-page-controls button { align-items: center; background: var(--panel); border: 1px solid var(--table-border); border-radius: 6px; display: inline-flex; justify-content: center; min-height: 32px; width: 32px; }
-.app-data-table-page-controls button:disabled { opacity: .35; cursor: default; }
-.app-data-table-page-controls button:not(:disabled):hover { background: var(--hover); }
+.app-data-table-filter-chip { max-width: 100%; }
+.app-data-table-filter-chip .chip__label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.app-data-table-clear-filters { margin-inline-start: auto; }
+.app-data-table-pagination { border-top: 1px solid var(--table-border); padding: 12px 16px; }
+.app-data-table-page-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; }
+.app-data-table-page-size { width: 80px; }
+.app-data-table-page-jump { display: flex; align-items: center; gap: 6px; }
+.app-data-table-page-number { width: 64px; }
+.app-data-table-page-number .number-field__group { grid-template-columns: minmax(0, 1fr); }
 
 /* Shared by Markdown tables and the data-table component. */
 .table-root--primary {

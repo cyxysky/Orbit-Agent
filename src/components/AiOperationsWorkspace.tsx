@@ -17,6 +17,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { CustomSelect } from '@/components/CustomSelect';
 import { BackendRuntimePanel } from '@/components/BackendRuntimePanel';
 import { AiOperationsLoading } from '@/components/AiOperationsLoading';
+import { WorkspacePageSkeleton } from '@/components/WorkspacePageSkeleton';
+import { DeferredContent } from '@/components/DeferredContent';
 import { DataTable } from '@/components/ui/data-table';
 import { EmptyState } from '@heroui/react/empty-state';
 import { DataTableStatus, DataTableText } from '@/components/ui/data-table-cells';
@@ -236,6 +238,7 @@ function AiOperationsDashboard({
   const [sidebarCollapsed, setSidebarCollapsed] = useState(initialSidebarCollapsed);
   const [data, setData] = useState(initialData);
   const [rangeDays, setRangeDays] = useState(initialData.rangeDays);
+  const [requestedRangeDays, setRequestedRangeDays] = useState(initialData.rangeDays);
   const [trendUserId, setTrendUserId] = useState(initialData.trendUserId || '');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -263,6 +266,7 @@ function AiOperationsDashboard({
     dashboardRequest.current?.abort();
     const request = new AbortController();
     dashboardRequest.current = request;
+    setRequestedRangeDays(days);
     setLoading(true);
     setError('');
     try {
@@ -290,6 +294,7 @@ function AiOperationsDashboard({
   }, []);
 
   const overview = data.overview;
+  const selectedRangeDays = loading ? requestedRangeDays : rangeDays;
   const trendUserOptions = useMemo(() => [
     { label: t('全部用户'), description: t('查看公司整体使用趋势'), value: '' },
     ...data.trendUsers.map((item) => ({
@@ -339,8 +344,8 @@ function AiOperationsDashboard({
               <div className="ai-operations-range" aria-label={t('统计时间范围')}>
                 {rangeOptions.map((days) => (
                   <button
-                    aria-pressed={rangeDays === days}
-                    className={rangeDays === days ? 'active' : undefined}
+                    aria-pressed={selectedRangeDays === days}
+                    className={selectedRangeDays === days ? 'active' : undefined}
                     disabled={loading}
                     key={days}
                     onClick={() => void loadDashboard(days, trendUserId)}
@@ -369,6 +374,8 @@ function AiOperationsDashboard({
 
           <div hidden={activeView !== 'overview'}>
 
+          {loading ? <WorkspacePageSkeleton label={t('正在读取统计数据…')} variant="overview" showHeader={false} /> : <>
+
           <div className="ai-operations-meta-row">
             <span>{t('时区')}：{data.timezone}</span>
             <span>{t('更新时间')}：{dateTime(data.generatedAt)}</span>
@@ -382,7 +389,7 @@ function AiOperationsDashboard({
               <MetricCard detail={t('{count} 次进程内模型调用', { count: overview.modelCalls })} icon={Bot} label={t('模型 Token')} value={compactNumber(overview.inputTokens + overview.outputTokens)} />
           </section>
 
-          <div className="ai-operations-analysis-grid">
+          <DeferredContent className="ai-operations-analysis-grid" estimatedHeight={340} label={t('正在读取统计数据…')}>
             <ChartShell
               title={t('趋势分析')}
               description={`${trendScopeLabel} · ${rangeDays} ${t('天')} · ${trendView === 'usage' ? t('按天统计对话请求与自动化运行次数') : t('按天查看成功、失败、阻塞与中断情况')}`}
@@ -418,9 +425,9 @@ function AiOperationsDashboard({
               </dl>
               <footer>{t('耗时、修复与用户按当前统计范围汇总')}</footer>
             </section>
-          </div>
+          </DeferredContent>
 
-          <div className="ai-operations-lower-grid">
+          <DeferredContent className="ai-operations-lower-grid" estimatedHeight={480} label={t('正在读取统计数据…')}>
             <section className="ai-operations-panel ai-operations-incidents-panel">
               <header className="ai-operations-panel-header">
                 <div>
@@ -468,9 +475,9 @@ function AiOperationsDashboard({
                 />
               ) : <EmptyState>{t('暂无目标系统使用数据')}</EmptyState>}
             </section>
-          </div>
+          </DeferredContent>
 
-          <div className="ai-operations-table-grid">
+          <DeferredContent className="ai-operations-table-grid" estimatedHeight={480} label={t('正在读取统计数据…')}>
             <section className="ai-operations-table-section">
               <header className="ai-operations-panel-header"><div><h2>{t('用户使用情况')}</h2><p>{t('按用户统计任务量和执行结果')}</p></div></header>
               {data.users.length ? (
@@ -520,7 +527,8 @@ function AiOperationsDashboard({
                 />
               ) : <EmptyState>{t('暂无模型使用数据')}</EmptyState>}
             </section>
-          </div>
+          </DeferredContent>
+          </>}
           </div>
 
           {activeView === 'runtime' ? <BackendRuntimePanel /> : null}
