@@ -304,7 +304,9 @@ function createCodeExecutionEngine(options) {
         outputLimitExceeded: result.outputLimitExceeded,
         packagesInstalled: packages.length ? packages : undefined,
         installElapsedMs: install.elapsedMs || undefined,
-        files: !result.aborted && !result.timedOut ? await collectFiles(jobDirectory, payload.outputFiles) : [],
+        // Failed code may never reach the declared outputs. Keep its exit code
+        // and stderr while still returning any files it produced before failing.
+        files: !result.aborted && !result.timedOut ? await collectFiles(jobDirectory, payload.outputFiles, { allowMissing: result.exitCode !== 0 }) : [],
       };
     } finally {
       if (jobDirectory) await rm(jobDirectory, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }).catch(() => undefined);

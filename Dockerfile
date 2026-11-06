@@ -46,7 +46,7 @@ RUN --mount=type=cache,target=/app/.next/cache \
     case "$BUILD_BUNDLER" in turbopack|webpack) ;; *) echo "BUILD_BUNDLER must be turbopack or webpack" >&2; exit 1 ;; esac \
     && case "$BUILD_TYPECHECK" in true|false) ;; *) echo "BUILD_TYPECHECK must be true or false" >&2; exit 1 ;; esac \
     && ORBIT_BASE_PATH="$ORBIT_BASE_PATH" ORBIT_BUILD_CPUS="$BUILD_CPUS" ORBIT_BUILD_TYPECHECK="$BUILD_TYPECHECK" NODE_OPTIONS="--max-old-space-size=$BUILD_HEAP_MB" npm run build -- "--$BUILD_BUNDLER"
-RUN npm prune --omit=dev && node scripts/prune-runtime-dependencies.cjs
+RUN npm prune --omit=dev && node scripts/prune-runtime-dependencies.cjs --strip-source-maps
 
 FROM node:22-bookworm-slim AS runner
 
@@ -78,8 +78,12 @@ ENV APP_DATA_DIR=/app
 ENV ARTIFACTS_DIR=/app/artifacts
 
 COPY --from=build /app/node_modules ./node_modules
-# Install only the Chromium revision used by the SDK, without unused base browsers.
-RUN node node_modules/patchright/cli.js install --with-deps chromium
+# Browser automation, document rendering and video rendering share full Chromium.
+# An explicit executable prevents headless launches from requesting a second binary.
+RUN node node_modules/patchright/cli.js install --with-deps --no-shell chromium \
+    && node -e "require('fs').symlinkSync(require('patchright').chromium.executablePath(), '/usr/local/bin/orbit-chromium')"
+ENV AI_WEB_TEST_CHROMIUM_EXECUTABLE_PATH=/usr/local/bin/orbit-chromium
+ENV REMOTION_BROWSER_EXECUTABLE=/usr/local/bin/orbit-chromium
 COPY --from=build /app/.next ./.next
 COPY --from=build /app/public ./public
 COPY --from=build /app/dist-backend ./dist-backend
@@ -92,6 +96,7 @@ COPY --from=build /app/.capability-runtime/computer ./capability-runtime/compute
 COPY --from=build /app/packages/capability-sdk/runtime/execution ./capability-runtime/execution
 
 RUN find ./server -type f -name '*.test.js' -delete \
+    && useradd --no-create-home --user-group --uid 10001 --shell /usr/sbin/nologin sandbox \
     && mkdir -p .data artifacts
 
 EXPOSE 3000

@@ -24,7 +24,8 @@ The `@cjfclonedeep/*` npm names, capability IDs, service identity, database file
 and existing storage keys remain compatible. Desktop upgrades reuse an existing
 legacy profile when no Orbit profile exists. The server installer retains its
 existing data directory. Docker Compose service keys remain stable for upgrades;
-the application and sandbox images are named `orbit` and `orbit-code-sandbox`.
+the application and sandbox containers share the single `orbit` image. The sandbox
+uses a separate command and retains its own resource and filesystem restrictions.
 
 New embeddings use `/embed/orbit.js` and `Orbit.mount()`; `/embed/webpilot.js`,
 `WebPilotQA.mount()`, and existing custom-element/event names remain supported.

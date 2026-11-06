@@ -46,7 +46,7 @@ async function stageFiles(directory, files = []) {
   await mkdir(path.join(directory, 'outputs'), { recursive: true, mode: 0o777 });
 }
 
-async function collectFiles(directory, requested = []) {
+async function collectFiles(directory, requested = [], { allowMissing = false } = {}) {
   if (!Array.isArray(requested) || requested.length > MAX_FILES) throw new Error('At most 16 output files are allowed.');
   const names = new Set(requested.map(relativeFile));
   const root = await realpath(directory);
@@ -73,10 +73,12 @@ async function collectFiles(directory, requested = []) {
   const files = [];
   for (const name of names) {
     const full = path.join(directory, name);
+    const info = await lstat(full).catch(error => allowMissing && error.code === 'ENOENT' ? undefined : Promise.reject(error));
+    if (!info) continue;
+    if (info.isSymbolicLink() || !info.isFile()) throw new Error('Output file must be a regular file inside this workspace.');
     const resolved = await realpath(full);
     const relative = path.relative(root, resolved);
-    const info = await lstat(full);
-    if (relative.startsWith('..') || path.isAbsolute(relative) || info.isSymbolicLink() || !info.isFile()) throw new Error('Output file must be a regular file inside this workspace.');
+    if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Output file must be a regular file inside this workspace.');
     if (info.size > MAX_FILE_BYTES) throw new Error(`Output file ${name} exceeds 10 MB.`);
     const bytes = await readFile(full);
     total += bytes.length;

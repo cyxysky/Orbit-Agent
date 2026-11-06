@@ -2,21 +2,26 @@
 
 主镜像包含 Orbit 前端、Node API 与执行进程，以及 Chromium、LibreOffice 和 SDK 运行资源。浏览器使用 SDK 实际依赖的 Chromium，不再额外携带 Playwright 基础镜像中的其他浏览器。桌面 Electron 二进制不参与下载。
 
-## 镜像职责
+## 一个发布镜像
 
-| 镜像 | 用途 | 是否参与服务运行 |
+构建、分发和加载只需要 `orbit:latest`。Docker Compose 从同一镜像启动两个容器：
+
+| 容器 | 入口 | 职责 |
 | --- | --- | --- |
-| `orbit:latest` | 前端、API、执行进程和浏览器/办公运行环境 | 是 |
-| `orbit-code-sandbox:latest` | 独立执行 JavaScript、Python 代码的服务；使用临时工作目录、身份验证和资源限制 | Compose 部署会启动并等待其健康检查，代码执行工具调用此服务 |
-| `orbit-build-deps:local` | 本机构建过程中保留的依赖阶段，可复用已安装的构建依赖 | 否；不是数据库或必须启动的后台服务，标准 Dockerfile 不依赖此标签 |
+| `webpilot-qa` | `node server/webpilot-server.js` | 前端、API、执行进程、浏览器和办公工具 |
+| `webpilot-code-sandbox` | `node server/code-sandbox-runner.js` | 使用临时目录执行 JavaScript/Python |
 
-构建辅助镜像的标签可删除，但不应将删除它的占用变化误认为主镜像被进一步压缩。构建缓存与运行镜像分开统计。
+两个容器共享镜像的只读层，镜像不因启动两次而复制一份。沙箱保留单独的只读文件系统、临时空间、内存/CPU/进程数限制及降权执行；它不挂载主服务的数据目录，也不接收主服务的模型配置。合并发布镜像不需要取消这些进程边界。
 
-## 后续体积空间
+此前的 `orbit-code-sandbox:latest` 已不再构建或引用，独立 Dockerfile 已移除。`orbit-build-deps:local` 是之前本机打包时留下的临时依赖标签，标准 Dockerfile 不依赖它。正常构建的依赖阶段保留在 BuildKit 缓存中，不需要额外发布构建镜像；删除旧标签与主镜像减重分开统计。
 
-在依赖裁剪后的镜像内，JavaScript/CSS 的 `.map` 文件共 16,275 个，文件内容约 394,635,995 字节；较大的来源包括 Next、Mermaid、ECharts、PDF 解析库。它们可作为发行包进一步精简的候选，需要结合错误诊断和运行时视频编译等功能验证；此审查没有直接删除这些文件。
+## 发行资源裁剪
 
-其他方向是统一浏览器工具、图表和视频渲染的可执行文件选择，再评估是否仅保留一套 Chromium；或将浏览器、办公组件做成独立的可选运行环境。这些属于不同的发行方案，不能仅按包名删除正在使用的库。
+`scripts/prune-runtime-dependencies.cjs --strip-source-maps` 在编译和移除开发依赖后，删除 node_modules 中独立的 JavaScript/CSS `.map` 文件。该选项仅用于发行镜像，普通 npm 安装仍保留调试资源；开发源码、可执行文件和必要的运行时编译依赖不受此规则影响。文件遍历不跟随符号链接，删除前校验路径；`--dry-run` 可以查看计划。
+
+此前镜像的这类文件共 16,275 个、394,635,995 字节。浏览器安装使用 `--no-shell chromium`，保留完整 Chromium，不再额外下载约 261MiB 的 headless shell。浏览器工具和文档渲染通过 `AI_WEB_TEST_CHROMIUM_EXECUTABLE_PATH`，视频渲染通过 `REMOTION_BROWSER_EXECUTABLE`，统一指向安装时解析的 `/usr/local/bin/orbit-chromium`。完整 Chromium 支持无头运行。
+
+这会减少发行环境的依赖源码调试能力；运行日志和应用错误仍保留。裁剪后需验证浏览器、文档和 Remotion 的运行时编译与渲染。
 
 ## 外部 Codex 运行时
 
@@ -75,29 +80,31 @@ docker run -d --name orbit -p 127.0.0.1:3001:3000 -e ORBIT_REQUIRE_MOUNT_USER_ID
 
 可用 `node scripts/prune-runtime-dependencies.cjs --dry-run` 查看计划。显式使用 `--ignore-scripts` 安装时不会执行 `postinstall`，需随后手动运行裁剪脚本。
 
-代码沙箱是独立服务，使用现有 `docker-compose.yml` 中的网络与权限配置。对应镜像可以单独构建：
+代码沙箱仍作为独立受限容器运行，直接使用同一个主镜像。构建一次后启动整套服务：
 
 ```powershell
-docker build -f Dockerfile.code-sandbox -t orbit-code-sandbox:latest .
+docker compose build webpilot-qa
+docker compose up -d
 ```
+
+Compose 沿用已有的 `CODE_SANDBOX_RUNNER_TOKEN` 配置，不对外发布沙箱端口。
 
 镜像仅构建到本地 Docker，没有发布到远端镜像仓库。
 
 ## 本机验证范围
 
-2026-11-06，Linux amd64。包含最新导航优化的 `orbit:latest` 为 `38669b86be09`：Docker 本地磁盘占用约 4.91GB，压缩内容约 1.21GB；裁剪前分别约 5.92GB、1.51GB。`node_modules` 由约 2.55GB 降至 1.84GB。代码沙箱镜像未变，Docker 显示约 404MB。
+2026-11-06，Linux amd64。最终 `orbit:latest` 为 `a99db9405875`：Docker 本地磁盘占用约 4.00GB（4001827175 字节），压缩内容约 1.01GB；本轮开始时分别约 4.91GB、1.21GB。使用同一个 Docker 显示口径，主镜像减少约 0.91GB；删除旧辅助标签释放的空间不包含在这个减重数字内。
 
-这些数字包含运行依赖和浏览器/办公套件，不是纯源码大小。磁盘占用包含压缩内容及解压层；旧构建缓存和其他镜像的占用不属于当前镜像的减重数字。本次未清理全局构建缓存。
+镜像仍保留完整浏览器、办公和代码执行能力。当前大项包括约 1.45GB 的 node_modules、一份完整 Chromium、LibreOffice/Python 及系统依赖。较早依赖清理前 node_modules 约 2.55GB，上一轮约 1.84GB，本轮进一步删除约 395MB 的独立 source map。
 
-- 新实例健康接口及对话、自动化、AI 运营、设置路由可用。
-- 后端状态返回 API、执行进程两组真实内存数据。
-- 容器内通过 SDK 启动 Chromium 并读取健康页面；LibreOffice 可启动，Python 可导入 UNO。
-- 代码沙箱分别执行 JavaScript、Python 并返回结果，未鉴权请求返回 401。
-- 未启动应用的干净镜像中，根目录没有私有 `.env`，`.data` 为空。
-- 生产界面检查覆盖时间切换/刷新骨架屏、筛选浮层、深色模式和窄屏。表格界面采用独立浏览器内的统计数据样本，没有复制本地业务数据库或运行既有自动化任务。
+本机已没有用户记忆中的旧 3GB 多镜像，无法确认其具体依赖和统计口径；不将压缩内容、镜像磁盘占用及全局构建缓存混为同一数字。本轮没有清理全局构建缓存或用户数据。
 
-本轮依赖裁剪额外验证了 Linux 原生终端实际执行、图片编码、GNU 版 Rspack 加载，以及重复裁剪没有额外删除。Windows 使用项目的实际 App Server 客户端，通过默认 PATH 和显式 npm `.cmd` 入口初始化外部 Codex 0.166.0；没有调用模型或创建真实对话任务。裁剪后的容器检查不代表缺少外部 CLI 时也能执行对话。
+- Compose 配置仅引用一个镜像。实际从同一最终镜像分别启动主服务和沙箱；使用新数据库和无业务挂载的临时容器，没有启动会读取现有本地数据的 Compose 服务。
+- 新实例健康接口、对话、自动化、AI 运营和设置路由返回成功，API 与执行进程内存数据可用。
+- 容器内通过 Cap SDK 启动 Chromium 并读取页面；LibreOffice 可启动，Python 可导入 UNO。
+- 通过 SDK 生成 HTML PDF、渲染 PDF 预览，并实际编译和渲染一段 3 帧的 Remotion MP4。该检查覆盖 source map 裁剪后的视频运行时编译。
+- 沙箱通过 SDK HTTP 执行器分别执行 JavaScript/Python、回传生成文件；进程降权为 UID 10001，写入应用目录被拒绝，未鉴权请求返回 401，且不挂载主服务目录。
+- 修复了 SDK 在代码失败且声明输出缺失时使用文件收集错误覆盖原始失败的问题；实际验证保留退出码、stderr 和已生成的部分文件，成功执行仍严格检查声明输出。
+- 镜像内没有额外 headless shell；重复裁剪计划为零，没有私有 .env。
 
-最新导航版本在容器内重新编译完整前端和后端，并复用本地构建依赖阶段；未运行宿主机 dev/build。额外延迟路由请求时，四个入口均先展示目标加载界面；取消切换保留草稿，连续点击落到最后一个目标，桌面浅色和窄屏深色布局已检查。本轮没有进一步裁剪依赖，体积与上一版基本相同。
-
-以上不是带真实模型供应商、外部站点和业务数据的全流程验收。
+本轮只重新打包发行资源和共享执行运行时，沿用上一轮已验证的前后端编译产物。未运行项目 dev/build，未新增测试文件。未调用真实模型或执行业务自动化任务。

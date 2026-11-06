@@ -29,10 +29,8 @@ services:
     restart: unless-stopped
 
   webpilot-code-sandbox:
-    build:
-      context: .
-      dockerfile: Dockerfile.code-sandbox
-    image: orbit-code-sandbox:latest
+    image: orbit:latest
+    command: ["node", "server/code-sandbox-runner.js"]
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:18100/health',{headers:{authorization:'Bearer '+process.env.CODE_SANDBOX_RUNNER_TOKEN},signal:AbortSignal.timeout(2000)}).then(async r=>{if(!r.ok||(await r.json()).status!=='healthy')process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 5s
@@ -40,6 +38,9 @@ services:
       retries: 12
       start_period: 5s
     environment:
+      CODE_SANDBOX_RUNNER_HOST: 0.0.0.0
+      CODE_SANDBOX_RUNNER_PORT: "18100"
+      CODE_SANDBOX_RUNNER_WORKSPACE: /tmp/webpilot-code-sandbox
       CODE_SANDBOX_RUNNER_TOKEN: "${CODE_SANDBOX_RUNNER_TOKEN:?CODE_SANDBOX_RUNNER_TOKEN must be set}"
       CODE_SANDBOX_RUNNER_CONCURRENCY: "${CODE_SANDBOX_RUNNER_CONCURRENCY:-2}"
     read_only: true

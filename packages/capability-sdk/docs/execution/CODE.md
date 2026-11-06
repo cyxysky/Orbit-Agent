@@ -342,8 +342,9 @@ The following pre-existing reference includes focused API fragments and applicat
 
 Bounded Python and JavaScript execution for agents. The portable core accepts
 an injected executor. The local Node adapter is only for trusted single-machine
-development; production deployments should use the HTTP runner in
-`Dockerfile.code-sandbox`.
+development; production deployments should use the HTTP runner. Orbit's
+`docker-compose.yml` starts it from the same `orbit` image with the command
+`node server/code-sandbox-runner.js`, in a separate restricted container.
 
 ### TypeScript Agent framework integration
 
@@ -369,6 +370,9 @@ JavaScript runs as Node.js ESM (`.mjs`): use `import`, including for installed
 packages. Bare `require` is not defined; use `createRequire(import.meta.url)`
 explicitly if needed. Each execution has a disposable directory. Write files
 under `outputs/` (created by the runner), or list extra relative `outputFiles`.
+If code fails before creating a requested file, the runner returns its original
+exit code and stderr, along with any files it already produced. Successful code
+must still create every explicitly requested output file.
 The runner exports them before cleanup over a separate file channel: 16 files,
 10 MB per file, 32 MB total. Symlinks and workspace escapes are rejected.
 The application host persists them and returns `artifacts` with IDs, preview
