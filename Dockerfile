@@ -24,6 +24,7 @@ RUN apt-get update \
 
 COPY package*.json ./
 COPY scripts/prepare-capability-install.mjs ./scripts/prepare-capability-install.mjs
+COPY scripts/prune-runtime-dependencies.cjs ./scripts/prune-runtime-dependencies.cjs
 COPY --from=manifests /metadata/packages ./packages
 # Desktop binaries are not needed by this server image.
 RUN export ELECTRON_SKIP_BINARY_DOWNLOAD=1 \
@@ -45,7 +46,7 @@ RUN --mount=type=cache,target=/app/.next/cache \
     case "$BUILD_BUNDLER" in turbopack|webpack) ;; *) echo "BUILD_BUNDLER must be turbopack or webpack" >&2; exit 1 ;; esac \
     && case "$BUILD_TYPECHECK" in true|false) ;; *) echo "BUILD_TYPECHECK must be true or false" >&2; exit 1 ;; esac \
     && ORBIT_BASE_PATH="$ORBIT_BASE_PATH" ORBIT_BUILD_CPUS="$BUILD_CPUS" ORBIT_BUILD_TYPECHECK="$BUILD_TYPECHECK" NODE_OPTIONS="--max-old-space-size=$BUILD_HEAP_MB" npm run build -- "--$BUILD_BUNDLER"
-RUN npm prune --omit=dev
+RUN npm prune --omit=dev && node scripts/prune-runtime-dependencies.cjs
 
 FROM node:22-bookworm-slim AS runner
 
@@ -57,6 +58,7 @@ ENV WEBPILOT_CAPABILITY_SOURCE=${ORBIT_CAPABILITY_SOURCE}
 
 # Serialize system-runtime provisioning after compilation on memory-limited builders.
 COPY --from=build /app/package*.json ./
+COPY --from=build /app/scripts/prune-runtime-dependencies.cjs ./scripts/prune-runtime-dependencies.cjs
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libreoffice-nogui fonts-noto-cjk python3 python3-venv python3-uno ca-certificates \
     && rm -rf /var/lib/apt/lists/*

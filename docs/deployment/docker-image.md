@@ -2,6 +2,18 @@
 
 主镜像包含 Orbit 前端、Node API 与执行进程，以及 Chromium、LibreOffice 和 SDK 运行资源。浏览器使用 SDK 实际依赖的 Chromium，不再额外携带 Playwright 基础镜像中的其他浏览器。桌面 Electron 二进制不参与下载。
 
+## 外部 Codex 运行时
+
+项目不再直接依赖或内置 `@openai/codex`；转接包引入的同名可选依赖及其平台二进制由安装后的依赖策略排除。转接包本身保留，继续支持外部 Codex 接入。
+
+当前主对话、自动化和子 Agent 的执行引擎都是 Codex App Server，因此外部 CLI 是执行任务的必要条件，其他模型供应商也需要它。宿主机可使用全局安装的 Codex，或在设置页指定 `CODEX_PATH`；此配置保存到数据库，不通过同名环境变量覆盖。
+
+Windows 的 npm 全局安装会生成 `.cmd` 入口。后端按 PATH 找到其 Node 入口后直接启动，不通过 shell 拼接参数；裁剪脚本同时清理指向已删除包的失效命令入口。
+
+Linux 容器必须提供兼容 Linux 和目标 CPU 架构的 CLI，不能直接使用 Windows 的 `codex.exe`。例如在下方启动命令中增加 `--mount type=bind,source=/absolute/path/to/linux-codex,target=/usr/local/bin/codex,readonly`，将原生可执行文件放入容器的 `PATH`。也可以将完整 CLI 目录挂载到容器内，再在设置页填写对应路径。挂载文件须具有执行权限。
+
+缺少外部 CLI 时，Web 页面仍可打开，但对话任务无法执行；移除二进制包不等于已替换执行引擎。
+
 ## 构建
 
 常规构建保留 Turbopack 和容器内类型检查：
@@ -36,6 +48,17 @@ docker run -d --name orbit -p 127.0.0.1:3001:3000 -e ORBIT_REQUIRE_MOUNT_USER_ID
 
 后端编译器按源文件的模块格式输出：CommonJS 使用 `.cjs`，ESM 使用 `.js`/`.mjs`，并同步重写模块引用，避免生产包的 ESM 目录错误解释 CommonJS 文件。此规则同样适用于其他后端分发包。
 
+## 依赖裁剪
+
+`scripts/prune-runtime-dependencies.cjs` 在普通 `npm install`/`npm ci` 的 `postinstall` 中运行；Docker 复制运行依赖之前和服务端/桌面包复制依赖之后，也会再次执行同一规则。
+
+- 根依赖移除了未使用的 `@lobehub/icons-static-png`，界面继续使用 `public/model-brands` 中的图标。
+- `package.json` 的 `runtimeDependencyPolicy.excludedOptionalPackages` 声明不随项目分发的可选包。上游 Codex 转接包仍在锁文件中声明这个可选依赖，安装后会移除其实际目录；不能把锁文件中的上游依赖记录误认为镜像仍内置 CLI。
+- 依据包的 `os`、`cpu`、`libc` 元数据及通用 `prebuilds/<platform>-<arch>` 目录约定裁剪异平台文件，不删除仍在使用的终端、图片、视频处理包。
+- 每次递归删除都检查解析后的路径位于目标 `node_modules` 内，跳过工作区链接。排除策略仅允许删除锁文件明确标记为可选的包，防止静默移除必要依赖。
+
+可用 `node scripts/prune-runtime-dependencies.cjs --dry-run` 查看计划。显式使用 `--ignore-scripts` 安装时不会执行 `postinstall`，需随后手动运行裁剪脚本。
+
 代码沙箱是独立服务，使用现有 `docker-compose.yml` 中的网络与权限配置。对应镜像可以单独构建：
 
 ```powershell
@@ -46,7 +69,9 @@ docker build -f Dockerfile.code-sandbox -t orbit-code-sandbox:latest .
 
 ## 本机验证范围
 
-2026-11-06，Linux amd64。Docker 显示主镜像约 5.92GB，代码沙箱镜像约 404MB，包含运行依赖和浏览器/办公套件，不是纯源码大小，也不是导出压缩包大小。
+2026-11-06，Linux amd64。依赖裁剪后的 `orbit:latest` 为 `8522bd077abc`：Docker 本地磁盘占用约 4.92GB，压缩内容约 1.21GB；裁剪前分别约 5.92GB、1.51GB。`node_modules` 由约 2.55GB 降至 1.84GB。代码沙箱镜像未变，Docker 显示约 404MB。
+
+这些数字包含运行依赖和浏览器/办公套件，不是纯源码大小。磁盘占用包含压缩内容及解压层；旧构建缓存和其他镜像的占用不属于当前镜像的减重数字。本次未清理全局构建缓存。
 
 - 新实例健康接口及对话、自动化、AI 运营、设置路由可用。
 - 后端状态返回 API、执行进程两组真实内存数据。
@@ -54,5 +79,9 @@ docker build -f Dockerfile.code-sandbox -t orbit-code-sandbox:latest .
 - 代码沙箱分别执行 JavaScript、Python 并返回结果，未鉴权请求返回 401。
 - 未启动应用的干净镜像中，根目录没有私有 `.env`，`.data` 为空。
 - 生产界面检查覆盖时间切换/刷新骨架屏、筛选浮层、深色模式和窄屏。表格界面采用独立浏览器内的统计数据样本，没有复制本地业务数据库或运行既有自动化任务。
+
+本轮依赖裁剪额外验证了 Linux 原生终端实际执行、图片编码、GNU 版 Rspack 加载，以及重复裁剪没有额外删除。Windows 使用项目的实际 App Server 客户端，通过默认 PATH 和显式 npm `.cmd` 入口初始化外部 Codex 0.166.0；没有调用模型或创建真实对话任务。裁剪后的容器检查不代表缺少外部 CLI 时也能执行对话。
+
+完整前端在依赖裁剪构建中完成编译。随后增加的 Windows 可执行入口解析只涉及独立后端，因此在同一依赖镜像上重新编译并更新后端和裁剪脚本，没有重复编译前端。
 
 以上不是带真实模型供应商、外部站点和业务数据的全流程验收。

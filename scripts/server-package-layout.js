@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 const fs = require('node:fs');
 const path = require('node:path');
+const { isPackageSupported, pruneRuntimeDependencies, runtimePlatform } = require('./prune-runtime-dependencies.cjs');
 
 const requiredProductionRuntimeEntries = [
   path.join('.next', 'BUILD_ID'),
@@ -33,11 +34,11 @@ function productionPackagePaths(projectRoot) {
 
   const missingRequiredPackages = [];
   const packagePaths = [];
+  const targetPlatform = runtimePlatform();
   for (const [relativePath, metadata] of Object.entries(lock.packages)) {
     if (!relativePath.startsWith('node_modules/') || !metadata || typeof metadata !== 'object' || metadata.dev === true) continue;
     const packagePath = packagePathFromLockEntry(relativePath);
-    const supported = (values, current) => !Array.isArray(values) || (!values.includes('!' + current) && (!values.some(value => !value.startsWith('!')) || values.includes(current)));
-    if (!supported(metadata.os, process.platform) || !supported(metadata.cpu, process.arch)) continue;
+    if (!isPackageSupported(metadata, targetPlatform)) continue;
     if (fs.existsSync(path.join(projectRoot, packagePath))) {
       packagePaths.push(packagePath);
     } else if (metadata.optional !== true) {
@@ -131,6 +132,9 @@ function copyProductionRuntime(projectRoot, target) {
   copyBuildOutput(projectRoot, target);
   fs.cpSync(path.join(projectRoot, 'dist-backend'), path.join(target, 'dist-backend'), { recursive: true });
   fs.cpSync(path.join(projectRoot, 'package.json'), path.join(target, 'package.json'));
+  fs.cpSync(path.join(projectRoot, 'package-lock.json'), path.join(target, 'package-lock.json'));
+  fs.mkdirSync(path.join(target, 'scripts'), { recursive: true });
+  fs.cpSync(path.join(projectRoot, 'scripts', 'prune-runtime-dependencies.cjs'), path.join(target, 'scripts', 'prune-runtime-dependencies.cjs'));
   const envSource = path.join(projectRoot, '.env.example');
   if (fs.existsSync(envSource)) fs.cpSync(envSource, path.join(target, '.env.example'));
 
@@ -155,6 +159,7 @@ function copyProductionRuntime(projectRoot, target) {
       fs.cpSync(source, destination, { recursive: true, dereference: true, filter: runtimeFileFilter });
     }
   }
+  pruneRuntimeDependencies(path.join(target, 'node_modules'));
   return packagePaths;
 }
 
