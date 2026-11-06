@@ -1,12 +1,10 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { BrowserChatLoadingSkeleton } from '@/components/BrowserChatLoadingSkeleton';
-import { useI18n } from '@/i18n/I18nProvider';
+import { WorkspaceLoadingShell } from '@/components/WorkspaceLoadingShell';
 
 function BrowserChatLoading() {
-  const { t } = useI18n();
-  return <BrowserChatLoadingSkeleton label={t('正在加载浏览器工作区')} workspace />;
+  return <WorkspaceLoadingShell route="/browser-chat" />;
 }
 
 const BrowserChatWorkspace = dynamic(

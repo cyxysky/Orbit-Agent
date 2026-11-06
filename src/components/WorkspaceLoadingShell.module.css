@@ -1,0 +1,38 @@
+.layout { height: 100dvh; min-height: 0; overflow: hidden; }
+.main { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: var(--background); }
+.header { flex: none; padding: 28px 28px 0; }
+.header h1 { margin: 0; color: var(--foreground); font-size: 24px; font-weight: 600; line-height: 1.3; outline: none; }
+.content { flex: 1; min-height: 0; min-width: 0; overflow: auto; padding: 24px 28px; }
+.chat { display: flex; padding: 0; }
+.chat > div { width: 100%; height: 100%; }
+@media (max-width: 760px) {
+  .shell .layout, .shell .layout:global(.sidebar-collapsed) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .shell .layout > :global(.browser-chat-sidebar),
+  .shell .layout:global(.sidebar-collapsed) > :global(.browser-chat-sidebar) {
+    display: flex; flex-direction: row; align-items: center; gap: 8px;
+    width: 100%; height: auto; min-height: 0; max-height: none;
+    padding: 8px 12px; border-right: 0; border-bottom: 1px solid var(--border);
+  }
+  .shell .layout :global(.browser-chat-brand) { flex: none; min-height: 32px; margin: 0; padding: 0; }
+  .shell .layout :global(.browser-chat-brand-title),
+  .shell .layout:global(.sidebar-collapsed) :global(.browser-chat-brand-title) { display: flex; }
+  .shell .layout :global(.browser-chat-brand > button),
+  .shell .layout :global(.browser-chat-brand-title > span),
+  .shell .layout :global(.workspace-mode-tab-label) { display: none; }
+  .shell .layout :global(.workspace-mode-tabs) { flex: 1; min-width: 0; margin: 0; }
+  .shell .layout :global(.workspace-mode-tabs [data-slot="tabs-list"]) { display: flex; flex-direction: row; width: 100%; }
+  .shell .layout :global(.workspace-mode-link) { flex: 1; min-width: 32px; justify-content: center; padding: 8px 6px; }
+  .shell .layout :global(.browser-chat-sidebar-footer) {
+    position: static; flex: none; flex-direction: row !important;
+    width: auto; margin: 0; padding: 0; border: 0;
+  }
+  .shell .layout:global(.browser-chat-layout) :global(.browser-chat-sidebar-footer .workspace-help-button) { width: 32px; height: 32px; gap: 0; padding: 0; font-size: 0; }
+  .header { padding: 20px 16px 0; }
+  .header h1 { font-size: 21px; }
+  .content { padding: 20px 16px; }
+  .chat { padding: 0; }
+}
+.shell { min-width: 0; }

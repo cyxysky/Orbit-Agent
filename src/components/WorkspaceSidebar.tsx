@@ -10,6 +10,7 @@ import { AuroraText } from '@/components/ui/aurora-text';
 import { useWorkspaceBrand } from '@/brand/WorkspaceBrandProvider';
 import { OrbitIcon } from '@/components/OrbitIcon';
 import { useWorkspaceAccess } from '@/components/WorkspaceAccessProvider';
+import { useWorkspaceNavigation, type WorkspacePath } from '@/components/workspace-navigation-context';
 
 type WorkspaceSidebarProps = {
   children: ReactNode;
@@ -55,6 +56,8 @@ export function WorkspaceModeTabs({
   showAiOperations = false,
 }: WorkspaceModeTabsProps) {
   const { settingsMenuVisible } = useWorkspaceAccess();
+  const { pendingPath, startNavigation } = useWorkspaceNavigation();
+  const selectedKey = pendingPath || activeKey;
   const visibleConversationLabel = conversationLabel.replace(/(?:模式| Mode)$/u, '');
   const items = [
     { path: '/browser-chat', label: visibleConversationLabel, ariaLabel: conversationLabel, icon: MessageCircleMore },
@@ -66,8 +69,9 @@ export function WorkspaceModeTabs({
   return (
     <nav className="workspace-mode-tabs" aria-label={ariaLabel}>
       <div data-slot="tabs-list-container"><div className="tabs__list-container__scroller"><div data-slot="tabs-list">
-        {items.map(({ path, label, ariaLabel: accessibleLabel, icon: Icon }) => <Link key={path} href={path} prefetch scroll={false}
-          aria-label={accessibleLabel} aria-current={activeKey === path ? 'page' : undefined} data-slot="tabs-tab" className="workspace-mode-link">
+        {items.map(({ path, label, ariaLabel: accessibleLabel, icon: Icon }) => <Link key={path} href={path} prefetch="auto" scroll={false}
+          onNavigate={event => { if (startNavigation) { event.preventDefault(); startNavigation(path as WorkspacePath); } }}
+          aria-label={accessibleLabel} aria-current={selectedKey === path ? 'page' : undefined} data-slot="tabs-tab" className="workspace-mode-link">
           <Icon aria-hidden="true" /><span className="workspace-mode-tab-label">{label}</span>
         </Link>)}
       </div></div></div>

@@ -6,6 +6,7 @@ import { InterfaceMotion } from '@/components/InterfaceMotion';
 import { FilePreviewProvider } from '@/components/FilePreviewProvider';
 import { NavigationLoading } from '@/components/NavigationLoading';
 import { WorkspaceAccessProvider } from '@/components/WorkspaceAccessProvider';
+import { WorkspaceNavigationTransition } from '@/components/WorkspaceNavigationTransition';
 import { readWorkspacePageContext } from '@/lib/backend-page-data';
 import { I18nProvider } from '@/i18n/I18nProvider';
 import { ThemeProvider } from '@/theme/ThemeProvider';
@@ -29,7 +30,7 @@ try {
 `;
 
 export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  const { settingsMenuVisible } = await readWorkspacePageContext();
+  const context = await readWorkspacePageContext();
   return (
     <html lang="zh-CN" suppressHydrationWarning>
       <body>
@@ -37,10 +38,10 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
         <ThemeProvider>
           <I18nProvider>
             <WorkspaceBrandProvider>
-              <WorkspaceAccessProvider settingsMenuVisible={settingsMenuVisible}>
+              <WorkspaceAccessProvider settingsMenuVisible={context.settingsMenuVisible} initialSidebarCollapsed={context.sidebarCollapsed} showAiOperations={context.admin}>
               <FilePreviewProvider>
                 <InterfaceMotion />
-                {children}
+                <WorkspaceNavigationTransition>{children}</WorkspaceNavigationTransition>
                 <NavigationLoading />
               </FilePreviewProvider>
               </WorkspaceAccessProvider>
