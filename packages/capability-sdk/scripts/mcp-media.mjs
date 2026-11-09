@@ -33,8 +33,9 @@ export async function createLocalMediaGeneration({ projectRoot, artifactsRoot, s
   const { mediaModelConfigurationSchema } = await import('../dist/media/models.js');
   const { builtInMediaModels } = await import('../dist/media/model-settings.js');
   let configured={models:[],defaults:{}};
-  if(settings.modelsFile){
-    configured=JSON.parse((await readFile(path.resolve(projectRoot,settings.modelsFile),'utf8')).replace(/^\uFEFF/,''));
+  const modelsFile = settings.modelsFile || process.env.CAPABILITY_MEDIA_MODELS_FILE;
+  if(modelsFile){
+    configured=JSON.parse((await readFile(path.resolve(projectRoot,modelsFile),'utf8')).replace(/^\uFEFF/,''));
     configured.models=configured.models.map(({apiKeyEnv,...model})=>{
       if(apiKeyEnv && !process.env[apiKeyEnv])throw new Error(`Missing media API key environment variable: ${apiKeyEnv}`);
       return {...model,...(apiKeyEnv?{apiKey:process.env[apiKeyEnv]}:{})};
@@ -46,7 +47,7 @@ export async function createLocalMediaGeneration({ projectRoot, artifactsRoot, s
     defaults:configured.defaults,
   });
   const codexPath=await codexCli(settings.codexPath || process.env.CAPABILITY_CODEX_PATH,projectRoot);
-  return createAiSdkMediaGenerationOperations({configuration,codex:{codexPath},
+  return createAiSdkMediaGenerationOperations({configuration,codex:{codexPath,env: process.env.CODEX_HOME ? { CODEX_HOME: process.env.CODEX_HOME } : undefined},
     async readSource(ref){
       const filename=await resolveSource(ref);
       if((await stat(filename)).size>50*1024*1024)throw new Error('Reference image exceeds 50 MiB.');

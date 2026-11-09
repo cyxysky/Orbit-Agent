@@ -12,6 +12,16 @@ const settingNames = [
 
 function applyOrbitEnvironment(environment = process.env) {
   const updates = {};
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const installerSource = path.join(process.cwd(), 'capability-runtime', 'sdk');
+  const bundledNpm = path.join(process.cwd(), 'capability-runtime/execution/npm/bin/npm-cli.js');
+  if (fs.existsSync(bundledNpm)) environment.CAPABILITY_NPM_CLI ||= bundledNpm;
+  if (fs.existsSync(path.join(installerSource, 'runtime/managed/install-tool.cjs'))) {
+    environment.CAPABILITY_SDK_ROOT ||= installerSource;
+    environment.CAPABILITY_TOOL_INSTALLER_DIR ||= path.join(installerSource, 'runtime/managed');
+  }
+  if (environment.CAPABILITY_TOOLS_HOME) environment.CAPABILITY_RUNTIME_HOME ||= path.join(environment.CAPABILITY_TOOLS_HOME, 'runtime', process.platform + '-' + process.arch);
   for (const name of settingNames) {
     const value = environment[`ORBIT_${name}`];
     if (value !== undefined) {

@@ -41,10 +41,9 @@ function assertSupportedNodeVersion(version = process.versions.node) {
 }
 
 function createServiceXml() {
-  const runtimePaths = JSON.parse(fs.readFileSync(path.join(distributionRoot, 'runtime-paths.json'), 'utf8'));
   const environment = {
     APP_DATA_DIR: '%ProgramData%\\WebPilot\\runtime',
-    AI_WEB_TEST_CHROMIUM_EXECUTABLE_PATH: `%BASE%\\${runtimePaths.chromium}`,
+    CAPABILITY_TOOLS_HOME: '%ProgramData%\\WebPilot\\runtime\\tool-components',
     AI_SENSITIVE_DATA_FILTER_ENABLED: 'false',
     AI_SENSITIVE_DATA_FILTER_FAILURE_MODE: 'closed',
     ARTIFACTS_DIR: '%ProgramData%\\WebPilot\\runtime\\artifacts',
@@ -54,10 +53,7 @@ function createServiceXml() {
     GLINER_SERVICE_URL: 'http://127.0.0.1:18001',
     HEADLESS_BROWSER: 'true',
     HOSTNAME: '0.0.0.0',
-    LIBREOFFICE_PATH: '%BASE%\\libreoffice\\program\\soffice.exe',
-    LIBREOFFICE_PYTHON_PATH: '%BASE%\\libreoffice\\program\\python.exe',
     NODE_ENV: 'production',
-    PLAYWRIGHT_BROWSERS_PATH: '%BASE%\\ms-playwright',
     PORT: '3000',
     WEBPILOT_SERVER_ROOT: '%BASE%',
   };
@@ -241,9 +237,7 @@ function requiredServerPackageEntries(packageRoot = distributionRoot) {
     path.join(packageRoot, 'server', '.next', 'BUILD_ID'),
     path.join(packageRoot, 'server', 'node_modules', 'next', 'package.json'),
     path.join(packageRoot, 'server', 'webpilot-server.js'),
-    path.join(packageRoot, 'ms-playwright'),
-    path.join(packageRoot, 'runtime-paths.json'),
-    path.join(packageRoot, 'libreoffice', 'program', 'soffice.exe'),
+    path.join(packageRoot, 'server', 'capability-runtime', 'sdk', 'runtime', 'managed', 'tools.json'),
   ];
 }
 

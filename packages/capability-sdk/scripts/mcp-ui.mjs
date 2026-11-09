@@ -1,12 +1,18 @@
 import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { readExcalidrawFont } from '../dist/chart/node.js';
 import { fromJsonSchema } from '@modelcontextprotocol/server';
 
 const mime = 'text/html;profile=mcp-app';
 const uri = 'ui://capability-sdk/visualization.html';
 const root = new URL('../runtime/ui/', import.meta.url);
+async function readExcalidrawFont(...args) {
+  // Visualization-specific support is loaded only when that resource is requested.
+  // A maps-only MCP does not depend on the chart renderer or its font packages.
+  const support = '../dist/' + 'chart/node.js';
+  const renderer = await import(new URL(support, import.meta.url).href);
+  return renderer.readExcalidrawFont(...args);
+}
 const json = (res, status, data) => { res.writeHead(status, {'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(data)); };
 
 /** One UI service per mounted MCP host. Access is scoped to returned artifacts. */

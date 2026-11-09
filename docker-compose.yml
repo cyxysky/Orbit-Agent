@@ -27,6 +27,7 @@ services:
       - ./.data:/app/.data
       - ./artifacts:/app/artifacts
       - ./runtime/knowledge:/app/knowledge
+      - orbit-tool-components:/app/tool-components
     restart: unless-stopped
 
   webpilot-code-sandbox:
@@ -45,6 +46,9 @@ services:
       CODE_SANDBOX_RUNNER_WORKSPACE: /tmp/webpilot-code-sandbox
       CODE_SANDBOX_RUNNER_TOKEN: "${CODE_SANDBOX_RUNNER_TOKEN:?CODE_SANDBOX_RUNNER_TOKEN must be set}"
       CODE_SANDBOX_RUNNER_CONCURRENCY: "${CODE_SANDBOX_RUNNER_CONCURRENCY:-2}"
+      CAPABILITY_TOOLS_HOME: /app/tool-components
+    volumes:
+      - orbit-tool-components:/app/tool-components:ro
     read_only: true
     tmpfs:
       - /tmp:exec,size=768m,mode=1777
@@ -62,3 +66,6 @@ services:
     security_opt:
       - no-new-privileges:true
     restart: unless-stopped
+
+volumes:
+  orbit-tool-components:

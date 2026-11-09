@@ -1,6 +1,6 @@
 import { getErrorCode, normalizeErrorCode } from "../errors.ts";
 import { browserRuntimeSkill, browserRuntimeReferenceSkills, browserInteractiveQaSkill } from './runtime-skill.ts';
-import type { BrowserCodeAttachmentBinding } from './node/browser-code-runner.ts';
+import type { BrowserCodeAttachmentBinding, BrowserCodeCredentialBinding } from './node/browser-code-runner.ts';
 import { validateBrowserVisualInput } from './interaction-schema.ts';
 import { browserSessionCommandShape, executeBrowserSessionOperation, type BrowserSessionCommand } from './node/interaction.ts';
 import { readFile } from 'node:fs/promises';
@@ -61,6 +61,8 @@ export type BrowserMcpSessionManagerOptions = {
   idleTimeoutMs?: number;
   sessionOptions?: BrowserSessionOptions;
   resolveAttachmentArtifact?: (artifactId: string) => Promise<Omit<BrowserCodeAttachmentBinding, 'ref'>>;
+  resolveCredentials?: () => Promise<BrowserCodeCredentialBinding[]>;
+  resolveTarget?: () => Promise<string | undefined>;
 };
 
 async function browserResult(
@@ -163,7 +165,7 @@ export class BrowserMcpSessionManager {
       const postActionState = await session.readBrowserState({scope:'active', maxOutputChars:4000, abortSignal})
         .catch(() => undefined);
       return browserResult(id, {ok:true, summary: 'Opened browser session ' + id + '.',
-        data: {url:session.currentUrl(), postActionState}, ...(observation ? {browserObservation:observation} : {})});
+        data: {url:session.currentUrl(), postActionState, browserTargetId: (await session.browserAutomationTarget()).targetId}, ...(observation ? {browserObservation:observation} : {})});
     } catch (error) {
       await session?.close({ force: true }).catch(() => undefined);
       return {
@@ -180,6 +182,8 @@ export class BrowserMcpSessionManager {
 
   async operate(input: z.infer<typeof browserParser>, abortSignal?: AbortSignal): Promise<CapabilityResult> {
     return this.#enqueue(input.browserSessionId!, async managed => {
+      const targetId = await this.options.resolveTarget?.();
+      if (targetId) await managed.session.selectAutomationTarget(targetId);
       managed.stepIndex += 1;
       if (input.action === 'images') {
         const requested = input.imageIds || [];
@@ -213,7 +217,10 @@ export class BrowserMcpSessionManager {
       }
       let result = await executeBrowserSessionOperation(managed.session, input as BrowserSessionCommand, {
         mode:'hybrid', runId:managed.runId, stepIndex:managed.stepIndex, abortSignal, attachments,
+        credentials: await this.options.resolveCredentials?.(),
       });
+      const browserTargetId = await managed.session.browserAutomationTarget().then(value => value.targetId).catch(() => undefined);
+      if (browserTargetId) result = { ...result, data: { ...(result.data && typeof result.data === 'object' ? result.data : { result: result.data }), browserTargetId } };
       if (['navigate','tabs'].includes(input.action) && !(input.action === 'tabs' && input.tabOperation === 'list')) {
         const observation = await managed.session.captureBrowserObservation(managed.runId, abortSignal).catch(() => undefined);
         if (observation) result = {...result, browserObservation:observation};
@@ -307,6 +314,8 @@ export type BrowserMcpOptions = {
   idleTimeoutMs?: number;
   sessionOptions?: BrowserSessionOptions | ((context: CapabilityRunContext) => BrowserSessionOptions | Promise<BrowserSessionOptions>);
   resolveAttachmentArtifact?: BrowserMcpSessionManagerOptions['resolveAttachmentArtifact'];
+  resolveCredentials?: BrowserMcpSessionManagerOptions['resolveCredentials'];
+  resolveTarget?: BrowserMcpSessionManagerOptions['resolveTarget'];
 };
 
 export function createBrowserMcpCapability(options: BrowserMcpOptions = {}): CapabilityProvider {
@@ -336,6 +345,8 @@ export function createBrowserMcpCapability(options: BrowserMcpOptions = {}): Cap
         maxSessions: options.maxSessions,
         idleTimeoutMs: options.idleTimeoutMs,
         resolveAttachmentArtifact: options.resolveAttachmentArtifact,
+        resolveCredentials: options.resolveCredentials,
+        resolveTarget: options.resolveTarget,
         sessionOptions: {
           ...sessionOptions,
           configuration: {

@@ -5,12 +5,12 @@ import path from 'node:path';
 import { createMCPClient, type MCPClient } from '@ai-sdk/mcp';
 import { Experimental_StdioMCPTransport } from '@ai-sdk/mcp/mcp-stdio';
 import type { BrowserSession } from '@cjfclonedeep/capability-sdk/browser/node';
+import { resolveToolModule } from '@cjfclonedeep/capability-sdk/managed/node';
 
 const clients = new WeakMap<BrowserSession, Promise<MCPClient>>();
 // Patchright deliberately disables page-console capture. Do not advertise an
 // empty console response as evidence that the page has no console errors.
 const excludedTools = new Set(['browser_run_code_unsafe', 'browser_close', 'browser_tabs', 'browser_console_messages']);
-const resolvePackage = createRequire(path.join(process.cwd(), 'package.json'));
 
 async function connectedClient(session: BrowserSession, runId: string) {
   const existing = clients.get(session);
@@ -19,7 +19,7 @@ async function connectedClient(session: BrowserSession, runId: string) {
     const connection = session.browserAutomationConnection();
     // Use the MCP implementation bundled with the same patched driver. The
     // standalone @playwright/mcp package would attach an unpatched CDP client.
-    const driverRequire = createRequire(resolvePackage.resolve('patchright'));
+    const driverRequire = createRequire(resolveToolModule('patchright'));
     const packageFile = driverRequire.resolve('patchright-core/package.json');
     const cli = path.join(path.dirname(packageFile), 'cli.js');
     const outputDir = path.resolve(process.cwd(), 'runtime', 'artifacts', runId.replace(/[^a-zA-Z0-9_-]/g, '_'), 'playwright-mcp');

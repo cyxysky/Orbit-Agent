@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+export { createMcpStdioConnector, type McpStdioConnection } from './stdio.ts';
 import { readBoundedResponseText } from '../../index.ts';
 import { createConnectorRegistry, createConnectorsCapability, type AgentConnector, type ConnectorOperation } from './index.ts';
 import type { CapabilityExecutionContext, CapabilityRunContext } from '../../index.ts';

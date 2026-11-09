@@ -8,8 +8,18 @@
     "url": "git+https://github.com/cyxysky/capability-sdk.git"
   },
   "homepage": "https://github.com/cyxysky/capability-sdk#readme",
-  "bugs": { "url": "https://github.com/cyxysky/capability-sdk/issues" },
-  "keywords": ["agent", "tools", "mcp", "browser", "office", "automation", "typescript"],
+  "bugs": {
+    "url": "https://github.com/cyxysky/capability-sdk/issues"
+  },
+  "keywords": [
+    "agent",
+    "tools",
+    "mcp",
+    "browser",
+    "office",
+    "automation",
+    "typescript"
+  ],
   "type": "module",
   "sideEffects": [
     "**/*.css"
@@ -30,6 +40,10 @@
     "*.md"
   ],
   "exports": {
+    "./managed/node": {
+      "types": "./dist/managed/node.d.ts",
+      "import": "./dist/managed/node.js"
+    },
     "./media/video-composition": {
       "types": "./dist/media/video-composition.d.ts",
       "import": "./dist/media/video-composition.js",
@@ -550,6 +564,7 @@
     "access": "public"
   },
   "dependencies": {
+    "@ai-sdk/mcp": "^2.0.30",
     "@ai-sdk/alibaba": "2.0.30",
     "@ai-sdk/google": "4.0.40",
     "@ai-sdk/openai": "4.0.37",
@@ -600,7 +615,9 @@
     "undici": "^7.29.0",
     "ws": "8.21.3",
     "xlsx": "^0.18.5",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "cross-spawn": "^7.0.6",
+    "patchright-core": "1.63.0"
   },
   "bin": {
     "capability-install": "install.mjs",

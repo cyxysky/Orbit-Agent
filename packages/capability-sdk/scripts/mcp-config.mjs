@@ -142,6 +142,8 @@ export async function loadConfig(projectRoot, filename) {
   }
 }
 
+export function validateConfig(value) { validate(value, configSchema, 'config'); return value; }
+
 export async function initConfig(projectRoot) {
   const value = defaultsFor();
   // Preserve automatic platform selection in a cross-platform checked-in file.
@@ -171,7 +173,7 @@ export const toolConfigurationKeys = {
   computer: { enabled: 'AGENT_COMPUTER_ENABLED', endpoint: 'AGENT_COMPUTER_ENDPOINT', timeoutMs: 'AGENT_COMPUTER_TIMEOUT_MS' },
 };
 
-export function toolConfiguration(config, group, projectRoot) {
+export function toolConfiguration(config, group, projectRoot, environment = process.env) {
   const values = config.tools?.[group] || {};
   const result = {};
   for (const [key, target] of Object.entries(toolConfigurationKeys[group] || {})) {
@@ -181,21 +183,21 @@ export function toolConfiguration(config, group, projectRoot) {
     result[target] = String(value);
   }
   if (group === 'computer' && values.authorizationEnv) {
-    const secret = process.env[values.authorizationEnv];
+    const secret = environment[values.authorizationEnv];
     if (!secret) throw new Error(`Missing environment variable named by tools.computer.authorizationEnv: ${values.authorizationEnv}`);
     result.AGENT_COMPUTER_AUTHORIZATION = secret;
   }
   if (group === 'maps') {
     for (const [setting, field] of [['GOOGLE_MAPS_BROWSER_KEY','browserKeyEnv'],['GOOGLE_MAPS_SERVER_KEY','serverKeyEnv']]) {
-      if (values[field]) result[setting] = process.env[values[field]] || '';
+      if (values[field]) result[setting] = environment[values[field]] || '';
     }
     for (const [setting, field] of [['GOOGLE_MAPS_LANGUAGE','language'],['GOOGLE_MAPS_SEARCH_MONTHLY_LIMIT','searchMonthlyLimit'],['GOOGLE_MAPS_ROUTES_MONTHLY_LIMIT','routesMonthlyLimit']]) {
       if (values[field] !== undefined) result[setting] = String(values[field]);
     }
   }
   if (group === 'browser' && values.viewport?.mode === 'fixed') {
-    result.BROWSER_VIEWPORT_WIDTH ??= process.env.BROWSER_VIEWPORT_WIDTH || '1440';
-    result.BROWSER_VIEWPORT_HEIGHT ??= process.env.BROWSER_VIEWPORT_HEIGHT || '900';
+    result.BROWSER_VIEWPORT_WIDTH ??= environment.BROWSER_VIEWPORT_WIDTH || '1440';
+    result.BROWSER_VIEWPORT_HEIGHT ??= environment.BROWSER_VIEWPORT_HEIGHT || '900';
   }
   return result;
 }

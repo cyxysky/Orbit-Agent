@@ -67,6 +67,9 @@ export type BrowserSessionOptions = {
   runId?: string;
   /** Durable browserCode state scope shared by all kernels for one browser conversation. */
   browserCodeStateSessionId?: string;
+  /** Attach to one host-owned Chromium target without claiming unrelated tabs. */
+  attachTargetId?: string;
+  sessionGroupId?: string;
   preferExistingPage?: boolean;
   browserProfileKey?: string;
   debugDevtools?: boolean;
@@ -1604,6 +1607,7 @@ export class BrowserSession {
   }
 
   private ownedPages = new Set<Page>();
+  private automationObserver?: Browser;
   private browserOwnership: BrowserOwnership = 'launched';
   private releaseSharedBrowser?: (force?: boolean) => Promise<void>;
   private parentBrowserSession?: BrowserSession;
@@ -1667,7 +1671,7 @@ export class BrowserSession {
 
   constructor(private readonly options: BrowserSessionOptions = {}) {
     this.capabilityConfiguration = Object.freeze({ ...options.configuration });
-    this.pageGroupId = normalizePageGroupId(options.runId);
+    this.pageGroupId = normalizePageGroupId(options.sessionGroupId || options.runId);
   }
 
   /** Applies host-loaded settings before a lazily created session is started. */
@@ -1725,6 +1729,78 @@ export class BrowserSession {
   browserAutomationConnection(): BrowserCodeConnection {
     if (!this.browserCodeConnection || !this.isUsable()) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Browser session is not ready for an external automation transport.');
     return { ...this.browserCodeConnection };
+  }
+
+  async browserAutomationTarget() {
+    const page = this.activePage;
+    const connection = await page.context().newCDPSession(page);
+    try {
+      const { targetInfo } = await connection.send('Target.getTargetInfo');
+      return { ...this.browserAutomationConnection(), targetId: targetInfo.targetId, sessionGroupId: this.pageGroupId };
+    } finally { await connection.detach().catch(() => undefined); }
+  }
+
+  async selectAutomationTarget(targetId: string) {
+    for (const candidateContext of new Set([this.context, ...(this.browser?.contexts() || [])])) for (const page of candidateContext?.pages() || []) {
+      const context = page.context();
+      const connection = await context.newCDPSession(page).catch(() => undefined);
+      if (!connection) continue;
+      let id: string | undefined;
+      try { id = (await connection.send('Target.getTargetInfo')).targetInfo.targetId; }
+      finally { await connection.detach().catch(() => undefined); }
+      if (id !== targetId) continue;
+      const group = await page.evaluate(() => document.documentElement?.getAttribute('data-ai-web-test-session-group-id')
+        || String(window.name || '').match(/^AI_WEB_TEST_SESSION_GROUP:([^;]+)/)?.[1] || '').catch(() => '');
+      if (group !== this.pageGroupId) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Browser target belongs to another session.');
+      await this.prepareContext(context, { claimPages: false });
+      this.context = context; this.installOwnedPageDiscovery(context);
+      this.claimPage(page, { allowSteal: true }); this.page = page;
+      await this.ensurePageGroup(page);
+      return;
+    }
+    // A Playwright server connection may not publish pages created by another
+    // client. Refresh its snapshot and rebind this session's pages by Chromium
+    // target id. Keep one observer connection and preserve public tab ids.
+    if (this.browserCodeConnection) {
+      const { chromium } = await import('patchright');
+      const connection = this.browserCodeConnection;
+      const observer = connection.protocol === 'playwright' ? await chromium.connect(connection.endpoint) : await chromium.connectOverCDP(connection.endpoint);
+      try {
+        const targets = new Map<string, Page>();
+        for (const context of observer.contexts()) for (const page of context.pages()) {
+          const channel = await context.newCDPSession(page);
+          try { targets.set((await channel.send('Target.getTargetInfo')).targetInfo.targetId, page); }
+          finally { await channel.detach().catch(() => undefined); }
+        }
+        const selected = targets.get(targetId);
+        if (!selected) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'The attached browser target is no longer available.');
+        const groupOf = (page: Page) => page.evaluate(() => document.documentElement?.getAttribute('data-ai-web-test-session-group-id')
+          || String(window.name || '').match(/^AI_WEB_TEST_SESSION_GROUP:([^;]+)/)?.[1] || '').catch(() => '');
+        if (await groupOf(selected) !== this.pageGroupId) throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'Browser target belongs to another session.');
+        const ids = new Map<string, string>();
+        for (const page of this.sessionPages()) {
+          const id = await this.browserCodeTargetId(page).catch(() => undefined);
+          if (id) ids.set(id, this.livePreviewTabId(page));
+        }
+        if (this.context && this.contextPageListener) this.context.off('page', this.contextPageListener);
+        if (this.context && this.pageDiscoveryListener) this.context.off('page', this.pageDiscoveryListener);
+        this.contextPageListener = undefined; this.pageDiscoveryListener = undefined;
+        for (const page of this.ownedPages) this.detachPageListeners(page);
+        this.ownedPages.clear();
+        const context = selected.context();
+        await this.prepareContext(context, { claimPages: false });
+        this.context = context; this.installOwnedPageDiscovery(context);
+        for (const [id, page] of targets) if (page.context() === context && await groupOf(page) === this.pageGroupId) {
+          if (ids.has(id)) this.livePreviewTabIds.set(page, ids.get(id)!);
+          this.claimPage(page, { allowSteal: true, makeActive: false });
+        }
+        this.page = selected;
+        const previous = this.automationObserver; this.automationObserver = observer;
+        await previous?.close().catch(() => undefined);
+        return;
+      } catch (error) { await observer.close().catch(() => undefined); throw error; }
+    }
+    throw new CodedError(ERROR_CODES.BROWSER_OPERATION_FAILED, 'The attached browser target is no longer available.');
   }
 
   async focusActivePage() {
@@ -2048,8 +2124,10 @@ export class BrowserSession {
 
     if (transportAdapter.kind === 'electron-cdp' || transportAdapter.kind === 'cdp') {
       this.browserOwnership = 'connected';
-      this.browser = await chromium.connectOverCDP(cdpEndpoint);
-      this.browserCodeConnection = { protocol: 'cdp', endpoint: cdpEndpoint };
+      const protocol = environment.BROWSER_CONNECTION_PROTOCOL === 'playwright' ? 'playwright' : 'cdp';
+      this.browser = protocol === 'playwright' ? await chromium.connect(cdpEndpoint) : await chromium.connectOverCDP(cdpEndpoint);
+      this.browserCodeConnection = { protocol, endpoint: cdpEndpoint };
+      if (this.options.attachTargetId) { await this.selectAutomationTarget(this.options.attachTargetId); return; }
       if (transportAdapter.kind === 'electron-cdp') {
         // The renderer creates the exact session tab only after it receives the
         // backend browser:start event. Allow the realtime activation handshake
@@ -5765,7 +5843,7 @@ export class BrowserSession {
           return;
         }
         if (options.closePages) await this.closeOwnedPages();
-        const managedProfileBrowserClosed = options.force
+        const managedProfileBrowserClosed = options.force && !this.options.attachTargetId
           ? await closeConnectedBrowserProcess(this.browser)
           : false;
         await this.browser?.close({ reason: 'AI test run finished; disconnecting from existing browser.' }).catch(() => undefined);
@@ -5783,6 +5861,8 @@ export class BrowserSession {
       this.parentBrowserSession?.childBrowserSessions.delete(this);
       this.parentBrowserSession = undefined;
       if (!shouldKeepOpen || disposeLocalState) {
+        await this.automationObserver?.close().catch(() => undefined);
+        this.automationObserver = undefined;
         unregisterBrowserSession(this);
         this.page = undefined;
         this.context = undefined;

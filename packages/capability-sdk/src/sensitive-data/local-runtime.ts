@@ -43,6 +43,7 @@ function isLoopbackHost(hostname: string) {
 export function localGlinerServiceDirectories(projectRoot = process.cwd(), configuredDirectory = '') {
   return [...new Set([
     configuredDirectory ? path.resolve(configuredDirectory) : '',
+    process.env.CAPABILITY_SDK_ROOT ? path.join(process.env.CAPABILITY_SDK_ROOT, 'runtime', 'sensitive-data', 'python') : '',
     ...bundledGlinerRuntimeDirectories(projectRoot).map((runtimeRoot) => path.join(runtimeRoot, 'service')),
     path.resolve(packageRoot, 'runtime', 'sensitive-data', 'python'),
     path.resolve(projectRoot, 'packages', 'capability-sdk', 'runtime', 'sensitive-data', 'python'),

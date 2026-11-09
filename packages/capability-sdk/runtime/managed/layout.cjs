@@ -20,11 +20,14 @@ function readManagedRuntime(environment = process.env) {
     const value = JSON.parse(fs.readFileSync(path.join(runtimeDirectory(environment), 'runtime.json'), 'utf8'));
     if (value.format !== 2 || value.platform !== process.platform || value.arch !== process.arch || value.status !== 'ready') return undefined;
     const directory = runtimeDirectory(environment);
+    let available = 0;
     for (const key of ['python', 'libreoffice', 'unoPython', 'chromium', 'ffmpeg']) {
+      if (!(key in value)) continue;
       value[key] = resolveRuntimePath(directory, value[key]);
-      if (!value[key]) return undefined;
+      if (!value[key]) { delete value[key]; continue; }
+      available++;
     }
-    return value;
+    return available ? value : undefined;
   } catch { return undefined; }
 }
 

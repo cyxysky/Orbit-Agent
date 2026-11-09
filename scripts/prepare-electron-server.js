@@ -14,7 +14,8 @@ function copyInto(source, target) {
 }
 
 fs.rmSync(outputRoot, { recursive: true, force: true });
-const productionPackagePaths = copyProductionRuntime(root, serverOutput);
+async function main() {
+const productionPackagePaths = await copyProductionRuntime(root, serverOutput);
 copyInto(path.join(root, 'public'), path.join(serverOutput, 'public'));
 const serverRuntimeFiles = copyServerRuntime(root, serverOutput);
 copyInto(
@@ -43,4 +44,6 @@ if (
   throw new Error('The complete production runtime required by the Orbit custom server was not found. Run npm run build before packaging.');
 }
 
-console.log(`Prepared desktop server with ${productionPackagePaths.length} package directories and ${serverRuntimeFiles.length} custom server files at ${serverOutput}`);
+console.log(`Prepared desktop server with ${productionPackagePaths.files} traced dependency files and ${serverRuntimeFiles.length} custom server files at ${serverOutput}`);
+}
+main().catch(error => { console.error(error); process.exitCode = 1; });

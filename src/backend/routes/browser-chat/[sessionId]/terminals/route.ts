@@ -1,6 +1,9 @@
-import { runtimeConfiguration, runtimeSetting } from '@/server/settings/runtime-configuration';
-import { terminalHttpResponse } from '@cjfclonedeep/capability-sdk/execution/terminal/http';
-import { conversationTerminals } from '@/server/capabilities/terminal-manager';
+import { runtimeConfiguration } from '@/server/settings/runtime-configuration';
+import { terminalHttpResponse, createPollingTerminalHttpOperations } from '@cjfclonedeep/capability-sdk/execution/terminal/http';
+import { managedToolConnector } from '@/server/capabilities/managed-tools';
+import type { CapabilityResult } from '@cjfclonedeep/capability-sdk';
+import type { TerminalResult } from '@cjfclonedeep/capability-sdk/execution/terminal';
+import { randomUUID } from 'node:crypto';
 import { queryDatabaseOne } from '@/server/db/database';
 import { requestApplicationUserId } from '@/server/auth/user-context';
 import { ApiRequestError, apiError } from '@/server/http/api-request';
@@ -19,14 +22,21 @@ async function authorizedManager(request: Request, context: BrowserChatSessionRo
     'SELECT status FROM browser_chat_session WHERE id = ? AND user_id = ?', [sessionId, userId],
   );
   if (!session) throw new ApiRequestError('对话不存在。', { code: ERROR_CODES.NOT_FOUND, status: 404 });
-  return { manager: conversationTerminals.get({ runId: sessionId, userId, configuration: runtimeConfiguration() }),
+  const connector = await managedToolConnector({ id: 'terminal', userId, sessionId, runId: sessionId, observe: request.method === 'GET' });
+  const manager = createPollingTerminalHttpOperations(async input => {
+    const raw = await connector.call('terminal', { ...input, detail: true }, { invocationId: randomUUID(), abortSignal: request.signal }) as { structuredContent?: CapabilityResult<TerminalResult> };
+    const result = raw.structuredContent;
+    if (!result || !result.ok && !result.data) throw new Error(result && !result.ok ? result.error.message : 'Invalid terminal MCP response.');
+    return result.data || {};
+  });
+  return { manager,
     closed: session.status === 'closed' };
 }
 
 async function handle(request: Request, context: BrowserChatSessionRouteContext) {
   try {
     const { manager, closed } = await authorizedManager(request, context);
-    return terminalHttpResponse(request, manager, { enabled: runtimeSetting("AGENT_TERMINAL_ENABLED") === 'true', closed });
+    return await terminalHttpResponse(request, manager, { enabled: true, closed });
   } catch (error) { return apiError(request, error, { fallback: '终端请求失败' }); }
 }
 export const GET = handle;

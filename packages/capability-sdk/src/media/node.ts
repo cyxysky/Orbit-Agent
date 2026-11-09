@@ -2,11 +2,12 @@ import { mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { readManagedRuntime } from '../runtime.ts';
-import ffmpegStatic from 'ffmpeg-static';
+import { createRequire } from 'node:module';
 import { runCapabilityProcess } from '../node.ts';
 import { createMediaCapability, mediaToolInput, type MediaArtifact, type MediaOperations } from './index.ts';
 import type { CapabilityExecutionContext, CapabilityRunContext } from '../index.ts';
 import { CodedError, ERROR_CODES } from '../errors.ts';
+const require = createRequire(import.meta.url);
 
 function run(executable: string, args: string[], timeoutMs: number, context: CapabilityExecutionContext) {
   return runCapabilityProcess({ executable, args, timeoutMs, signal: context.abortSignal, maxOutputChars: 100_000 });
@@ -24,7 +25,7 @@ export function createFfmpegMediaOperations(input: {
   publishArtifact(filePath: string, context: CapabilityExecutionContext): Promise<MediaArtifact>;
   timeoutMs?: number; ocr?: MediaOperations['ocr']; transcribe?: MediaOperations['transcribe'];
 }): MediaOperations {
-  const ffmpegPath = input.ffmpegPath || process.env.FFMPEG_PATH || readManagedRuntime()?.ffmpeg || ffmpegStatic || '';
+  const ffmpegPath = input.ffmpegPath || process.env.FFMPEG_PATH || readManagedRuntime()?.ffmpeg || require('ffmpeg-static') || '';
   const operations: MediaOperations = {
     videoRenderer: 'ffmpeg',
     videoCompositionCapabilities: { motions: ['none'], captions: false, renderTimeoutMs: input.timeoutMs || 120_000 },

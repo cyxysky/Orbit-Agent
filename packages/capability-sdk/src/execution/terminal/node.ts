@@ -181,11 +181,11 @@ export function createNodeTerminalOperations(initialOptions: NodeTerminalOptions
     s.interruption = 'interrupted'; kill(s);
     await s.closed;
   };
-  const reply = async (s: TerminalSession, cursor = 0, outputOptions: TerminalOutputOptions = {}): Promise<TerminalResult> => {
-    const result = operations.read(s.summary.terminalId, cursor, false, outputOptions);
+  const reply = async (s: TerminalSession, cursor = 0, outputOptions: TerminalOutputOptions & { raw?: boolean } = {}): Promise<TerminalResult> => {
+    const result = operations.read(s.summary.terminalId, cursor, outputOptions.raw === true, outputOptions);
     // A completed one-shot process needs no resident shell. Keep its transcript
     // only while more output remains to be delivered, then release its handle.
-    if (s.summary.transport === 'pipe' && isClosed(s) && !result.hasMore) {
+    if (!outputOptions.raw && s.summary.transport === 'pipe' && isClosed(s) && !result.hasMore) {
       await rm(s.directory, { recursive: true, force: true });
       sessions.delete(s.summary.terminalId); emit({ type: 'deleted', terminalId: s.summary.terminalId });
       return { ...result, released: true };

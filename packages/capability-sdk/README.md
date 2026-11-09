@@ -29,6 +29,8 @@ Hosts can also mount [executable extensions](docs/extensions.md): an independent
 
 Requires **Node.js >=22.16 with npm**. Automatic runtime preparation supports Windows x64 and Ubuntu 22.04/24.04 or Debian 12/13 on x64/arm64. macOS automatic runtime preparation is not currently supported.
 
+`npm install` no longer provisions every runtime automatically. Hosts can use `@cjfclonedeep/capability-sdk/managed/node` to install a single MCP component. The explicit runtime CLI also accepts `install browser`, `install file`, `install media`, or `install code`. Orbit exposes the per-component installer and environment settings in its settings interface; see [Orbit tool deployment](../../docs/managed-mcp-tools.md).
+
 Windows PowerShell:
 
 ```powershell

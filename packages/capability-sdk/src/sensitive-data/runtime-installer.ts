@@ -11,7 +11,8 @@ export type SensitiveDataInstallStatus = {
 };
 const jobs = new Map<string, ChildProcess>();
 function installerScript() {
-  const candidates = [path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'runtime.cjs')];
+  const candidates = [process.env.CAPABILITY_SDK_ROOT ? path.join(process.env.CAPABILITY_SDK_ROOT, 'scripts', 'runtime.cjs') : '',
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'runtime.cjs')].filter(Boolean);
   const packageName = '@cjfclonedeep/capability-sdk';
   try { candidates.push(path.resolve(path.dirname(fileURLToPath(import.meta.resolve(packageName))), '..', 'scripts', 'runtime.cjs')); } catch { /* Source module path above may already be sufficient. */ }
   const script = candidates.find(existsSync);

@@ -4,16 +4,18 @@ export type ManagedRuntime = {
   arch: string;
   status: 'ready';
   fingerprint: string;
-  python: string;
-  libreoffice: string;
-  unoPython: string;
-  chromium: string;
-  ffmpeg: string;
+  python?: string;
+  libreoffice?: string;
+  unoPython?: string;
+  chromium?: string;
+  ffmpeg?: string;
+  fingerprints?: Record<string, string>;
 };
 export function runtimeDirectory(environment?: Readonly<Record<string, string | undefined>>): string;
 export function readManagedRuntime(environment?: Readonly<Record<string, string | undefined>>): ManagedRuntime | undefined;
 export type ManagedSensitiveDataRuntime = Pick<ManagedRuntime, 'platform' | 'arch' | 'status' | 'fingerprint' | 'python'> & {
   format: 1;
+  python: string;
   models: { gliner: string; chinese: string; pii: string };
 };
 export function readManagedSensitiveDataRuntime(environment?: Readonly<Record<string, string | undefined>>): ManagedSensitiveDataRuntime | undefined;

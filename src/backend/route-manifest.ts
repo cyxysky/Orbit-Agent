@@ -2,6 +2,7 @@
 import { authorizeAdminSettingsRequest, authorizeSettingsMenuRequest } from '@/server/settings/admin-settings-access';
 
 const settingsRoutes = [
+  { path: '/api/settings/tools', load: () => import('./routes/settings/tools/route') },
   { path: '/api/settings/configuration', load: () => import('./routes/settings/configuration/route') },
   { path: '/api/settings/knowledge', load: () => import('./routes/settings/knowledge/route') },
   { path: '/api/settings/bootstrap', load: () => import('./routes/settings/bootstrap/route') },

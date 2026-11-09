@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "excludedOptionalPackages": ["@openai/codex"],
+  "dependencyOverrides": { "node-pty": "npm:@lydell/node-pty@1.2.0-beta.18" },
+  "optionalAssets": [
+    { "path": "scripts/mcp-ui.mjs", "flag": "visualization" },
+    { "path": "runtime/ui", "flag": "visualization" },
+    { "path": "scripts/local-images.mjs", "flag": "images" }
+  ],
+  "tools": [
+    { "id": "browser", "title": "浏览器", "description": "网页操作、搜索、截图与浏览器自动化", "group": "browser", "runtime": "browser", "images": true },
+    { "id": "file", "title": "文件", "description": "读取、生成、转换和渲染 Office、PDF 等文档", "group": "file", "runtime": "file", "images": true, "dispose": { "module": "file/node/office/uno.js", "export": "disposeUnoRuntime" } },
+    { "id": "chart", "title": "图表与画布", "description": "二维、三维图表和可编辑画布", "group": "chart", "visualization": true },
+    { "id": "maps", "title": "地图", "description": "地点搜索、路线规划和交互地图", "group": "maps", "visualization": true },
+    { "id": "codeSandbox", "title": "代码沙箱", "description": "运行代码和数据计算", "group": "code", "runtime": "code" },
+    { "id": "knowledge", "title": "知识库", "description": "检索和管理可复用的知识资料", "group": "knowledge" },
+    { "id": "media", "title": "多媒体", "description": "图片、音频和视频生成与处理", "group": "media", "runtime": "media", "images": true },
+    { "id": "terminal", "title": "本地终端", "description": "命令执行与交互式终端", "group": "terminal", "scope": "session" },
+    { "id": "computer", "title": "电脑操作", "description": "通过本地或远程驱动操作桌面", "group": "computer", "images": true }
+  ]
+}

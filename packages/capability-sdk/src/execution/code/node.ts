@@ -11,7 +11,8 @@ type LocalProcessOptions = {
 };
 
 export function createNodeProcessCodeSandbox(input: LocalProcessOptions & { maxConcurrent?: number }): CodeSandboxExecutor {
-  const engine = createCodeExecutionEngine({...input, pythonExecutable: input.pythonExecutable || readManagedRuntime()?.python});
+  const engine = createCodeExecutionEngine({...input, npmCli: process.env.CAPABILITY_NPM_CLI || process.env.npm_execpath,
+    pythonExecutable: input.pythonExecutable || readManagedRuntime()?.python});
   return {
     run: (execution, context) => engine.run(execution, context.abortSignal),
     health: () => engine.health(),

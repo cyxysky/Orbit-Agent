@@ -3,10 +3,15 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import source from '../server/backend-source.cjs';
+import { toolDependencyLayout } from './tool-dependency-layout.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'dist-backend');
 const checkOnly = process.argv.includes('--check');
+const toolLayout = await toolDependencyLayout(root);
+const optionalPackages = new Set(toolLayout.optional);
+const dependencyName = name => name.startsWith('@') ? name.split('/').slice(0, 2).join('/') : name.split('/')[0];
+const toolModulesSource = path.join(root, 'packages/capability-sdk/src/managed/modules.ts');
 const options = source.backendCompilerOptions(root, ts);
 const resolveSource = source.sourceResolver(root, options.paths || {});
 const seen = new Set();
@@ -52,12 +57,37 @@ function visit(file) {
   let code = compiled.outputText;
   const parsed = ts.createSourceFile(file, code, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
   const edits = [];
+  let managedImports = false;
+  function managedModulePath() {
+    managedImports = true;
+    visit(toolModulesSource);
+    let relative = path.relative(path.dirname(outputPath(file)), outputPath(toolModulesSource)).split(path.sep).join('/');
+    if (!relative.startsWith('.')) relative = './' + relative;
+    return relative;
+  }
   function rewrite(node) {
     let specifier;
     if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier) specifier = node.moduleSpecifier;
-    if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword || node.expression.getText(parsed) === 'require') && node.arguments.length) specifier = node.arguments[0];
+    if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword || /(?:require|Require)(?:\.resolve)?$/.test(node.expression.getText(parsed)) || node.expression.getText(parsed).startsWith('createRequire(')) && node.arguments.length) specifier = node.arguments[0];
     if (specifier && ts.isStringLiteral(specifier)) {
       const name = specifier.text;
+      if (optionalPackages.has(dependencyName(name))) {
+        managedModulePath();
+        if (ts.isImportDeclaration(node) && node.importClause) {
+          const declarations = [];
+          if (node.importClause.name) declarations.push(`const ${node.importClause.name.text}=__toolLazy(${JSON.stringify(name)},'default');`);
+          const bindings = node.importClause.namedBindings;
+          if (bindings && ts.isNamespaceImport(bindings)) declarations.push(`const ${bindings.name.text}=__toolLazy(${JSON.stringify(name)});`);
+          else if (bindings) for (const binding of bindings.elements) declarations.push(`const ${binding.name.text}=__toolLazy(${JSON.stringify(name)},${JSON.stringify(binding.propertyName?.text || binding.name.text)});`);
+          edits.push({ start: node.getStart(parsed), end: node.end, text: declarations.join('\n') });
+        } else if (ts.isExportDeclaration(node) && node.exportClause && ts.isNamedExports(node.exportClause)) {
+          edits.push({ start: node.getStart(parsed), end: node.end, text: node.exportClause.elements.map(binding =>
+            `export const ${binding.name.text}=__toolLazy(${JSON.stringify(name)},${JSON.stringify(binding.propertyName?.text || binding.name.text)});`).join('\n') });
+        } else if (ts.isCallExpression(node)) {
+          edits.push({ start: node.getStart(parsed), end: node.end, text: `${node.expression.kind === ts.SyntaxKind.ImportKeyword ? '__toolImport' : node.expression.getText(parsed).endsWith('.resolve') ? '__toolResolve' : '__toolRequire'}(${JSON.stringify(name)})` });
+        }
+        return;
+      }
       if (name === 'next' || name.startsWith('next/') || name === '@next/env') throw new Error(`Next dependency in backend graph: ${file} -> ${name}`);
       const target = resolveSource(name, file);
       if (target) {
@@ -73,7 +103,7 @@ function visit(file) {
       && node.arguments?.length === 2 && ts.isStringLiteral(node.arguments[0])
       && node.arguments[1].getText(parsed) === 'import.meta.url'
       && node.arguments[0].text.startsWith('.')
-      && /\.[cm]?[jt]sx?$/.test(node.arguments[0].text)) {
+      && /(?:\.[cm]?[jt]sx?|\.json)$/.test(node.arguments[0].text)) {
       const target = resolveSource(node.arguments[0].text, file);
       if (!target) throw new Error('Unresolved backend runtime script: ' + file + ' -> ' + node.arguments[0].text);
       visit(target);
@@ -85,6 +115,12 @@ function visit(file) {
   }
   rewrite(parsed);
   for (const edit of edits.sort((a, b) => b.start - a.start)) code = code.slice(0, edit.start) + edit.text + code.slice(edit.end);
+  if (managedImports) {
+    const modulePath = managedModulePath();
+    code = (commonJsSource(file)
+      ? `const {lazyToolExport:__toolLazy,importToolModule:__toolImport,requireToolModule:__toolRequire,resolveToolModule:__toolResolve}=require(${JSON.stringify(modulePath)});\n`
+      : `import {lazyToolExport as __toolLazy,importToolModule as __toolImport,requireToolModule as __toolRequire,resolveToolModule as __toolResolve} from ${JSON.stringify(modulePath)};\n`) + code;
+  }
   // Rewriting specifiers changes positions; do not ship misleading source maps.
   code = code.replace(/^\/\/# sourceMappingURL=.*$/gm, '');
   files.set(outputPath(file), code);
@@ -106,5 +142,6 @@ if (!checkOnly) {
   for (const [file, contents] of files) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, contents); }
   fs.writeFileSync(path.join(output, 'package.json'), JSON.stringify({ private: true, type: 'module' }));
   fs.writeFileSync(path.join(output, 'manifest.json'), JSON.stringify({ version: 1, entry: 'src/backend/http-server.js', files: [...files.keys()].map(file => path.relative(output, file)) }, null, 2));
+  fs.writeFileSync(path.join(output, 'tool-dependencies.json'), JSON.stringify(toolLayout, null, 2));
 }
 console.log(`${checkOnly ? 'Checked' : 'Compiled'} ${files.size} Node backend modules; no Next imports.`);

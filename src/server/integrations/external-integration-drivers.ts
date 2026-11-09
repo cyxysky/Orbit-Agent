@@ -3,7 +3,8 @@ import { maskSecret } from '@/lib/secret-input';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { DataSource } from 'typeorm';
-import { createMcpStreamableHttpConnector } from '@cjfclonedeep/capability-sdk/integrations/connectors/node';
+import { createMcpStreamableHttpConnector, createMcpStdioConnector } from '@cjfclonedeep/capability-sdk/integrations/connectors/node';
+import { minimalProcessEnvironment } from '@cjfclonedeep/capability-sdk/managed/node';
 import type { AgentConnector } from '@cjfclonedeep/capability-sdk/integrations/connectors';
 import type { AgentDataSource } from '@cjfclonedeep/capability-sdk/data';
 import { createTypeOrmAgentDataSource } from '@cjfclonedeep/capability-sdk/data/typeorm';
@@ -525,6 +526,39 @@ function connectorDriver(): ExternalIntegrationDriver {
   };
 }
 
+function stdioConnectorDriver(): ExternalIntegrationDriver {
+  const base = connectorDriver();
+  function json(value: string | undefined, fallback: unknown) {
+    try { return value?.trim() ? JSON.parse(value) : fallback; }
+    catch { throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'MCP 参数和环境变量需要有效的 JSON。'); }
+  }
+  return {
+    ...base, id: 'mcp-stdio', label: 'MCP 本地进程', description: '按需启动本地 MCP 服务，为每个服务单独设置参数和环境变量。',
+    fields: [
+      { key: 'command', label: '启动命令', control: 'text', required: true, placeholder: 'node' },
+      { key: 'args', label: '命令参数', control: 'textarea', placeholder: '["server.mjs"]' },
+      { key: 'cwd', label: '工作目录', control: 'text' },
+      { key: 'env', label: '环境变量', control: 'textarea', secret: true, placeholder: '{"API_KEY":"…"}' },
+    ],
+    normalize(configuration) {
+      const args = json(configuration.args, []), env = json(configuration.env, {});
+      if (!Array.isArray(args) || args.length > 100 || args.some(item => typeof item !== 'string' || item.length > 20000)) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '命令参数必须是文本数组。');
+      if (!env || typeof env !== 'object' || Array.isArray(env) || Object.keys(env).length > 100
+        || Object.entries(env).some(([key, value]) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || typeof value !== 'string' || value.length > 20000)) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '环境变量必须是名称与文本值组成的对象。');
+      return { command: requiredText(configuration.command, '启动命令', 2000), args: JSON.stringify(args), env: JSON.stringify(env),
+        ...(configuration.cwd?.trim() ? { cwd: configuration.cwd.trim() } : {}),
+        ...(configuration[connectorDefaultsKey] ? { [connectorDefaultsKey]: configuration[connectorDefaultsKey] } : {}) };
+    },
+    summarize(configuration) { return configuration.command; },
+    createConnector(integration, timeoutMs) {
+      return createMcpStdioConnector({ id: integration.id, name: integration.name, command: integration.configuration.command,
+        args: json(integration.configuration.args, []) as string[], cwd: integration.configuration.cwd || undefined,
+        env: { ...minimalProcessEnvironment(), ...json(integration.configuration.env, {}) as Record<string, string> }, timeoutMs,
+        argumentDefaults: operationId => currentConnectorToolDefaults(integration.id, operationId) });
+    },
+  };
+}
+
 function sqliteDataDriver(): ExternalIntegrationDriver {
   return {
     id: 'sqlite',
@@ -848,6 +882,7 @@ function weComAiBotDriver(): ExternalIntegrationDriver {
 
 const drivers = [
   connectorDriver(),
+  stdioConnectorDriver(),
   canonicalWebhookDriver(),
   weComAiBotDriver(),
   sqliteDataDriver(),

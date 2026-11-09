@@ -9,6 +9,7 @@ const executionRuntime = existsSync(path.join(__dirname, 'capability-runtime', '
     ? path.join(__dirname, '..', 'capability-runtime', 'execution')
     : path.join(__dirname, '..', 'packages', 'capability-sdk', 'runtime', 'execution');
 const { createCodeExecutionEngine } = require(path.join(executionRuntime, 'engine.cjs'));
+const runtimeHome = process.env.CAPABILITY_RUNTIME_HOME || (process.env.CAPABILITY_TOOLS_HOME && path.join(process.env.CAPABILITY_TOOLS_HOME, 'runtime', process.platform + '-' + process.arch));
 
 const HOST = process.env.CODE_SANDBOX_RUNNER_HOST || '127.0.0.1';
 const PORT = Number(process.env.CODE_SANDBOX_RUNNER_PORT || 18100);
@@ -22,7 +23,18 @@ const MAX_CONCURRENCY = Math.max(1, Math.min(16, Math.floor(Number(process.env.C
 const engine = createCodeExecutionEngine({
   workspaceDirectory: WORKSPACE_ROOT,
   maxConcurrent: MAX_CONCURRENCY,
-  pythonExecutable: process.env.CODE_SANDBOX_PYTHON_PATH,
+  pythonExecutable: () => {
+    if (process.env.CODE_SANDBOX_PYTHON_PATH) return process.env.CODE_SANDBOX_PYTHON_PATH;
+    if (runtimeHome) {
+      try {
+        const manifest = JSON.parse(require('node:fs').readFileSync(path.join(runtimeHome, 'runtime.json'), 'utf8'));
+        const executable = manifest.python && path.resolve(runtimeHome, manifest.python);
+        if (executable?.startsWith(path.resolve(runtimeHome) + path.sep) && existsSync(executable)) return executable;
+      } catch { /* tool environment has not been installed */ }
+    }
+    return undefined;
+  },
+  runtimeReadOnlyPaths: runtimeHome ? [runtimeHome] : [],
   npmCli: [process.env.CODE_SANDBOX_NPM_CLI, path.join(executionRuntime, 'npm', 'bin', 'npm-cli.js')].find(value => value && existsSync(value)),
   pipCacheDirectory: PIP_CACHE_DIRECTORY,
   dropPrivileges: true,

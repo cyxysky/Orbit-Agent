@@ -24,6 +24,7 @@
       }
     ],
     "paths": {
+      "@cjfclonedeep/capability-sdk/managed/node": ["./packages/capability-sdk/src/managed/node.ts"],
       "@cjfclonedeep/capability-sdk/media/video-editor": ["./packages/capability-sdk/src/media/video-editor.tsx"],
       "@cjfclonedeep/capability-sdk/media/video-project": ["./packages/capability-sdk/src/media/video-project.ts"],
       "@cjfclonedeep/capability-sdk/text-editor": ["./packages/capability-sdk/src/text-editor/index.ts"],

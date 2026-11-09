@@ -122,8 +122,8 @@ function runtimeFileFilter(entry) {
     && !/\.(?:map|pyc|pyo)$/.test(entry);
 }
 
-function copyProductionRuntime(projectRoot, target) {
-  const packagePaths = productionPackagePaths(projectRoot);
+async function copyProductionRuntime(projectRoot, target) {
+  assertProductionRuntimeSource(projectRoot);
   const resolvedTarget = path.resolve(target);
   if (!resolvedTarget.startsWith(path.resolve(projectRoot) + path.sep)) throw new Error('Package target must be inside project output.');
   fs.rmSync(resolvedTarget, { recursive: true, force: true });
@@ -138,35 +138,28 @@ function copyProductionRuntime(projectRoot, target) {
   const envSource = path.join(projectRoot, '.env.example');
   if (fs.existsSync(envSource)) fs.cpSync(envSource, path.join(target, '.env.example'));
 
-  for (const packagePath of packagePaths) {
-    const source = path.join(projectRoot, packagePath);
-    const destination = path.join(target, packagePath);
-    fs.mkdirSync(path.dirname(destination), { recursive: true });
-    const workspace = fs.lstatSync(source).isSymbolicLink();
-    if (workspace) {
-      // npm's publish file list avoids copying workspace source and private data.
-      const { execFileSync } = require('node:child_process');
-      const npmCli = process.env.npm_execpath;
-      if (!npmCli) throw new Error('Package through npm so its publish file list is available.');
-      const pack = JSON.parse(execFileSync(process.execPath, [npmCli, 'pack', '--dry-run', '--json', '--ignore-scripts'], { cwd: fs.realpathSync(source), encoding: 'utf8' }))[0];
-      for (const { path: file } of pack.files) {
-        if (!runtimeFileFilter(file)) continue;
-        const output = path.join(destination, file);
-        fs.mkdirSync(path.dirname(output), { recursive: true });
-        fs.copyFileSync(path.join(source, file), output);
-      }
-    } else {
-      fs.cpSync(source, destination, { recursive: true, dereference: true, filter: runtimeFileFilter });
-    }
-  }
+  /* Full dependency trees are intentionally replaced by traced runtime files. */
+  const report = await require('./collect-server-dependencies.cjs').collectServerDependencies(projectRoot, target);
+  copyToolInstaller(projectRoot, target);
   pruneRuntimeDependencies(path.join(target, 'node_modules'));
-  return packagePaths;
+  return report;
+}
+
+function copyToolInstaller(projectRoot, target) {
+  const source = path.join(projectRoot, 'packages/capability-sdk');
+  const destination = path.join(target, 'capability-runtime/sdk');
+  for (const entry of ['package.json', 'LICENSE', 'mcp-config.schema.json', 'src', 'scripts', 'runtime']) {
+    if (!fs.existsSync(path.join(source, entry))) continue;
+    fs.cpSync(path.join(source, entry), path.join(destination, entry), { recursive: true,
+      filter: file => runtimeFileFilter(file) && !/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(file) && !file.endsWith('.d.ts') });
+  }
 }
 
 module.exports = {
   assertProductionRuntimeSource,
   copyProductionRuntime,
   copyServerRuntime,
+  copyToolInstaller,
   productionPackagePaths,
   requiredProductionRuntimeEntries,
   serverRuntimeFilePaths,

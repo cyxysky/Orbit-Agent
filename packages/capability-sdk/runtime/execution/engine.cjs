@@ -19,7 +19,7 @@ function createCodeExecutionEngine(options) {
   const MAX_TIMEOUT_MS = 300_000;
   const MAX_INSTALL_TIMEOUT_MS = 600_000;
   const MAX_CONCURRENCY = Math.max(1, Math.min(16, Math.floor(Number(options.maxConcurrent) || 2)));
-  const PYTHON_EXECUTABLE = options.pythonExecutable || (process.platform === 'win32' ? 'python' : 'python3');
+  const pythonExecutable = () => (typeof options.pythonExecutable === 'function' ? options.pythonExecutable() : options.pythonExecutable) || (process.platform === 'win32' ? 'python' : 'python3');
   const NPM_CLI = options.npmCli;
   const PYTHON_BIN_DIRECTORY = process.platform === 'win32' ? 'Scripts' : 'bin';
   const PYTHON_BINARY = process.platform === 'win32' ? 'python.exe' : 'python';
@@ -83,7 +83,7 @@ function createCodeExecutionEngine(options) {
     return new Promise((resolve) => {
       let child;
       try {
-        const command = input.identity ? landlockCommand(input, PYTHON_EXECUTABLE, NODE_EXECUTABLE, NPM_CLI, options.runtimeReadOnlyPaths) : input;
+        const command = input.identity ? landlockCommand(input, pythonExecutable(), NODE_EXECUTABLE, NPM_CLI, options.runtimeReadOnlyPaths) : input;
         child = spawn(command.executable, command.args, {
           cwd: input.cwd,
           env: input.env,
@@ -231,7 +231,7 @@ function createCodeExecutionEngine(options) {
     } else {
       const venv = path.join(input.jobDirectory, '.venv');
       const venvResult = await runBoundedProcess({
-        executable: PYTHON_EXECUTABLE,
+        executable: pythonExecutable(),
         args: ['-m', 'venv', venv],
         cwd: input.jobDirectory,
         env: input.env,
@@ -303,7 +303,7 @@ function createCodeExecutionEngine(options) {
         language,
         packages,
         jobDirectory,
-        executable: language === 'python' ? PYTHON_EXECUTABLE : NODE_EXECUTABLE,
+        executable: language === 'python' ? pythonExecutable() : NODE_EXECUTABLE,
         env,
         signal,
         identity,
@@ -363,11 +363,11 @@ function createCodeExecutionEngine(options) {
         await mkdir(WORKSPACE_ROOT, {recursive:true});
         if (isolated) {
           await validateIsolation();
-          const probe = landlockProbe(PYTHON_EXECUTABLE, WORKSPACE_ROOT);
+          const probe = landlockProbe(pythonExecutable(), WORKSPACE_ROOT);
           try { execFileSync(probe.executable, probe.args, { timeout: 3000 }); }
           catch (error) { throw new Error(error.stderr?.toString().trim().split('\n').at(-1) || 'Linux sandbox isolation probe failed.'); }
         }
-        const results = await Promise.all([NODE_EXECUTABLE, PYTHON_EXECUTABLE].map(executable => runBoundedProcess({
+        const results = await Promise.all([NODE_EXECUTABLE, pythonExecutable()].map(executable => runBoundedProcess({
           executable, args:['--version'], cwd:WORKSPACE_ROOT, env:{...process.env, ...(process.versions.electron ? {ELECTRON_RUN_AS_NODE:'1'} : {})},
           timeoutMs:5000, maxOutputChars:1000, signal:lifetime.signal,
         })));

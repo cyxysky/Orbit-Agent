@@ -2,42 +2,34 @@ import { runtimeSetting } from '@/server/settings/runtime-configuration';
 import { createConfigurationCapability } from './configuration';
 import { orbitExtensions, refreshExtensionToolCatalog } from './extensions';
 import { isAiOperationsAdmin } from '@/server/auth/ai-operations-admin';
-import { remoteSandboxAllowed, selfBootstrapEnabled, hostExecutionEnabled } from '@/server/runtime/self-bootstrap-policy';
+import { selfBootstrapEnabled } from '@/server/runtime/self-bootstrap-policy';
 import { mediaModelsForConfig } from '@/lib/model-selection';
 import { resolveCodexCliPath } from '@/server/ai/codex-cli';
 import { prepareCodexIdentityHome } from '@/server/ai/codex-identity';
 import { randomUUID } from 'node:crypto';
 import { copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import ffmpegStaticPath from 'ffmpeg-static';
+import { requireToolModule } from '@cjfclonedeep/capability-sdk/managed/node';
 import type { CapabilityProvider, CapabilityRunContext } from '@cjfclonedeep/capability-sdk';
-import { createCodeSandboxCapability } from '@cjfclonedeep/capability-sdk/execution/code';
-import { createNodeProcessCodeSandbox } from '@cjfclonedeep/capability-sdk/execution/code/node';
-import { createHttpCodeSandboxExecutor } from '@cjfclonedeep/capability-sdk/execution/code/remote';
 import { createNodeConnectorsCapability } from '@cjfclonedeep/capability-sdk/integrations/connectors/node';
 import type { AgentConnector } from '@cjfclonedeep/capability-sdk/integrations/connectors';
-import { createNodeKnowledgeCapability } from '@cjfclonedeep/capability-sdk/knowledge/node';
-import { sharedKnowledgeDirectory } from './knowledge-storage';
 import { createTextEditorCapability } from '@cjfclonedeep/capability-sdk/text-editor';
 import { createFileTextEditorOperations } from '@cjfclonedeep/capability-sdk/text-editor/node';
 import { importLegacyTextDocuments, textUserDirectory } from './text-storage';
 import { saveCompositionProject } from './video-projects';
 import { createDataCapability, createDataSourceRegistry, type AgentDataSource } from '@cjfclonedeep/capability-sdk/data';
-import { createMediaCapability, type MediaOperations } from '@cjfclonedeep/capability-sdk/media';
+import type { MediaOperations } from '@cjfclonedeep/capability-sdk/media';
 import { createRemotionMediaOperations } from '@cjfclonedeep/capability-sdk/media/node';
 import { fileFormatForMimeType } from '@cjfclonedeep/capability-sdk/file';
 import { createAiSdkMediaGenerationOperations } from '@cjfclonedeep/capability-sdk/media/ai-sdk';
 import { store } from '@/server/db/store';
 import { createNodeCommunicationCapability } from '@cjfclonedeep/capability-sdk/integrations/communication/node';
 import type { CommunicationChannel } from '@cjfclonedeep/capability-sdk/integrations/communication';
-import { conversationTerminals } from './terminal-manager';
-import { createNodeComputerCapability } from '@cjfclonedeep/capability-sdk/computer/node';
 import type { BrowserCodeAttachmentBinding } from '@cjfclonedeep/capability-sdk/browser/node';
 import { artifactApiUrl } from '@/lib/artifacts';
-import { artifactPath, artifactsRoot, codeSandboxRoot } from '@/server/storage/paths';
+import { artifactPath, artifactsRoot } from '@/server/storage/paths';
 import { communicationArtifactReader } from '@/server/storage/artifact-access';
 import { resolveExternalIntegrations } from '@/server/integrations/external-integration-vault';
-import { withCodeSandboxArtifacts } from './code-sandbox-artifacts';
 import {
   createExternalCommunicationChannel,
   createExternalDataSource,
@@ -49,28 +41,6 @@ import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 function safeSegment(value: unknown, fallback: string) {
   const normalized = String(value || '').trim().replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
   return normalized.slice(0, 160) || fallback;
-}
-
-function createAgentCodeSandboxCapability(): CapabilityProvider {
-  return createCodeSandboxCapability({
-    createExecutor(context) {
-      if (!remoteSandboxAllowed(context.configuration)) {
-        throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, 'Service mode requires an independent remote sandbox. Local processes and loopback runners are disabled.');
-      }
-      const backend = context.configuration.AGENT_CODE_SANDBOX_BACKEND === 'local' ? 'local' : 'remote';
-      if (backend === 'remote') {
-        return withCodeSandboxArtifacts(createHttpCodeSandboxExecutor({
-          url: String(context.configuration.AGENT_CODE_SANDBOX_RUNNER_URL || '').trim(),
-          token: String(context.configuration.AGENT_CODE_SANDBOX_RUNNER_TOKEN || '').trim() || undefined,
-          requiredIsolation: 'linux-landlock-v1',
-        }), context);
-      }
-      return withCodeSandboxArtifacts(createNodeProcessCodeSandbox({
-        workspaceDirectory: codeSandboxRoot('agent-infrastructure', 'code', safeSegment(context.userId, 'shared'), safeSegment(context.runId, 'run'), randomUUID()),
-        maxConcurrent: Number(context.configuration.AGENT_CODE_SANDBOX_MAX_CONCURRENCY) || 2,
-      }), context);
-    },
-  });
 }
 
 async function configuredConnectors(context: CapabilityRunContext): Promise<AgentConnector[]> {
@@ -151,7 +121,7 @@ export async function createConfiguredMediaOperations(input: { context: Capabili
     },
   });
   const processing: MediaOperations = createRemotionMediaOperations({
-    ffmpegPath: ffmpegStaticPath || undefined,
+    ffmpegPath: requireToolModule<string>('ffmpeg-static') || undefined,
     timeoutMs: Number(input.context.configuration.AGENT_MEDIA_TIMEOUT_MS) || 120_000,
     renderTimeoutMs: Number(input.context.configuration.AGENT_VIDEO_RENDER_TIMEOUT_MS) || 900_000,
     resolveSource,
@@ -196,9 +166,7 @@ export async function createAgentInfrastructureProviders(input: {
   return [
     ...(selfBootstrapEnabled() && isAiOperationsAdmin(input.userId) ? [orbitExtensions.capability(), ...extensionProviders] : []),
     createConfigurationCapability(),
-    createAgentCodeSandboxCapability(),
     createNodeConnectorsCapability({ connectors: configuredConnectors }),
-    createNodeKnowledgeCapability({ directory: sharedKnowledgeDirectory(), readOnly: true }),
     createTextEditorCapability({ createOperations(context) {
       return createFileTextEditorOperations({
         directory: textUserDirectory(context.userId),
@@ -218,13 +186,6 @@ export async function createAgentInfrastructureProviders(input: {
       });
     } }),
     createDataCapability({ createRegistry: async () => createDataSourceRegistry(await configuredDataSources()) }),
-    createMediaCapability({ createOperations: (context) => createConfiguredMediaOperations({ context, attachments: input.attachmentBindings || [] }) }),
     createNodeCommunicationCapability({ channels: configuredCommunicationChannels, draftDirectory: (context) => artifactPath('users', safeSegment(context.userId, 'shared'), 'communication') }),
-    ...(hostExecutionEnabled() ? [conversationTerminals.capability(), createNodeComputerCapability({
-      screenshotDirectory: (context) => artifactPath(
-        safeSegment(context.runId, 'shared'),
-        'computer',
-      ),
-    })] : []),
   ];
 }

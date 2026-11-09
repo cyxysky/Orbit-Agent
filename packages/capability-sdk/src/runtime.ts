@@ -17,6 +17,6 @@ export function managedProcessEnvironment(environment: NodeJS.ProcessEnv = proce
   const pathKey = process.platform === 'win32' ? Object.keys(environment).find(key => key.toLowerCase() === 'path') : 'PATH';
   const originalPath = pathKey ? environment[pathKey] || '' : '';
   if (process.platform === 'win32') for (const key of Object.keys(result)) if (key.toLowerCase() === 'path') delete result[key];
-  result.PATH = [...new Set([runtime.python, runtime.ffmpeg, runtime.libreoffice].filter(Boolean).map(executable => path.dirname(executable))), originalPath].join(path.delimiter);
+  result.PATH = [...new Set([runtime.python, runtime.ffmpeg, runtime.libreoffice].filter((executable): executable is string => typeof executable === 'string').map(executable => path.dirname(executable))), originalPath].join(path.delimiter);
   return result;
 }

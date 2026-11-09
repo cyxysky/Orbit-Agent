@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.7
 ARG WEBPILOT_CAPABILITY_SOURCE=workspace
 ARG ORBIT_CAPABILITY_SOURCE=${WEBPILOT_CAPABILITY_SOURCE}
 ARG WEBPILOT_BASE_PATH=
@@ -28,6 +27,13 @@ COPY scripts/prune-runtime-dependencies.cjs ./scripts/prune-runtime-dependencies
 COPY --from=manifests /metadata/packages ./packages
 # Desktop binaries are not needed by this server image.
 RUN export ELECTRON_SKIP_BINARY_DOWNLOAD=1 \
+    && export FFMPEG_BIN=/bin/false \
+    && export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+    && export NODE_OPTIONS=--max-old-space-size=768 \
+    && export npm_config_maxsockets=4 \
+    && export npm_config_foreground_scripts=true \
+    && export npm_config_jobs=2 \
+    && export UV_THREADPOOL_SIZE=2 \
     && if [ "$WEBPILOT_CAPABILITY_SOURCE" = "npm" ]; then node scripts/prepare-capability-install.mjs npm && npm install --no-audit --no-fund && cp package.json /tmp/webpilot-package.json && cp package-lock.json /tmp/webpilot-package-lock.json; else npm ci --no-audit --no-fund; fi
 
 FROM dependencies AS build
@@ -46,7 +52,8 @@ RUN --mount=type=cache,target=/app/.next/cache \
     case "$BUILD_BUNDLER" in turbopack|webpack) ;; *) echo "BUILD_BUNDLER must be turbopack or webpack" >&2; exit 1 ;; esac \
     && case "$BUILD_TYPECHECK" in true|false) ;; *) echo "BUILD_TYPECHECK must be true or false" >&2; exit 1 ;; esac \
     && ORBIT_BASE_PATH="$ORBIT_BASE_PATH" ORBIT_BUILD_CPUS="$BUILD_CPUS" ORBIT_BUILD_TYPECHECK="$BUILD_TYPECHECK" NODE_OPTIONS="--max-old-space-size=$BUILD_HEAP_MB" npm run build -- "--$BUILD_BUNDLER"
-RUN npm prune --omit=dev && node scripts/prune-runtime-dependencies.cjs --strip-source-maps
+RUN node scripts/collect-server-dependencies.cjs /app/.server-runtime \
+    && node -e "require('./scripts/server-package-layout.js').copyToolInstaller('/app','/app/.server-runtime')"
 
 FROM node:22-bookworm-slim AS runner
 
@@ -56,11 +63,10 @@ ARG ORBIT_CAPABILITY_SOURCE
 ARG ORBIT_BASE_PATH
 ENV WEBPILOT_CAPABILITY_SOURCE=${ORBIT_CAPABILITY_SOURCE}
 
-# Serialize system-runtime provisioning after compilation on memory-limited builders.
+# Python is the small Landlock security supervisor, not an installed Python tool environment.
 COPY --from=build /app/package*.json ./
-COPY --from=build /app/scripts/prune-runtime-dependencies.cjs ./scripts/prune-runtime-dependencies.cjs
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libreoffice-nogui fonts-noto-cjk python3 python3-venv python3-uno ca-certificates util-linux \
+    && apt-get install -y --no-install-recommends python3 ca-certificates util-linux \
     && rm -rf /var/lib/apt/lists/*
 
 ENV NODE_ENV=production
@@ -68,22 +74,16 @@ ENV ORBIT_BASE_PATH=${ORBIT_BASE_PATH}
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
-ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-ENV LIBREOFFICE_PATH=/usr/bin/libreoffice
 ENV CAPABILITY_FILE_RUNTIME_DIR=/app/capability-runtime/file
 ENV CAPABILITY_BROWSER_RUNTIME_DIR=/app/capability-runtime/browser
 ENV CAPABILITY_COMPUTER_RUNTIME_DIR=/app/capability-runtime/computer
 ENV LIBREOFFICE_UNO_PROGRAM_WORKER_PATH=/app/capability-runtime/file/python/libreoffice-program-worker.py
 ENV APP_DATA_DIR=/app
 ENV ARTIFACTS_DIR=/app/artifacts
+ENV CAPABILITY_TOOLS_HOME=/app/tool-components
 
-COPY --from=build /app/node_modules ./node_modules
-# Browser automation, document rendering and video rendering share full Chromium.
-# An explicit executable prevents headless launches from requesting a second binary.
-RUN node node_modules/patchright/cli.js install --with-deps --no-shell chromium \
-    && node -e "require('fs').symlinkSync(require('patchright').chromium.executablePath(), '/usr/local/bin/orbit-chromium')"
-ENV AI_WEB_TEST_CHROMIUM_EXECUTABLE_PATH=/usr/local/bin/orbit-chromium
-ENV REMOTION_BROWSER_EXECUTABLE=/usr/local/bin/orbit-chromium
+COPY --from=build /app/.server-runtime/node_modules ./node_modules
+COPY --from=build /app/.server-runtime/capability-runtime/sdk ./capability-runtime/sdk
 COPY --from=build /app/.next ./.next
 COPY --from=build /app/public ./public
 COPY --from=build /app/dist-backend ./dist-backend

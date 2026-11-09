@@ -48,3 +48,5 @@ id_ed25519.*
 /lottie-act02
 /.agents
 /.impeccable
+.server-runtime/
+.server-runtime-report.json

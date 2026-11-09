@@ -2,6 +2,9 @@ import { copyFile, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import { resolveToolModule } from '../managed/modules.ts';
 import { bundle } from '@remotion/bundler';
 import { makeCancelSignal, openBrowser, renderMedia, selectComposition } from '@remotion/renderer';
 import { chromium } from 'patchright';
@@ -22,8 +25,10 @@ type Options = {
 };
 
 function compositionPath() {
-  const hostRequire = process.getBuiltinModule('module').createRequire(path.join(process.cwd(), 'package.json'));
+  const hostRequire = createRequire(resolveToolModule('@remotion/bundler'));
   const candidates = [
+    path.join(path.dirname(fileURLToPath(import.meta.url)), 'video-composition.js'),
+    fileURLToPath(new URL('./video-composition.tsx', import.meta.url)),
     path.join(process.cwd(), 'packages/capability-sdk/src/media/video-composition.tsx'),
     path.join(process.cwd(), 'dist-backend/packages/capability-sdk/src/media/video-composition.js'),
   ];
@@ -91,9 +96,10 @@ const Video = (input) => React.createElement(MediaVideoComposition, {...input, s
 registerRoot(() => React.createElement(Composition, {id: 'MediaVideo', component: Video, ...videoCompositionMetadata(props), defaultProps: props}));
 `, { signal });
       await report('正在准备 Remotion 渲染器');
-      const hostRequire = process.getBuiltinModule('module').createRequire(path.join(process.cwd(), 'package.json'));
+      const hostRequire = createRequire(resolveToolModule('@remotion/bundler'));
+      const dependencyDirectory = path.dirname(path.dirname(hostRequire.resolve('react/package.json')));
       const serveUrl = await bundle({ entryPoint, outDir: path.join(directory, 'bundle'), publicDir, enableCaching: false,
-        webpackOverride: config => ({ ...config, resolve: { ...config.resolve, modules: [path.join(process.cwd(), 'node_modules'), ...(config.resolve?.modules || [])],
+        webpackOverride: config => ({ ...config, resolve: { ...config.resolve, modules: [dependencyDirectory, ...(config.resolve?.modules || ['node_modules'])],
           alias: { ...config.resolve?.alias, react: path.dirname(hostRequire.resolve('react/package.json')), 'react-dom': path.dirname(hostRequire.resolve('react-dom/package.json')), remotion: path.dirname(hostRequire.resolve('remotion/package.json')) } } }) });
       signal.throwIfAborted();
       const executable = [options.browserExecutable, process.env.REMOTION_BROWSER_EXECUTABLE, readManagedRuntime()?.chromium, chromium.executablePath()].find(file => file && existsSync(file));

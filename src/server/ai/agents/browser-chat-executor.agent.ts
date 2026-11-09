@@ -18,7 +18,11 @@ import { fileCapabilityManifest, fileCapabilityToolNames, type FileReadInput } f
 import { browserCapabilityManifest, browserCapabilityToolNames } from '@cjfclonedeep/capability-sdk/browser';
 import { chartCapabilityManifest, chartCapabilityToolNames } from '@cjfclonedeep/capability-sdk/chart';
 import { mapsCapabilityManifest } from '@cjfclonedeep/capability-sdk/maps';
-import { browserChatMapsCapability } from '@/server/capabilities/browser-chat-maps';
+import { createManagedToolProviders } from '@/server/capabilities/managed-provider';
+import { managedToolConfigurations, toolInstaller } from '@/server/capabilities/managed-tools';
+import { managedToolRuntimeConfiguration } from '@cjfclonedeep/capability-sdk/managed/node';
+import { browserCodeServiceFileDeliveryViolation } from './browser-chat-file-delivery';
+import { sharedKnowledgeDirectory } from '@/server/capabilities/knowledge-storage';
 import { createAISDKResponseTool, mountAISDKCapabilities } from '@cjfclonedeep/capability-sdk/ai-sdk';
 import type { AiRequestSnapshot, AiToolContextSnapshot, BrowserOperationRecord, StepExecutionResult, StepToolCall, VisualFrameRecord } from '@/server/ai/schemas/runtime.schema';
 import { getModelSettings } from '@/server/ai/model';
@@ -33,12 +37,10 @@ import { nativeRuntimeToolNames, runtimeBuiltinToolPrompts } from './runtime-too
 import { activeBrowserRuntimeSkillId, hiddenRuntimeSkillContent, hiddenRuntimeSkillForToolCall, requireHiddenRuntimeSkillRead } from './hidden-runtime-skills';
 import { subagentRuntimeSkillId } from './subagent-runtime-skill';
 import { chartRuntimeSkillId } from '@cjfclonedeep/capability-sdk/chart/runtime-skill';
-import { browserChatChartCapability } from '@/server/capabilities/browser-chat-chart';
 import { capabilityResultToBrowserActionResult } from '@/server/capabilities/browser-chat-result';
 import { browserOperationSummary } from '@cjfclonedeep/capability-sdk/browser';
 import { createAgentInfrastructureProviders } from '@/server/capabilities/agent-infrastructure';
-import { createBrowserChatFileCapability, executeBrowserChatFile } from '@/server/capabilities/browser-chat-file';
-import { createBrowserChatBrowserCapability } from '@/server/capabilities/browser-chat-browser';
+import { executeBrowserChatFile } from '@/server/capabilities/browser-chat-file';
 import { type BrowserChatFinalBlock } from '@/lib/browser-chat-ui-message';
 import { type ReasoningStreamUpdate } from './browser-chat-reasoning-stream';
 import { subagentResultActual } from './browser-chat-subagent-delivery';
@@ -1053,12 +1055,39 @@ async function makeBrowserTools(
   const allowedCapabilityToolNames = new Set(
     (referenceOptions?.allowedToolTypes ?? nativeRuntimeToolNames()).filter(name => isRuntimeToolEnabled(name, runtimeConfiguration())),
   );
+  const managedProviders = await createManagedToolProviders({
+    allowed: allowedCapabilityToolNames, userId: referenceOptions?.userId || '',
+    attachments: referenceOptions?.attachmentBindings,
+    credentials: referenceOptions?.getCredentialBindings || referenceOptions?.credentialBindings,
+    sourcePageUrl: () => session.currentUrl(),
+    sessionId: referenceOptions?.sessionId || referenceOptions?.runId || '', runId: referenceOptions?.runId || '',
+    async beforeCall(id, _args, context): Promise<Record<string, string> | undefined> {
+      if (id === 'knowledge') return { CAPABILITY_KNOWLEDGE_DIR: sharedKnowledgeDirectory(), CAPABILITY_KNOWLEDGE_READ_ONLY: 'true' };
+      if (id === 'file') return { CAPABILITY_VISUAL_INPUT_AVAILABLE: String(imageInputAvailable) };
+      if (id !== 'browser') return;
+      const violation = _args.action === 'code' ? browserCodeServiceFileDeliveryViolation(String(_args.code || '')) : undefined;
+      if (violation) throw new Error(violation);
+      const component = toolInstaller().installed(id);
+      const configuration = (await managedToolConfigurations())[id];
+      session.configure({ ...runtimeConfiguration(), ...configuration?.env,
+        ...await managedToolRuntimeConfiguration(id, configuration?.config || {}, process.cwd(), { ...runtimeConfiguration(), ...configuration?.env }),
+        ...(component ? { CAPABILITY_RUNTIME_HOME: component.runtimeDirectory } : {}) });
+      await referenceOptions?.ensureBrowserStarted?.(context.abortSignal);
+      const connection = await session.browserAutomationTarget();
+      return { BROWSER_ISOLATED: 'false', BROWSER_SHARED_TABS: 'false', BROWSER_CDP_ENDPOINT: connection.endpoint,
+        BROWSER_CDP_TARGET_ID: connection.targetId, BROWSER_SESSION_GROUP_ID: connection.sessionGroupId,
+        BROWSER_CONNECTION_PROTOCOL: connection.protocol };
+    },
+    async afterCall(id, result) {
+      if (id !== 'browser') return;
+      const envelope = (result.ok ? result.data : result.error.details) as { result?: { data?: { browserTargetId?: string } } } | undefined;
+      const targetId = envelope?.result?.data?.browserTargetId;
+      if (targetId) await session.selectAutomationTarget(targetId);
+    },
+  });
   const enabledCapabilityIds = allowedCapabilityToolNames
     ? new Set([
-        ...(allowedCapabilityToolNames.has(browserCapabilityToolNames.browser) ? [browserCapabilityManifest.id] : []),
-        ...(allowedCapabilityToolNames.has(chartCapabilityToolNames.chart) ? [chartCapabilityManifest.id] : []),
-        ...(allowedCapabilityToolNames.has('maps') ? [mapsCapabilityManifest.id] : []),
-        ...(allowedCapabilityToolNames.has(fileCapabilityToolNames.file) ? [fileCapabilityManifest.id] : []),
+        ...managedProviders.map(provider => provider.manifest.id),
         ...infrastructureProviders.filter((provider) => (
           (provider.manifest.skills || []).some((skill) => (
             (skill.activation || []).some((activation) => allowedCapabilityToolNames.has(activation.toolName))
@@ -1069,25 +1098,7 @@ async function makeBrowserTools(
   const capabilityRuntime = await mountAISDKCapabilities({
     responses: coreResponses,
     providers: [
-      createBrowserChatBrowserCapability({
-        session,
-        ensureStarted: referenceOptions?.ensureBrowserStarted,
-        runId: referenceOptions?.runId || '',
-        stepIndex: referenceOptions?.stepIndex,
-        attachmentBindings: referenceOptions?.attachmentBindings,
-        credentialBindings: referenceOptions?.credentialBindings,
-        getCredentialBindings: referenceOptions?.getCredentialBindings,
-        imageInputAvailable,
-      }),
-      browserChatChartCapability,
-      browserChatMapsCapability,
-      createBrowserChatFileCapability({
-        attachmentBindings: referenceOptions?.attachmentBindings,
-        currentPageUrl: () => session.currentUrl(),
-        readFile: referenceOptions?.readFile,
-        readFileVisuals: referenceOptions?.readFileVisuals,
-        visualInputAvailable: imageInputAvailable,
-      }),
+      ...managedProviders,
       ...infrastructureProviders,
     ],
     context: {
@@ -1124,23 +1135,7 @@ async function makeBrowserTools(
       ),
     },
   });
-  const mountedBrowserTool = capabilityRuntime.tools[browserCapabilityToolNames.browser];
-  const capabilityTools = (mountedBrowserTool
-    ? {
-        ...capabilityRuntime.tools,
-        [browserCapabilityToolNames.browser]: {
-          ...mountedBrowserTool,
-          description: browserInteractionInstructions(browserMode),
-          execute: async (raw: unknown, options: { toolCallId: string }) => record('browser', raw, signal => executeBrowserInteraction(session, raw, {
-            mode: browserMode, runId: referenceOptions?.runId, stepIndex: referenceOptions?.stepIndex,
-            imageInputAvailable, abortSignal: signal, ensureStarted: referenceOptions?.ensureBrowserStarted,
-            attachments: referenceOptions?.attachmentBindings, credentials: referenceOptions?.getCredentialBindings?.() || referenceOptions?.credentialBindings,
-            selectImages: ids => referenceOptions?.visualContext?.select(ids),
-          }), options),
-          inputSchema: browserAgentToolInputSchema,
-        },
-      }
-    : capabilityRuntime.tools) as ToolSet;
+  const capabilityTools = capabilityRuntime.tools as ToolSet;
   const mountedFileTool = capabilityTools[fileCapabilityToolNames.file];
   if (mountedFileTool) capabilityTools[fileCapabilityToolNames.file] = {
     ...mountedFileTool,

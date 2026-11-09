@@ -13,7 +13,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { OpenFileViewerSurface } from './OpenFileViewerSurface';
+import dynamic from 'next/dynamic';
 import { FileText, Scissors, X } from 'lucide-react';
 import { textDocumentIdFromFile } from '@/lib/text-editor';
 import type { VideoEditorHandle } from './VideoEditorPanel';
@@ -34,8 +34,11 @@ function FilePreviewModuleLoading() {
   return <BeautifulLoadingState label={t('正在加载文件预览')} />;
 }
 
-// A direct import avoids Turbopack's experimental lazy compilation loader for
-// the viewer host. Format renderers remain loaded by the viewer as needed.
+// The viewer and its format plugins use browser APIs. Keep them out of server
+// rendering and load them only when a preview is opened.
+const OpenFileViewerSurface = dynamic(() => import('./OpenFileViewerSurface').then(module => module.OpenFileViewerSurface), {
+  ssr: false, loading: FilePreviewModuleLoading,
+});
 const VideoEditorPanel = lazy(() => import('./VideoEditorPanel').then(module => ({ default: module.VideoEditorPanel })));
 
 class SurfaceErrorBoundary extends Component<{ children: ReactNode; onError: (error: Error) => void }, { failed: boolean }> {

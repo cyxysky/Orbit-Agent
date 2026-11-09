@@ -157,8 +157,8 @@ async function main() {
       throw new Error('--config must default-export MCP options or a factory returning them.');
     }
   }
-  const configuration = { AGENT_TERMINAL_ENABLED: 'true', AGENT_CODE_SANDBOX_ENABLED: 'true',
-    AGENT_CODE_SANDBOX_BACKEND: 'local', AGENT_COMPUTER_ENABLED: 'true' };
+  const configuration = { AGENT_TERMINAL_ENABLED: process.env.AGENT_TERMINAL_ENABLED ?? 'true', AGENT_CODE_SANDBOX_ENABLED: process.env.AGENT_CODE_SANDBOX_ENABLED ?? 'true',
+    AGENT_CODE_SANDBOX_BACKEND: process.env.AGENT_CODE_SANDBOX_BACKEND ?? 'local', AGENT_COMPUTER_ENABLED: process.env.AGENT_COMPUTER_ENABLED ?? 'true' };
   const options = {
     name: config.server?.name || 'capability-sdk', version, providers,
     resolveImage: createLocalImageResolver(stateDirectory),

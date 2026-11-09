@@ -15,6 +15,7 @@ export async function startExecutionServices() {
     const { closeAllBrowserSessions } = await import('@cjfclonedeep/capability-sdk/browser/node');
     const { conversationTerminals } = await import('@/server/capabilities/terminal-manager');
     const { closeBrowserPreviewWebSocketServer } = await import('@/server/realtime/browser-preview-ws');
-    await Promise.all([closeAllBrowserSessions(), conversationTerminals.dispose(), closeBrowserPreviewWebSocketServer()]);
+    const { disposeManagedTools } = await import('@/server/capabilities/managed-tools');
+    await Promise.all([closeAllBrowserSessions(), conversationTerminals.dispose(), closeBrowserPreviewWebSocketServer(), disposeManagedTools()]);
   };
 }

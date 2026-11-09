@@ -9,7 +9,7 @@ type CapabilityHealth = {status:'healthy'|'needs-runtime'|'unhealthy'; message?:
 export function createCodeExecutionEngine(options: {
   workspaceDirectory: string;
   nodeExecutable?: string;
-  pythonExecutable?: string;
+  pythonExecutable?: string | (() => string | undefined);
   npmExecutable?: string;
   npmCli?: string;
   pipCacheDirectory?: string;

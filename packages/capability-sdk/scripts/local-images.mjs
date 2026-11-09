@@ -6,7 +6,7 @@ import { CapabilityTaskQueue } from '../dist/index.js';
 export function createLocalImageResolver(stateDirectory) {
   const queue = new CapabilityTaskQueue({ concurrency: 1 });
   return content => queue.run(async () => {
-    const root = await realpath(path.join(stateDirectory, 'artifacts'));
+    const root = await realpath(process.env.CAPABILITY_ARTIFACTS_DIR || path.join(stateDirectory, 'artifacts'));
     const filename = await realpath(content.artifactId);
     const relative = path.relative(root, filename);
     if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {

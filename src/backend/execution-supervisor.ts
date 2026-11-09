@@ -9,7 +9,7 @@ import { processMemorySnapshot } from '@/server/observability/process-memory';
 
 
 const executionPrefixes = ['/api/browser-chat', '/api/embed/browser-chat', '/api/automation', '/api/communication',
-  '/api/admin/ai-operations/runtime', '/api/debug', '/api/settings/integrations', '/api/settings/sensitive-data', '/api/metrics', '/api/system/shutdown'];
+  '/api/admin/ai-operations/runtime', '/api/debug', '/api/settings/integrations', '/api/settings/tools', '/api/settings/sensitive-data', '/api/metrics', '/api/system/shutdown'];
 export function executionRequest(pathname: string, method = 'GET') {
   // Database projections must remain reachable when Agent's event loop is busy.
   // Keep preview, selection and mutations with their live execution registry.

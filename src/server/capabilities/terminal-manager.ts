@@ -5,6 +5,10 @@ import { requireHostExecution } from '@/server/runtime/self-bootstrap-policy';
 const registry = createTerminalWorkspaceRegistry();
 export const conversationTerminals = {
   ...registry,
+  async stop(scope: Parameters<typeof registry.stop>[0]) {
+    const { stopManagedSessionTools } = await import('./managed-tools');
+    await Promise.all([registry.stop(scope), stopManagedSessionTools(scope.ownerId, scope.workspaceId)]);
+  },
   get(context: Parameters<typeof registry.get>[0]) {
     requireHostExecution('Local terminals');
     return registry.get(context);

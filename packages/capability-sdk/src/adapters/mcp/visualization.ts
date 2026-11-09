@@ -18,6 +18,7 @@ type VisualizationInput = {
 };
 
 export async function createMcpVisualization(input: VisualizationInput): Promise<Visualization | undefined> {
+  if (input.options?.enabled === false) return undefined;
   // Runtime assets are shared with the standalone CLI. Keep their declaration
   // files out of source builds so an existing dist/ cannot become build input.
   const runtimeUrl = new URL('../../../scripts/mcp-ui.mjs', import.meta.url).href;

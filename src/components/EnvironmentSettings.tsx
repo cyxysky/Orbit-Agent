@@ -83,6 +83,7 @@ const SkillsManager = dynamic(() => import('@/components/SkillsManager').then(mo
 const KnowledgeSettings = dynamic(() => import('@/components/KnowledgeSettings').then(module => module.KnowledgeSettings), { loading: SettingsSectionLoading });
 const SensitiveDataRuntimeSettings = dynamic(() => import('@/components/SensitiveDataRuntimeSettings').then(module => module.SensitiveDataRuntimeSettings), { loading: SettingsSectionLoading });
 const ExternalIntegrationSettings = dynamic(() => import('@/components/ExternalIntegrationSettings').then(module => module.ExternalIntegrationSettings), { loading: SettingsSectionLoading });
+const ManagedToolSettings = dynamic(() => import('@/components/ManagedToolSettings').then(module => module.ManagedToolSettings), { loading: SettingsSectionLoading });
 
 export {
   environmentSettingsTabs,
@@ -2621,6 +2622,7 @@ export function EnvironmentSettings({
     ...(activeTab === 'sensitive-data' ? [{ id: 'sensitive:runtime', label: t('本地组件下载') }] : []),
     ...(activeTab === 'capabilities' ? [
       { id: 'capability:overview', label: t('工具开关'), meta: String(toolCapabilitySettings.length) },
+      { id: 'capability:components', label: t('工具组件') },
       { id: 'capability:browser', label: t('浏览器') },
       { id: 'integration:connector', label: t('MCP') },
       { id: 'integration:communication', label: t('通信') },
@@ -3019,6 +3021,7 @@ export function EnvironmentSettings({
                       onConfigure={(section) => setActiveSettingsSections((current) => ({ ...current, capabilities: section }))}
                     />
                   ) : null}
+                  {activeSettingsSection === 'capability:components' ? <ManagedToolSettings accessToken={adminSettingsAccessToken} /> : null}
                   {activeSettingsSection === 'capability:browser' ? (
                     <section className="settings-capability-page">
                       <header className="settings-capability-head">
@@ -3044,7 +3047,7 @@ export function EnvironmentSettings({
                   {activeSettingsSection === 'sensitive:evaluation' ? renderSensitiveDataToolPanel('evaluation') : null}
 
                   {activeSettingsSection === 'integration:connector' ? (
-                    <SettingsDetailSection heading={t('MCP')} description={t('配置 MCP 服务地址与授权，供 Agent 发现和调用工具。')}>
+                    <SettingsDetailSection heading={t('MCP')} description={t('连接远程或本地 MCP，配置启动参数、环境变量与授权。')}>
                       <ExternalIntegrationSettings accessToken={adminSettingsAccessToken} category="connector" />
                       {renderEnvSettingList(activeIntegrationSettings)}
                     </SettingsDetailSection>

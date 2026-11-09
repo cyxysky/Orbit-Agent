@@ -23,74 +23,12 @@ function copyInto(source, target) {
   fs.cpSync(source, target, { recursive: true });
 }
 
-function findLibreOfficeRoot() {
-  const configuredExecutable = String(process.env.LIBREOFFICE_PATH || '').trim();
-  const candidates = [
-    process.env.LIBREOFFICE_BUNDLE_DIR,
-    configuredExecutable ? path.resolve(path.dirname(configuredExecutable), '..') : '',
-    process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'LibreOffice'),
-    process.env['ProgramFiles(x86)'] && path.join(process.env['ProgramFiles(x86)'], 'LibreOffice'),
-  ].filter(Boolean);
-
-  for (const candidate of candidates) {
-    const libreOfficeRoot = path.resolve(candidate);
-    if (fs.existsSync(path.join(libreOfficeRoot, 'program', 'soffice.exe'))) return libreOfficeRoot;
-  }
-
-  throw new Error(
-    'LibreOffice was not found. Install LibreOffice or set LIBREOFFICE_BUNDLE_DIR before packaging the server.',
-  );
+function writeStartScript() {
+  const lines = ['@echo off', 'setlocal', 'set "WEBPILOT_SERVER_ROOT=%~dp0"', 'if not defined APP_DATA_DIR set "APP_DATA_DIR=%WEBPILOT_SERVER_ROOT%runtime"', 'if not defined ARTIFACTS_DIR set "ARTIFACTS_DIR=%APP_DATA_DIR%\\artifacts"', 'if not defined CAPABILITY_TOOLS_HOME set "CAPABILITY_TOOLS_HOME=%APP_DATA_DIR%\\tool-components"', 'if not defined PORT set "PORT=3000"', 'if not defined HOSTNAME set "HOSTNAME=0.0.0.0"', 'set "NODE_ENV=production"', 'pushd "%WEBPILOT_SERVER_ROOT%server"', 'node webpilot-server.js', 'set "ORBIT_EXIT_CODE=%ERRORLEVEL%"', 'popd', 'exit /b %ORBIT_EXIT_CODE%'];
+  fs.writeFileSync(path.join(distributionRoot, 'start.cmd'), lines.join('\r\n')+'\r\n');
 }
-
-function copyLibreOffice() {
-  const sourceRoot = findLibreOfficeRoot();
-  const targetRoot = path.join(distributionRoot, 'libreoffice');
-  copyDir(sourceRoot, targetRoot);
-
-  const packagedExecutable = path.join(targetRoot, 'program', 'soffice.exe');
-  if (!fs.existsSync(packagedExecutable)) {
-    throw new Error(`Packaged LibreOffice executable is missing: ${packagedExecutable}`);
-  }
-}
-
-function findBrowserRevisionDir(executablePath) {
-  let dir = path.dirname(executablePath);
-  while (dir && dir !== path.dirname(dir)) {
-    if (/^chromium(?:_headless_shell)?-\d+$/.test(path.basename(dir))) return dir;
-    dir = path.dirname(dir);
-  }
-  throw new Error(`Unable to locate the Patchright Chromium revision directory from: ${executablePath}`);
-}
-
-function copyPlaywrightChromium() {
-  const { chromium } = require('patchright');
-  const { readManagedRuntime } = require('../packages/capability-sdk/runtime/managed/layout.cjs');
-  const executablePath = process.env.AI_WEB_TEST_CHROMIUM_EXECUTABLE_PATH?.trim() || readManagedRuntime()?.chromium || chromium.executablePath();
-  if (!fs.existsSync(executablePath)) {
-    throw new Error('Patchright Chromium was not found. Run "npx patchright install chromium" before packaging.');
-  }
-
-  const sourceChromiumDir = findBrowserRevisionDir(executablePath);
-  const targetRoot = path.join(distributionRoot, 'ms-playwright');
-  copyDir(sourceChromiumDir, path.join(targetRoot, path.basename(sourceChromiumDir)));
-  const relativeExecutable = path.join('ms-playwright', path.basename(sourceChromiumDir), path.relative(sourceChromiumDir, executablePath));
-  fs.writeFileSync(path.join(distributionRoot, 'runtime-paths.json'), JSON.stringify({ chromium: relativeExecutable }, null, 2));
-  return relativeExecutable;
-}
-
-function writeStartScript(chromiumExecutable) {
-  const startScript = `@echo off\r\nsetlocal\r\n\r\nset "WEBPILOT_SERVER_ROOT=%~dp0"\r\nif not defined APP_DATA_DIR set "APP_DATA_DIR=%WEBPILOT_SERVER_ROOT%runtime"\r\nif not defined ARTIFACTS_DIR set "ARTIFACTS_DIR=%APP_DATA_DIR%\\artifacts"\r\nif not defined PLAYWRIGHT_BROWSERS_PATH set "PLAYWRIGHT_BROWSERS_PATH=%WEBPILOT_SERVER_ROOT%ms-playwright"\r\nif not defined HOSTNAME set "HOSTNAME=0.0.0.0"\r\nif not defined PORT set "PORT=17890"\r\nif not defined NODE_ENV set "NODE_ENV=production"\r\nif not defined HEADLESS_BROWSER set "HEADLESS_BROWSER=true"\r\n\r\nif not exist "%APP_DATA_DIR%" mkdir "%APP_DATA_DIR%"\r\nif not exist "%ARTIFACTS_DIR%" mkdir "%ARTIFACTS_DIR%"\r\n\r\npushd "%WEBPILOT_SERVER_ROOT%server"\r\nnode webpilot-server.js\r\nset "WEBPILOT_SERVER_EXIT_CODE=%ERRORLEVEL%"\r\npopd\r\nexit /b %WEBPILOT_SERVER_EXIT_CODE%\r\n`;
-  const packagedStartScript = startScript
-    .replace(
-      'if not defined HOSTNAME',
-      'if not defined LIBREOFFICE_PATH set "LIBREOFFICE_PATH=%WEBPILOT_SERVER_ROOT%libreoffice\\program\\soffice.exe"\r\nif not defined LIBREOFFICE_PYTHON_PATH set "LIBREOFFICE_PYTHON_PATH=%WEBPILOT_SERVER_ROOT%libreoffice\\program\\python.exe"\r\nif not defined CAPABILITY_FILE_RUNTIME_DIR set "CAPABILITY_FILE_RUNTIME_DIR=%WEBPILOT_SERVER_ROOT%server\\capability-runtime\\file"\r\nif not defined CAPABILITY_BROWSER_RUNTIME_DIR set "CAPABILITY_BROWSER_RUNTIME_DIR=%WEBPILOT_SERVER_ROOT%server\\capability-runtime\\browser"\r\nif not defined HOSTNAME',
-    )
-    .replace('PORT=17890', 'PORT=3000');
-  fs.writeFileSync(path.join(distributionRoot, 'start.cmd'), packagedStartScript.replace('if not defined HOSTNAME', `if not defined AI_WEB_TEST_CHROMIUM_EXECUTABLE_PATH set "AI_WEB_TEST_CHROMIUM_EXECUTABLE_PATH=%WEBPILOT_SERVER_ROOT%${chromiumExecutable}"\r\nif not defined HOSTNAME`), 'utf8');
-}
-
 function writeReadme() {
-  const readme = `# Orbit HTTP Server\n\nRequirements: Node.js 22.16 or later. No npm install is required.\n\n1. Extract this directory.\n2. Run start.cmd.\n3. Open http://127.0.0.1:17890.\n\nLocal direct access uses ORBIT_DEFAULT_USER_ID (default: 1). For an online mounted deployment, set ORBIT_REQUIRE_MOUNT_USER_ID=true and pass userId to Orbit.mount().\n\nThe service listens on all network interfaces by default. To change the port, run \`set PORT=3000 && start.cmd\` from Command Prompt, or set \`$env:PORT = '3000'; .\\start.cmd\` in PowerShell. HTTP and WebSocket traffic share this one public port.\n\nRuntime data, artifacts, and browser profiles are written under the runtime directory unless APP_DATA_DIR or ARTIFACTS_DIR is set. Patchright Chromium is included in this package.\n`;
+  const readme = `# Orbit HTTP Server\n\nRequirements: Node.js 22.16 or later. No npm install is required.\n\n1. Extract this directory.\n2. Run start.cmd.\n3. Open http://127.0.0.1:17890.\n\nLocal direct access uses ORBIT_DEFAULT_USER_ID (default: 1). For an online mounted deployment, set ORBIT_REQUIRE_MOUNT_USER_ID=true and pass userId to Orbit.mount().\n\nThe service listens on all network interfaces by default. To change the port, run \`set PORT=3000 && start.cmd\` from Command Prompt, or set \`$env:PORT = '3000'; .\\start.cmd\` in PowerShell. HTTP and WebSocket traffic share this one public port.\n\nRuntime data, artifacts, and browser profiles are written under the runtime directory unless APP_DATA_DIR or ARTIFACTS_DIR is set. Optional tools, libraries, Chromium, LibreOffice, FFmpeg and Python tool environments are downloaded individually in Settings > Environment > Tool components. Preserve APP_DATA_DIR/tool-components during upgrades.\n`;
   const packagedReadme = readme
     .replace('Patchright Chromium is included in this package.', 'Patchright Chromium and LibreOffice are included. Local redaction is optional: open Settings > Security and privacy > Local component download to install its Python dependencies and models into APP_DATA_DIR. Redaction is disabled by default. User knowledge packages and downloaded models are private runtime data and are not part of the distribution.')
     .replace('http://127.0.0.1:17890', 'http://127.0.0.1:3000')
@@ -139,8 +77,9 @@ function prepareOutputDirectory() {
   }
 }
 
+async function main() {
 prepareOutputDirectory();
-const productionPackagePaths = copyProductionRuntime(root, serverRoot);
+const productionPackagePaths = await copyProductionRuntime(root, serverRoot);
 copyInto(path.join(root, 'public'), path.join(serverRoot, 'public'));
 const serverRuntimeFiles = copyServerRuntime(root, serverRoot);
 copyInto(
@@ -149,8 +88,6 @@ copyInto(
 );
 copyBrowserSessionExtension();
 copyComputerDriverRuntime();
-copyLibreOffice();
-const chromiumExecutable = copyPlaywrightChromium();
 
 if (
   !fs.existsSync(path.join(serverRoot, '.next', 'BUILD_ID'))
@@ -161,12 +98,14 @@ if (
   || !fs.existsSync(path.join(serverRoot, 'webpilot-identity.js'))
   || !fs.existsSync(path.join(serverRoot, 'realtime-refresh-hub.js'))
   || !fs.existsSync(path.join(serverRoot, 'node_modules', 'next', 'package.json'))
-  || !fs.existsSync(path.join(distributionRoot, 'libreoffice', 'program', 'soffice.exe'))
 ) {
   throw new Error('The complete production runtime required by the Orbit custom server was not found. Run "npm run build" before packaging.');
 }
 
-writeStartScript(chromiumExecutable);
+writeStartScript();
 writeReadme();
 
-console.log(`Production server package created with ${productionPackagePaths.length} package directories and ${serverRuntimeFiles.length} custom server files:\n  ${distributionRoot}`);
+console.log(`Production server package created with ${productionPackagePaths.files} package directories and ${serverRuntimeFiles.length} custom server files:\n  ${distributionRoot}`);
+
+}
+main().catch(error => { console.error(error); process.exitCode=1; });
