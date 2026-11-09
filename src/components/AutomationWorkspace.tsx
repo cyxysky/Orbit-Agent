@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
 import { TextArea } from '@heroui/react/textarea';
-import { FormEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   CalendarDays,
   CheckCircle2,
@@ -43,10 +43,7 @@ import { readApiJson } from '@/lib/api-client';
 import { artifactApiUrl } from '@/lib/artifacts';
 import { subscribeRealtimeRefresh } from '@/lib/realtime-refresh';
 import { asRecord } from '@/lib/unknown-value';
-import {
-  readSidebarCollapsedPreference,
-  writeSidebarCollapsedPreference,
-} from '@/lib/sidebar-collapse';
+import { useSidebarCollapsed } from '@/hooks/useSidebarCollapsed';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 import { useTheme } from '@/theme/ThemeProvider';
 import { AppInput } from '@/components/ui/app-input';
@@ -657,7 +654,7 @@ export function AutomationWorkspace({
   const userId = defaultUserId.trim() || '1';
   const { mode: themeMode, setMode } = useTheme();
   const { language, t } = useI18n();
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(initialSidebarCollapsed);
+  const { collapsed: sidebarCollapsed, toggle: toggleSidebar } = useSidebarCollapsed(initialSidebarCollapsed);
   const [cases, setCases] = useState<AutomationCase[]>([]);
   const [caseListPage, setCaseListPage] = useState<AutomationCaseListPage>({});
   const [loadingMoreCases, setLoadingMoreCases] = useState(false);
@@ -748,12 +745,6 @@ export function AutomationWorkspace({
       setLoadingMoreCases(false);
     }
   }, [caseListPage, loadingMoreCases, t, userId]);
-
-  useLayoutEffect(() => {
-    const storedSidebarCollapsed = readSidebarCollapsedPreference(initialSidebarCollapsed);
-    setSidebarCollapsed(storedSidebarCollapsed);
-    writeSidebarCollapsedPreference(storedSidebarCollapsed);
-  }, [initialSidebarCollapsed]);
 
   useEffect(() => {
     void loadAll();
@@ -857,13 +848,6 @@ export function AutomationWorkspace({
     setNotice('');
   }
 
-  function toggleSidebar() {
-    setSidebarCollapsed((current) => {
-      const next = !current;
-      writeSidebarCollapsedPreference(next);
-      return next;
-    });
-  }
 
   function openCaseDialog() {
     setFormError('');

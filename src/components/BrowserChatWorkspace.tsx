@@ -237,10 +237,7 @@ import {
 import { useBrowserChatRealtime } from '@/components/useBrowserChatRealtime';
 import { BoundedEventBuffer } from '@/lib/bounded-event-buffer';
 import type { RealtimeRefreshEvent } from '@/lib/realtime-refresh';
-import {
-  readSidebarCollapsedPreference,
-  writeSidebarCollapsedPreference,
-} from '@/lib/sidebar-collapse';
+import { useSidebarCollapsed } from '@/hooks/useSidebarCollapsed';
 import { sortBrowserChatAiOutputCycles } from '@/lib/browser-chat-output-cycles';
 import {
   browserChatArtifactExtension,
@@ -8778,7 +8775,7 @@ export function BrowserChatWorkspace({
   const interruptRequestSequenceRef = useRef(0);
   const interruptingRef = useRef(false);
   const interruptGuardsRef = useRef(new Map<string, BrowserChatInterruptGuard>());
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(initialSidebarCollapsed);
+  const { collapsed: sidebarCollapsed, toggle: toggleSidebarCollapsed } = useSidebarCollapsed(initialSidebarCollapsed);
   const [session, setSession] = useState<BrowserChatSession | null>(null);
   const [sessions, setSessions] = useState<BrowserChatSession[]>([]);
   const [confirmationNotices, setConfirmationNotices] = useState<Array<{
@@ -9228,13 +9225,6 @@ export function BrowserChatWorkspace({
   const hasMessages = visibleMessages.length > 0;
   const hasChatContent = hasMessages;
   const messageViewportPositioning = Boolean(loadingSessionHistory || loadingSessionId || (hasMessages && !messageViewportReady));
-  const toggleSidebarCollapsed = useCallback(() => {
-    setSidebarCollapsed((current) => {
-      const next = !current;
-      writeSidebarCollapsedPreference(next);
-      return next;
-    });
-  }, []);
   const toggleEmbeddedChatCollapsed = useCallback(() => {
     setEmbeddedChatCollapsed((current) => {
       const next = !current;
@@ -9245,12 +9235,9 @@ export function BrowserChatWorkspace({
   }, []);
 
   useLayoutEffect(() => {
-    const storedSidebarCollapsed = readSidebarCollapsedPreference(initialSidebarCollapsed);
-    setSidebarCollapsed(storedSidebarCollapsed);
-    writeSidebarCollapsedPreference(storedSidebarCollapsed);
     setEmbeddedChatCollapsed(readStoredEmbeddedChatCollapsed());
     setWebPreviewRuntime(!window.webPilotEmbeddedBrowser);
-  }, [initialSidebarCollapsed]);
+  }, []);
 
   useEffect(() => {
     setWebPreviewOpen(false);

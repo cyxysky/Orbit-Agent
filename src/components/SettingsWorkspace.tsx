@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useLayoutEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import {
   Bot,
   BookOpen,
@@ -27,10 +27,7 @@ import { WorkspaceNavigationSidebar } from '@/components/WorkspaceSidebar';
 import type { SettingsTab } from '@/config/settings';
 import { useI18n } from '@/i18n/I18nProvider';
 import { readApiJson } from '@/lib/api-client';
-import {
-  readSidebarCollapsedPreference,
-  writeSidebarCollapsedPreference,
-} from '@/lib/sidebar-collapse';
+import { useSidebarCollapsed } from '@/hooks/useSidebarCollapsed';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 import { useTheme } from '@/theme/ThemeProvider';
 import { AppInput } from '@/components/ui/app-input';
@@ -76,7 +73,7 @@ export function SettingsWorkspace({
   const { t } = useI18n();
   const router = useRouter();
   const { mode: themeMode, setMode } = useTheme();
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(initialSidebarCollapsed);
+  const { collapsed: sidebarCollapsed, toggle: toggleSidebarCollapsed } = useSidebarCollapsed(initialSidebarCollapsed);
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
   const [requestedSection, setRequestedSection] = useState<string>();
   const [adminSettingsAccessToken, setAdminSettingsAccessToken] = useState('');
@@ -87,20 +84,6 @@ export function SettingsWorkspace({
   const visibleSettingsTabs = environmentSettingsTabsForUser(defaultUserId, defaultUserId);
   const selectedTab = visibleSettingsTabs.some((tab) => tab.id === activeTab) ? activeTab : 'general';
   const adminSettingsLocked = adminSettingsPasswordRequired && !adminSettingsAccessToken;
-
-  const toggleSidebarCollapsed = useCallback(() => {
-    setSidebarCollapsed((current) => {
-      const next = !current;
-      writeSidebarCollapsedPreference(next);
-      return next;
-    });
-  }, []);
-
-  useLayoutEffect(() => {
-    const stored = readSidebarCollapsedPreference(initialSidebarCollapsed);
-    setSidebarCollapsed(stored);
-    writeSidebarCollapsedPreference(stored);
-  }, [initialSidebarCollapsed]);
 
   function closeAdminSettingsPasswordDialog() {
     if (adminSettingsPasswordSubmitting) return;

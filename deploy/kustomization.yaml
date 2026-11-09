@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: orbit
+resources:
+  - k8s/orbit.yaml
+configMapGenerator:
+  - name: orbit-nginx
+    files:
+      - default.conf=nginx/orbit.conf
+images:
+  # Build this source snapshot, push it to your internal registry, then edit here.
+  - name: orbit-app
+    newName: registry.gitlab.internal/ai/orbit
+    newTag: replace-with-your-release-tag
+  - name: nginx
+    newName: registry.gitlab.internal/library/nginx
+    newTag: stable-alpine

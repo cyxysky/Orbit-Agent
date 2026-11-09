@@ -1,6 +1,8 @@
 # Docker 镜像
 
-主镜像包含 Orbit 前端、Node API 与执行进程，以及 Chromium、LibreOffice 和 SDK 运行资源。浏览器使用 SDK 实际依赖的 Chromium，不再额外携带 Playwright 基础镜像中的其他浏览器。桌面 Electron 二进制不参与下载。
+当前基础镜像包含 Orbit 前端、Node API、执行调度与 SDK 工具安装模板。Chromium、LibreOffice、FFmpeg 等工具运行资源按单个工具安装，基础镜像不预装这些资源，也不包含 Electron 桌面端。
+
+内网迁移、Kubernetes、密钥和 Nginx 的当前部署入口见 [deploy/README.md](../../deploy/README.md)，工具安装机制见 [按需安装 MCP 工具](../managed-mcp-tools.md)。本文末尾保留早期内置工具镜像的历史测量数据。
 
 ## 一个发布镜像
 
@@ -17,7 +19,7 @@
 
 此前的 `orbit-code-sandbox:latest` 已不再构建或引用，独立 Dockerfile 已移除。`orbit-build-deps:local` 是之前本机打包时留下的临时依赖标签，标准 Dockerfile 不依赖它。正常构建的依赖阶段保留在 BuildKit 缓存中，不需要额外发布构建镜像；删除旧标签与主镜像减重分开统计。
 
-## 发行资源裁剪
+## 早期内置工具镜像的资源裁剪记录
 
 `scripts/prune-runtime-dependencies.cjs --strip-source-maps` 在编译和移除开发依赖后，删除 node_modules 中独立的 JavaScript/CSS `.map` 文件。该选项仅用于发行镜像，普通 npm 安装仍保留调试资源；开发源码、可执行文件和必要的运行时编译依赖不受此规则影响。文件遍历不跟随符号链接，删除前校验路径；`--dry-run` 可以查看计划。
 
@@ -91,7 +93,7 @@ docker compose up -d
 
 Compose 沿用已有的 `CODE_SANDBOX_RUNNER_TOKEN` 配置，不对外发布沙箱端口。
 
-镜像仅构建到本地 Docker，没有发布到远端镜像仓库。
+已发布的基础镜像位于 `dsadsaddfsdad/orbit`。本轮源码中的侧边栏修复需要重新构建；内网应使用自己的镜像仓库与发布标签。
 
 ## 上次发行镜像验证（隔离修复前）
 

@@ -13,7 +13,7 @@ import {
   Wrench,
   type LucideIcon,
 } from 'lucide-react';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { CustomSelect } from '@/components/CustomSelect';
 import { BackendRuntimePanel } from '@/components/BackendRuntimePanel';
 import { AiOperationsLoading } from '@/components/AiOperationsLoading';
@@ -25,10 +25,7 @@ import { DataTableStatus, DataTableText } from '@/components/ui/data-table-cells
 import { WorkspaceNavigationSidebar } from '@/components/WorkspaceSidebar';
 import { useI18n } from '@/i18n/I18nProvider';
 import { readApiJson } from '@/lib/api-client';
-import {
-  readSidebarCollapsedPreference,
-  writeSidebarCollapsedPreference,
-} from '@/lib/sidebar-collapse';
+import { useSidebarCollapsed } from '@/hooks/useSidebarCollapsed';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 import type {
   AiOperationsDashboardData,
@@ -235,7 +232,7 @@ function AiOperationsDashboard({
   const compactNumber = useCallback((value: number) => formatCompactNumber(value, language), [language]);
   const dateTime = (value: string) => formatDateTime(value, language);
   const { mode: themeMode, setMode } = useTheme();
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(initialSidebarCollapsed);
+  const { collapsed: sidebarCollapsed, toggle: toggleSidebar } = useSidebarCollapsed(initialSidebarCollapsed);
   const [data, setData] = useState(initialData);
   const [rangeDays, setRangeDays] = useState(initialData.rangeDays);
   const [requestedRangeDays, setRequestedRangeDays] = useState(initialData.rangeDays);
@@ -246,21 +243,8 @@ function AiOperationsDashboard({
   const [activeView, setActiveView] = useState<'overview' | 'runtime'>('overview');
   const [trendView, setTrendView] = useState<'usage' | 'outcome'>('usage');
 
-  useLayoutEffect(() => {
-    const stored = readSidebarCollapsedPreference(initialSidebarCollapsed);
-    setSidebarCollapsed(stored);
-    writeSidebarCollapsedPreference(stored);
-  }, [initialSidebarCollapsed]);
-
   useEffect(() => () => dashboardRequest.current?.abort(), []);
 
-  const toggleSidebar = useCallback(() => {
-    setSidebarCollapsed((current) => {
-      const next = !current;
-      writeSidebarCollapsedPreference(next);
-      return next;
-    });
-  }, []);
 
   const loadDashboard = useCallback(async (days: number, userId: string) => {
     dashboardRequest.current?.abort();

@@ -3,6 +3,28 @@ export const SIDEBAR_COLLAPSED_COOKIE_NAME = 'webpilotqa_sidebar_collapsed';
 
 let cachedSidebarCollapsed: boolean | undefined;
 let persistedSidebarCollapsed: boolean | undefined;
+const listeners = new Set<() => void>();
+
+function notifySidebarCollapsedChange() {
+  for (const listener of listeners) listener();
+}
+
+function onStorage(event: StorageEvent) {
+  if (event.key !== SIDEBAR_COLLAPSED_STORAGE_KEY && event.key !== null) return;
+  try { if (event.storageArea !== window.localStorage) return; } catch { return; }
+  cachedSidebarCollapsed = event.newValue === 'true';
+  persistedSidebarCollapsed = undefined;
+  notifySidebarCollapsedChange();
+}
+
+export function subscribeSidebarCollapsedPreference(listener: () => void) {
+  listeners.add(listener);
+  if (listeners.size === 1) window.addEventListener('storage', onStorage);
+  return () => {
+    listeners.delete(listener);
+    if (!listeners.size) window.removeEventListener('storage', onStorage);
+  };
+}
 
 export function sidebarCollapsedFromCookie(value: string | undefined) {
   return value === 'true';
@@ -21,14 +43,21 @@ export function readSidebarCollapsedPreference(fallback = false) {
 }
 
 export function writeSidebarCollapsedPreference(collapsed: boolean) {
-  cachedSidebarCollapsed = collapsed;
   if (typeof window === 'undefined') return;
-  if (persistedSidebarCollapsed === collapsed) return;
-  try {
-    window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, collapsed ? 'true' : 'false');
-  } catch {
-    // The in-memory value and cookie still keep navigation stable.
+  const changed = cachedSidebarCollapsed !== collapsed;
+  cachedSidebarCollapsed = collapsed;
+  if (persistedSidebarCollapsed !== collapsed) {
+    try {
+      window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, collapsed ? 'true' : 'false');
+    } catch {
+      // Navigation still uses the shared in-memory snapshot when storage is blocked.
+    }
+    try {
+      document.cookie = `${SIDEBAR_COLLAPSED_COOKIE_NAME}=${collapsed ? 'true' : 'false'}; Path=/; Max-Age=31536000; SameSite=Lax`;
+    } catch {
+      // Cookie persistence is optional; mounted workspaces remain synchronized.
+    }
+    persistedSidebarCollapsed = collapsed;
   }
-  document.cookie = `${SIDEBAR_COLLAPSED_COOKIE_NAME}=${collapsed ? 'true' : 'false'}; Path=/; Max-Age=31536000; SameSite=Lax`;
-  persistedSidebarCollapsed = collapsed;
+  if (changed) notifySidebarCollapsedChange();
 }
