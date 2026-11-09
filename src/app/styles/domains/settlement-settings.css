@@ -232,3 +232,16 @@
 .personal-memory-detail-body summary { color: var(--muted); cursor: pointer; }
 .personal-memory-detail-body details p { margin-top: 12px; }
 .personal-memory-detail-body blockquote { background: var(--panel-soft); border-radius: 8px; margin: 12px 0 0; padding: 12px 16px; }
+
+/* Tool configuration dialogs keep one reading column and one scroll container. */
+.tool-configuration-group { border-bottom: 1px solid var(--border); min-width: 0; }
+.tool-configuration-group > summary { display: flex; align-items: center; gap: 10px; padding-block: 14px; cursor: pointer; font-size: 14px; font-weight: 600; color: var(--foreground); }
+.tool-configuration-group > summary::marker, .tool-configuration-group > summary::-webkit-details-marker { display: none; content: ''; }
+.tool-configuration-group > summary > svg { transform: rotate(-90deg); flex-shrink: 0; }
+.tool-configuration-group[open] > summary > svg { transform: rotate(0); }
+.tool-configuration-group > summary > small { margin-left: auto; color: var(--muted); font-size: 12px; font-weight: 400; font-variant-numeric: tabular-nums; }
+.tool-configuration-group > div { padding-block: 4px 12px; }
+.tool-configuration-group .settings-row { min-width: 0; }
+.tool-configuration-empty { padding-block: 16px; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
+.tool-integration-editor { min-width: 0; }
+.tool-configuration-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border); }

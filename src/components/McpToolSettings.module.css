@@ -1,21 +1,23 @@
-.modal { min-height: min(640px, 88dvh); }
+.modal { max-height: calc(100dvh - 32px); }
 .body { display: flex; flex-direction: column; gap: 16px; min-height: 0; }
-.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); }
-.tabs button { padding: 10px 16px; border-bottom: 2px solid transparent; color: var(--muted); }
-.tabs button[aria-pressed='true'] { border-bottom-color: var(--foreground); color: var(--foreground); font-weight: 600; }
-.hint, .description, .footerHint, .field small, .fieldHeading > span, .target > span { color: var(--muted); font-size: 12px; line-height: 1.6; }
+.tabs { display: flex; gap: 4px; padding-inline: 28px; border-bottom: 1px solid var(--border); flex: 0 0 auto; }
+.tabs button { padding: 12px 16px; border-bottom: 2px solid transparent; color: var(--muted); font-size: 13px; white-space: nowrap; }
+.tabs button[aria-selected='true'] { border-bottom-color: var(--foreground); color: var(--foreground); font-weight: 600; }
+.hint, .description, .footerHint, .field small, .fieldHeading > span, .target small { color: var(--muted); font-size: 12px; line-height: 1.6; }
 .hint { margin: 0; }
-.workspace { display: grid; grid-template-columns: 224px minmax(0, 1fr); gap: 24px; min-height: 340px; }
-.navigation { display: flex; flex-direction: column; gap: 12px; padding-right: 20px; border-right: 1px solid var(--border); min-width: 0; }
-.targets { flex: 1; max-height: 360px; overflow: auto; }
-.target { display: flex; flex-direction: column; gap: 3px; width: 100%; text-align: left; padding: 10px 12px; border-radius: 6px; color: var(--foreground); overflow-wrap: anywhere; }
-.target strong { font-size: 13px; font-weight: 500; }
-.target:hover, .target[aria-pressed='true'] { background: var(--panel-soft); }
-.target[aria-pressed='true'] strong { font-weight: 600; }
+.targets { min-width: 0; }
+.operation + .operation { border-top: 1px solid var(--border); }
+.operationRow { display: flex; align-items: center; gap: 16px; padding-block: 12px; }
+.operationRow > :last-child { flex-shrink: 0; }
+.target { display: flex; align-items: flex-start; gap: 10px; flex: 1; min-width: 0; text-align: left; color: var(--foreground); }
+.target > svg { flex-shrink: 0; margin-top: 3px; transition: transform 180ms ease-out; transform: rotate(-90deg); }
+.target > svg.expanded { transform: rotate(0); }
+.target > span { display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.target strong { font-size: 14px; font-weight: 500; }
+.target[aria-expanded='true'] strong { font-weight: 600; }
 .pagination { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--muted); }
-.editor { min-width: 0; }
-.editor h3 { font-size: 16px; font-weight: 600; margin: 0 0 8px; overflow-wrap: anywhere; }
-.description { margin: 0 0 24px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.editor { min-width: 0; padding: 8px 0 20px 25px; }
+.description { margin: 0 0 20px; overflow-wrap: anywhere; white-space: pre-wrap; }
 .field { display: grid; gap: 8px; padding: 16px 0; border-bottom: 1px solid var(--border); }
 .field:first-of-type { padding-top: 0; }
 .field:last-of-type { border-bottom: 0; }
@@ -24,12 +26,12 @@
 .fieldHeading > button { margin-left: auto; }
 .field small { overflow-wrap: anywhere; }
 .field :global(.settings-control) { width: 100%; max-width: none; }
-.status { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 28px 8px; color: var(--muted); font-size: 13px; line-height: 1.7; text-align: center; }
-.footerHint { margin-right: auto; max-width: 34ch; }
-.tabs button:disabled, .target:disabled { opacity: .55; cursor: default; }
+.status { padding: 24px 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
+.footerHint { margin-right: auto; max-width: 38ch; }
 @media (max-width: 640px) {
-  .workspace { grid-template-columns: minmax(0, 1fr); gap: 20px; }
-  .navigation { border-right: 0; border-bottom: 1px solid var(--border); padding: 0 0 16px; }
-  .targets { max-height: 160px; }
+  .tabs { padding-inline: 16px; }
+  .tabs button { padding-inline: 10px; }
+  .editor { padding-left: 0; }
   .footerHint { flex-basis: 100%; max-width: none; }
 }
+@media (prefers-reduced-motion: reduce) { .target > svg { transition: none; } }

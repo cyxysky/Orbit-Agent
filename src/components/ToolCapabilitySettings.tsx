@@ -1,11 +1,12 @@
 'use client';
 
 import { useId } from 'react';
-import { ArrowUpRight, BookOpen, ChartNoAxesCombined, CodeXml, Database, Files, FileText, Globe2, Image, MapPin, MessageSquareText, Monitor, Plug, SquareTerminal, type LucideIcon } from 'lucide-react';
+import { BookOpen, ChartNoAxesCombined, CodeXml, Database, Files, FileText, Globe2, Image, MapPin, MessageSquareText, Monitor, Plug, Settings, SquareTerminal, type LucideIcon } from 'lucide-react';
+import { Button } from '@heroui/react/button';
 import { useI18n } from '@/i18n/I18nProvider';
 import { SettingsDetailSection } from '@/components/SettingsDetailSection';
 import { SettingsFieldControl, useSettingsForms } from '@/components/SettingsFields';
-import { isToolCapabilityEnabled, toolCapabilitySettings, toolConfigurationTargets } from '@/lib/tool-capability-settings';
+import { isToolCapabilityEnabled, toolCapabilitySettings } from '@/lib/tool-capability-settings';
 
 const toolIcons: Record<string, LucideIcon> = {
   selfBootstrap: CodeXml,
@@ -19,40 +20,40 @@ export type ToolCapabilitySettingsProps = {
   onChange: (key: string, enabled: boolean) => void;
   onConfigure?: (target: string) => void;
   disabled?: boolean;
+  components?: readonly { id: string; state: string; enabled: boolean }[];
+  busy?: ReadonlySet<string>;
 };
 
-export function ToolCapabilitySettings({ items, onChange, onConfigure, disabled = false }: ToolCapabilitySettingsProps) {
+export function ToolCapabilitySettings({ items, onChange, onConfigure, disabled = false, components = [], busy = new Set() }: ToolCapabilitySettingsProps) {
   const { t } = useI18n();
   const form = useSettingsForms()('tools.switches');
   const id = useId();
   const environment = Object.fromEntries(items.filter(item => item.enabled !== false).map(item => [item.key, item.value]));
-  const enabledCount = toolCapabilitySettings.filter(tool => isToolCapabilityEnabled(tool.name, environment)).length;
+  const enabledFor = (name: string) => { const component = components.find(item => item.id === name); return isToolCapabilityEnabled(name, environment) && (!component || component.state === 'ready' && component.enabled); };
+  const enabledCount = toolCapabilitySettings.filter(tool => enabledFor(tool.name)).length;
 
   return <SettingsDetailSection
     className="tool-capability-settings"
-    heading={t(form.title)}
-    description={t(form.description)}
+    heading={t('工具列表')}
+    description={t('统一管理工具的启用状态，点击齿轮配置。')}
     meta={<>{enabledCount} / {toolCapabilitySettings.length} {t('已启用')}</>}
   >
     <div className="tool-capability-grid">
       {form.fields.map(field => {
         const tool = toolCapabilitySettings.find(tool => tool.envKey === field.key);
         if (!tool) return null;
-        const enabled = isToolCapabilityEnabled(tool.name, environment);
+        const enabled = enabledFor(tool.name);
+        const component = components.find(item => item.id === tool.name);
         const Icon = toolIcons[tool.name] || Plug;
-        const target = toolConfigurationTargets[tool.name];
         const descriptionId = `${id}-${tool.name}-description`;
         return <article className={`settings-row tool-capability-row${enabled ? '' : ' is-disabled'}`} key={tool.name} data-setting-key={tool.envKey}>
           <div>
-            <strong className="tool-capability-title"><Icon aria-hidden="true" size={17} />{t(field.label)}</strong>
+            <strong className="tool-capability-title"><Icon aria-hidden="true" size={17} />{t(field.label)}{component ? <small className="tool-capability-status">{t(component.state === 'ready' ? '已安装' : component.state === 'installing' ? '安装中' : component.state === 'failed' ? '安装失败' : '未安装')}</small> : null}</strong>
             <span id={descriptionId}>{t(field.description || '')}</span>
           </div>
           <div className="tool-capability-actions">
-            {target && onConfigure ? <button type="button" className="ui-button tool-capability-configure"
-              aria-label={`${t('配置')} · ${t(tool.label)}`} onClick={() => onConfigure(target)}>
-              {t('配置')}<ArrowUpRight aria-hidden="true" size={14} />
-            </button> : null}
-            <SettingsFieldControl field={field} value={enabled} disabled={disabled} onChange={value => onChange(field.key, value === 'true')} />
+            <SettingsFieldControl field={field} value={enabled} disabled={disabled || busy.has(tool.name) || Boolean(component && component.state !== 'ready')} onChange={value => onChange(field.key, value === 'true')} />
+            {onConfigure ? <Button isIconOnly size="sm" variant="ghost" aria-label={`${t('配置')} · ${t(tool.label)}`} onPress={() => onConfigure(tool.name)}><Settings aria-hidden="true" size={17} /></Button> : null}
           </div>
         </article>;
       })}

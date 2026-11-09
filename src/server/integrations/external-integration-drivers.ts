@@ -17,7 +17,8 @@ import {
 import type { CommunicationChannel, CommunicationDraft, CommunicationMediaOperations, CommunicationReceipt } from '@cjfclonedeep/capability-sdk/integrations/communication';
 import { CommunicationDeliveryError } from '@cjfclonedeep/capability-sdk/integrations/communication';
 import { getWeComConnection, weComConnectionStatus } from './wecom-connections';
-import { connectorDefaultsKey, currentConnectorToolDefaults } from './connector-tool-defaults';
+import { connectorDefaultsKey, connectorDisabledToolsKey, connectorDisabledTools, currentConnectorToolDefaults } from './connector-tool-defaults';
+import { resolveExternalIntegration } from './external-integration-vault';
 import { listCommunicationConversations } from '@/server/storage/communication-conversation-store';
 import type {
   ExternalIntegrationCategory,
@@ -495,6 +496,7 @@ function connectorDriver(): ExternalIntegrationDriver {
         endpoint: httpEndpoint(configuration.endpoint, 'MCP 服务地址'),
         ...authenticationConfiguration(configuration),
         ...(configuration[connectorDefaultsKey] ? { [connectorDefaultsKey]: configuration[connectorDefaultsKey] } : {}),
+        ...(configuration[connectorDisabledToolsKey] ? { [connectorDisabledToolsKey]: configuration[connectorDisabledToolsKey] } : {}),
       };
     },
     summarize(configuration) {
@@ -507,7 +509,6 @@ function connectorDriver(): ExternalIntegrationDriver {
         url: integration.configuration.endpoint,
         headers: authorizationHeader(integration.configuration),
         timeoutMs,
-        argumentDefaults: operationId => currentConnectorToolDefaults(integration.id, operationId),
       });
     },
     async test(integration, timeoutMs) {
@@ -547,14 +548,14 @@ function stdioConnectorDriver(): ExternalIntegrationDriver {
         || Object.entries(env).some(([key, value]) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || typeof value !== 'string' || value.length > 20000)) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '环境变量必须是名称与文本值组成的对象。');
       return { command: requiredText(configuration.command, '启动命令', 2000), args: JSON.stringify(args), env: JSON.stringify(env),
         ...(configuration.cwd?.trim() ? { cwd: configuration.cwd.trim() } : {}),
-        ...(configuration[connectorDefaultsKey] ? { [connectorDefaultsKey]: configuration[connectorDefaultsKey] } : {}) };
+        ...(configuration[connectorDefaultsKey] ? { [connectorDefaultsKey]: configuration[connectorDefaultsKey] } : {}),
+        ...(configuration[connectorDisabledToolsKey] ? { [connectorDisabledToolsKey]: configuration[connectorDisabledToolsKey] } : {}) };
     },
     summarize(configuration) { return configuration.command; },
     createConnector(integration, timeoutMs) {
       return createMcpStdioConnector({ id: integration.id, name: integration.name, command: integration.configuration.command,
         args: json(integration.configuration.args, []) as string[], cwd: integration.configuration.cwd || undefined,
-        env: { ...minimalProcessEnvironment(), ...json(integration.configuration.env, {}) as Record<string, string> }, timeoutMs,
-        argumentDefaults: operationId => currentConnectorToolDefaults(integration.id, operationId) });
+        env: { ...minimalProcessEnvironment(), ...json(integration.configuration.env, {}) as Record<string, string> }, timeoutMs });
     },
   };
 }
@@ -957,10 +958,23 @@ export function publicExternalIntegrationSummary(integration: ResolvedExternalIn
   };
 }
 
-export function createExternalIntegrationConnector(integration: ResolvedExternalIntegration, timeoutMs: number) {
+export function createExternalIntegrationConnector(integration: ResolvedExternalIntegration, timeoutMs: number, options: { administration?: boolean } = {}) {
   const driver = externalIntegrationDriver(integration.driverId, 'connector');
   if (!driver.createConnector) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, `驱动 ${driver.id} 不能创建连接器。`);
-  return driver.createConnector(integration, timeoutMs);
+  const connector = driver.createConnector(integration, timeoutMs);
+  if (options.administration) return connector;
+  return { ...connector,
+    async listOperations(context) {
+      const current = await resolveExternalIntegration(integration.id);
+      if (!current?.enabled) return [];
+      const disabled = connectorDisabledTools(current.configuration);
+      return (await connector.listOperations(context)).filter(operation => !disabled.has(operation.id));
+    },
+    async call(name, args, context) {
+      const defaults = await currentConnectorToolDefaults(integration.id, name);
+      return connector.call(name, { ...defaults, ...args }, context);
+    },
+  } satisfies AgentConnector;
 }
 
 export function createExternalCommunicationChannel(integration: ResolvedExternalIntegration, timeoutMs: number, readArtifact?: CommunicationMediaOperations['readArtifact']) {

@@ -1,15 +1,15 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react';
+import { Button } from '@heroui/react/button';
 import {
   Cable,
   CircleCheck,
   Database,
   Loader2,
-  PencilLine,
   Plus,
   Send,
-  SlidersHorizontal,
+  Settings,
   Trash2,
   UserRound,
   UsersRound,
@@ -24,6 +24,7 @@ import { useI18n } from '@/i18n/I18nProvider';
 import { readApiJson } from '@/lib/api-client';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+import { TOOL_CAPABILITY_SETTINGS_CHANGED_EVENT } from '@/lib/tool-capability-settings';
 
 
 type IntegrationCategory = 'connector' | 'communication' | 'data';
@@ -148,13 +149,21 @@ async function readIntegrationTestResult(
   return result;
 }
 
+function IntegrationEditorFrame({ embedded, ...props }: ComponentProps<typeof AppModal> & { embedded?: boolean }) {
+  return embedded ? <section className="tool-integration-editor">{props.children}</section> : <AppModal {...props} />;
+}
+
 export function ExternalIntegrationSettings({
   accessToken = '',
   category,
   permission,
+  embedded = false,
+  onBusyChange,
 }: {
   accessToken?: string;
   category: IntegrationCategory;
+  embedded?: boolean;
+  onBusyChange?: (busy: boolean) => void;
   permission?: {
     enabled: boolean;
     label: string;
@@ -169,13 +178,13 @@ export function ExternalIntegrationSettings({
   const [drivers, setDrivers] = useState<IntegrationDriverDescriptor[]>([]);
   const [editor, setEditor] = useState<IntegrationDraft | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<IntegrationSummary | null>(null);
-  const [toolSettingsTarget, setToolSettingsTarget] = useState<IntegrationSummary | null>(null);
+  const [editorBaseline, setEditorBaseline] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testStage, setTestStage] = useState<'connecting' | 'connected' | 'authenticated' | 'verifying' | ''>('');
   const [deleting, setDeleting] = useState(false);
-  const [updatingId, setUpdatingId] = useState('');
+  const [updatingIds, setUpdatingIds] = useState<Set<string>>(new Set());
   const [error, setError] = useState('');
   const [editorError, setEditorError] = useState('');
   const [testResult, setTestResult] = useState<{ message: string; operations?: string[]; targets?: IntegrationTestTarget[] } | null>(null);
@@ -211,7 +220,7 @@ export function ExternalIntegrationSettings({
   }, [load]);
 
   useEffect(() => {
-    if (editor || toolSettingsTarget || saving || testing || deleting || updatingId) return;
+    if (category !== 'communication' || editor || saving || testing || deleting || updatingIds.size) return;
     const controller = new AbortController();
     let pending = false;
     const timer = setInterval(async () => {
@@ -225,7 +234,10 @@ export function ExternalIntegrationSettings({
       finally { pending = false; }
     }, 3000);
     return () => { controller.abort(); clearInterval(timer); };
-  }, [category, headers, t, editor, toolSettingsTarget, saving, testing, deleting, updatingId]);
+  }, [category, headers, t, editor, saving, testing, deleting, updatingIds]);
+
+  useEffect(() => { onBusyChange?.(Boolean(editor) || saving || testing || deleting); }, [onBusyChange, editor, saving, testing, deleting]);
+  useEffect(() => () => onBusyChange?.(false), [onBusyChange]);
 
   useEffect(() => {
     setHasFilePicker(Boolean(window.webPilotSystem?.selectFile));
@@ -253,7 +265,7 @@ export function ExternalIntegrationSettings({
       setError(t('当前没有可用的外部集成驱动。'));
       return;
     }
-    setEditor({
+    const draft: IntegrationDraft = {
       id: item?.id,
       name: item?.name || '',
       driverId: driver.id,
@@ -261,7 +273,9 @@ export function ExternalIntegrationSettings({
       configuredFields: item?.configuredFields || [],
       clearFields: [],
       enabled: item?.enabled ?? true,
-    });
+    };
+    setEditor(draft);
+    setEditorBaseline(JSON.stringify(draft));
     setEditorError('');
     setTestResult(null);
   }
@@ -443,8 +457,8 @@ export function ExternalIntegrationSettings({
   }
 
   async function toggle(item: IntegrationSummary) {
-    if (updatingId) return;
-    setUpdatingId(item.id);
+    if (updatingIds.has(item.id)) return;
+    setUpdatingIds(current => new Set(current).add(item.id));
     setError('');
     try {
       const response = await fetch(withWebPilotBasePath('/api/settings/integrations'), {
@@ -461,10 +475,11 @@ export function ExternalIntegrationSettings({
       });
       const data = await readApiJson<{ item?: IntegrationSummary }>(response, t('更新外部集成失败'));
       if (data.item) setItems((current) => current.map((entry) => entry.id === item.id ? data.item! : entry));
+      window.dispatchEvent(new Event(TOOL_CAPABILITY_SETTINGS_CHANGED_EVENT));
     } catch (toggleError) {
       setError(toggleError instanceof Error ? toggleError.message : t('更新外部集成失败'));
     } finally {
-      setUpdatingId('');
+      setUpdatingIds(current => { const next = new Set(current); next.delete(item.id); return next; });
     }
   }
 
@@ -479,6 +494,7 @@ export function ExternalIntegrationSettings({
       });
       await readApiJson(response, t('删除外部集成失败'));
       setItems((current) => current.filter((item) => item.id !== deleteTarget.id));
+      setEditor(current => current?.id === deleteTarget.id ? null : current);
       setDeleteTarget(null);
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : t('删除外部集成失败'));
@@ -487,103 +503,8 @@ export function ExternalIntegrationSettings({
     }
   }
 
-  return (
-    <div className="external-integration-settings">
-      <div className="external-integration-toolbar">
-        <p>{t(definition.description)}</p>
-        <button className="ui-button ui-button--neutral" disabled={loading || !drivers.length} onClick={() => openEditor()} type="button">
-          <Plus size={15} />
-          {t(definition.addLabel)}
-        </button>
-      </div>
-
-      {permission ? (
-        <div className="external-integration-permission">
-          <div>
-            <strong>{t(permission.label)}</strong>
-            <span>{t(permission.description)}</span>
-          </div>
-          <button
-            aria-pressed={permission.enabled}
-            className={`settings-toggle${permission.enabled ? ' on' : ''}`}
-            onClick={() => permission.onChange(!permission.enabled)}
-            type="button"
-          >
-            <span />
-          </button>
-        </div>
-      ) : null}
-
-      {error ? <p className="external-integration-error" role="alert">{t(error)}</p> : null}
-
-      {loading ? (
-        <div className="external-integration-loading"><Loader2 className="spin" size={16} />{t('正在读取配置')}</div>
-      ) : items.length ? (
-        <div className="external-integration-list">
-          {items.map((item) => {
-            const driver = drivers.find((candidate) => candidate.id === item.driverId);
-            return (
-              <div className="external-integration-row" key={item.id}>
-                <span className="external-integration-icon" aria-hidden="true">
-                  {integrationIcon(category, 17)}
-                </span>
-                <div className="external-integration-copy">
-                  <div>
-                    <strong>{item.name}</strong>
-                    <span className={item.enabled ? 'is-enabled' : 'is-disabled'}>{t(item.enabled ? '已启用' : '已停用')}</span>
-                  </div>
-                  <span>{t(driver?.label || item.driverId)} · {item.detailPreview}</span>
-                </div>
-                <div className="external-integration-actions">
-                  <button
-                    aria-label={t(item.enabled ? '停用 {name}' : '启用 {name}', { name: item.name })}
-                    aria-pressed={item.enabled}
-                    className={`settings-toggle${item.enabled ? ' on' : ''}`}
-                    disabled={Boolean(updatingId)}
-                    onClick={() => void toggle(item)}
-                    type="button"
-                  ><span /></button>
-                  <button className="ui-icon-button" aria-label={t('编辑 {name}', { name: item.name })} onClick={() => openEditor(item)} type="button"><PencilLine size={15} /></button>
-                  {category === 'connector' ? <button className="ui-icon-button" aria-label={t('工具设置 {name}', { name: item.name })} title={t('工具设置')} onClick={() => setToolSettingsTarget(item)} type="button"><SlidersHorizontal size={15} /></button> : null}
-                  <button className="ui-icon-button danger" aria-label={t('删除 {name}', { name: item.name })} onClick={() => setDeleteTarget(item)} type="button"><Trash2 size={15} /></button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      ) : (
-        <div className="external-integration-empty">
-          <span className="external-integration-icon" aria-hidden="true">
-            {integrationIcon(category, 18)}
-          </span>
-          <div><strong>{t(definition.emptyTitle)}</strong><span>{t(definition.emptyDescription)}</span></div>
-        </div>
-      )}
-
-      {toolSettingsTarget ? <McpToolSettings key={toolSettingsTarget.id} integration={toolSettingsTarget} headers={headers} onClose={() => setToolSettingsTarget(null)} /> : null}
-      {editor && activeDriver ? (
-        <AppModal
-          ariaLabelledBy={`${category}-integration-modal-title`}
-          dialogClassName="ui-modal ui-modal--form external-integration-modal"
-          dismissable={!saving}
-          keyboardDismissable={!saving}
-          onClose={closeEditor}
-          size="wide"
-        >
-          <header className="ui-modal-header">
-            <div className="ui-modal-heading ui-modal-heading--with-icon">
-              <span className="ui-modal-heading-icon external-integration-modal-icon" aria-hidden="true">
-                {integrationIcon(category, 18)}
-              </span>
-              <div className="ui-modal-heading-copy">
-                <h2 className="ui-modal-title" id={`${category}-integration-modal-title`}>{t(editor.id ? definition.editLabel : definition.addLabel)}</h2>
-                <p className="ui-modal-subtitle">{t(activeDriver.description)}</p>
-              </div>
-            </div>
-            <button aria-label={t('关闭')} className="ui-icon-button ui-modal-close" disabled={saving} onClick={closeEditor} type="button"><X size={16} /></button>
-          </header>
-
-          <div className="ui-modal-body external-integration-form">
+  const editorContent = editor && activeDriver ? (
+          <div className={embedded ? "external-integration-form" : "ui-modal-body external-integration-form"}>
             {form.fields.filter(field => field.key !== 'enabled').map(field => <label key={field.key}>
               <span>{t(field.key === 'driverId' ? definition.typeLabel : field.label)}</span>
               <SettingsFieldControl field={{ ...field, options: field.key === 'driverId' ? drivers.map(driver => ({ label: driver.label, value: driver.id })) : field.options, placeholder: field.key === 'name' ? definition.namePlaceholder : field.placeholder }}
@@ -663,9 +584,11 @@ export function ExternalIntegrationSettings({
             ) : null}
             {editorError ? <p className="external-integration-modal-error wide" role="alert">{t(editorError)}</p> : null}
           </div>
-
-          <footer className="ui-modal-footer">
-            <button className="ui-button ui-button--neutral" disabled={saving} onClick={closeEditor} type="button">{t('取消')}</button>
+  ) : null;
+  const editorActions = editor && activeDriver ? (
+          <footer className={embedded ? "tool-configuration-actions" : "ui-modal-footer"}>
+            {editor.id ? <button className="ui-button ui-button--danger" disabled={saving || testing} type="button" onClick={() => { const item = items.find(item => item.id === editor.id); if (item) setDeleteTarget(item); }}><Trash2 size={15} />{t('删除')}</button> : null}
+            <button className="ui-button ui-button--neutral" disabled={saving} onClick={closeEditor} type="button">{t(embedded ? '返回列表' : '取消')}</button>
             <button className="ui-button ui-button--neutral" disabled={saving} onClick={() => void test()} type="button">
               {testing ? <X size={15} /> : integrationIcon(category, 15)}
               {t(testing ? '停止测试' : activeDriver.testLabel)}
@@ -675,8 +598,102 @@ export function ExternalIntegrationSettings({
               {t(saving ? '正在保存' : '保存')}
             </button>
           </footer>
-        </AppModal>
+  ) : null;
+
+  return (
+    <div className="external-integration-settings">
+      <div className="external-integration-toolbar">
+        <p>{t(definition.description)}</p>
+        <button className="ui-button ui-button--neutral" disabled={loading || !drivers.length} onClick={() => openEditor()} type="button">
+          <Plus size={15} />
+          {t(definition.addLabel)}
+        </button>
+      </div>
+
+      {permission ? (
+        <div className="external-integration-permission">
+          <div>
+            <strong>{t(permission.label)}</strong>
+            <span>{t(permission.description)}</span>
+          </div>
+          <button
+            aria-pressed={permission.enabled}
+            className={`settings-toggle${permission.enabled ? ' on' : ''}`}
+            onClick={() => permission.onChange(!permission.enabled)}
+            type="button"
+          >
+            <span />
+          </button>
+        </div>
       ) : null}
+
+      {error ? <p className="external-integration-error" role="alert">{t(error)}</p> : null}
+
+      {loading ? (
+        <div className="external-integration-loading"><Loader2 className="spin" size={16} />{t('正在读取配置')}</div>
+      ) : items.length ? (
+        <div className="external-integration-list">
+          {items.map((item) => {
+            const driver = drivers.find((candidate) => candidate.id === item.driverId);
+            return (
+              <div className="external-integration-row" key={item.id}>
+                <span className="external-integration-icon" aria-hidden="true">
+                  {integrationIcon(category, 17)}
+                </span>
+                <div className="external-integration-copy">
+                  <div>
+                    <strong>{item.name}</strong>
+                    <span className={item.enabled ? 'is-enabled' : 'is-disabled'}>{t(item.enabled ? '已启用' : '已停用')}</span>
+                  </div>
+                  <span>{t(driver?.label || item.driverId)} · {item.detailPreview}</span>
+                </div>
+                <div className="external-integration-actions">
+                  <SettingsFieldControl field={{ key: item.id, label: t('启用') + ' ' + item.name, control: 'boolean' }} value={item.enabled} disabled={updatingIds.has(item.id)} onChange={() => void toggle(item)} />
+                  <Button isIconOnly size="sm" variant="ghost" aria-label={t('配置') + ' · ' + item.name} onPress={() => openEditor(item)}><Settings size={17} /></Button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="external-integration-empty">
+          <span className="external-integration-icon" aria-hidden="true">
+            {integrationIcon(category, 18)}
+          </span>
+          <div><strong>{t(definition.emptyTitle)}</strong><span>{t(definition.emptyDescription)}</span></div>
+        </div>
+      )}
+
+      {editor && activeDriver ? (category === 'connector' && editor.id ? <McpToolSettings
+        integration={{ id: editor.id, name: editor.name, enabled: editor.enabled }} headers={headers} onClose={closeEditor}
+        connection={editorContent} connectionActions={editorActions} connectionBusy={saving || testing || deleting}
+        connectionDirty={JSON.stringify(editor) !== editorBaseline} /> : (
+        <IntegrationEditorFrame embedded={embedded}
+          ariaLabelledBy={`${category}-integration-modal-title`}
+          dialogClassName="ui-modal ui-modal--form external-integration-modal"
+          dismissable={!saving}
+          keyboardDismissable={!saving}
+          onClose={closeEditor}
+          size="wide"
+        >
+          {!embedded ? <header className="ui-modal-header">
+            <div className="ui-modal-heading ui-modal-heading--with-icon">
+              <span className="ui-modal-heading-icon external-integration-modal-icon" aria-hidden="true">
+                {integrationIcon(category, 18)}
+              </span>
+              <div className="ui-modal-heading-copy">
+                <h2 className="ui-modal-title" id={`${category}-integration-modal-title`}>{t(editor.id ? definition.editLabel : definition.addLabel)}</h2>
+                <p className="ui-modal-subtitle">{t(activeDriver.description)}</p>
+              </div>
+            </div>
+            <button aria-label={t('关闭')} className="ui-icon-button ui-modal-close" disabled={saving} onClick={closeEditor} type="button"><X size={16} /></button>
+          </header> : null}
+
+          {editorContent}
+
+          {editorActions}
+        </IntegrationEditorFrame>
+      )) : null}
 
       {deleteTarget ? (
         <ConfirmDeleteModal

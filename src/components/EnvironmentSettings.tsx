@@ -1,6 +1,6 @@
 'use client';
 
-import { integrationSettingsSections, browserRuntimeGroups, browserSettingsPages, envSettingGroup, envSettingDisplayTab, envSettingSectionId, browserSettingsPageFor, envSettingCardTitle, envSettingIsContextuallyVisible, type BrowserSettingsPage } from '@/config/settings-presentation';
+import { integrationSettingsSections, browserRuntimeGroups, envSettingGroup, envSettingDisplayTab, envSettingSectionId, envSettingCardTitle, envSettingIsContextuallyVisible } from '@/config/settings-presentation';
 import { SettingsDetailSection } from '@/components/SettingsDetailSection';
 import { SettingsFields, SettingsFieldControl, useSettingsForms } from '@/components/SettingsFields';
 import { useSettingsCatalog } from '@/components/useSettingsCatalog';
@@ -63,8 +63,7 @@ import type { SensitiveDataEvaluationCase } from '@/lib/sensitive-data-evaluatio
 import { WorkspaceSidebarArchiveRow } from '@/components/WorkspaceSidebarArchive';
 import { useWorkspaceBrand } from '@/brand/WorkspaceBrandProvider';
 import { ModelTypeSettings } from '@/components/ModelTypeSettings';
-import { ToolCapabilitySettings } from '@/components/ToolCapabilitySettings';
-import { toolCapabilitySettings, TOOL_CAPABILITY_SETTINGS_CHANGED_EVENT } from '@/lib/tool-capability-settings';
+import { toolCapabilitySettings, toolConfigurationTargets, TOOL_CAPABILITY_SETTINGS_CHANGED_EVENT } from '@/lib/tool-capability-settings';
 import { builtInMediaModels, createMediaTypeSettings, normalizeProviderMediaSettings, mediaModelTypeDefinitions, type MediaTypeSettings } from '@cjfclonedeep/capability-sdk/media/model-settings';
 import { type MediaModelKind, type MediaModelDriver } from '@cjfclonedeep/capability-sdk/media/models';
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
@@ -846,7 +845,6 @@ export function EnvironmentSettings({
   const [settingsSearchFocused, setSettingsSearchFocused] = useState(false);
   const [highlightedSettingKey, setHighlightedSettingKey] = useState('');
   const [activeSettingsSections, setActiveSettingsSections] = useState<Partial<Record<SettingsTab, string>>>({});
-  const [activeBrowserSettingsPage, setActiveBrowserSettingsPage] = useState<BrowserSettingsPage>('interaction');
   const [sensitiveDataTestInput, setSensitiveDataTestInput] = useState('');
   const [sensitiveDataTestResult, setSensitiveDataTestResult] = useState<SensitiveDataTestResult | null>(null);
   const sensitiveDataTestRequestRef = useRef(0);
@@ -2615,19 +2613,9 @@ export function EnvironmentSettings({
     && envSettingIsContextuallyVisible(setting, envValues)
   ));
   const visibleEnvGroups = groupVisibleEnvSettings(visibleEnvItems);
-  const browserEnvItems = visibleEnvItems.filter((setting) => envSettingSectionId(setting) === 'capability:browser');
-  const activeBrowserEnvItems = browserEnvItems.filter((setting) => browserSettingsPageFor(setting) === activeBrowserSettingsPage);
   const settingsSecondaryItems: SettingsSecondaryNavItem[] = [
     ...(activeTab === 'general' ? [{ id: 'general:appearance', label: t('基础设置') }] : []),
     ...(activeTab === 'sensitive-data' ? [{ id: 'sensitive:runtime', label: t('本地组件下载') }] : []),
-    ...(activeTab === 'capabilities' ? [
-      { id: 'capability:overview', label: t('工具开关'), meta: String(toolCapabilitySettings.length) },
-      { id: 'capability:components', label: t('工具组件') },
-      { id: 'capability:browser', label: t('浏览器') },
-      { id: 'integration:connector', label: t('MCP') },
-      { id: 'integration:communication', label: t('通信') },
-      { id: 'integration:data', label: t('数据') },
-    ] : []),
     ...visibleEnvGroups.filter((group) => !integrationSettingsSections[group.title] && !browserRuntimeGroups.has(group.title) && group.title !== '工具开关').map((group) => ({
       id: group.title,
       label: t(group.title),
@@ -2688,10 +2676,6 @@ export function EnvironmentSettings({
     if ('provider' in result && result.provider) selectProvider(result.provider as ModelProvider);
     if ('section' in result && result.section) {
       setActiveSettingsSections((current) => ({ ...current, [result.tab]: result.section }));
-      if (result.section === 'capability:browser') {
-        const setting = allEnvSettings.find((item) => item.item.key === result.key);
-        if (setting) setActiveBrowserSettingsPage(browserSettingsPageFor(setting));
-      }
     }
     setSettingsSearch('');
     setSettingsSearchFocused(false);
@@ -2711,6 +2695,35 @@ export function EnvironmentSettings({
         </SettingsGroupCard>
       ))}
     </div>;
+  }
+
+  function renderToolConfiguration(tool: string, query: string, onBusyChange: (busy: boolean) => void) {
+    const target = toolConfigurationTargets[tool];
+    const normalized = query.trim().toLocaleLowerCase();
+    const relevant = allEnvSettings.filter(setting => setting.definition?.hidden !== true
+      && envSettingDisplayTab(setting) === 'capabilities' && envSettingIsContextuallyVisible(setting, envValues)
+      && (envSettingSectionId(setting) === target || tool === 'file' && envSettingGroup(setting) === '数据与文件')
+      && !toolCapabilitySettings.some(item => item.envKey === setting.item.key)
+      && !['AGENT_TERMINAL_ENABLED', 'AGENT_COMPUTER_ENABLED', 'AGENT_CODE_SANDBOX_ENABLED'].includes(setting.item.key)
+      && (!normalized || (setting.item.key + ' ' + (setting.definition?.label || '') + ' ' + (setting.definition?.description || '')).toLocaleLowerCase().includes(normalized)));
+    const category = tool === 'communication' ? 'communication' : tool === 'data' ? 'data' : undefined;
+    return <>
+      {category ? <ExternalIntegrationSettings accessToken={adminSettingsAccessToken} category={category} embedded onBusyChange={onBusyChange}
+        permission={category === 'communication' ? {
+          enabled: communicationSendSetting?.item.value === 'true', label: '允许 Agent 请求发送消息',
+          description: '更改会自动保存；每次正式发送仍会暂停并等待你的确认。',
+          onChange(enabled) { if (communicationSendSetting) update(communicationSendSetting.index, { value: String(enabled) }); },
+        } : {
+          enabled: dataWriteSetting?.item.value === 'true', label: '允许 Agent 执行数据写入',
+          description: '默认只允许查询；更改会自动保存，每次写操作仍需要确认。',
+          onChange(enabled) { if (dataWriteSetting) update(dataWriteSetting.index, { value: String(enabled) }); },
+        }} /> : null}
+      {groupEnvSettingCards(relevant).map((group, index) => <details className="tool-configuration-group" open={index < 2 || Boolean(normalized) || group.items.some(setting => setting.item.key === highlightedSettingKey)} key={group.title}>
+        <summary><ChevronDown aria-hidden="true" size={15} />{t(group.title)}<small>{group.items.length}</small></summary>
+        <div>{renderEnvSettingList(group.items)}</div>
+      </details>)}
+      {!category && !relevant.length ? <p className="tool-configuration-empty">{t(normalized ? '没有匹配的配置' : '此工具没有额外的常用配置。')}</p> : null}
+    </>;
   }
 
   return (
@@ -3003,7 +3016,14 @@ export function EnvironmentSettings({
 
           {activeTab === 'accounts' ? renderLoginAccountsPanel() : null}
 
-          {activeTab !== 'general' && activeTab !== 'model' && activeTab !== 'skills' && activeTab !== 'memory' && activeTab !== 'accounts' && activeTab !== 'knowledge' ? (
+          {activeTab === 'capabilities' ? <ManagedToolSettings
+            accessToken={adminSettingsAccessToken} items={items} onChange={updateToolCapability}
+            saving={savingEnv} onSave={saveEnv} renderConfiguration={renderToolConfiguration}
+            openTool={Object.keys(toolConfigurationTargets).find(name => toolConfigurationTargets[name] === activeSettingsSections.capabilities)}
+            onConfigurationClosed={() => setActiveSettingsSections(current => ({ ...current, capabilities: 'capability:overview' }))}
+          /> : null}
+
+          {activeTab !== 'capabilities' && activeTab !== 'general' && activeTab !== 'model' && activeTab !== 'skills' && activeTab !== 'memory' && activeTab !== 'accounts' && activeTab !== 'knowledge' ? (
             <section>
               <div className="settings-detail-workspace">
                 <SettingsSecondaryNav
@@ -3013,79 +3033,10 @@ export function EnvironmentSettings({
                   onChange={(section) => setActiveSettingsSections((current) => ({ ...current, [activeTab]: section }))}
                 />
                 <div className="settings-detail-content">
-                  {activeSettingsSection === 'capability:overview' ? (
-                    <ToolCapabilitySettings
-                      disabled={loading}
-                      items={items}
-                      onChange={updateToolCapability}
-                      onConfigure={(section) => setActiveSettingsSections((current) => ({ ...current, capabilities: section }))}
-                    />
-                  ) : null}
-                  {activeSettingsSection === 'capability:components' ? <ManagedToolSettings accessToken={adminSettingsAccessToken} /> : null}
-                  {activeSettingsSection === 'capability:browser' ? (
-                    <section className="settings-capability-page">
-                      <header className="settings-capability-head">
-                        <h3>{t('浏览器')}</h3>
-                        <p>{t('管理浏览器操作、实例和实时预览。')}</p>
-                      </header>
-                      <nav aria-label={t('浏览器配置分组')} className="settings-capability-tabs">
-                        {browserSettingsPages.map((page) => (
-                          <button
-                            aria-pressed={activeBrowserSettingsPage === page.id}
-                            className={activeBrowserSettingsPage === page.id ? 'active' : undefined}
-                            key={page.id}
-                            onClick={() => setActiveBrowserSettingsPage(page.id)}
-                            type="button"
-                          >{t(page.label)}</button>
-                        ))}
-                      </nav>
-                      {renderEnvSettingCards(activeBrowserEnvItems)}
-                    </section>
-                  ) : null}
                   {activeSettingsSection === 'sensitive:test' ? renderSensitiveDataToolPanel('test') : null}
                   {activeSettingsSection === 'sensitive:runtime' ? <SensitiveDataRuntimeSettings accessToken={adminSettingsAccessToken} /> : null}
                   {activeSettingsSection === 'sensitive:evaluation' ? renderSensitiveDataToolPanel('evaluation') : null}
 
-                  {activeSettingsSection === 'integration:connector' ? (
-                    <SettingsDetailSection heading={t('MCP')} description={t('连接远程或本地 MCP，配置启动参数、环境变量与授权。')}>
-                      <ExternalIntegrationSettings accessToken={adminSettingsAccessToken} category="connector" />
-                      {renderEnvSettingList(activeIntegrationSettings)}
-                    </SettingsDetailSection>
-                  ) : null}
-                  {activeSettingsSection === 'integration:communication' ? (
-                    <SettingsDetailSection heading={t('通信')} description={t('消息发送保持逐次确认，避免意外外发。')}>
-                      <ExternalIntegrationSettings
-                        accessToken={adminSettingsAccessToken}
-                        category="communication"
-                        permission={{
-                          enabled: communicationSendSetting?.item.value === 'true',
-                          label: '允许 Agent 请求发送消息',
-                          description: '更改会自动保存；每次正式发送仍会暂停并等待你的确认。',
-                          onChange(enabled) {
-                            if (communicationSendSetting) update(communicationSendSetting.index, { value: String(enabled) });
-                          },
-                        }}
-                      />
-                      {renderEnvSettingList(activeIntegrationSettings)}
-                    </SettingsDetailSection>
-                  ) : null}
-                  {activeSettingsSection === 'integration:data' ? (
-                    <SettingsDetailSection heading={t('数据')} description={t('统一管理数据源，并单独控制写入权限。')}>
-                      <ExternalIntegrationSettings
-                        accessToken={adminSettingsAccessToken}
-                        category="data"
-                        permission={{
-                          enabled: dataWriteSetting?.item.value === 'true',
-                          label: '允许 Agent 执行数据写入',
-                          description: '默认只允许查询；更改会自动保存，每次写操作仍需要确认。',
-                          onChange(enabled) {
-                            if (dataWriteSetting) update(dataWriteSetting.index, { value: String(enabled) });
-                          },
-                        }}
-                      />
-                      {renderEnvSettingList(activeIntegrationSettings)}
-                    </SettingsDetailSection>
-                  ) : null}
                   {activeEnvGroup && groupEnvSettingCards(activeEnvGroup.items).length > 1 ? (
                     <section className="settings-capability-page">
                       <header className="settings-capability-head">

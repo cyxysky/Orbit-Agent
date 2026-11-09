@@ -3,8 +3,8 @@ import { z } from 'zod';
 import { connectorConfigurationPatchSchema, connectorSettingFields, mergeConnectorConfiguration,
   publicConnectorConfiguration, type AgentConnector, type ConnectorConfigurationDescriptor } from '@cjfclonedeep/capability-sdk/integrations/connectors';
 import { createExternalIntegrationConnector } from '@/server/integrations/external-integration-drivers';
-import { resolveExternalIntegration, upsertExternalIntegration, type ResolvedExternalIntegration } from '@/server/integrations/external-integration-vault';
-import { connectorDefaultsKey, connectorToolDefaults, connectorDefaultsRevision } from '@/server/integrations/connector-tool-defaults';
+import { resolveExternalIntegration, updateExternalIntegrationConfiguration, type ResolvedExternalIntegration } from '@/server/integrations/external-integration-vault';
+import { connectorDefaultsKey, connectorDisabledToolsKey, connectorDisabledTools, connectorToolDefaults, connectorDefaultsRevision } from '@/server/integrations/connector-tool-defaults';
 import { ApiRequestError } from '@/server/http/api-request';
 
 export const toolSettingsQuerySchema = z.object({
@@ -12,16 +12,19 @@ export const toolSettingsQuerySchema = z.object({
   target: z.string().min(1).max(160).optional(), q: z.string().max(200).default(''),
   offset: z.coerce.number().int().min(0).max(10_000).default(0),
 });
-export const toolSettingsSaveSchema = connectorConfigurationPatchSchema.extend({
+const defaultsSaveSchema = connectorConfigurationPatchSchema.extend({
   id: z.string().uuid(), scope: z.enum(['tool', 'service']), target: z.string().min(1).max(160),
 }).strict();
+export const toolSettingsSaveSchema = z.union([defaultsSaveSchema, z.object({
+  id: z.string().uuid(), action: z.literal('set-enabled'), target: z.string().min(1).max(160), enabled: z.boolean(),
+}).strict()]);
 type Query = z.infer<typeof toolSettingsQuerySchema>;
 
 async function withConnector<T>(id: string, signal: AbortSignal | undefined,
   callback: (integration: ResolvedExternalIntegration, connector: AgentConnector, context: { invocationId: string; abortSignal?: AbortSignal }) => Promise<T>) {
   const integration = await resolveExternalIntegration(id);
   if (!integration || integration.category !== 'connector') throw new ApiRequestError('MCP 集成不存在。', { status: 404 });
-  const connector = createExternalIntegrationConnector(integration, 30_000);
+  const connector = createExternalIntegrationConnector(integration, 30_000, { administration: true });
   try { return await callback(integration, connector, { invocationId: randomUUID(), abortSignal: signal }); }
   finally { await Promise.resolve(connector.dispose?.()).catch(() => undefined); }
 }
@@ -48,7 +51,8 @@ export async function readIntegrationToolSettings(query: Query, signal?: AbortSi
       const q = query.q.trim().toLocaleLowerCase();
       const filtered = targets.filter(target => !q || `${target.id} ${target.title}`.toLocaleLowerCase().includes(q));
       return { items: filtered.slice(query.offset, query.offset + 20).map(target => ({ id: target.id, title: target.title,
-        description: target.description?.slice(0, 2000), writable: target.writable, fieldCount: fieldsFor(target).fields.length })),
+        description: target.description?.slice(0, 2000), writable: target.writable, fieldCount: fieldsFor(target).fields.length,
+        enabled: query.scope === 'tool' ? !connectorDisabledTools(integration.configuration).has(target.id) : undefined })),
         total: filtered.length, offset: query.offset, pageSize: 20 };
     }
     const descriptor = targets.find(target => target.id === query.target);
@@ -61,6 +65,18 @@ export async function readIntegrationToolSettings(query: Query, signal?: AbortSi
   });
 }
 export async function saveIntegrationToolSettings(body: z.infer<typeof toolSettingsSaveSchema>, signal?: AbortSignal) {
+  if ('action' in body) {
+    const integration = await resolveExternalIntegration(body.id);
+    if (!integration || integration.category !== 'connector') throw new ApiRequestError('MCP 集成不存在。', { status: 404 });
+    const updated = await updateExternalIntegrationConfiguration(body.id, current => {
+      const disabled = connectorDisabledTools(current.configuration);
+      if (body.enabled) disabled.delete(body.target); else disabled.add(body.target);
+      const json = JSON.stringify([...disabled].sort());
+      if (disabled.size > 1000 || json.length > 20_000) throw new ApiRequestError('停用工具数量超出此服务的配置限制。');
+      return { ...current.configuration, [connectorDisabledToolsKey]: json };
+    });
+    return { enabled: !connectorDisabledTools(updated.configuration).has(body.target) };
+  }
   return withConnector(body.id, signal, async (integration, connector, context) => {
     const descriptor = (await descriptors(connector, body.scope, context)).find(target => target.id === body.target);
     if (!descriptor || !descriptor.writable) throw new ApiRequestError('此配置不可写。');
@@ -68,7 +84,7 @@ export async function saveIntegrationToolSettings(body: z.infer<typeof toolSetti
     if (fields.unsupported) throw new ApiRequestError(fields.unsupported);
     if (body.scope === 'service') return { state: await connector.settings!.write(descriptor.id,
       { values: body.values, clearKeys: body.clearKeys, expectedRevision: body.expectedRevision }, context) };
-    const updated = await upsertExternalIntegration({ ...integration, configuration(current) {
+    const updated = await updateExternalIntegrationConfiguration(body.id, current => {
       if (!current || current.updatedAt !== integration.updatedAt || connectorDefaultsRevision(current.configuration) !== body.expectedRevision) {
         throw new ApiRequestError('配置已被修改，请重新加载后保存。', { status: 409 });
       }
@@ -82,7 +98,7 @@ export async function saveIntegrationToolSettings(body: z.infer<typeof toolSetti
       const json = JSON.stringify(defaults);
       if (json.length > 20_000) throw new ApiRequestError('此 MCP 集成的参数默认值总大小不能超过 20,000 字符。');
       return { ...current.configuration, [connectorDefaultsKey]: json };
-    } });
+    });
     return { state: defaultState(updated, descriptor) };
   });
 }

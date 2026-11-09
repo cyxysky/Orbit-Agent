@@ -183,6 +183,18 @@ export async function upsertExternalIntegration(input: {
   });
 }
 
+export async function updateExternalIntegrationConfiguration(id: string, update: (current: ResolvedExternalIntegration) => ExternalIntegrationConfiguration) {
+  return mutateStore(items => {
+    const index = items.findIndex(item => item.id === id);
+    if (index < 0) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '外部集成不存在。');
+    const previous = items[index];
+    const configuration = update(resolveStored(previous));
+    const record = { ...previous, configurationEnvelope: encryptConfiguration(configuration, previous), updatedAt: new Date().toISOString() };
+    items[index] = record;
+    return resolveStored(record);
+  });
+}
+
 export async function deleteExternalIntegration(id: string) {
   return mutateStore((items) => {
     const index = items.findIndex((item) => item.id === id);
