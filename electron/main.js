@@ -22,7 +22,7 @@ if (!app.isPackaged) {
   // both processes use the same WEBPILOT_BASE_PATH and runtime settings.
   loadDevelopmentEnvironment(process.cwd());
 }
-const { applyOrbitEnvironment } = require(app.isPackaged
+const { applyOrbitEnvironment, apiStartupTimeoutMs } = require(app.isPackaged
   ? path.join(process.resourcesPath, 'server', 'orbit-environment.js')
   : '../server/orbit-environment');
 applyOrbitEnvironment();
@@ -2527,7 +2527,7 @@ async function startServer(appDataDir) {
     basePath,
   );
   localServerUrl = url;
-  await waitForHttp(serverRouteUrl(url, basePath, '/browser-chat'), 60_000, 3);
+  await waitForHttp(serverRouteUrl(url, basePath, '/browser-chat'), apiStartupTimeoutMs(env) + 60_000, 3);
   return url;
 }
 

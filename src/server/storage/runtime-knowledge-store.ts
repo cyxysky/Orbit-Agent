@@ -3,11 +3,12 @@ import type { SkillRecord } from '@/server/ai/schemas/runtime.schema';
 
 /** Small metadata reads detect committed changes, including other server processes. */
 export async function readRuntimeKnowledgeRevisions(userId: string, domain: string) {
-  const rows = await queryDatabase<{ scope: string; kind: string; revision: string | number }>(
-    'SELECT scope, kind, revision FROM runtime_knowledge_revision WHERE scope IN (?, ?) ORDER BY scope, kind',
-    [`user:${userId}`, 'shared'],
-  );
-  const revision = (kind: string) => JSON.stringify([domain, ...rows.filter((row) => row.kind === kind).map((row) => [row.scope, String(row.revision)])]);
+  const scopes = ['shared', `user:${userId}`];
+  const keys = ['skills', 'memories'].flatMap(kind => scopes.map(scope => `knowledge-revision:${kind}:${scope}`));
+  const rows = await queryDatabase<{ key: string; value: string }>(
+    'SELECT key,value FROM runtime_meta WHERE key IN (?, ?, ?, ?)', keys);
+  const values = new Map(rows.map(row => [row.key, row.value]));
+  const revision = (kind: string) => JSON.stringify([domain, ...scopes.map(scope => [scope, values.get(`knowledge-revision:${kind}:${scope}`) || '0'])]);
   return { skills: revision('skills'), memories: revision('memories') };
 }
 

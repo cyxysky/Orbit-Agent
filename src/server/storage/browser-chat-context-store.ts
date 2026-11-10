@@ -2,7 +2,7 @@ import { conversationRecords } from '@/server/storage/record-sources';
 import { databaseDriver, sqliteDatabasePath, queryDatabase } from '@/server/db/database';
 import type { DatabaseWriteStatement } from './database-write-queue';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
-import { runtimeOwnerStatement } from './runtime-owner';
+import { encodeConversationJson, storedJsonText, type StoredJsonRow } from './stored-json';
 
 
 type ContextView = {
@@ -30,10 +30,15 @@ function cacheKey(sessionId: string) {
 export function markBrowserChatContextWritten<T>(sessionId: string, snapshot: T) {
   const context = (snapshot as ContextSnapshot).modelContext;
   if (!context?.records) return;
+  markBrowserChatContextCommitted(sessionId, Object.keys(context.records).map(id => `context:${id}`));
+}
+
+export function markBrowserChatContextCommitted(sessionId: string, keys: readonly string[]) {
+  if (!keys.length) return;
   const key = cacheKey(sessionId);
   const known = committedRecords.get(key) || new Set<string>();
   forgetCommittedRecords(key);
-  for (const id of Object.keys(context.records)) known.add(id);
+  for (const id of keys) known.add(id);
   // This is only an insert-deduplication cache. Eviction safely falls back to ON CONFLICT.
   if (known.size > maxCommittedRecordIds) return;
   committedRecords.set(key, known);
@@ -44,28 +49,32 @@ export function markBrowserChatContextWritten<T>(sessionId: string, snapshot: T)
 /** Header and immutable records must be committed in the SAME transaction. */
 export function splitBrowserChatContextSnapshot<T>(sessionId: string, snapshot: T) {
   const context = (snapshot as ContextSnapshot).modelContext;
-  if (context?.version !== 2 || !context.records) return { snapshot, statements: [] as DatabaseWriteStatement[] };
+  if (context?.version !== 2 || !context.records) return { snapshot, statements: [] as DatabaseWriteStatement[], committedKeys: [] as string[] };
   const { records, ...index } = context;
   const known = committedRecords.get(cacheKey(sessionId));
-  const compactions: DatabaseWriteStatement[] = Object.entries({ main: context, ...context.branches }).flatMap(([scopeId, view]) => {
-    let state: { version?: number; epoch?: number };
-    try { state = JSON.parse(view.continuationSummary || '{}'); } catch { return []; }
-    if (state.version !== 3 || !state.epoch) return [];
-    return [{ sql: `INSERT INTO execution_record (session_id, scope_id, kind, id, revision, record_json) VALUES (?, ?, 'compaction', ?, ?, ?) ON CONFLICT(session_id, scope_id, kind, id) DO NOTHING`,
-      params: [sessionId, scopeId, String(state.epoch), state.epoch, JSON.stringify({ active: view.active, continuationSummary: view.continuationSummary })] }];
-  });
+  const recordIds = Object.keys(records);
+  const manifests = [context.lastRequest, ...Object.values(context.branches || {}).map(branch => branch.lastRequest)]
+    .flatMap(manifest => manifest ? [manifest] : []);
   return {
-    snapshot: { ...snapshot, modelContext: { ...index, recordIds: Object.keys(records), externalRecords: true } },
-    statements: [...(compactions.length ? [runtimeOwnerStatement(sessionId)] : []), ...compactions, ...Object.entries(records).filter(([id]) => !known?.has(id)).map(([id, value]) => ({
-      sql: `INSERT INTO conversation_record (session_id, kind, id, record_json) VALUES (?, 'context', ?, ?)
-        ON CONFLICT(session_id, kind, id) DO NOTHING`,
-      params: [sessionId, id, JSON.stringify(value)],
-    })), ...[context.lastRequest, ...Object.values(context.branches || {}).map((branch) => branch.lastRequest)]
-      .flatMap((manifest) => manifest ? [{
-        sql: `INSERT INTO conversation_record (session_id, kind, id, record_json) VALUES (?, 'request', ?, ?)
+    snapshot: { ...snapshot, modelContext: { ...index, recordIds, externalRecords: true } },
+    committedKeys: [...recordIds.map(id => `context:${id}`), ...manifests.map(manifest => `request:${manifest.id}`)],
+    statements: [...Object.entries(records).filter(([id]) => !known?.has(`context:${id}`)).map(([id, value]) => {
+      const stored = encodeConversationJson('context', JSON.stringify(value));
+      return {
+        sql: `INSERT INTO conversation_record (session_id, kind, id, record_json, record_gzip) VALUES (?, 'context', ?, ?, ?)
           ON CONFLICT(session_id, kind, id) DO NOTHING`,
-        params: [sessionId, manifest.id, JSON.stringify(manifest)],
-      }] : [])],
+        params: [sessionId, id, stored.record_json, stored.record_gzip],
+      };
+    }), ...manifests
+      .flatMap((manifest) => {
+        if (!manifest || known?.has(`request:${manifest.id}`)) return [];
+        const stored = encodeConversationJson('request', JSON.stringify(manifest));
+        return [{
+          sql: `INSERT INTO conversation_record (session_id, kind, id, record_json, record_gzip) VALUES (?, 'request', ?, ?, ?)
+            ON CONFLICT(session_id, kind, id) DO NOTHING`,
+          params: [sessionId, manifest.id, stored.record_json, stored.record_gzip],
+        }];
+      })],
   };
 }
 
@@ -74,11 +83,11 @@ export async function hydrateBrowserChatContextSnapshot<T>(sessionId: string, sn
   if (context?.version !== 2 || !context.externalRecords) return snapshot;
   const records: Record<string, unknown> = {};
   const readRecords = async (ids?: string[]) => {
-    const rows = await queryDatabase<{ id: string; record_json: string }>(
-      `SELECT id, record_json FROM ${conversationRecords('context')} WHERE session_id = ?${ids ? ` AND id IN (${ids.map(() => '?').join(',')})` : ''}`,
+    const rows = await queryDatabase<StoredJsonRow & { id: string }>(
+      `SELECT id, record_json, record_gzip FROM ${conversationRecords('context')} WHERE session_id = ?${ids ? ` AND id IN (${ids.map(() => '?').join(',')})` : ''}`,
       [sessionId, ...(ids || [])],
     );
-    for (const row of rows) records[row.id] = JSON.parse(row.record_json);
+    for (const row of rows) records[row.id] = JSON.parse(storedJsonText(row));
   };
   if (context.recordIds) {
     // Do not materialize archived records only to discard them in JavaScript.

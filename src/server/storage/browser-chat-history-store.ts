@@ -1,6 +1,7 @@
 import { conversationRecords } from '@/server/storage/record-sources';
 import { hydrateBrowserChatContextSnapshot } from './browser-chat-context-store';
 import { queryDatabase, queryDatabaseOne } from '@/server/db/database';
+import { storedJsonText, type StoredJsonRow } from './stored-json';
 
 export type BrowserChatHistoryKind = 'logs' | 'messages' | 'steps';
 
@@ -27,7 +28,7 @@ type HistoryCursor = {
   value: number | string;
 };
 
-type JsonHistoryRow = {
+type JsonHistoryRow = StoredJsonRow & {
   id: string;
   record_json: string;
   sort_value: number | string;
@@ -71,7 +72,7 @@ function jsonPage<T>(rows: JsonHistoryRow[], kind: BrowserChatHistoryKind, limit
   const selected = rows.slice(0, limit);
   const oldest = selected.at(-1);
   const items = selected
-    .map((row) => parseJson<T>(row.record_json))
+    .map((row) => parseJson<T>(storedJsonText(row)))
     .filter((item): item is T => item !== undefined)
     .reverse();
   return {
@@ -229,7 +230,7 @@ export async function readBrowserChatLogsPage<T>(
   }
   params.push(limit + 1);
   const rows = await queryDatabase<JsonHistoryRow>(`
-    SELECT id, time AS sort_value, record_json
+    SELECT id, time AS sort_value, record_json, record_gzip
     FROM ${conversationRecords('log')}
     WHERE session_id = ? ${messageWhere} ${cursorWhere}
     ORDER BY time DESC, id DESC

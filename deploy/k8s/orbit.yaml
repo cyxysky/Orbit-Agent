@@ -22,6 +22,7 @@ data:
   ORBIT_CROSS_SITE_MOUNT: "false"
   ORBIT_ADMIN_SETTINGS_PASSWORD_ENABLED: "true"
   ORBIT_API_HEAP_MB: "512"
+  ORBIT_API_STARTUP_TIMEOUT_MS: "600000"
   ORBIT_EXECUTION_HEAP_MB: "1536"
   ORBIT_CODE_SANDBOX_SERVICE_URL: http://127.0.0.1:18100
   APP_DATA_DIR: /var/lib/orbit
@@ -116,7 +117,8 @@ spec:
             tcpSocket:
               port: app-http
             periodSeconds: 5
-            failureThreshold: 60
+            # API migrations may use the configured 10-minute startup window.
+            failureThreshold: 132
           readinessProbe:
             tcpSocket:
               port: app-http

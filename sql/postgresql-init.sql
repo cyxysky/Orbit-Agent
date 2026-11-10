@@ -100,20 +100,6 @@ CREATE INDEX IF NOT EXISTS login_account_user_domain_idx ON login_account(user_i
 
 CREATE INDEX IF NOT EXISTS login_account_updated_at_idx ON login_account(updated_at DESC);
 
-CREATE TABLE IF NOT EXISTS websocket_ticket (
-    id TEXT PRIMARY KEY,
-    token_hash TEXT NOT NULL UNIQUE,
-    user_id TEXT NOT NULL,
-    session_id TEXT,
-    scope TEXT NOT NULL,
-    origin TEXT,
-    expires_at TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    consumed_at TEXT
-  );
-
-CREATE INDEX IF NOT EXISTS websocket_ticket_token_idx ON websocket_ticket(token_hash, expires_at);
-
 CREATE TABLE IF NOT EXISTS automation_case (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
@@ -177,22 +163,6 @@ CREATE INDEX IF NOT EXISTS automation_run_lease_idx ON automation_run(status, le
 
 CREATE UNIQUE INDEX IF NOT EXISTS automation_run_occurrence_idx ON automation_run(schedule_id, occurrence_key) WHERE schedule_id IS NOT NULL AND occurrence_key IS NOT NULL;
 
-CREATE TABLE IF NOT EXISTS api_idempotency (
-    user_id TEXT NOT NULL,
-    scope TEXT NOT NULL,
-    idempotency_key TEXT NOT NULL,
-    request_hash TEXT NOT NULL,
-    state TEXT NOT NULL,
-    status_code INTEGER,
-    response_json TEXT,
-    expires_at TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    PRIMARY KEY (user_id, scope, idempotency_key)
-  );
-
-CREATE INDEX IF NOT EXISTS api_idempotency_expires_idx ON api_idempotency(expires_at);
-
 CREATE TABLE IF NOT EXISTS browser_domain_cookie (
     user_id TEXT NOT NULL,
     domain TEXT NOT NULL,
@@ -211,34 +181,6 @@ INSERT INTO typeorm_migration("timestamp", "name") VALUES (1788307200000, 'Initi
 INSERT INTO typeorm_migration("timestamp", "name") VALUES (1788566400000, 'BrowserChatContextRecords1788566400000');
 
 -- RuntimeReadIndexes1788652800000
-
-CREATE TABLE runtime_knowledge_revision (scope TEXT NOT NULL, kind TEXT NOT NULL, revision BIGINT NOT NULL, PRIMARY KEY(scope,kind));
-
-CREATE FUNCTION webpilot_revision_skill() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
-          IF TG_OP <> 'INSERT' THEN INSERT INTO runtime_knowledge_revision(scope,kind,revision) VALUES ('user:' || OLD.user_id, 'skills', 1)
-        ON CONFLICT(scope,kind) DO UPDATE SET revision=runtime_knowledge_revision.revision+1;
-        INSERT INTO runtime_knowledge_revision(scope,kind,revision) SELECT 'shared', 'skills', 1 WHERE OLD.shared = true
-        ON CONFLICT(scope,kind) DO UPDATE SET revision=runtime_knowledge_revision.revision+1; END IF;
-          IF TG_OP <> 'DELETE' THEN INSERT INTO runtime_knowledge_revision(scope,kind,revision) VALUES ('user:' || NEW.user_id, 'skills', 1)
-        ON CONFLICT(scope,kind) DO UPDATE SET revision=runtime_knowledge_revision.revision+1;
-        INSERT INTO runtime_knowledge_revision(scope,kind,revision) SELECT 'shared', 'skills', 1 WHERE NEW.shared = true
-        ON CONFLICT(scope,kind) DO UPDATE SET revision=runtime_knowledge_revision.revision+1; END IF;
-          RETURN NULL; END $$;
-
-CREATE TRIGGER webpilot_revision_skill AFTER INSERT OR UPDATE OR DELETE ON skill FOR EACH ROW EXECUTE FUNCTION webpilot_revision_skill();
-
-CREATE FUNCTION webpilot_revision_personal_memory_item() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
-          IF TG_OP <> 'INSERT' THEN INSERT INTO runtime_knowledge_revision(scope,kind,revision) VALUES ('user:' || OLD.user_id, 'memories', 1)
-        ON CONFLICT(scope,kind) DO UPDATE SET revision=runtime_knowledge_revision.revision+1;
-        INSERT INTO runtime_knowledge_revision(scope,kind,revision) SELECT 'shared', 'memories', 1 WHERE OLD.shared = true
-        ON CONFLICT(scope,kind) DO UPDATE SET revision=runtime_knowledge_revision.revision+1; END IF;
-          IF TG_OP <> 'DELETE' THEN INSERT INTO runtime_knowledge_revision(scope,kind,revision) VALUES ('user:' || NEW.user_id, 'memories', 1)
-        ON CONFLICT(scope,kind) DO UPDATE SET revision=runtime_knowledge_revision.revision+1;
-        INSERT INTO runtime_knowledge_revision(scope,kind,revision) SELECT 'shared', 'memories', 1 WHERE NEW.shared = true
-        ON CONFLICT(scope,kind) DO UPDATE SET revision=runtime_knowledge_revision.revision+1; END IF;
-          RETURN NULL; END $$;
-
-CREATE TRIGGER webpilot_revision_personal_memory_item AFTER INSERT OR UPDATE OR DELETE ON personal_memory_item FOR EACH ROW EXECUTE FUNCTION webpilot_revision_personal_memory_item();
 
 INSERT INTO typeorm_migration("timestamp", "name") VALUES (1788652800000, 'RuntimeReadIndexes1788652800000');
 
@@ -260,29 +202,13 @@ INSERT INTO typeorm_migration("timestamp", "name") VALUES (1788832800000, 'Commu
 
 -- PersonalMemoryReceipts1789084800000
 
-CREATE TABLE personal_memory_receipt (
-      user_id TEXT NOT NULL,
-      source_key TEXT NOT NULL,
-      report_json TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      PRIMARY KEY (user_id, source_key)
-    );
-
 INSERT INTO typeorm_migration("timestamp", "name") VALUES (1789084800000, 'PersonalMemoryReceipts1789084800000');
 
 -- HybridRuntime1790000200000
 
-CREATE TABLE agent_memory_candidate (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, session_id TEXT NOT NULL REFERENCES browser_chat_session(id) ON DELETE CASCADE, source_key TEXT NOT NULL, status TEXT NOT NULL, record_json TEXT NOT NULL, UNIQUE(user_id, source_key));
-
-CREATE TABLE agent_memory_job (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, session_id TEXT NOT NULL REFERENCES browser_chat_session(id) ON DELETE CASCADE, status TEXT NOT NULL, attempts INTEGER NOT NULL, available_at BIGINT NOT NULL, lease_until BIGINT NOT NULL, lease_id TEXT, payload_json TEXT NOT NULL, error TEXT);
-
 INSERT INTO typeorm_migration("timestamp", "name") VALUES (1790000200000, 'HybridRuntime1790000200000');
 
 -- MemoryJobResults1790600000000
-
-ALTER TABLE agent_memory_job ADD COLUMN result_json TEXT;
-
-CREATE INDEX agent_memory_job_pending ON agent_memory_job (status, available_at);
 
 INSERT INTO typeorm_migration("timestamp", "name") VALUES (1790600000000, 'MemoryJobResults1790600000000');
 
@@ -346,5 +272,85 @@ CREATE FUNCTION orbit_index_message_files() RETURNS trigger LANGUAGE plpgsql AS 
 CREATE TRIGGER orbit_message_files AFTER INSERT OR UPDATE OF record_json ON conversation_record FOR EACH ROW WHEN (NEW.kind='message') EXECUTE FUNCTION orbit_index_message_files();
 
 INSERT INTO typeorm_migration("timestamp", "name") VALUES (1794268800000, 'ConsolidatedRecords1794268800000');
+
+-- CompactOperationalStorage1794272400000
+
+CREATE TABLE memory_operation (
+      user_id TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('candidate','job','receipt')), id TEXT NOT NULL,
+      session_id TEXT REFERENCES browser_chat_session(id) ON DELETE CASCADE,
+      status TEXT NOT NULL, record_json TEXT NOT NULL DEFAULT '{}', result_json TEXT, error TEXT,
+      attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0), available_at BIGINT NOT NULL DEFAULT 0,
+      lease_until BIGINT NOT NULL DEFAULT 0, lease_id TEXT, created_at TEXT NOT NULL DEFAULT '',
+      PRIMARY KEY(user_id,kind,id),
+      CHECK ((kind='receipt' AND session_id IS NULL AND status='completed') OR
+        (kind='candidate' AND session_id IS NOT NULL AND status IN ('candidate','approved','deleted')) OR
+        (kind='job' AND session_id IS NOT NULL AND status IN ('queued','running','completed','failed')))
+    );
+
+CREATE INDEX memory_operation_session ON memory_operation(session_id,user_id,kind,status,available_at DESC);
+
+CREATE INDEX memory_operation_pending ON memory_operation(status,available_at) WHERE kind='job';
+
+CREATE INDEX memory_operation_lease ON memory_operation(user_id,lease_until) WHERE kind='job' AND status='running';
+
+CREATE TABLE request_record (
+      user_id TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('ticket','idempotency')), scope TEXT NOT NULL, id TEXT NOT NULL,
+      token_hash TEXT, session_id TEXT, origin TEXT, request_hash TEXT,
+      state TEXT NOT NULL, status_code INTEGER, response_json TEXT,
+      expires_at TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+      PRIMARY KEY(user_id,kind,scope,id),
+      CHECK ((kind='ticket' AND token_hash IS NOT NULL AND state='issued') OR
+        (kind='idempotency' AND request_hash IS NOT NULL AND state IN ('pending','completed')))
+    );
+
+CREATE UNIQUE INDEX request_record_token ON request_record(token_hash) WHERE kind='ticket';
+
+CREATE INDEX request_record_expiry ON request_record(expires_at);
+
+DROP TRIGGER IF EXISTS webpilot_revision_skill ON skill;
+
+DROP FUNCTION IF EXISTS webpilot_revision_skill();
+
+CREATE FUNCTION orbit_revision_skill() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+          IF TG_OP <> 'INSERT' THEN INSERT INTO runtime_meta(key,value,updated_at)
+        VALUES ('knowledge-revision:skills:user:' || OLD.user_id,'1',CAST(CURRENT_TIMESTAMP AS TEXT))
+        ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(runtime_meta.value AS BIGINT)+1 AS TEXT),updated_at=excluded.updated_at;
+        INSERT INTO runtime_meta(key,value,updated_at)
+        SELECT 'knowledge-revision:skills:shared','1',CAST(CURRENT_TIMESTAMP AS TEXT) WHERE OLD.shared=true
+        ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(runtime_meta.value AS BIGINT)+1 AS TEXT),updated_at=excluded.updated_at; END IF;
+          IF TG_OP <> 'DELETE' THEN INSERT INTO runtime_meta(key,value,updated_at)
+        VALUES ('knowledge-revision:skills:user:' || NEW.user_id,'1',CAST(CURRENT_TIMESTAMP AS TEXT))
+        ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(runtime_meta.value AS BIGINT)+1 AS TEXT),updated_at=excluded.updated_at;
+        INSERT INTO runtime_meta(key,value,updated_at)
+        SELECT 'knowledge-revision:skills:shared','1',CAST(CURRENT_TIMESTAMP AS TEXT) WHERE NEW.shared=true
+        ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(runtime_meta.value AS BIGINT)+1 AS TEXT),updated_at=excluded.updated_at; END IF; RETURN NULL; END $$;
+
+CREATE TRIGGER orbit_revision_skill AFTER INSERT OR UPDATE OR DELETE ON skill FOR EACH ROW EXECUTE FUNCTION orbit_revision_skill();
+
+DROP TRIGGER IF EXISTS webpilot_revision_personal_memory_item ON personal_memory_item;
+
+DROP FUNCTION IF EXISTS webpilot_revision_personal_memory_item();
+
+CREATE FUNCTION orbit_revision_personal_memory_item() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+          IF TG_OP <> 'INSERT' THEN INSERT INTO runtime_meta(key,value,updated_at)
+        VALUES ('knowledge-revision:memories:user:' || OLD.user_id,'1',CAST(CURRENT_TIMESTAMP AS TEXT))
+        ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(runtime_meta.value AS BIGINT)+1 AS TEXT),updated_at=excluded.updated_at;
+        INSERT INTO runtime_meta(key,value,updated_at)
+        SELECT 'knowledge-revision:memories:shared','1',CAST(CURRENT_TIMESTAMP AS TEXT) WHERE OLD.shared=true
+        ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(runtime_meta.value AS BIGINT)+1 AS TEXT),updated_at=excluded.updated_at; END IF;
+          IF TG_OP <> 'DELETE' THEN INSERT INTO runtime_meta(key,value,updated_at)
+        VALUES ('knowledge-revision:memories:user:' || NEW.user_id,'1',CAST(CURRENT_TIMESTAMP AS TEXT))
+        ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(runtime_meta.value AS BIGINT)+1 AS TEXT),updated_at=excluded.updated_at;
+        INSERT INTO runtime_meta(key,value,updated_at)
+        SELECT 'knowledge-revision:memories:shared','1',CAST(CURRENT_TIMESTAMP AS TEXT) WHERE NEW.shared=true
+        ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(runtime_meta.value AS BIGINT)+1 AS TEXT),updated_at=excluded.updated_at; END IF; RETURN NULL; END $$;
+
+CREATE TRIGGER orbit_revision_personal_memory_item AFTER INSERT OR UPDATE OR DELETE ON personal_memory_item FOR EACH ROW EXECUTE FUNCTION orbit_revision_personal_memory_item();
+
+DELETE FROM execution_record WHERE kind IN ('event','compaction');
+
+ALTER TABLE conversation_record ADD COLUMN record_gzip BYTEA;
+
+INSERT INTO typeorm_migration("timestamp", "name") VALUES (1794272400000, 'CompactOperationalStorage1794272400000');
 
 COMMIT;

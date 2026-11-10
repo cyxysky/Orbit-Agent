@@ -1,7 +1,7 @@
 // Public host settings accept the Orbit prefix while legacy consumers keep working.
 // Internal process credentials and role flags are deliberately not aliases.
 const settingNames = [
-  'ADMIN_SETTINGS_PASSWORD', 'ADMIN_SETTINGS_PASSWORD_ENABLED', 'APP_DIR',
+  'ADMIN_SETTINGS_PASSWORD', 'ADMIN_SETTINGS_PASSWORD_ENABLED', 'APP_DIR', 'API_STARTUP_TIMEOUT_MS',
   'BASE_PATH', 'CAPABILITY_SOURCE', 'CROSS_SITE_MOUNT',
   'DEBUG_ROUTES_ENABLED', 'DEBUG_WEBPACK_CACHE', 'DEFAULT_USER_ID',
   'DOCUMENT_FONT', 'DOCUMENT_FONT_FAMILY',
@@ -9,6 +9,11 @@ const settingNames = [
   'USER_COOKIE_CHECK_ENABLED', 'USER_COOKIE_NAMES',
   'RUNTIME_PORT', 'SERVER_ROOT', 'SPLIT_RUNTIME', 'TRUST_PROXY', 'WEBSOCKET_TICKET_TTL_SECONDS',
 ];
+
+function apiStartupTimeoutMs(environment = process.env) {
+  const value = Number(environment.ORBIT_API_STARTUP_TIMEOUT_MS ?? environment.WEBPILOT_API_STARTUP_TIMEOUT_MS ?? 600_000);
+  return Number.isFinite(value) && value > 0 ? Math.max(10_000, Math.min(3_600_000, Math.floor(value))) : 600_000;
+}
 
 function applyOrbitEnvironment(environment = process.env) {
   const updates = {};
@@ -40,4 +45,4 @@ function applyOrbitEnvironment(environment = process.env) {
   return updates;
 }
 
-module.exports = { applyOrbitEnvironment };
+module.exports = { applyOrbitEnvironment, apiStartupTimeoutMs };

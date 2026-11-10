@@ -21,7 +21,7 @@ function scheduleExpiredClaimCleanup(timestamp: string) {
   if (Date.now() - cleanupState.lastAt < 60 * 60 * 1000) return;
   cleanupState.lastAt = Date.now();
   void queueDatabaseWrite([{
-    sql: 'DELETE FROM api_idempotency WHERE expires_at <= ?',
+    sql: 'DELETE FROM request_record WHERE expires_at <= ?',
     params: [timestamp],
   }]).catch(() => {
     cleanupState.lastAt = 0;
@@ -61,21 +61,21 @@ export async function runIdempotentJson(
   const expiresAt = new Date(timestamp.getTime() + idempotencyTtlMs()).toISOString();
   const claim = await runDatabaseTransaction(async (database) => {
     await executeDatabase(`
-      DELETE FROM api_idempotency
-      WHERE user_id = ? AND scope = ? AND idempotency_key = ? AND expires_at <= ?
+      DELETE FROM request_record
+      WHERE kind='idempotency' AND user_id = ? AND scope = ? AND id = ? AND expires_at <= ?
     `, [input.userId, input.scope, key, timestamp.toISOString()], database);
     const inserted = await queryDatabase<{ user_id: string }>(`
-      INSERT INTO api_idempotency (
-        user_id, scope, idempotency_key, request_hash, state, expires_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)
-      ON CONFLICT(user_id, scope, idempotency_key) DO NOTHING
+      INSERT INTO request_record (
+        user_id, kind, scope, id, request_hash, state, expires_at, created_at, updated_at
+      ) VALUES (?, 'idempotency', ?, ?, ?, 'pending', ?, ?, ?)
+      ON CONFLICT(user_id, kind, scope, id) DO NOTHING
       RETURNING user_id
     `, [input.userId, input.scope, key, input.fingerprint, expiresAt, timestamp.toISOString(), timestamp.toISOString()], database);
     if (inserted.length) return { owned: true as const };
     const row = await queryDatabaseOne<IdempotencyRow>(`
       SELECT request_hash, response_json, state, status_code
-      FROM api_idempotency
-      WHERE user_id = ? AND scope = ? AND idempotency_key = ?
+      FROM request_record
+      WHERE kind='idempotency' AND user_id = ? AND scope = ? AND id = ?
     `, [input.userId, input.scope, key], database);
     return { owned: false as const, row };
   });
@@ -106,9 +106,9 @@ export async function runIdempotentJson(
     if (response.ok && response.headers.get('content-type')?.includes('application/json')) {
       const responseJson = await response.clone().text();
       await executeDatabase(`
-        UPDATE api_idempotency
+        UPDATE request_record
         SET state = 'completed', status_code = ?, response_json = ?, updated_at = ?
-        WHERE user_id = ? AND scope = ? AND idempotency_key = ? AND request_hash = ?
+        WHERE kind='idempotency' AND user_id = ? AND scope = ? AND id = ? AND request_hash = ?
       `, [
         response.status,
         responseJson,
@@ -120,14 +120,14 @@ export async function runIdempotentJson(
       ]);
     } else {
       await executeDatabase(`
-        DELETE FROM api_idempotency WHERE user_id = ? AND scope = ? AND idempotency_key = ?
+        DELETE FROM request_record WHERE kind='idempotency' AND user_id = ? AND scope = ? AND id = ?
       `, [input.userId, input.scope, key]);
     }
     scheduleExpiredClaimCleanup(timestamp.toISOString());
     return response;
   } catch (error) {
     await executeDatabase(`
-      DELETE FROM api_idempotency WHERE user_id = ? AND scope = ? AND idempotency_key = ?
+      DELETE FROM request_record WHERE kind='idempotency' AND user_id = ? AND scope = ? AND id = ?
     `, [input.userId, input.scope, key]);
     scheduleExpiredClaimCleanup(timestamp.toISOString());
     throw error;

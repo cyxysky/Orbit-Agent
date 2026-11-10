@@ -1,3 +1,4 @@
+import { browserChatLogUsage as usageFromLog } from '@/lib/browser-chat-log-usage';
 import { conversationRecords } from '@/server/storage/record-sources';
 import { databaseDriver, queryDatabase, queryDatabaseOne } from '@/server/db/database';
 import { projectDatabaseJsonFields } from '@/server/db/json-projection';
@@ -190,11 +191,6 @@ function numberValue(value: unknown) {
   return Number.isFinite(numeric) ? numeric : 0;
 }
 
-function tokenValue(value: unknown) {
-  const record = parseRecord(value);
-  return Math.max(0, numberValue(record.total || record.totalTokens || value));
-}
-
 function arrayValue(value: unknown) {
   return Array.isArray(value) ? value : [];
 }
@@ -271,23 +267,6 @@ function modelIdentity(summary: JsonRecord) {
     model: text(summary.model) || 'unknown-model',
     provider: text(summary.modelProvider) || 'unknown-provider',
   };
-}
-
-function usageFromLog(value: unknown) {
-  const log = parseRecord(value);
-  if (!['ai:runtime:object', 'ai:runtime:response'].includes(text(log.phase))) return undefined;
-  const details = parseRecord(log.details);
-  const payload = parseRecord(details.value);
-  const aiOutput = parseRecord(payload.aiOutput || details.aiOutput);
-  const response = parseRecord(aiOutput.response);
-  const usage = parseRecord(aiOutput.usage || response.usage);
-  const inputTokens = tokenValue(usage.inputTokens || usage.promptTokens || usage.input_tokens || usage.prompt_tokens);
-  const outputTokens = tokenValue(usage.outputTokens || usage.completionTokens || usage.output_tokens || usage.completion_tokens);
-  const totalTokens = Math.max(
-    inputTokens + outputTokens,
-    tokenValue(usage.totalTokens || usage.total_tokens),
-  );
-  return totalTokens ? { inputTokens, outputTokens, totalTokens } : undefined;
 }
 
 function mutableUser(users: Map<string, MutableUserMetric>, userIdValue: unknown) {

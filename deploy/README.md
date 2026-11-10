@@ -29,7 +29,7 @@ docker build --platform linux/amd64 \
 docker push registry.gitlab.internal/ai/orbit:YOUR_RELEASE_TAG
 ```
 
-构建默认执行类型检查。资源有限的构建机可参照 [低内存构建参数](../docs/managed-mcp-tools-validation.md#构建与部署要点)。本轮源码交付没有运行应用 dev/build，也没有替换 Docker Hub 现有镜像；管理员登录、后端鉴权、数据库表合并和侧边栏修复在本源码包中，部署时应由本次源码构建镜像。
+构建默认执行类型检查。资源有限的构建机可参照 [低内存构建参数](../docs/managed-mcp-tools-validation.md#构建与部署要点)。本轮源码交付没有运行应用 dev/build，也没有替换 Docker Hub 现有镜像；管理员登录、后端鉴权、数据库表合并、无损正文压缩和侧边栏修复在本源码包中，部署时应由本次源码构建镜像。
 
 将官方 `nginx:stable-alpine` 同步到内网镜像仓库，并在 `deploy/kustomization.yaml` 修改两个镜像地址与标签。正式部署建议固定版本或 digest。应用和沙箱使用同一个 Orbit 镜像；Nginx 是代理镜像。
 
@@ -63,7 +63,7 @@ kubectl -n orbit create secret generic orbit-secrets \
 
 同一反向代理源下的 iframe 可以使用 Orbit 自己的会话 Cookie。跨站 iframe 必须通过 HTTPS 并设置 `ORBIT_CROSS_SITE_MOUNT=true`，浏览器仍可能阻止第三方 Cookie；优先采用同源代理。不要公开 API/执行子进程端口，Nginx 应覆盖 `X-Real-IP` 和转发头，管理员登录限流才会使用真实客户端地址。
 
-详细鉴权流程见[管理员登录与嵌入身份](../docs/deployment/administrator-authentication.md)。当前数据库为 22 张业务表和 1 张迁移表；升级前停止旧应用并备份数据库，合并迁移只向新结构转换。见[数据表合并](../docs/architecture/storage-table-review.md)。
+详细鉴权流程见[管理员登录与嵌入身份](../docs/deployment/administrator-authentication.md)。当前服务端数据库为 18 张业务表和 1 张迁移表；升级前停止旧应用并备份数据库，合并迁移只向新结构转换。见[数据表与存储精简](../docs/architecture/storage-table-review.md)和[存储压缩说明](../docs/architecture/storage-compaction.md)。`ORBIT_API_STARTUP_TIMEOUT_MS` 默认允许 10 分钟启动，模板的应用 startupProbe 允许 11 分钟；若增加该超时，也应同步增加探针等待窗口。
 
 私有镜像仓库需要创建 `orbit-registry` 拉取凭据，并取消 Deployment 中 `imagePullSecrets` 的注释；企业镜像仓库 CA 需在集群节点的容器运行时中配置。
 
@@ -73,7 +73,7 @@ kubectl -n orbit create secret generic orbit-secrets \
 kubectl kustomize deploy > orbit.rendered.yaml
 kubectl apply --dry-run=server -k deploy
 kubectl apply -k deploy
-kubectl -n orbit rollout status deployment/orbit --timeout=300s
+kubectl -n orbit rollout status deployment/orbit --timeout=900s
 kubectl -n orbit get pods,pvc,svc -o wide
 ```
 

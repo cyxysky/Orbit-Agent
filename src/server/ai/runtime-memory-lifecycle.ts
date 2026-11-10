@@ -1,32 +1,37 @@
 import { runtimeSetting } from '@/server/settings/runtime-configuration';
 import { createHash, randomUUID } from 'node:crypto';
-import { queryDatabase, queryDatabaseOne, executeDatabase } from '@/server/db/database';
+import { queryDatabase, queryDatabaseOne, executeDatabase, type DatabaseExecutor } from '@/server/db/database';
 import { commitPersonalMemoryReview } from '@/server/storage/database-record-store';
 import { personalMemoryExtractionEnabled, type PersonalMemoryItem, type PersonalMemoryExtractionResult } from './personal-memory';
 import { withModelSettings, type ModelSettingsOverride } from './model';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 
 
-type Candidate = { userId: string; sourceKey: string; expectedItems: PersonalMemoryItem[]; items: PersonalMemoryItem[]; report: unknown };
+type Candidate = { userId: string; sourceKey: string; expectedContentHash: string; items: PersonalMemoryItem[] };
 export async function proposeReviewedMemory(sessionId: string, candidate: Candidate) {
   const id = createHash('sha256').update(`${candidate.userId}:${candidate.sourceKey}`).digest('hex');
-  await executeDatabase('INSERT INTO agent_memory_candidate (id, user_id, session_id, source_key, status, record_json) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(user_id, source_key) DO NOTHING', [id, candidate.userId, sessionId, candidate.sourceKey, 'candidate', JSON.stringify(candidate)]);
+  await executeDatabase(`INSERT INTO memory_operation (user_id, kind, id, session_id, status, record_json)
+    VALUES (?, 'candidate', ?, ?, 'candidate', ?) ON CONFLICT(user_id, kind, id) DO NOTHING`, [candidate.userId, id, sessionId, JSON.stringify(candidate)]);
   return id;
 }
 export async function listMemoryCandidates(sessionId: string, userId: string) {
-  const rows = await queryDatabase<{ id: string; record_json: string }>("SELECT id, record_json FROM agent_memory_candidate WHERE session_id = ? AND user_id = ? AND status = 'candidate'", [sessionId, userId]);
+  const rows = await queryDatabase<{ id: string; record_json: string }>("SELECT id, record_json FROM memory_operation WHERE kind='candidate' AND session_id = ? AND user_id = ? AND status = 'candidate'", [sessionId, userId]);
   return rows.map(row => ({ id: row.id, items: (JSON.parse(row.record_json) as Candidate).items }));
 }
 export async function reviewMemoryProposal(sessionId: string, userId: string, id: string, approved: boolean) {
-  const row = await queryDatabaseOne<{ record_json: string; status: string }>('SELECT record_json, status FROM agent_memory_candidate WHERE id = ? AND session_id = ? AND user_id = ?', [id, sessionId, userId]);
+  const row = await queryDatabaseOne<{ record_json: string; status: string }>("SELECT record_json, status FROM memory_operation WHERE kind='candidate' AND id = ? AND session_id = ? AND user_id = ?", [id, sessionId, userId]);
   if (!row || row.status !== 'candidate') throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Memory proposal is unavailable or already reviewed.');
-  if (!approved) { await executeDatabase("UPDATE agent_memory_candidate SET status = 'deleted' WHERE id = ? AND status = 'candidate'", [id]); return; }
+  const finish = async (status: 'approved' | 'deleted', executor?: DatabaseExecutor) => {
+    const changed = await queryDatabase(`UPDATE memory_operation SET status = ?, record_json = '{}'
+      WHERE kind='candidate' AND id = ? AND user_id = ? AND session_id = ? AND status = 'candidate' RETURNING id`,
+    [status, id, userId, sessionId], executor);
+    if (!changed.length) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Proposal changed during review.');
+  };
+  if (!approved) { await finish('deleted'); return; }
   const candidate = JSON.parse(row.record_json) as Candidate;
   if (candidate.items.some(item => item.expiresAt && Date.parse(item.expiresAt) <= Date.now())) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Proposal has expired.');
-  const result = await commitPersonalMemoryReview({ ...candidate, afterCommit: async executor => {
-    const changed = await queryDatabase("UPDATE agent_memory_candidate SET status = 'approved' WHERE id = ? AND status = 'candidate' RETURNING id", [id], executor);
-    if (!changed.length) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Proposal changed during approval.');
-  } });
+  const result = await commitPersonalMemoryReview({ ...candidate, afterCommit: executor => finish('approved', executor) });
+  if (result === 'duplicate') await finish('approved');
   if (result === 'conflict') throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Memory changed since this proposal. Request a new proposal.');
 }
 export type MemoryJobPayload = Omit<Parameters<typeof import('./personal-memory-learning').extractPersonalMemoryFromTurn>[0], 'abortSignal'> & {
@@ -34,30 +39,41 @@ export type MemoryJobPayload = Omit<Parameters<typeof import('./personal-memory-
 };
 export async function enqueueMemoryJob(payload: MemoryJobPayload, retryFailed = false) {
   const userId = String(payload.userId), id = createHash('sha256').update(`${userId}:${payload.sourceSessionId}:${payload.sourceMessageIds.join(':')}`).digest('hex');
-  await executeDatabase('INSERT INTO agent_memory_job (id, user_id, session_id, status, attempts, available_at, lease_until, payload_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING', [id, userId, payload.sourceSessionId, 'queued', 0, Date.now(), 0, JSON.stringify(payload)]);
-  if (retryFailed) await executeDatabase("UPDATE agent_memory_job SET status = 'queued', attempts = 0, available_at = ?, error = NULL, result_json = NULL, payload_json = ? WHERE id = ? AND status = 'failed'", [Date.now(), JSON.stringify(payload), id]);
+  await executeDatabase(`INSERT INTO memory_operation (user_id, kind, id, session_id, status, available_at, record_json)
+    VALUES (?, 'job', ?, ?, 'queued', ?, ?) ON CONFLICT(user_id, kind, id) DO NOTHING`, [userId, id, payload.sourceSessionId, Date.now(), JSON.stringify(payload)]);
+  if (retryFailed) await executeDatabase("UPDATE memory_operation SET status = 'queued', attempts = 0, available_at = ?, lease_id = NULL, lease_until = 0, error = NULL, result_json = NULL, record_json = ? WHERE kind='job' AND user_id = ? AND id = ? AND status = 'failed'", [Date.now(), JSON.stringify(payload), userId, id]);
   return id;
 }
 export async function listMemoryJobs(sessionId: string, userId: string) {
   const rows = await queryDatabase<{ id: string; status: string; attempts: number; error: string | null; result_json: string | null }>(
-    'SELECT id, status, attempts, error, result_json FROM agent_memory_job WHERE session_id = ? AND user_id = ? ORDER BY available_at DESC LIMIT 20', [sessionId, userId]);
+    "SELECT id, status, attempts, error, result_json FROM memory_operation WHERE kind='job' AND session_id = ? AND user_id = ? ORDER BY available_at DESC LIMIT 20", [sessionId, userId]);
   return rows.map(({ result_json, ...row }) => ({ ...row, result: result_json ? JSON.parse(result_json) as PersonalMemoryExtractionResult : undefined }));
 }
 /** Host invokes workers explicitly. Leases survive process death; retries never run in model assembly. */
 export async function runMemoryJobs(sessionId: string, userId: string, abortSignal?: AbortSignal) {
   const now = Date.now(), leaseId = randomUUID();
-  const rows = await queryDatabase<{ id: string; attempts: number; payload_json: string }>("UPDATE agent_memory_job SET status = 'running', attempts = attempts + 1, lease_id = ?, lease_until = ? WHERE id = (SELECT id FROM agent_memory_job WHERE session_id = ? AND user_id = ? AND attempts < 4 AND available_at <= ? AND (status = 'queued' OR (status = 'running' AND lease_until < ?)) ORDER BY available_at LIMIT 1) AND (status = 'queued' OR (status = 'running' AND lease_until < ?)) RETURNING id, attempts, payload_json", [leaseId, now + 360000, sessionId, userId, now, now, now]);
+  const rows = await queryDatabase<{ id: string; attempts: number; record_json: string }>(`UPDATE memory_operation
+    SET status = 'running', attempts = attempts + 1, lease_id = ?, lease_until = ?
+    WHERE kind='job' AND user_id = ? AND id = (SELECT id FROM memory_operation
+      WHERE kind='job' AND session_id = ? AND user_id = ? AND attempts < 4 AND available_at <= ?
+      AND (status = 'queued' OR (status = 'running' AND lease_until < ?)) ORDER BY available_at LIMIT 1)
+    AND (status = 'queued' OR (status = 'running' AND lease_until < ?)) RETURNING id, attempts, record_json`,
+  [leaseId, now + 360000, userId, sessionId, userId, now, now, now]);
   if (!rows.length) return { processed: false };
   const job = rows[0];
   try {
     const { extractPersonalMemoryFromTurn } = await import('./personal-memory-learning');
-    const { modelSettings, ...payload } = JSON.parse(job.payload_json) as MemoryJobPayload;
+    const { modelSettings, ...payload } = JSON.parse(job.record_json) as MemoryJobPayload;
     const signal = AbortSignal.any([AbortSignal.timeout(300000), ...(abortSignal ? [abortSignal] : [])]);
     const result = await withModelSettings(modelSettings || {}, () => extractPersonalMemoryFromTurn({ ...payload, abortSignal: signal }));
-    await executeDatabase("UPDATE agent_memory_job SET status = 'completed', lease_until = 0, error = NULL, result_json = ? WHERE id = ? AND lease_id = ?", [JSON.stringify(result), job.id, leaseId]);
+    const finished = await queryDatabase("UPDATE memory_operation SET status = 'completed', lease_until = 0, lease_id = NULL, error = NULL, record_json = '{}', result_json = ? WHERE kind='job' AND user_id = ? AND id = ? AND lease_id = ? AND status='running' RETURNING id", [JSON.stringify(result), userId, job.id, leaseId]);
+    if (!finished.length) return { processed: false };
     return { processed: true, id: job.id, result };
   } catch (error) {
-    await executeDatabase("UPDATE agent_memory_job SET status = ?, available_at = ?, lease_until = 0, error = ? WHERE id = ? AND lease_id = ?", [job.attempts >= 4 ? 'failed' : 'queued', Date.now() + 1000 * 2 ** job.attempts, String(error), job.id, leaseId]);
+    await executeDatabase(`UPDATE memory_operation SET status = ?, available_at = ?, lease_until = 0, lease_id = NULL, error = ?,
+      record_json = CASE WHEN attempts >= 4 THEN '{}' ELSE record_json END
+      WHERE kind='job' AND user_id = ? AND id = ? AND lease_id = ? AND status='running'`,
+    [job.attempts >= 4 ? 'failed' : 'queued', Date.now() + 1000 * 2 ** job.attempts, String(error), userId, job.id, leaseId]);
     throw error;
   }
 }
@@ -74,9 +90,9 @@ export function startMemoryExtractionWorker() {
       const configured = Number(runtimeSetting("AI_PERSONAL_MEMORY_EXTRACTION_CONCURRENCY") || 2);
       const concurrency = Number.isFinite(configured) ? Math.min(8, Math.max(1, Math.floor(configured))) : 2;
       const now = Date.now();
-      await executeDatabase("UPDATE agent_memory_job SET status = 'failed', lease_until = 0, error = 'Memory extraction worker was interrupted after the final attempt.' WHERE status = 'running' AND lease_until < ? AND attempts >= 4", [now]);
+      await executeDatabase("UPDATE memory_operation SET status = 'failed', lease_until = 0, lease_id = NULL, record_json = '{}', error = 'Memory extraction worker was interrupted after the final attempt.' WHERE kind='job' AND status = 'running' AND lease_until < ? AND attempts >= 4", [now]);
       const jobs = await queryDatabase<{ session_id: string; user_id: string }>(
-        "SELECT session_id, user_id FROM agent_memory_job j WHERE attempts < 4 AND available_at <= ? AND (status = 'queued' OR (status = 'running' AND lease_until < ?)) AND NOT EXISTS (SELECT 1 FROM agent_memory_job running WHERE running.user_id = j.user_id AND running.status = 'running' AND running.lease_until >= ?) ORDER BY available_at LIMIT 100", [now, now, now]);
+        "SELECT session_id, user_id FROM memory_operation j WHERE kind='job' AND attempts < 4 AND available_at <= ? AND (status = 'queued' OR (status = 'running' AND lease_until < ?)) AND NOT EXISTS (SELECT 1 FROM memory_operation running WHERE running.kind='job' AND running.user_id = j.user_id AND running.status = 'running' AND running.lease_until >= ?) ORDER BY available_at LIMIT 100", [now, now, now]);
       for (const job of jobs) {
         if (controller.signal.aborted || active.size >= concurrency) break;
         if (active.has(job.user_id)) continue;

@@ -9,8 +9,8 @@ export async function GET(request: Request) {
   const principal = requestApplicationPrincipal(request), userId = principal.userId;
   const ticket = new URL(request.url).searchParams.get('webSocketTicket');
   if (ticket) {
-    const owned = await queryDatabaseOne<{ id: string }>(`SELECT id FROM websocket_ticket
-      WHERE token_hash = ? AND user_id = ? AND consumed_at IS NULL AND expires_at > ?`,
+    const owned = await queryDatabaseOne<{ id: string }>(`SELECT id FROM request_record
+      WHERE kind='ticket' AND token_hash = ? AND user_id = ? AND state='issued' AND expires_at > ?`,
     [createHash('sha256').update(ticket).digest('hex'), userId, new Date().toISOString()]);
     if (!owned) return new Response(null, { status: 401 });
   }

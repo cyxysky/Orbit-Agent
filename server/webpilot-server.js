@@ -13,7 +13,7 @@ const {
   requestIdentity,
 } = require('./webpilot-identity');
 const { createRealtimeRefreshHub } = require('./realtime-refresh-hub');
-const { applyOrbitEnvironment } = require('./orbit-environment');
+const { applyOrbitEnvironment, apiStartupTimeoutMs } = require('./orbit-environment');
 const { stopProcessTree } = require('./process-tree.cjs');
 const { browserChatStreamPath, createBrowserChatStreamHub } = require('./browser-chat-stream');
 const { validateUpgradeCookieIdentity } = require('./user-cookie-access');
@@ -293,7 +293,7 @@ async function startApiRuntimeChild({ appDir, dev, externalPort, runtimePort }) 
   };
   process.once('exit', stopChildOnExit);
   child.once('exit', () => process.off('exit', stopChildOnExit));
-  return { child, hostname, port, ready: waitForInternalPort(port, hostname, child) };
+  return { child, hostname, port, ready: waitForInternalPort(port, hostname, child, apiStartupTimeoutMs()) };
 }
 
 function createApiRuntimeSupervisor({
@@ -739,6 +739,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  apiStartupTimeoutMs,
   applyTrustedIdentityHeaders,
   applicationBasePath,
   initializeMountedIdentity,

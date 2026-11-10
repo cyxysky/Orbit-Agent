@@ -6,7 +6,7 @@ import { ensureRuntimeOwner } from '@/server/storage/runtime-owner';
 
 
 type Pending = { id: string; phase: 'planned' | 'awaiting-approval' | 'executing' | 'uncertain' | 'completed'; messages: ModelMessage[]; calls: Array<{ toolCallId: string; toolName: string; input: unknown }>; results: ModelMessage[]; startedCallIds?: string[] };
-export type RuntimeJournalState = { revision: number; pending?: Pending; observations?: unknown };
+export type RuntimeJournalState = { revision: number; lastEvent?: { name: string; at: string }; pending?: Pending; observations?: unknown };
 export class RuntimeExecutionJournal {
   state: RuntimeJournalState = { revision: 0 };
   constructor(readonly sessionId: string, readonly scopeId = 'main') {}
@@ -18,6 +18,7 @@ export class RuntimeExecutionJournal {
   async save(event: string, mutate: (next: RuntimeJournalState) => void, effect?: (executor: DatabaseExecutor) => Promise<void>) {
     const previous = this.state.revision;
     const next = structuredClone(this.state); mutate(next); next.revision++;
+    next.lastEvent = { name: event, at: new Date().toISOString() };
     await runDatabaseTransaction(async executor => {
       if (!previous) await ensureRuntimeOwner(this.sessionId, executor);
       if (!previous) await executeDatabase(`INSERT INTO execution_record (session_id, scope_id, kind, id, revision, record_json) VALUES (?, ?, 'state', 'current', ?, ?)`, [this.sessionId, this.scopeId, next.revision, JSON.stringify(next)], executor);
@@ -26,7 +27,6 @@ export class RuntimeExecutionJournal {
         if (!rows.length) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Agent runtime revision conflict; another writer owns this state.');
       }
       await effect?.(executor);
-      await executeDatabase(`INSERT INTO execution_record (session_id, scope_id, kind, id, revision, record_json) VALUES (?, ?, 'event', ?, ?, ?)`, [this.sessionId, this.scopeId, String(next.revision), next.revision, JSON.stringify({ event, at: new Date().toISOString(), pending: next.pending, observations: event === 'observation' ? next.observations : undefined })], executor);
     });
     this.state = next;
   }

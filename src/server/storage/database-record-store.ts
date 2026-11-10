@@ -1,5 +1,5 @@
 import { conversationRecords } from '@/server/storage/record-sources';
-import { hydrateBrowserChatContextSnapshot, splitBrowserChatContextSnapshot, markBrowserChatContextWritten } from './browser-chat-context-store';
+import { hydrateBrowserChatContextSnapshot, splitBrowserChatContextSnapshot, markBrowserChatContextCommitted } from './browser-chat-context-store';
 import type { EntityManager } from 'typeorm';
 import type { SkillRecord, RuntimeSettingRecord } from '@/server/ai/schemas/runtime.schema';
 import {
@@ -15,6 +15,8 @@ import {
 import { queueDatabaseWrite, type DatabaseWriteStatement } from './database-write-queue';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 import { settingsSchemaMetaKey, validateSettingValue, type RegisteredSetting } from '@/config/settings-schema';
+import { memoryContentHash } from './memory-content-hash';
+import { encodeConversationJson, storedJsonText, type StoredJsonRow } from './stored-json';
 
 
 type ConfigRecord = {
@@ -23,7 +25,7 @@ type ConfigRecord = {
   registeredSettings?: unknown[];
 };
 
-type JsonRow = { record_json: string };
+type JsonRow = StoredJsonRow;
 type SkillJsonRow = JsonRow & { user_id: string; shared: boolean | number };
 
 function now() {
@@ -301,24 +303,15 @@ export async function writePersonalMemoryRecords<T extends PersonalMemoryRecordF
 
 export async function hasPersonalMemoryReceipt(userId: string, sourceKey: string) {
   return Boolean(await queryDatabaseOne(
-    'SELECT source_key FROM personal_memory_receipt WHERE user_id = ? AND source_key = ?', [userId, sourceKey],
+    "SELECT id FROM memory_operation WHERE user_id = ? AND kind='receipt' AND id = ?", [userId, sourceKey],
   ));
-}
-
-/** Ignore retrieval counters when checking whether the model's input became stale. */
-function memoryContentSignature(items: PersonalMemoryRecordFields[]) {
-  return JSON.stringify(items.map((item) => {
-    const entries = Object.entries(item).filter(([key]) => key !== 'lastUsedAt' && key !== 'useCount');
-    return Object.fromEntries(entries.sort(([a], [b]) => a.localeCompare(b)));
-  }).sort((a, b) => String(a.id).localeCompare(String(b.id))));
 }
 
 export async function commitPersonalMemoryReview<T extends PersonalMemoryRecordFields>(input: {
   userId: string;
   sourceKey: string;
-  expectedItems: T[];
+  expectedContentHash: string;
   items: T[];
-  report: unknown;
   afterCommit?: (executor: import('@/server/db/database').DatabaseExecutor) => Promise<void>;
 }) {
   return runDatabaseTransaction(async (manager) => {
@@ -326,7 +319,7 @@ export async function commitPersonalMemoryReview<T extends PersonalMemoryRecordF
     if (databaseDriver() === 'postgres') {
       await queryDatabase('SELECT pg_advisory_xact_lock(hashtext(?))', [input.userId], manager);
     }
-    const receipt = await queryDatabaseOne('SELECT source_key FROM personal_memory_receipt WHERE user_id = ? AND source_key = ?',
+    const receipt = await queryDatabaseOne("SELECT id FROM memory_operation WHERE user_id = ? AND kind='receipt' AND id = ?",
       [input.userId, input.sourceKey], manager);
     if (receipt) return 'duplicate' as const;
     const rows = await queryDatabase<JsonRow>(
@@ -335,7 +328,7 @@ export async function commitPersonalMemoryReview<T extends PersonalMemoryRecordF
     );
     const current = rows.map((row) => parseDatabaseJson<T | undefined>(row.record_json, undefined))
       .filter((item): item is T => Boolean(item));
-    if (memoryContentSignature(current) !== memoryContentSignature(input.expectedItems)) return 'conflict' as const;
+    if (memoryContentHash(current) !== input.expectedContentHash) return 'conflict' as const;
     for (const item of input.items) {
       if (item.userId !== input.userId) throw new CodedError(ERROR_CODES.STORAGE_OPERATION_FAILED, 'Cannot change another user\'s memory.');
       const latest = current.find((previous) => previous.id === item.id) as (T & { useCount?: number; lastUsedAt?: string }) | undefined;
@@ -343,8 +336,8 @@ export async function commitPersonalMemoryReview<T extends PersonalMemoryRecordF
         ...(latest ? { useCount: latest.useCount, lastUsedAt: latest.lastUsedAt } : {}),
       });
     }
-    await executeDatabase('INSERT INTO personal_memory_receipt (user_id, source_key, report_json, created_at) VALUES (?, ?, ?, ?)',
-      [input.userId, input.sourceKey, JSON.stringify(input.report), now()], manager);
+    await executeDatabase("INSERT INTO memory_operation (user_id, kind, id, status, created_at) VALUES (?, 'receipt', ?, 'completed', ?)",
+      [input.userId, input.sourceKey, now()], manager);
     await input.afterCommit?.(manager);
     return 'committed' as const;
   });
@@ -415,12 +408,12 @@ type BrowserChatSessionFields = {
 
 async function readJsonRows<T>(sql: string, parameters: unknown[] = [], executor?: DatabaseExecutor) {
   const rows = await queryDatabase<JsonRow>(sql, parameters, executor);
-  return rows.map((row) => parseDatabaseJson<T | undefined>(row.record_json, undefined))
+  return rows.map((row) => parseDatabaseJson<T | undefined>(storedJsonText(row), undefined))
     .filter((item): item is T => Boolean(item));
 }
 
 export function readBrowserChatLogs<T>(sessionId: string) {
-  return readJsonRows<T>(`SELECT record_json FROM ${conversationRecords('log')} WHERE session_id = ? ORDER BY time ASC`, [sessionId]);
+  return readJsonRows<T>(`SELECT record_json, record_gzip FROM ${conversationRecords('log')} WHERE session_id = ? ORDER BY time ASC`, [sessionId]);
 }
 
 function readBrowserChatMessages<T>(sessionId: string) {
@@ -527,14 +520,18 @@ async function upsertSessionRows<
     INSERT INTO conversation_record (session_id, kind, id, step_index, record_json) VALUES (?, 'step', ?, ?, ?)
     ON CONFLICT(session_id, kind, id) DO UPDATE SET record_json = excluded.record_json
   `, [snapshot.id, String(step.index), step.index, JSON.stringify(step)], manager);
-  for (const log of delta.logs || []) await executeDatabase(`
-    INSERT INTO conversation_record (session_id, kind, id, time, message_id, record_json) VALUES (?, 'log', ?, ?, ?, ?)
+  for (const log of delta.logs || []) {
+    const stored = encodeConversationJson('log', JSON.stringify(log));
+    await executeDatabase(`
+    INSERT INTO conversation_record (session_id, kind, id, time, message_id, record_json, record_gzip) VALUES (?, 'log', ?, ?, ?, ?, ?)
     ON CONFLICT(session_id, kind, id) DO UPDATE SET
-      time = excluded.time, message_id = excluded.message_id, record_json = excluded.record_json
-  `, [snapshot.id, log.id, log.time, log.messageId || null, JSON.stringify(log)], manager);
+      time = excluded.time, message_id = excluded.message_id, record_json = excluded.record_json, record_gzip = excluded.record_gzip
+  `, [snapshot.id, log.id, log.time, log.messageId || null, stored.record_json, stored.record_gzip], manager);
+  }
   for (const id of delta.removedMessageIds || []) await executeDatabase(`DELETE FROM conversation_record WHERE kind='message' AND session_id = ? AND id = ?`, [snapshot.id, id], manager);
   for (const index of delta.removedStepIndexes || []) await executeDatabase(`DELETE FROM conversation_record WHERE kind='step' AND session_id = ? AND step_index = ?`, [snapshot.id, index], manager);
   for (const id of delta.removedLogIds || []) await executeDatabase(`DELETE FROM conversation_record WHERE kind='log' AND session_id = ? AND id = ?`, [snapshot.id, id], manager);
+  return contextWrite.committedKeys;
 }
 
 export async function writeBrowserChatSessionRecord<
@@ -543,13 +540,14 @@ export async function writeBrowserChatSessionRecord<
   TStep extends { index: number },
   TLog extends { id: string; messageId?: string; time: string },
 >(snapshot: TSnapshot, summary: unknown, messages: TMessage[], steps: TStep[], logs: TLog[]) {
-  await runDatabaseTransaction(async (manager) => {
-    await upsertSessionRows(manager, snapshot, summary, { messages, steps, logs });
+  const committedKeys = await runDatabaseTransaction(async (manager) => {
+    const keys = await upsertSessionRows(manager, snapshot, summary, { messages, steps, logs });
     await pruneBrowserChatRows(manager, 'message', 'id', snapshot.id, messages.map((message) => message.id));
     await pruneBrowserChatRows(manager, 'step', 'step_index', snapshot.id, steps.map((step) => step.index));
     await pruneBrowserChatRows(manager, 'log', 'id', snapshot.id, logs.map((log) => log.id));
+    return keys;
   });
-  markBrowserChatContextWritten(snapshot.id, snapshot);
+  markBrowserChatContextCommitted(snapshot.id, committedKeys);
 }
 
 type BrowserChatSessionDelta<
@@ -572,7 +570,7 @@ export function writeBrowserChatSessionDelta<
   TLog extends { id: string; messageId?: string; time: string },
 >(snapshot: TSnapshot, summary: unknown, delta: BrowserChatSessionDelta<TMessage, TStep, TLog>) {
   return runDatabaseTransaction((manager) => upsertSessionRows(manager, snapshot, summary, delta))
-    .then(() => markBrowserChatContextWritten(snapshot.id, snapshot));
+    .then(keys => markBrowserChatContextCommitted(snapshot.id, keys));
 }
 
 export async function readReferencedUploadPaths(userId?: string) {
@@ -627,15 +625,18 @@ export function writeBrowserChatSessionDeltaQueued<
       ON CONFLICT(session_id, kind, id) DO UPDATE SET record_json = excluded.record_json`,
     params: [snapshot.id, String(step.index), step.index, JSON.stringify(step)],
   });
-  for (const log of delta.logs || []) statements.push({
-    sql: `INSERT INTO conversation_record (session_id, kind, id, time, message_id, record_json) VALUES (?, 'log', ?, ?, ?, ?)
-      ON CONFLICT(session_id, kind, id) DO UPDATE SET time = excluded.time, message_id = excluded.message_id, record_json = excluded.record_json`,
-    params: [snapshot.id, log.id, log.time, log.messageId || null, JSON.stringify(log)],
-  });
+  for (const log of delta.logs || []) {
+    const stored = encodeConversationJson('log', JSON.stringify(log));
+    statements.push({
+      sql: `INSERT INTO conversation_record (session_id, kind, id, time, message_id, record_json, record_gzip) VALUES (?, 'log', ?, ?, ?, ?, ?)
+        ON CONFLICT(session_id, kind, id) DO UPDATE SET time = excluded.time, message_id = excluded.message_id, record_json = excluded.record_json, record_gzip = excluded.record_gzip`,
+      params: [snapshot.id, log.id, log.time, log.messageId || null, stored.record_json, stored.record_gzip],
+    });
+  }
   for (const id of delta.removedMessageIds || []) statements.push({ sql: `DELETE FROM conversation_record WHERE kind='message' AND session_id = ? AND id = ?`, params: [snapshot.id, id] });
   for (const index of delta.removedStepIndexes || []) statements.push({ sql: `DELETE FROM conversation_record WHERE kind='step' AND session_id = ? AND step_index = ?`, params: [snapshot.id, index] });
   for (const id of delta.removedLogIds || []) statements.push({ sql: `DELETE FROM conversation_record WHERE kind='log' AND session_id = ? AND id = ?`, params: [snapshot.id, id] });
-  return queueDatabaseWrite(statements).then(() => markBrowserChatContextWritten(snapshot.id, snapshot));
+  return queueDatabaseWrite(statements).then(() => markBrowserChatContextCommitted(snapshot.id, contextWrite.committedKeys));
 }
 
 async function pruneBrowserChatRows(

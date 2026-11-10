@@ -35,7 +35,7 @@ export async function bindUserIdentityCookie(request: Request, domainValue: stri
       cookie_domain=excluded.cookie_domain, cookie_fingerprint=excluded.cookie_fingerprint, updated_at=excluded.updated_at`,
     [principal.userId, encrypted, domain, digest, timestamp, timestamp], database);
     // Tickets are short lived, but a replaced identity must invalidate outstanding ones immediately.
-    await executeDatabase('DELETE FROM websocket_ticket WHERE user_id = ?', [principal.userId], database);
+    await executeDatabase("DELETE FROM request_record WHERE kind='ticket' AND user_id = ?", [principal.userId], database);
     const businessCookies = parseBrowserCookieHeader(request.headers.get('cookie') || '', domain)
       .filter(cookie => !internalCookies.has(cookie.name)).map(cookie => `${cookie.name}=${cookie.value}`).join('; ');
     return saveBrowserDomainCookie(principal.userId, domain, businessCookies, database);

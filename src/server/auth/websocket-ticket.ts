@@ -12,7 +12,7 @@ type WebSocketTicketRow = {
   scope: string;
   origin?: string | null;
   expires_at: string;
-  consumed_at?: string | null;
+  state: string;
 };
 
 function nowIso() {
@@ -66,9 +66,9 @@ export async function createWebSocketTicket(input: {
   const createdAt = nowIso();
   const expiresAt = new Date(Date.now() + ticketLifetimeMs()).toISOString();
   await executeDatabase(`
-    INSERT INTO websocket_ticket (
-      id, token_hash, user_id, session_id, scope, origin, expires_at, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO request_record (
+      id, kind, token_hash, user_id, session_id, scope, origin, state, expires_at, created_at, updated_at
+    ) VALUES (?, 'ticket', ?, ?, ?, ?, ?, 'issued', ?, ?, ?)
   `, [
     randomUUID(),
     ticketHash(token),
@@ -78,8 +78,9 @@ export async function createWebSocketTicket(input: {
     origin,
     expiresAt,
     createdAt,
+    createdAt,
   ]);
-  await executeDatabase('DELETE FROM websocket_ticket WHERE expires_at <= ? OR consumed_at IS NOT NULL', [createdAt]);
+  await executeDatabase('DELETE FROM request_record WHERE expires_at <= ?', [createdAt]);
   return { expiresAt, ticket: token };
 }
 
@@ -93,25 +94,26 @@ export async function consumeWebSocketTicket(input: {
   if (!token) return undefined;
   return runDatabaseTransaction(async (database) => {
     const row = await queryDatabaseOne<WebSocketTicketRow>(`
-      SELECT id, user_id, session_id, scope, origin, expires_at, consumed_at
-      FROM websocket_ticket WHERE token_hash = ?
+      SELECT id, user_id, session_id, scope, origin, expires_at, state
+      FROM request_record WHERE kind='ticket' AND token_hash = ?
     `, [ticketHash(token)], database);
     const current = nowIso();
     const expectedOrigin = normalizedOrigin(String(input.origin || '').trim());
     if (
       !row
-      || row.consumed_at
+      || row.state !== 'issued'
       || row.expires_at <= current
       || row.scope !== input.scope
       || String(row.session_id || '') !== String(input.sessionId || '')
       || (row.origin && row.origin !== expectedOrigin)
     ) return undefined;
-    const updated = await queryDatabase<{ id: string }>(`
-      UPDATE websocket_ticket SET consumed_at = ?
-      WHERE id = ? AND consumed_at IS NULL AND expires_at > ?
+    // Deleting the claim is atomic and leaves no spent-ticket history to retain.
+    const consumed = await queryDatabase<{ id: string }>(`
+      DELETE FROM request_record
+      WHERE kind='ticket' AND token_hash = ? AND state='issued' AND expires_at > ?
       RETURNING id
-    `, [current, row.id, current], database);
-    if (updated.length !== 1) return undefined;
+    `, [ticketHash(token), current], database);
+    if (consumed.length !== 1) return undefined;
     return {
       userId: row.user_id,
       sessionId: row.session_id || undefined,

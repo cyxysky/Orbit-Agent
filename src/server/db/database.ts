@@ -121,7 +121,7 @@ export async function getDatabase() {
   const dataSource = new DataSource(dataSourceOptions());
   runtimeState.initialization = dataSource.initialize().then(async (initialized) => {
     runtimeState.dataSource = initialized;
-    await deleteExpiredWebSocketTickets(initialized);
+    await deleteExpiredRequestRecords(initialized);
     return initialized;
   }).finally(() => {
     runtimeState.initialization = undefined;
@@ -129,9 +129,9 @@ export async function getDatabase() {
   return runtimeState.initialization;
 }
 
-async function deleteExpiredWebSocketTickets(executor: DatabaseExecutor) {
+async function deleteExpiredRequestRecords(executor: DatabaseExecutor) {
   await executeDatabase(
-    'DELETE FROM websocket_ticket WHERE expires_at <= ? OR consumed_at IS NOT NULL',
+    'DELETE FROM request_record WHERE expires_at <= ?',
     [new Date().toISOString()],
     executor,
   );
