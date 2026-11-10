@@ -1,4 +1,5 @@
 import { asRecord } from '@/lib/unknown-value';
+import { executionStatusText, publicExecutionDetails } from '@/lib/execution-log-presentation';
 
 type BrowserChatClientLog = {
   details?: string;
@@ -20,6 +21,11 @@ function parsedDetails(value: string) {
 }
 
 export function compactBrowserChatLogForClient<TLog extends BrowserChatClientLog>(log: TLog): TLog {
+  log = { ...log, ...(log.message ? { message: executionStatusText(log.message) } : {}) };
+  if (log.details) {
+    try { log = { ...log, details: JSON.stringify(publicExecutionDetails(JSON.parse(log.details))) }; }
+    catch { log = { ...log, details: executionStatusText(log.details || '') }; }
+  }
   if (!log.details) return log;
 
   if (log.phase === 'ai:runtime:request') {

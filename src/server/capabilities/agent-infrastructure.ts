@@ -1,8 +1,8 @@
-import { runtimeSetting } from '@/server/settings/runtime-configuration';
-import { createConfigurationCapability } from './configuration';
-import { orbitExtensions, refreshExtensionToolCatalog } from './extensions';
+import { runtimeConfiguration, runtimeSetting } from '@/server/settings/runtime-configuration';
+import { createSelfBootstrapCapability } from './self-bootstrap';
+import { refreshExtensionToolCatalog } from './extensions';
 import { isAiOperationsAdmin } from '@/server/auth/ai-operations-admin';
-import { selfBootstrapEnabled } from '@/server/runtime/self-bootstrap-policy';
+import { isRuntimeToolEnabled } from '@/server/runtime/self-bootstrap-policy';
 import { mediaModelsForConfig } from '@/lib/model-selection';
 import { resolveCodexCliPath } from '@/server/ai/codex-cli';
 import { prepareCodexIdentityHome } from '@/server/ai/codex-identity';
@@ -162,10 +162,10 @@ export async function createAgentInfrastructureProviders(input: {
   attachmentBindings?: readonly BrowserCodeAttachmentBinding[];
   userId?: string;
 } = {}): Promise<CapabilityProvider[]> {
-  const extensionProviders = await refreshExtensionToolCatalog();
+  const bootstrapAvailable = isAiOperationsAdmin(input.userId) && isRuntimeToolEnabled('selfBootstrap', runtimeConfiguration());
+  const extensionProviders = bootstrapAvailable ? await refreshExtensionToolCatalog() : [];
   return [
-    ...(selfBootstrapEnabled() && isAiOperationsAdmin(input.userId) ? [orbitExtensions.capability(), ...extensionProviders] : []),
-    createConfigurationCapability(),
+    ...(bootstrapAvailable ? [createSelfBootstrapCapability(), ...extensionProviders] : []),
     createNodeConnectorsCapability({ connectors: configuredConnectors }),
     createTextEditorCapability({ createOperations(context) {
       return createFileTextEditorOperations({

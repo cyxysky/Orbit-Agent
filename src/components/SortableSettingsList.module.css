@@ -1,0 +1,9 @@
+.row { display: grid; grid-template-columns: 24px minmax(0, 1fr); min-width: 0; position: relative; border-bottom: 1px solid var(--border); }
+.row:last-child { border-bottom: 0; }
+.content { min-width: 0; }
+.content > * { width: 100%; }
+.handle { display: grid; place-items: center; align-self: start; margin-top: 12px; height: 32px; color: var(--muted); background: transparent; border: 0; cursor: grab; padding: 0; touch-action: none; }
+.handle:hover, .handle:focus-visible { color: var(--foreground); background: var(--panel-soft); }
+.handle:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.row[data-dragging] { background: var(--panel); z-index: 2; box-shadow: 0 6px 20px #0002; }
+.row[data-dragging] .handle { cursor: grabbing; }

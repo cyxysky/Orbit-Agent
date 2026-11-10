@@ -10,6 +10,7 @@ import {
 import { asRecord } from './unknown-value';
 import { stripBrowserChatContextMarkers } from './browser-chat-visible-text';
 import { browserChatOutputPerformanceFromUnknown } from './browser-chat-activity';
+import { modelVisibleText } from './model-visible-text';
 
 /** Keep streamed reasoning and text in one cycle without replacing each other. */
 export function mergeBrowserChatStreamPart(
@@ -19,7 +20,7 @@ export function mergeBrowserChatStreamPart(
   const output = previous || { parts: [], reasoning: [], texts: [], tools: [] };
   const key = part.kind === 'reasoning' ? 'reasoning' : 'texts';
   const values = [...output[key]];
-  values[part.index] = part.text;
+  values[part.index] = modelVisibleText(part.text, true);
   const exists = output.parts.some(item => item.kind === part.kind && item.index === part.index);
   return { ...output, [key]: values, parts: exists ? output.parts : [...output.parts, { kind: part.kind, index: part.index }] };
 }
@@ -80,11 +81,11 @@ function normalizeAiContentPart(part: unknown): BrowserChatAiOutputView {
   if (!record) return { parts: [], reasoning: [], texts: [], tools: [] };
   const type = String(record.type || '').toLowerCase();
   if (type === 'reasoning') {
-    const text = stripBrowserChatContextMarkers(stringFromUnknown(record.text ?? record.content ?? record.reasoning ?? record.value));
+    const text = modelVisibleText(stripBrowserChatContextMarkers(stringFromUnknown(record.text ?? record.content ?? record.reasoning ?? record.value)));
     return { parts: text ? [{ index: 0, kind: 'reasoning' }] : [], reasoning: text ? [text] : [], texts: [], tools: [] };
   }
   if (type === 'text') {
-    const text = stripBrowserChatContextMarkers(stringFromUnknown(record.text ?? record.content ?? record.reasoning ?? record.value));
+    const text = modelVisibleText(stripBrowserChatContextMarkers(stringFromUnknown(record.text ?? record.content ?? record.reasoning ?? record.value)));
     return { parts: text ? [{ index: 0, kind: 'text' }] : [], reasoning: [], texts: text ? [text] : [], tools: [] };
   }
   if (type === 'tool-call' || type === 'tool_call') {
@@ -349,7 +350,7 @@ export function browserChatAiOutputCycleFromDebugEvent(input: {
         }],
       },
       stepIndex: input.stepIndex,
-      sequence: event?.engine === 'codex-app-server' && Number.isFinite(Number(event.agentStepIndex))
+      sequence: event?.agentStepIndex !== undefined && Number.isFinite(Number(event.agentStepIndex))
         ? Number(event.agentStepIndex) : input.sequence,
       createdAt: input.createdAt,
       subagentId: input.subagentId,
@@ -371,14 +372,14 @@ export function browserChatAiOutputCycleFromDebugEvent(input: {
   const compacted = compactBrowserChatAiOutputView(output);
   if (!hasAiOutputView(compacted)) return undefined;
   return {
-    id: aiOutput.engine === 'codex-app-server' && typeof aiOutput.itemId === 'string'
+    id: typeof aiOutput.itemId === 'string'
       ? `cycle_codex_${input.messageId}_${input.stepIndex}_${aiOutput.itemId}` : input.id,
     messageId: input.messageId,
     output: compacted,
     performance: browserChatOutputPerformanceFromUnknown(aiOutput.performance),
     stepIndex: input.stepIndex,
     agentStepIndex: Number.isFinite(rawAgentStepIndex) ? rawAgentStepIndex : undefined,
-    sequence: aiOutput.engine === 'codex-app-server' && Number.isFinite(rawAgentStepIndex) ? rawAgentStepIndex : input.sequence,
+    sequence: Number.isFinite(rawAgentStepIndex) ? rawAgentStepIndex : input.sequence,
     createdAt: input.createdAt,
     subagentId: input.subagentId,
     batchId: input.batchId,

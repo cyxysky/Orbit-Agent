@@ -105,6 +105,7 @@ function responseTools(value: unknown, hostTools?: readonly CodexDynamicTool[]) 
     const item = record(raw);
     if (item.type !== 'function') throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, `Unsupported built-in Responses tool: ${item.type}`);
     const name = string(item.name);
+    if (current && !current.has(name)) return;
     const alias = namespace ? `${namespace}__${name}` : name;
     names.set(alias, { name, namespace });
     const updated = namespace === 'orbit' ? current.get(name) : undefined;
@@ -216,7 +217,7 @@ async function streamResponseBody(body: RecordValue, response: ServerResponse,
     inputSchema: await asSchema(definition.inputSchema).jsonSchema,
   })));
   const aiInputTokens = estimateRuntimeRequestContext({ messages, tools: sentTools }, runtimeContextWindowTokens(getModelSettings()));
-  await onModelEvent?.({ phase: 'ai:runtime:request', message: 'Codex 已发送模型供应商请求', details: {
+  await onModelEvent?.({ phase: 'ai:runtime:request', message: '模型请求已发送', details: {
     modelRequestId: id, attempt: retryAttempt + 1, timeout, aiInputTokens, aiInput: { model: body.model, messages, tools: sentTools, reasoning: body.reasoning,
       temperature: body.temperature, toolChoice: body.tool_choice },
   } });
@@ -227,6 +228,9 @@ async function streamResponseBody(body: RecordValue, response: ServerResponse,
     event('response.in_progress', { response: envelope('in_progress') });
   };
   const indexes = new Map<string, number>();
+  const draftPublishedAt = new Map<string, number>();
+  let firstOutputReceived = false;
+  let performancePublishedAt = 0;
   const instructions = messages.filter(message => message.role === 'system').map(message => message.content).join('\n\n');
   const result = streamText({ model: getModel(), instructions,
     messages: messages.filter(message => message.role !== 'system'), tools: Object.keys(tools).length ? tools : undefined,
@@ -241,6 +245,12 @@ async function streamResponseBody(body: RecordValue, response: ServerResponse,
     signal.throwIfAborted();
     if (part.type === 'error') throw part.error;
     if (part.type !== 'start') start();
+    if (!firstOutputReceived && ['text-delta', 'reasoning-delta', 'tool-input-start', 'tool-input-delta', 'tool-call'].includes(part.type)) {
+      firstOutputReceived = true;
+      await onModelEvent?.({ phase: 'ai:runtime:receiving', message: '正在接收模型输出', details: {
+        modelRequestId: id, firstOutputElapsedMs: Date.now() - startedAt,
+      } });
+    }
     if (part.type === 'reasoning-start') {
       const index = output.length;
       indexes.set(part.id, index);
@@ -300,6 +310,12 @@ async function streamResponseBody(body: RecordValue, response: ServerResponse,
       const item = output[index];
       item.arguments = string(item.arguments) + part.delta;
       event('response.function_call_arguments.delta', { item_id: item.id, output_index: index, delta: part.delta });
+      if (item.name === 'finalResponse' && Date.now() - (draftPublishedAt.get(part.id) || 0) >= 32) {
+        draftPublishedAt.set(part.id, Date.now());
+        await onModelEvent?.({ phase: 'ai:runtime:stream', message: '正在生成回复', details: {
+          kind: 'tool-input', modelRequestId: id, toolCallId: part.id, toolName: item.name, arguments: item.arguments,
+        } });
+      }
     } else if (part.type === 'tool-call') {
       let index = indexes.get(part.toolCallId);
       if (index === undefined) {
@@ -313,8 +329,17 @@ async function streamResponseBody(body: RecordValue, response: ServerResponse,
       const item = output[index];
       item.arguments = JSON.stringify(part.input);
       item.status = 'completed';
+      if (item.name === 'finalResponse') await onModelEvent?.({ phase: 'ai:runtime:stream', message: '正在生成回复', details: {
+        kind: 'tool-input', modelRequestId: id, toolCallId: part.toolCallId, toolName: item.name, arguments: item.arguments,
+      } });
       event('response.function_call_arguments.done', { item_id: item.id, output_index: index, arguments: item.arguments });
       event('response.output_item.done', { output_index: index, item });
+    }
+    if (['text-delta', 'reasoning-delta', 'tool-input-delta'].includes(part.type) && Date.now() - performancePublishedAt >= 160) {
+      performancePublishedAt = Date.now();
+      await onModelEvent?.({ phase: 'ai:runtime:stream', message: '正在接收模型输出', details: {
+        kind: 'performance', modelRequestId: id, performance: performance.snapshot(),
+      } });
     }
   }
   const finish = await result.finishReason;

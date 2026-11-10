@@ -6,6 +6,7 @@ import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 export { selfBootstrapEnabled, hostExecutionEnabled, remoteSandboxAllowed };
 
 export function isRuntimeToolEnabled(name: string, configuration: ToolCapabilityEnvironment) {
+  if (name === 'memory' && configuration.AI_PERSONAL_MEMORY_ENABLED === 'false') return false;
   if (!isToolCapabilityEnabled(name, configuration)) return false;
   if (name === 'selfBootstrap' || isExtensionToolName(name)) {
     return selfBootstrapEnabled() && isToolCapabilityEnabled('selfBootstrap', configuration);

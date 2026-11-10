@@ -1,5 +1,8 @@
 .workspace { display: grid; gap: 24px; min-width: 0; }
 .workspace :global(.tool-capability-actions) { flex-wrap: nowrap; flex-shrink: 0; }
+.workspace :global(.tool-capability-row) { padding: 16px 12px; align-items: center; gap: 20px; }
+.workspace :global(.tool-capability-title) { display: flex; align-items: center; gap: 10px; min-height: 20px; line-height: 20px; }
+.workspace :global(.tool-capability-row) > :first-child > span { display: block; margin-top: 6px; padding-inline-start: 27px; line-height: 1.7; }
 .workspace :global(.tool-capability-status) { color: var(--muted); font-size: 12px; font-weight: 400; }
 .modal { max-height: calc(100dvh - 32px); }
 .tabs { display: flex; gap: 4px; padding: 0 28px; border-bottom: 1px solid var(--border); flex: 0 0 auto; }
@@ -31,6 +34,4 @@
   .environment > :first-child { grid-column: 1 / -1; }
   .tabs { padding-inline: 16px; }
   .tabs button { padding-inline: 12px; }
-  .workspace :global(.tool-capability-row) { flex-direction: row; align-items: center; gap: 12px; }
-  .workspace :global(.tool-capability-row) > :first-child { min-width: 0; }
 }

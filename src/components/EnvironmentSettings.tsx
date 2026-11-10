@@ -2,6 +2,7 @@
 
 import { integrationSettingsSections, browserRuntimeGroups, envSettingGroup, envSettingDisplayTab, envSettingSectionId, envSettingCardTitle, envSettingIsContextuallyVisible } from '@/config/settings-presentation';
 import { SettingsDetailSection } from '@/components/SettingsDetailSection';
+import { AgentPromptSettingsHelp } from '@/components/AgentPromptSettingsHelp';
 import { SettingsFields, SettingsFieldControl, useSettingsForms } from '@/components/SettingsFields';
 import { useSettingsCatalog } from '@/components/useSettingsCatalog';
 import { updateSettingsPreference, settingsPreferencesStatus, subscribeSettingsPreferencesStatus } from '@/lib/settings-preferences';
@@ -2440,7 +2441,7 @@ export function EnvironmentSettings({
   }
 
   function renderEnvSettingList(settings: VisibleEnvSetting[]) {
-    return settings.map(({ item, index, definition }) => (
+    return <>{settings.map(({ item, index, definition }) => (
       <div
         className={`settings-row settings-env-row${definition?.control === 'textarea' ? ' prompt-row' : ''}${highlightedSettingKey === item.key ? ' is-highlighted' : ''}`}
         data-setting-key={item.key}
@@ -2457,7 +2458,10 @@ export function EnvironmentSettings({
         </div>
         <div className="settings-row-control">{renderRuntimeControl(item, index)}</div>
       </div>
-    ));
+    ))}{settings.some(({ item }) => item.key === 'AI_SYSTEM_PROMPT_TEMPLATE') ? <AgentPromptSettingsHelp
+      template={items.find(item => item.key === 'AI_SYSTEM_PROMPT_TEMPLATE')?.value || ''}
+      variables={items.find(item => item.key === 'AI_SYSTEM_PROMPT_VARIABLES')?.value || '{}'}
+      onRestore={() => { const index = items.findIndex(item => item.key === 'AI_SYSTEM_PROMPT_TEMPLATE'); if (index >= 0) update(index, { value: '' }); }} /> : null}</>;
   }
 
   const envDirty = runtimeItemsFingerprint(items) !== runtimeItemsFingerprint(savedItems);

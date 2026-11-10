@@ -6,7 +6,7 @@ import { runtimeSettingDefinitions, type RuntimeSettingDefinition } from '@/conf
 import type { SettingsForm } from '@/config/settings-schema';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 
-type Catalog = { definitions: RuntimeSettingDefinition[]; forms: SettingsForm[] };
+type Catalog = { definitions: RuntimeSettingDefinition[]; forms: SettingsForm[]; permissions?: { selfBootstrapEnabled: boolean; hostExecutionEnabled: boolean } };
 const initial: Catalog = { definitions: runtimeSettingDefinitions, forms: settingsForms };
 let catalog = initial;
 let authorization: HeadersInit | undefined;
@@ -24,7 +24,7 @@ function refresh() {
     .then(async response => {
       if (!response.ok) return;
       const next = await response.json() as Catalog;
-      const candidate = { definitions: next.definitions, forms: next.forms };
+      const candidate = { definitions: next.definitions, forms: next.forms, permissions: next.permissions };
       if (!request.signal.aborted && Array.isArray(next.definitions) && Array.isArray(next.forms)
         && JSON.stringify(catalog) !== JSON.stringify(candidate)) {
         catalog = candidate;

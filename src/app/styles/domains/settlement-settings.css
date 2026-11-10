@@ -223,6 +223,15 @@
   .settings-workspace-route .settings-content .settings-row > .settings-toggle { width: 52px; }
   .settings-workspace-route .settings-content :is(.settings-detail-panel-body, .settings-group-card-body) { padding-inline: 16px; }
   .tool-capability-actions { flex-wrap: wrap; gap: 10px; }
+  .settings-workspace-route .settings-content :is(.settings-detail-panel, .settings-group-card) .settings-row.tool-capability-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px 12px;
+  }
+  .settings-workspace-route .settings-content .settings-row.tool-capability-row > div:first-child { display: contents; }
+  .settings-workspace-route .settings-content .tool-capability-row .tool-capability-title { grid-column: 1; grid-row: 1; flex-wrap: wrap; }
+  .settings-workspace-route .settings-content .tool-capability-row > div:first-child > span { grid-column: 1 / -1; grid-row: 2; margin-top: 0; }
+  .settings-workspace-route .settings-content .tool-capability-row > .tool-capability-actions { grid-column: 2; grid-row: 1; }
 }
 
 /* Memory lists show titles; longer content is read in the detail dialog. */

@@ -40,7 +40,7 @@ export function runtimeSkills(
       skill,
       relevance: skillRelevanceScore(skill, query),
     }))
-    .filter((item) => !retrievalQueryTexts(query).length || item.relevance >= 3.8)
+    .filter((item) => retrievalQueryTexts(query).length > 0 && item.relevance >= 3.8)
     .sort((left, right) => right.relevance - left.relevance || left.skill.id.localeCompare(right.skill.id))
     .filter((item) => !loadedSkillIds.has(item.skill.id))
     .slice(0, 8)

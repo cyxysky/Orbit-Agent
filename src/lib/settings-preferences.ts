@@ -3,6 +3,7 @@ import { withWebPilotBasePath } from './webpilot-base-path';
 
 type Preferences = Record<string, string>;
 const cacheKeys: Record<string, string> = {
+  UI_TOOL_ORDER: 'orbit.toolOrder',
   UI_BRAND_PREFIX: 'orbit.brandPrefix', UI_BRAND_TEXT: 'orbit.brandText', UI_LANGUAGE: 'webpilotqa.language',
   UI_THEME_COLOR: 'webpilotqa.themeColor', UI_THEME_MODE: 'webpilotqa.themeMode',
 };

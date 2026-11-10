@@ -4,6 +4,7 @@ import {
   getPersonalMemoryItem, markPersonalMemoryItemsUsed, normalizePersonalMemoryDomain,
   normalizePersonalMemoryUserId, searchPersonalMemory, reviewPersonalMemoryCandidates,
   type PersonalMemoryItem,
+  personalMemoryEnabled,
 } from './personal-memory';
 import { memoryCandidateSchema } from './personal-memory-policy';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
@@ -30,6 +31,7 @@ function toolMemoryItem(item: PersonalMemoryItem) {
 }
 
 export function createPersonalMemoryTools(context: PersonalMemoryToolContext): ToolSet {
+  if (!personalMemoryEnabled()) return {};
   const userId = normalizePersonalMemoryUserId(context.userId);
   const usedMemoryIds = context.usedMemoryIds || new Set<string>();
   const currentUrl = () => context.getCurrentUrl?.() || context.currentUrl || '';

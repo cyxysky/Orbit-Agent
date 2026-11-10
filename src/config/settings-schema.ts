@@ -62,6 +62,7 @@ export type SettingsField = {
   placeholder?: string;
   inputType?: 'text' | 'url';
   required?: boolean;
+  hidden?: boolean;
   secret?: boolean;
   picker?: 'directory' | 'file';
   applyMode?: 'runtime' | 'recreate';
@@ -76,6 +77,7 @@ export type SettingsForm = {
 };
 
 export const preferenceSettingDefinitions: SettingsField[] = [
+  { key: 'UI_TOOL_ORDER', label: '工具列表顺序', description: '保存工具和 MCP 服务列表的拖拽顺序。', control: 'json', defaultValue: '{}', maxLength: 64000, hidden: true },
   { key: 'UI_BRAND_PREFIX', label: '品牌前缀', description: '设置侧边栏中的品牌前缀。', control: 'text', defaultValue: '', maxLength: 48 },
   { key: 'UI_BRAND_TEXT', label: '产品名称', description: '设置侧边栏中显示的产品名称。', control: 'text', defaultValue: 'Orbit', maxLength: 48 },
   { key: 'UI_LANGUAGE', label: '界面语言', description: '选择界面显示语言。', control: 'select', defaultValue: 'zh', options: [{ label: '中文', value: 'zh' }, { label: 'English', value: 'en' }] },

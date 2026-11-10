@@ -1056,7 +1056,7 @@ function browserChatToolLabel(name: string, input: unknown, t: (value: string) =
     return t('执行浏览器代码');
   }
   const labels: Record<string, string> = {
-    selfBootstrap: '自举与扩展',
+    selfBootstrap: '自举与配置',
     browserCode: '执行浏览器代码',
     contextCompression: '压缩上下文',
     contextRead: '读取内容',
@@ -3460,7 +3460,7 @@ const BrowserChatFinalResponseDraft = memo(function BrowserChatFinalResponseDraf
     : streaming && Boolean(blocks?.length && blocks.every(block => block.type === 'core.markdown'));
   const parts = useMemo(() => expanded && Array.isArray(blocks) ? browserChatFinalBlocksToParts(blocks.filter(block =>
     block && typeof block.type === 'string' && block.params && typeof block.params === 'object')) : [], [expanded, blocks]);
-  const hasDraft = Array.isArray(blocks) && blocks.length > 0;
+  const hasDraft = !live && Array.isArray(blocks) && blocks.length > 0;
   return <>
     <div className="browser-chat-tool-card-row">
       {children}
@@ -4038,7 +4038,7 @@ function browserChatSubagentStatusPresentation(subagent: Pick<BrowserChatSubagen
       ? '等待补充资料' : humanRequest ? '等待人工验证' : '等待处理' };
   }
   if (subagent.status === 'queued') return { className: 'status-running', label: '等待执行' };
-  return { className: 'status-running', label: '正在执行' };
+  return { className: 'status-running', label: '处理中' };
 }
 
 function browserChatSubagentViewsFromRecords(
@@ -4928,7 +4928,7 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
   const hasProcessContent = hasHistoricalAiOutput || hasPersistedProcess || shouldShowStepTimeline || running || hasPendingConfirmation;
   const runningActivityLabel = message.activity?.label?.trim()
     ? t(message.activity.label)
-    : t('正在分析页面状态并准备下一步操作');
+    : t('正在准备处理请求');
   const processAutoOpen = running || hasPendingConfirmation || Boolean(manualVerificationRequired);
   const processLabel = running || manualVerificationPaused || hasPendingConfirmation
     ? t('处理中')
@@ -5027,7 +5027,7 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
                 || message.activity?.operationId?.startsWith('subagent:wait') ? t('等待子 Agent 返回结果')
                 : message.activity?.operationId?.startsWith('tool:') ? t('正在执行工具')
                 : message.activity?.operationId?.startsWith('compression:') ? t('正在压缩上下文')
-                  : t('AI 正在处理当前请求')}
+                  : t('处理中')}
               showElapsed
               showTokensPerSecond={!hasPendingConfirmation && message.activity?.operationId?.startsWith('ai:')}
               outputPerformance={message.activity?.performance}
@@ -5036,7 +5036,11 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
           ) : null}
         </BrowserChatProcessDisclosure>
       ) : null}
-      {/* Show the main answer only after the turn commits its terminal response. */}
+      {running && message.responseDraft?.blocks.length ? <div className="browser-chat-answer is-draft">
+        <span className="browser-chat-draft-status">{t('回复草稿 · 尚未通过完成校验')}</span>
+        <BrowserChatOrderedResponse fallbackText="" parts={browserChatFinalBlocksToParts(message.responseDraft.blocks)} streaming />
+      </div> : null}
+      {/* The committed answer replaces the live draft after completion review. */}
       {hasFinalResponse && !running ? (
         <div className="browser-chat-answer">
           {message.status === 'failed' && isBrowserChatFailureNotice(displayFinalText)

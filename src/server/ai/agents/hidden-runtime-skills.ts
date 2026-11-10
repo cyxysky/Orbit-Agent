@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 import { configurationCapabilityManifest } from '@/config/configuration-capability';
-import { extensionCapabilityManifest } from '@cjfclonedeep/capability-sdk/extensions';
 import { extensionToolCatalog } from '@/server/capabilities/extension-catalog';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 import { browserInteractionSkill } from './runtime-browser-interaction';
@@ -31,7 +30,6 @@ function manifestRuntimeSkill(manifest: { id: string; skills?: readonly Capabili
 const browserRuntimeSkill = browserInteractionSkill;
 const capabilityRuntimeSkills = [
   configurationCapabilityManifest,
-  extensionCapabilityManifest,
   browserCapabilityManifest,
   fileCapabilityManifest,
   chartCapabilityManifest,
@@ -50,8 +48,8 @@ const capabilityRuntimeSkills = [
   return manifest.id === browserCapabilityManifest.id ? [browserInteractionSkill, ...manifest.skills!.slice(1)] : manifest.skills!;
 });
 
-// These capability tools are always visible to the model. Skill enforcement is
-// owned by the Agent runtime below, not by the capability packages themselves.
+// Published activation names describe capability tools; each run still filters
+// its mounted catalogue. The Agent owns lazy Skill delivery.
 const defaultVisibleCapabilityToolNames: ReadonlySet<string> = new Set(
   capabilityRuntimeSkills.flatMap((skill) => (skill.activation || []).map((activation) => activation.toolName)),
 );
@@ -89,6 +87,11 @@ export function activeBrowserRuntimeSkillId() {
 
 export function hiddenRuntimeSkillIds() {
   return Object.keys(hiddenRuntimeSkills);
+}
+
+export function hiddenRuntimeSkillIdsForTools(tools: ReadonlySet<string>) {
+  return Object.values(hiddenRuntimeSkills).filter(skill =>
+    skill.activation?.some(activation => tools.has(activation.toolName))).map(skill => skill.id);
 }
 
 export function hiddenRuntimeSkillContent(skillId: string) {

@@ -1,3 +1,4 @@
+import { executionStatusText } from '@/lib/execution-log-presentation';
 import { applicationUserOwnsResource, normalizeApplicationUserId } from '@/server/auth/user-context';
 import type { StepExecutionResult, StepToolCall } from '@/server/ai/schemas/runtime.schema';
 import {
@@ -21,6 +22,7 @@ import {
 import {
   activeBrowserChatAssistantMessage,
   browserChatClientRecordsForMessage,
+  browserChatClientSubagentRecord,
 } from '@/server/ai/agents/browser-chat-client-window';
 import {
   BROWSER_CHAT_MESSAGE_PAGE_SIZE,
@@ -169,7 +171,7 @@ function belongsToUser(session: Pick<BrowserChatSessionSnapshot, 'userId'>, user
 }
 
 function compactStepForClient(step: StepExecutionResult): StepExecutionResult {
-  const compacted = { ...step };
+  const compacted = { ...step, action: executionStatusText(step.action) };
   delete compacted.aiRequest;
   delete compacted.visualContext;
   return compacted;
@@ -391,7 +393,7 @@ export async function readBrowserChatSessionLogs(
     return {
       logs: [],
       subagents: input.messageId
-        ? (session.subagents || []).filter((subagent) => subagent.messageId === input.messageId)
+        ? (session.subagents || []).filter((subagent) => subagent.messageId === input.messageId).map(browserChatClientSubagentRecord)
         : [],
       history: { hasMore: false },
     };

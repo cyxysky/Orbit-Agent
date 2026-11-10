@@ -5,7 +5,7 @@ import { toolCapabilitySettings } from '@/lib/tool-capability-settings';
 
 /** Built-in schema seeds. Pages render these descriptors through shared controls. */
 export const settingsForms: SettingsForm[] = [
-  { id: 'appearance', title: '基础设置', description: '调整品牌、界面语言与主题色。', fields: preferenceSettingDefinitions },
+  { id: 'appearance', title: '基础设置', description: '调整品牌、界面语言与主题色。', fields: preferenceSettingDefinitions.filter(field => !field.hidden) },
   { id: 'tools.switches', title: '工具开关', description: '启用的工具可在每个对话中单独选择；关闭后，该工具将从对话工具列表中移除，也不会提供给 AI。',
     fields: toolCapabilitySettings.map(tool => ({ key: tool.envKey, label: tool.label, description: tool.description, control: 'boolean', defaultValue: 'true' })) },
   { id: 'provider.basic', title: '基础信息', description: '配置供应商名称和可用状态。', fields: [

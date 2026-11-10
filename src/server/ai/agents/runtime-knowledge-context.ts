@@ -57,7 +57,7 @@ export function createRuntimeKnowledgeResolver(input: {
   let memoryKey: string | undefined;
   let memories: PersonalMemorySearchResult[] = [];
   const bodies = new Map<string, SkillRecord>();
-  let candidates = new Set<string>();
+  const readThisTurn = new Set<string>();
   const initial = input.getState();
   let state: RuntimeKnowledgeState = initial?.version === 1 && initial.scopeId === input.scopeId
     ? { ...initial, skills: [...initial.skills] } : { version: 1, scopeId: input.scopeId, skills: [] };
@@ -87,6 +87,10 @@ export function createRuntimeKnowledgeResolver(input: {
     for (const loaded of state.skills) {
       const descriptor = valid.get(loaded.id);
       if (!descriptor) { bodies.delete(loaded.id); revoked.set(loaded.id, { id: loaded.id, version: loaded.version }); continue; }
+      if (!readThisTurn.has(loaded.id) && !input.selectedSkillIds.includes(loaded.id) && skillRelevanceScore(descriptor, input.query) < 3.8) {
+        nextSkills.push({ ...loaded, bodyAvailable: false });
+        continue;
+      }
       let skill = bodies.get(loaded.id);
       const hit = skill?.version === descriptor.version && skill.updatedAt === descriptor.updatedAt;
       if (!hit) skill = await input.getSkill(loaded.id);
@@ -125,7 +129,6 @@ export function createRuntimeKnowledgeResolver(input: {
       required: true, priority: 100, reason: 'explicit selection unavailable', cacheHit: catalogHit,
     });
     const available = runtimeSkills(catalog, selected, new Set(nextSkills.map((skill) => skill.id)), input.query);
-    candidates = new Set(available.map((skill) => skill.id));
     for (const skill of available) blocks.push({
       kind: 'skill-summary', id: skill.id, title: skill.title, version: skill.version,
       digest: knowledgeDigest([skill.title, skill.description, skill.triggerPhrases]), text: formatSkillSummariesForPrompt([skill]),
@@ -154,12 +157,16 @@ export function createRuntimeKnowledgeResolver(input: {
     },
     async readSkill(id: string) {
       const loaded = state.skills.find((skill) => skill.id === id);
-      if (!loaded && !candidates.has(id)) return { ok: false, actual: 'Skill is not available in this runtime candidate list.' };
-      // Always authorize reads against current storage, even on the idempotent path.
+      // Relevance candidates are a prompt budget, not an access-control boundary.
+      // Storage authorizes the exact Skill against this user's current access.
       const skill = await input.getSkill(id);
-      if (!skill || skill.status !== 'ready') return { ok: false, actual: 'Skill is disabled or no longer accessible.' };
+      if (!skill || skill.status !== 'ready') return { ok: false, actual: JSON.stringify({
+        message: 'Skill is disabled, missing, or not accessible to the current user.',
+        availableSkillIds: catalog.filter(item => item.status === 'ready').slice(0, 30).map(item => item.id),
+      }) };
       const digest = knowledgeDigest(skill.content);
       bodies.set(id, skill);
+      readThisTurn.add(id);
       state = { ...state, skills: [...state.skills.filter((item) => item.id !== id),
         { id, version: skill.version, digest, loadedAt: new Date().toISOString(), bodyAvailable: true }],
         revokedSkills: state.revokedSkills?.filter((item) => item.id !== id) };

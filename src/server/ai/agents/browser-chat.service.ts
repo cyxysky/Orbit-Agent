@@ -1,4 +1,6 @@
-import { runtimeSetting } from '@/server/settings/runtime-configuration';
+import { executionStatusText } from '@/lib/execution-log-presentation';
+import { runtimeSetting, runtimeConfiguration } from '@/server/settings/runtime-configuration';
+import { isRuntimeToolEnabled } from '@/server/runtime/self-bootstrap-policy';
 import { normalizeReasoningEffort, type ReasoningEffortSetting } from '@/lib/reasoning-effort';
 import { recoverCodexBrowserChatOutputCycles } from './browser-chat-codex-output-recovery';
 import { normalizeBrowserChatInteractionMode, type BrowserChatInteractionMode } from '@/lib/browser-chat-interaction-mode';
@@ -1376,18 +1378,21 @@ async function createBrowserChatRuntimeOperationalContext(input: {
     revisions: (domain) => readRuntimeKnowledgeRevisions(normalizeUserId(input.session.userId), domain),
     listSkills: () => readRuntimeSkillCatalog(normalizeUserId(input.session.userId)),
     getSkill: (id) => store.getSkill(id, input.session.userId),
-    searchMemory: (domain) => searchPersonalMemory({ userId: input.session.userId, query, domain }),
+    searchMemory: (domain) => personalMemoryEnabled() ? searchPersonalMemory({ userId: input.session.userId, query, domain }) : Promise.resolve([]),
     formatMemory: formatPersonalMemoryForRuntime,
   });
   let lastMemorySelection = '';
-  const getContext = async () => {
+  let availableTools: readonly string[] = [];
+  const getContext = async (toolNames?: readonly string[]) => {
+    if (toolNames) availableTools = toolNames;
+    const enabled = new Set(availableTools.filter(name => !input.session.disabledTools?.includes(name) && isRuntimeToolEnabled(name, runtimeConfiguration())));
     const domain = normalizePersonalMemoryDomain(browserChatMemoryUrl(input.browser, input.session));
     const knowledge = await resolver.refresh(domain, JSON.stringify([
       personalMemoryEnabled(), runtimeSetting('AI_PERSONAL_MEMORY_PROMPT_LIMIT'),
     ]));
-    const credentials = await browserChatCredentialContext(input.session, credentialReferences);
-    const officeDraftCatalog = await officeDraftCatalogForPrompt(input.session.id);
-    const knowledgeCatalog = await knowledgeCatalogForPrompt();
+    const credentials = enabled.has('browser') ? await browserChatCredentialContext(input.session, credentialReferences) : { credentials: [], bindings: [] };
+    const officeDraftCatalog = enabled.has('file') ? await officeDraftCatalogForPrompt(input.session.id) : '';
+    const knowledgeCatalog = enabled.has('knowledge') ? await knowledgeCatalogForPrompt() : '';
     return {
       operationalContext: [conversationFileRegistry(input.session, input.historicalMessages), officeDraftCatalog, knowledgeCatalog,
         browserChatCredentialPrompt(credentials.credentials, input.session.browserInteractionMode)].filter(Boolean).join('\n\n'),
@@ -1557,7 +1562,7 @@ function statusFromSteps(steps: StepExecutionResult[]): CompletedRunStatus {
 }
 
 function compactStepForClient(step: StepExecutionResult): StepExecutionResult {
-  const clientStep = { ...step };
+  const clientStep = { ...step, action: executionStatusText(step.action) };
   delete clientStep.aiRequest;
   delete clientStep.visualContext;
   return clientStep;
@@ -1707,6 +1712,7 @@ function compactBrowserChatSubagentSteps(steps: readonly StepExecutionResult[] =
 function compactBrowserChatSubagentRecord(record: BrowserChatSubagentRecord): BrowserChatSubagentRecord {
   return {
     ...record,
+    currentAction: record.currentAction ? executionStatusText(record.currentAction) : record.currentAction,
     steps: compactBrowserChatSubagentSteps(record.steps).map(compactStepForRealtime),
     outputCycles: trimBrowserChatOutputCycles(mergeBrowserChatAiOutputCycles(record.outputCycles || [])).map(compactOutputCycleForRealtime),
     messages: record.messages.map((message) => ({
@@ -2524,6 +2530,7 @@ function appendLog(
     updateAssistantMessage(session, logMessageId, (item) => ({
       ...item,
       activity: item.status === 'running' && runningActivity
+        && !(phase === 'ai:runtime:response' && item.activity?.operationId?.startsWith('tool:'))
         ? {
           ...nextBrowserChatActivity({ phase, label: runningActivity, timestamp, elapsedMs: input.elapsedMs, previous: item.activity,
             operationId: phase.startsWith('ai:context-compression:')
@@ -4796,7 +4803,7 @@ function runningAssistantActivity(step: StepExecutionResult, timestamp: string) 
     }
     return { phase: 'tool:running', label: latestTool.progress?.message?.trim() || `正在执行工具：${latestTool.name}`, updatedAt: timestamp };
   }
-  return { phase: 'step:running', label: '正在处理浏览器操作', updatedAt: timestamp };
+  return { phase: 'step:running', label: '处理中', updatedAt: timestamp };
 }
 
 function toolNameFromLogMessage(message: string) {
@@ -6186,20 +6193,22 @@ async function executeBrowserChatSubagentBatch(input: {
           (interaction) => recordBrowserChatSubagentConfirmation(session.id, task.id, interaction),
           task.id,
         ),
-        onTextStream: ({ text }) => {
+        onTextStream: ({ text, responseDraft }) => {
           if (!ownsTask()) return;
-          streamedSubagentText = text;
+          const content = text || (responseDraft ? browserChatFinalBlocksToText(responseDraft.blocks) : '');
+          if (!content) return;
+          streamedSubagentText = content;
           updateBrowserChatStoredSubagent(session.id, task.id, {
-            content: text,
+            content,
             messages: liveSubagentMessages(),
           });
           persistAndNotify(session.id, { defer: true });
         },
         onDebug: (event) => {
           if (!ownsTask()) return;
-          if (['ai:runtime:dispatch', 'ai:runtime:response-headers', 'ai:runtime:receiving',
-            'ai:runtime:retry', 'ai:runtime:attempt-failed', 'ai:runtime:retry-exhausted', 'ai:runtime:retry-skipped'].includes(event.phase)) {
-            updateBrowserChatStoredSubagent(session.id, task.id, { currentAction: event.message });
+          const activity = runningActivityFromLog(event.phase, event.message);
+          if (activity && event.phase !== 'ai:runtime:response') {
+            updateBrowserChatStoredSubagent(session.id, task.id, { currentAction: executionStatusText(activity) });
             persistAndNotify(session.id, { defer: true });
           }
           const outputCycle = browserChatAiOutputCycleFromDebugEvent({
@@ -6229,7 +6238,7 @@ async function executeBrowserChatSubagentBatch(input: {
           const steps = [...childSteps.values()];
           updateBrowserChatStoredSubagent(session.id, task.id, {
             status: step.status === 'blocked' ? 'blocked' : 'running',
-            currentAction: step.action || step.actual || '正在执行',
+            currentAction: runningAssistantActivity(step, now()).label,
             toolCount: steps.reduce((count, childStep) => count + (childStep.tools || []).length, 0),
             steps,
             messages: liveSubagentMessages(),
@@ -6471,17 +6480,24 @@ async function resumeBlockedBrowserChatSubagent(input: {
         (interaction) => recordBrowserChatSubagentConfirmation(session.id, binding.id, interaction),
         binding.id,
       ),
-      onTextStream: ({ text }) => {
+      onTextStream: ({ text, responseDraft }) => {
         if (!ownsTask()) return;
-        streamedSubagentText = text;
+        const content = text || (responseDraft ? browserChatFinalBlocksToText(responseDraft.blocks) : '');
+        if (!content) return;
+        streamedSubagentText = content;
         updateBrowserChatStoredSubagent(session.id, binding.id, {
-          content: text,
+          content,
           messages: liveSubagentMessages(binding.steps),
         });
         persistAndNotify(session.id, { defer: true });
       },
       onDebug: (event) => {
         if (!ownsTask()) return;
+        const activity = runningActivityFromLog(event.phase, event.message);
+        if (activity && event.phase !== 'ai:runtime:response') {
+          updateBrowserChatStoredSubagent(session.id, binding.id, { currentAction: executionStatusText(activity) });
+          persistAndNotify(session.id, { defer: true });
+        }
         const stored = subagentResults.get(session.id)?.get(binding.id);
         const outputCycle = browserChatAiOutputCycleFromDebugEvent({
           details: event.details,
@@ -6511,7 +6527,7 @@ async function resumeBlockedBrowserChatSubagent(input: {
         binding.steps = nextSteps;
         updateBrowserChatStoredSubagent(session.id, binding.id, {
           status: step.status === 'blocked' ? 'blocked' : 'running',
-          currentAction: step.action || step.actual || '正在继续',
+          currentAction: runningAssistantActivity(step, now()).label,
           toolCount: nextSteps.reduce((count, childStep) => count + (childStep.tools || []).length, 0),
           steps: nextSteps,
           messages: liveSubagentMessages(nextSteps),
@@ -6736,10 +6752,10 @@ async function runBrowserChatMessage(
           scheduleBrowserChatTextStreamPublish(session.id, assistantMessageId);
           persistAndNotify(session.id, { defer: true, mergePersisted: false });
         },
-        onTextStream: ({ agentStepIndex, responseDraft, runtimeStepIndex, text: streamedText }) => {
+        onTextStream: ({ agentStepIndex, responseDraft, runtimeStepIndex, text: streamedText, performance }) => {
           if (!isActiveBrowserChatTurn(session, assistantMessageId, abortController)) return;
           if (session.messages.find(message => message.id === assistantMessageId)?.status === 'failed') return;
-          if (!streamedText && responseDraft === undefined) return;
+          if (!streamedText && responseDraft === undefined && !performance) return;
           if (responseDraft === null && !session.messages.some((message) => (
             message.id === assistantMessageId && message.responseDraft
           ))) return;
@@ -6759,9 +6775,12 @@ async function runBrowserChatMessage(
             const updated: BrowserChatMessage = {
               ...message,
               ...(responseDraft !== undefined ? { responseDraft: responseDraft || undefined } : {}),
-              activity: nextBrowserChatActivity({
-                phase: 'ai:text:streaming', previous: message.activity, timestamp,
-                label: message.activity?.phase === 'ai:runtime:receiving' || message.activity?.phase === 'ai:text:streaming'
+              activity: !streamedText && responseDraft === undefined && performance ? {
+                ...(message.activity || nextBrowserChatActivity({ phase: 'ai:runtime:receiving', label: '正在接收模型输出', timestamp })),
+                performance,
+              } : nextBrowserChatActivity({
+                phase: responseDraft ? 'ai:tool-input:streaming' : 'ai:text:streaming', previous: message.activity, timestamp,
+                label: responseDraft ? '正在生成回复' : message.activity?.phase === 'ai:runtime:receiving' || message.activity?.phase === 'ai:text:streaming'
                   ? message.activity.label
                   : '正在接收 AI 回复',
               }),

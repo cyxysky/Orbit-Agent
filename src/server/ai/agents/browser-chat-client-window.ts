@@ -3,6 +3,20 @@ import type {
   BrowserChatSubagentRecord,
 } from '@/server/ai/schemas/runtime.schema';
 import { mergeBrowserChatAiOutputCycles } from '@/lib/browser-chat-output-cycles';
+import { executionStatusText } from '@/lib/execution-log-presentation';
+
+export function browserChatClientSubagentRecord(subagent: BrowserChatSubagentRecord): BrowserChatSubagentRecord {
+  return {
+    ...subagent,
+    currentAction: subagent.currentAction ? executionStatusText(subagent.currentAction) : subagent.currentAction,
+    steps: subagent.steps.map(step => {
+      const { aiRequest: _aiRequest, visualContext: _visualContext, ...publicStep } = step;
+      void _aiRequest; void _visualContext;
+      return { ...publicStep, action: executionStatusText(step.action) };
+    }),
+    outputCycles: mergeBrowserChatAiOutputCycles(subagent.outputCycles || []),
+  };
+}
 
 type BrowserChatClientMessage = {
   id: string;
@@ -67,10 +81,7 @@ export function browserChatClientRecordsForMessage(
       !cycle.subagentId && belongsToMessage(cycle)
     ))),
     subagents: options.includeSubagents
-      ? (source.subagents || []).filter((subagent) => subagent.messageId === messageId).map((subagent) => {
-        const outputCycles = mergeBrowserChatAiOutputCycles(subagent.outputCycles || []);
-        return outputCycles === subagent.outputCycles ? subagent : { ...subagent, outputCycles };
-      })
+      ? (source.subagents || []).filter((subagent) => subagent.messageId === messageId).map(browserChatClientSubagentRecord)
       : [],
   };
 }

@@ -1,4 +1,5 @@
 import { normalizeRuntimeSettingValue, modelProviderDefinitionsForConfig } from '@/config/settings';
+import { validateAgentPromptConfiguration } from '@/lib/agent-prompt-template';
 import { settingsForms } from '@/config/settings-forms';
 import { integrationDriverForm } from '@/config/integration-settings';
 import { configurationRequestSchema, preferenceSettingDefinitions, validateSettingValue } from '@/config/settings-schema';
@@ -19,6 +20,10 @@ import { listExternalIntegrationDrivers, publicExternalIntegrationSummary } from
 export { configurationRequestSchema };
 
 export async function saveRuntimeConfiguration(values: Record<string, unknown>) {
+  if (Object.hasOwn(values, 'AI_SYSTEM_PROMPT_TEMPLATE') || Object.hasOwn(values, 'AI_SYSTEM_PROMPT_VARIABLES')) {
+    validateAgentPromptConfiguration(String(values.AI_SYSTEM_PROMPT_TEMPLATE ?? runtimeSetting('AI_SYSTEM_PROMPT_TEMPLATE') ?? ''),
+      String(values.AI_SYSTEM_PROMPT_VARIABLES ?? runtimeSetting('AI_SYSTEM_PROMPT_VARIABLES') ?? '{}'));
+  }
   const definitions = new Map(configurationDefinitions().map(field => [field.key, field]));
   const saved = new Map((await store.listRuntimeSettings()).map(item => [item.key, item]));
   const patch = Object.entries(values).map(([key, raw]) => {

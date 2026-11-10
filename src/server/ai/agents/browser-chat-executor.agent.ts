@@ -2,11 +2,11 @@ import { runtimeConfiguration } from '@/server/settings/runtime-configuration';
 import { runtimeCapabilityConfigStore } from '@/server/settings/capability-config-store';
 import { runtimeSetting } from '@/server/settings/runtime-configuration';
 import { executeAppServerBrowserTurn, reviewAppServerCompletion } from './browser-chat-app-server-runtime';
-import { browserInteractionSchema, browserInteractionInstructions, executeBrowserInteraction } from './runtime-browser-interaction';
-import { normalizeBrowserChatInteractionMode, type BrowserChatInteractionMode } from '@/lib/browser-chat-interaction-mode';
+import { executeBrowserInteraction } from './runtime-browser-interaction';
+import { type BrowserChatInteractionMode } from '@/lib/browser-chat-interaction-mode';
 import { artifactApiUrl } from '@/lib/artifacts';
 import { browserChatCapabilityResult } from '@/lib/browser-chat-capability-result';
-import { isRuntimeToolEnabled, selfBootstrapInstructions } from '@/server/runtime/self-bootstrap-policy';
+import { isRuntimeToolEnabled } from '@/server/runtime/self-bootstrap-policy';
 import { coreResponses } from '@cjfclonedeep/capability-sdk/responses';
 import { type StructuredResponse } from '@cjfclonedeep/capability-sdk';
 import { contextReadToolName, type RuntimeContextManifest } from './runtime-context-assembler';
@@ -14,10 +14,7 @@ import { type RuntimeKnowledgeBlock } from './runtime-knowledge-context';
 import { tool, type ModelMessage, type ToolSet } from 'ai';
 import { z } from 'zod';
 import { jsonRecordFromUnknown, type CapabilityProgressEvent } from '@cjfclonedeep/capability-sdk';
-import { fileCapabilityManifest, fileCapabilityToolNames, type FileReadInput } from '@cjfclonedeep/capability-sdk/file';
-import { browserCapabilityManifest, browserCapabilityToolNames } from '@cjfclonedeep/capability-sdk/browser';
-import { chartCapabilityManifest, chartCapabilityToolNames } from '@cjfclonedeep/capability-sdk/chart';
-import { mapsCapabilityManifest } from '@cjfclonedeep/capability-sdk/maps';
+import { fileCapabilityToolNames, type FileReadInput } from '@cjfclonedeep/capability-sdk/file';
 import { createManagedToolProviders } from '@/server/capabilities/managed-provider';
 import { managedToolConfigurations, toolInstaller } from '@/server/capabilities/managed-tools';
 import { managedToolRuntimeConfiguration } from '@cjfclonedeep/capability-sdk/managed/node';
@@ -27,21 +24,20 @@ import { createAISDKResponseTool, mountAISDKCapabilities } from '@cjfclonedeep/c
 import type { AiRequestSnapshot, AiToolContextSnapshot, BrowserOperationRecord, StepExecutionResult, StepToolCall, VisualFrameRecord } from '@/server/ai/schemas/runtime.schema';
 import { getModelSettings } from '@/server/ai/model';
 import { codexRuntimeError } from '@/server/ai/codex-runtime-errors';
-import { customRuntimePromptFromEnv } from '@/server/ai/prompts/runtime-agent.prompt';
+import { agentSystemPrompt } from '@/server/ai/prompts/agent-system-prompt';
 import { BrowserSession, type BrowserActionResult } from '@cjfclonedeep/capability-sdk/browser/node';
 import { type BrowserCodeAttachmentBinding, type BrowserCodeCredentialBinding } from '@cjfclonedeep/capability-sdk/browser/node';
 import { richTextToPlainText } from '@/lib/rich-text';
 import { fileToolModelOutput } from './browser-chat-file-model-output';
-import { fileArtifactRuntimeSkillId } from '@cjfclonedeep/capability-sdk/file/runtime-skill';
 import { nativeRuntimeToolNames, runtimeBuiltinToolPrompts } from './runtime-tool-catalog';
-import { activeBrowserRuntimeSkillId, hiddenRuntimeSkillContent, hiddenRuntimeSkillForToolCall, requireHiddenRuntimeSkillRead } from './hidden-runtime-skills';
+import { hiddenRuntimeSkillContent, hiddenRuntimeSkillForToolCall, hiddenRuntimeSkillIdsForTools, requireHiddenRuntimeSkillRead } from './hidden-runtime-skills';
 import { subagentRuntimeSkillId } from './subagent-runtime-skill';
-import { chartRuntimeSkillId } from '@cjfclonedeep/capability-sdk/chart/runtime-skill';
 import { capabilityResultToBrowserActionResult } from '@/server/capabilities/browser-chat-result';
 import { browserOperationSummary } from '@cjfclonedeep/capability-sdk/browser';
 import { createAgentInfrastructureProviders } from '@/server/capabilities/agent-infrastructure';
 import { executeBrowserChatFile } from '@/server/capabilities/browser-chat-file';
 import { type BrowserChatFinalBlock } from '@/lib/browser-chat-ui-message';
+import type { BrowserChatOutputPerformance } from '@/lib/browser-chat-activity';
 import { type ReasoningStreamUpdate } from './browser-chat-reasoning-stream';
 import { subagentResultActual } from './browser-chat-subagent-delivery';
 import { formatFileArtifactResult } from '@cjfclonedeep/capability-sdk/file/node/workspace';
@@ -70,6 +66,7 @@ export type BrowserChatTextStreamUpdate = {
   agentStepIndex: number;
   delta: string;
   responseDraft?: { id: string; blocks: BrowserChatFinalBlock[] } | null;
+  performance?: BrowserChatOutputPerformance;
   runtimeStepIndex: number;
   stepNumber: number;
   text: string;
@@ -515,12 +512,6 @@ function systemPromptOf(runtimeRecord: BrowserChatRuntimeRecord) {
 }
 
 // 将浏览器工具调用轨迹压缩为步骤证据，保存到运行历史中。
-const browserChatDefaultSystemPrompt = 'This is an interactive browser chat. Operate from the live page and answer the latest user message in Chinese.';
-
-function browserChatSystemPromptForRuntime(value: string) {
-  return value.replace(browserChatDefaultSystemPrompt, '').trim();
-}
-
 function summarizeToolTraces(traces: ToolTrace[]): StepToolCall[] {
   return traces.map((trace) => {
     const { input, reason } = splitToolInputAndReason(trace.input);
@@ -883,6 +874,7 @@ async function makeBrowserTools(
     userId?: string;
     stepIndex?: number;
     allowedToolTypes?: string[];
+    disabledTools?: string[];
     visualContext?: VisualContextManager;
     getAiRequest?: () => AiRequestSnapshot | undefined;
     archiveResult?: (name: string, id: string, result: BrowserActionResult) => Promise<string>;
@@ -907,15 +899,13 @@ async function makeBrowserTools(
   },
 ) {
   const imageInputAvailable = modelSupportsImageInput();
-  const browserRuntimeSkillId = activeBrowserRuntimeSkillId();
   // Browser and document mutations stay ordered. Consecutive download calls are
   // independent and run as one concurrent batch; the next stateful tool waits
   // for that complete batch before it starts.
   let toolExecutionQueue = Promise.resolve();
   const activeConcurrentDownloads = new Set<Promise<BrowserActionResult>>();
   const loadedHiddenRuntimeSkillIds = referenceOptions?.loadedHiddenRuntimeSkillIds || new Set<string>();
-  const toolTextRule = 'Do not include old tool params, candidate ids as business meaning, coordinates, screenshot ids/file names, or tool input JSON.';
-  const toolReasonInput = z.string().min(1).max(300).describe(`Required: concise Chinese reason for this exact tool call. Name the visible target and expected page change; do not merely repeat a candidate ID. ${toolTextRule}`);
+  const toolReasonInput = z.string().min(1).max(300).describe('Concise Chinese reason for this call: the requested target, missing evidence or expected outcome. Do not paste tool arguments or internal identifiers as the reason.');
   const toolContextShape = {
     reason: toolReasonInput,
   };
@@ -935,8 +925,6 @@ async function makeBrowserTools(
     shape: T,
     examples: readonly Record<string, unknown>[] = [],
   ) => withToolInputExamples(z.object({ ...toolContextShape, ...shape }), examples);
-  const browserMode = normalizeBrowserChatInteractionMode(referenceOptions?.browserInteractionMode);
-  const browserAgentToolInputSchema = browserInteractionSchema(browserMode);
   const fileProgressReporter = (trace?: ToolTrace) => async (progress: CapabilityProgressEvent) => {
     if (!trace) return;
     trace.progress = {
@@ -1053,7 +1041,7 @@ async function makeBrowserTools(
     userId: referenceOptions?.userId,
   });
   const allowedCapabilityToolNames = new Set(
-    (referenceOptions?.allowedToolTypes ?? nativeRuntimeToolNames()).filter(name => isRuntimeToolEnabled(name, runtimeConfiguration())),
+    (referenceOptions?.allowedToolTypes ?? nativeRuntimeToolNames()).filter(name => !referenceOptions?.disabledTools?.includes(name) && isRuntimeToolEnabled(name, runtimeConfiguration())),
   );
   const managedProviders = await createManagedToolProviders({
     allowed: allowedCapabilityToolNames, userId: referenceOptions?.userId || '',
@@ -1136,6 +1124,10 @@ async function makeBrowserTools(
     },
   });
   const capabilityTools = capabilityRuntime.tools as ToolSet;
+  const subagentAvailable = allowedCapabilityToolNames.has('subagent') && Boolean(referenceOptions?.runSubagents || referenceOptions?.readSubagentResult);
+  const readableRuntimeSkills = new Set(hiddenRuntimeSkillIdsForTools(new Set([
+    ...Object.keys(capabilityTools), ...(subagentAvailable ? ['subagent'] : []),
+  ])));
   const mountedFileTool = capabilityTools[fileCapabilityToolNames.file];
   if (mountedFileTool) capabilityTools[fileCapabilityToolNames.file] = {
     ...mountedFileTool,
@@ -1143,9 +1135,9 @@ async function makeBrowserTools(
   };
 
   const sharedTools: ToolSet = {
-    ...(referenceOptions?.runSubagents || referenceOptions?.readSubagentResult ? {
+    ...(subagentAvailable ? {
       subagent: tool({
-        description: `Run child Agents with action=spawn. Tasks in one batch execute concurrently, but this tool call waits for the whole batch and returns all full results directly. Use action=read with an exact uuid only to retrieve a saved or resumed child's full result. action=spawn uses hidden Skill ${subagentRuntimeSkillId}, supplied with the result if unread.`,
+        description: `Delegate only independent task parts when this materially helps the active request. Ordinary questions should be answered directly. Run child Agents with action=spawn. Tasks in one batch execute concurrently, but this tool call waits for the whole batch and returns all full results directly. Use action=read with an exact uuid only to retrieve a saved or resumed child's full result. action=spawn uses hidden Skill ${subagentRuntimeSkillId}, supplied with the result if unread.`,
         inputSchema: browserToolInput({
           action: z.enum(['spawn', 'read']),
           uuid: z.string().trim().min(1).max(160).optional().describe('Exact child UUID returned by spawn; required for action=read.'),
@@ -1172,7 +1164,7 @@ async function makeBrowserTools(
           }
         }),
         execute: (input, execution) => {
-          if (input.action === 'read') return record('subagent', input, abortSignal => referenceOptions.readSubagentResult
+          if (input.action === 'read') return record('subagent', input, abortSignal => referenceOptions?.readSubagentResult
             ? referenceOptions.readSubagentResult({ uuid: input.uuid! }, abortSignal)
             : Promise.resolve({ ok: false, actual: 'subagent action=read is unavailable in this runtime.' }), execution);
           const tasks = normalizeBrowserChatSubagentTasks(input.tasks ?? input);
@@ -1180,7 +1172,7 @@ async function makeBrowserTools(
             if (!tasks.length) {
               return Promise.resolve({ ok: false, actual: 'subagent action=spawn requires a non-empty batch where every task has a non-blank title and instruction, and every supplied URL is a valid absolute URL. No child task was started.' });
             }
-            return referenceOptions.runSubagents ? referenceOptions.runSubagents(tasks, abortSignal, trace?.id)
+            return referenceOptions?.runSubagents ? referenceOptions.runSubagents(tasks, abortSignal, trace?.id)
               : Promise.resolve({ ok: false, actual: 'subagent action=spawn is unavailable in this runtime.' });
           }, execution);
         },
@@ -1201,7 +1193,7 @@ async function makeBrowserTools(
       },
     }),
     skill: tool({
-      description: runtimeBuiltinToolPrompts.skill,
+      description: `${runtimeBuiltinToolPrompts.skill} Current capability Skill ids: ${[...readableRuntimeSkills].join(', ') || '(none)'}.`,
       inputSchema: withToolInputExamples(z.preprocess((value) => {
         if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
         const record = value as Record<string, unknown>;
@@ -1212,16 +1204,13 @@ async function makeBrowserTools(
         reason: toolReasonInput,
         action: z.literal('read'),
         skillId: z.string().min(1).max(160).describe('Exact Skill id from an available <system_skill> or user Skill summary.'),
-      })), [
-        { reason: '读取浏览器代码运行规范', action: 'read', skillId: browserRuntimeSkillId },
-        { reason: '读取文件产物运行规范', action: 'read', skillId: fileArtifactRuntimeSkillId },
-        { reason: '读取图表生成运行规范', action: 'read', skillId: chartRuntimeSkillId },
-        { reason: '读取子 Agent 运行规范', action: 'read', skillId: subagentRuntimeSkillId },
-      ]),
+      })), [...readableRuntimeSkills].slice(0, 4).map(skillId => ({ reason: '读取运行规范', action: 'read', skillId }))),
       execute: (input, execution) => record('skill', input, async () => {
         const hiddenContent = hiddenRuntimeSkillContent(input.skillId);
         if (hiddenContent) {
-          return { ok: true, actual: hiddenContent } satisfies BrowserActionResult;
+          return readableRuntimeSkills.has(input.skillId)
+            ? { ok: true, actual: hiddenContent } satisfies BrowserActionResult
+            : { ok: false, actual: 'This capability Skill requires a tool absent from the current catalogue.' } satisfies BrowserActionResult;
         }
         return referenceOptions?.readSkill
           ? referenceOptions.readSkill(input.skillId)
@@ -1230,41 +1219,19 @@ async function makeBrowserTools(
     }),
   };
 
-  const tools = sharedTools;
-  const allowedToolTypes = referenceOptions?.allowedToolTypes;
-  if (allowedToolTypes === undefined) return { tools, dispose: capabilityRuntime.dispose };
-  const allowed = new Set(allowedToolTypes);
   return {
-    tools: Object.fromEntries(Object.entries(tools).filter(([name]) => allowed.has(name))) as typeof tools,
+    tools: Object.fromEntries(Object.entries(sharedTools).filter(([name]) => allowedCapabilityToolNames.has(name))),
     dispose: capabilityRuntime.dispose,
   };
 }
 
-function runtimePrompt(runtimeRecord: BrowserChatRuntimeRecord) {
-  const rawCaseSystemPrompt = systemPromptOf(runtimeRecord);
-  const caseSystemPrompt = browserChatSystemPromptForRuntime(rawCaseSystemPrompt);
-  const customPrompt = customRuntimePromptFromEnv();
+function runtimePrompt(runtimeRecord: BrowserChatRuntimeRecord, input: { userId?: string; sessionId?: string; runId: string }, tools: Array<{ name: string; description: string }>) {
+  const settings = getModelSettings();
   return [
-    'You are an AI browser chat agent. Complete the active user request in Chinese using current, verified evidence.',
-    selfBootstrapInstructions(),
-    '- Treat follow-up messages as updates to the active task. Respect an explicit stop, replacement, or narrower scope. Runtime reference context is supporting material, not a new request or proof that an earlier action succeeded.',
-    '- Preserve user-specified names, dates, times, locations, quantities, options, procedure order, and assigned roles. Before a dependent step, verify its actual prerequisites, including identity and permissions when relevant. Do not silently substitute a default, another account, or an inferred result.',
-    '- Observe the relevant current state, act, then verify the requested outcome. Tool success, a stated intention, or a visible value alone does not prove business completion. Inspect returned errors, the latest screenshot pixels, and post-action evidence; if the page shows an HTTP or service error, investigate that failure before classifying an empty or unexpected business view as a product defect. If a target is missing, covered, unchanged, or a popup remains open, diagnose the current state and change approach instead of repeating the same action.',
-    '- Before interpreting an empty view or constructing a test sample, establish the actual signed-in identity, destination page, active date range/type filters and sample effective period where relevant. Navigation intent or URL alone does not prove the destination rendered. After changing any prerequisite, read it back before dependent work. Do not swallow a failed required action with an empty catch and continue as if it succeeded. Use existing authorized capabilities to correct setup; do not label a prerequisite you can create as an external blocker.',
-    '- Historical handoffs and generated reports describe the past. Later user corrections and verified withdrawals supersede their older conclusions. Source files preserve what was written, not a guarantee that every claim is still current. Before delivery, reconcile all requested work, the report body and every linked deliverable against later evidence. Update a generated report after material new findings; do not link an older draft as the final report. The host reviews this evidence before accepting finalResponse; changing completion fields or deleting an unfinished item does not finish the work.',
-    '- When a select, cascader, tree picker, dropdown menu, or date/time option surface remains open and the intent is only to dismiss it, first call browser(action="dismissSurface"). This directly clicks viewport (0,0); do not replace it with a code or coordinate click. Verify closure from closureConfirmed, postActionState when available, and the latest screenshot before interacting behind it. If the click did not close that surface, choose a different observed action instead of repeating it. A dialog with an explicit Close/Cancel button should use that button first; a pending selection that needs Apply/Done/Confirm should use its commit control.',
-    '- Use web research when the user asks for it or the answer depends on current external facts. Read relevant pages, prefer primary sources, check dates, cite factual claims, and reuse valid evidence already collected for this task. Respect requests limited to local work, supplied material, or a specific operation; do not start unrelated research before executing a supplied procedure.',
-    '- Follow the current tool schema, capability Skill, and user-disabled tool restrictions. When a required Skill is absent from context, the host executes the tool through its normal validation and approval flow and includes the complete current instructions in result.runtimeSkill. Apply them directly in later steps; inspect the original tool outcome and do not reread the Skill or repeat the operation merely to load it. Use only capabilities that help the request.',
-    '- subagent(action="spawn") is synchronous: the tool call waits for its concurrent child tasks and directly returns their full results. Use the returned findings, sources, partial results and errors before finalResponse; do not poll or re-spawn to collect output. subagent(action="read", uuid=the exact child UUID) returns an entire saved result for older or resumed children. Failed/stopped children are terminal outcomes to assess.',
-    '- Tool routing for existing documents: use file for PDF/Word/Excel/PPT text and tables. For a discovered remote PDF, call file action=download with the exact urlOrPath, then file action=readContent with the returned artifactId (includeVisuals=false; contentPages for specific PDF pages; offset/limit for text pagination). For an uploaded or already downloaded file, readContent with its attachmentId/artifactId directly. Keep source URL and page numbers with extracted research facts. Reading a PDF needs no Office plan/render or package installation. Use codeSandbox for calculations/transformations on extracted data, explicitly requested code, or a concrete parsing capability that file lacks after inspecting its result; do not start with requests/pypdf/pdfplumber/cryptography installation just to read a PDF. Empty/scanned or malformed text calls for a targeted file visualRead when available; a password-required error needs the password, not repeated parser installs. Respect disabled tools and report access failures without claiming the PDF was read.',
-    '- Native tool calling supports multiple tool calls in the same model step; there is no one-tool-per-step limit. Proactively batch independent calls whose inputs are already known, including reading multiple required Skills or downloading multiple known assets. Emit each call separately with its own tool name and schema-valid arguments; do not invent a batch tool or wrap calls in an unsupported array. The runtime schedules execution according to each tool\'s concurrency policy, so submitting a batch does not guarantee simultaneous execution.',
-    '- Keep result-dependent calls in later steps: read and inspect a required Skill before invoking its governed capability, inspect a lookup result before using its returned IDs or URLs, and observe a changed page before choosing dependent actions. Batch independent Skill reads together, then use their results in the next step. Call finalResponse only after all required tool results have been received and assessed.',
-    '- A server-side browser action or download click does not deliver a file to the user. Deliver only URLs copied exactly from successful artifact or screenshot tool results. The output-file list contains only files explicitly linked or embedded in your finalResponse. Link every intended final deliverable, including alternate formats the user requested; leave intermediate drafts, build sources, validation images and superseded revisions in the process records unless the user requests them. Check required output features and visual review coverage before claiming a generated file is complete.',
-    '- Keep progress concise and user-facing. Explain technical details when requested. Continue authorized feasible work until the requested boundary or an evidenced blocker. Do not invent a per-turn, per-pass, tool-count, or time limit; do not ask whether to continue work the user already requested. A partial report is progress, not permission to stop.',
-    '- Complete every fully handled turn through finalResponse, including text-only answers. It is accepted only with completion.complete=true and completion.remainingWork=[]; status=failed means the requested work was carried out but produced a failed outcome, not that you chose to stop early. completion.complete=false is progress, never a terminal finalResponse, regardless of listed blocker strings. Continue authorized feasible work across model steps and context compression. A new login, a sample you can create, a different browser interaction, elapsed time, or a self-imposed step budget is not permission to stop. For user-owned browser verification, use waitForHumanVerification; for essential user-owned information or an attachment, use requestUserInput with a concrete question. Both pause this same task and may be used only after completing independent work. Prose is {type:"core.markdown",params:{text:"..."}}. Ordinary assistant text is progress, not the final answer.',
-    caseSystemPrompt ? `Loaded safety rules and Skills:\n${caseSystemPrompt}` : '',
-    customPrompt,
-  ].filter(Boolean).join('\n');
+    agentSystemPrompt({ userId: input.userId, sessionId: input.sessionId || input.runId, targetUrl: runtimeRecord.targetUrl,
+      provider: settings.provider, model: settings.model, tools }),
+    systemPromptOf(runtimeRecord),
+  ].filter(Boolean).join('\n\n');
 }
 function binaryLogDescriptor(value: unknown, imagePath?: string) {
   const bytes = Buffer.isBuffer(value)
@@ -1362,15 +1329,13 @@ function browserChatSafetyInstructions(mode?: BrowserChatSafetyMode) {
     return [
       'Safety mode: full.',
       '- When the user request is clear, do not ask for extra confirmation only because an operation is important.',
-      '- First attempt ordinary CAPTCHA/robot/security challenges through the page UI under the browser interaction instructions. Ask for human help after those bounded attempts fail, or when credentials, OTP, QR scan, identity/device approval or essential information must come from the user.',
+      '- Ask for user-owned credentials, identity approval or essential information only when the active task needs them.',
     ].join('\n');
   }
   return [
     'Safety mode: strict.',
     '- The backend independently evaluates important, irreversible, externally visible, data-changing, privacy-sensitive, or costly tool calls and pauses them for user approval before execution.',
-    '- All textEditor actions execute directly without human approval, including creating, writing, editing and deleting documents.',
     '- Do not ask for approval in plain text and do not add approval flags to tool input. Call the intended tool normally; the backend is the authority.',
-    '- Preparatory field entry, including filling a username or password for an explicitly requested login, does not pause separately; the final submit/login action does.',
   ].join('\n');
 }
 
@@ -1406,7 +1371,7 @@ export async function executeInteractiveBrowserTurn(input: {
   safetyMode?: BrowserChatSafetyMode;
   browserInteractionMode?: BrowserChatInteractionMode;
   referenceImagePaths?: string[];
-  getRuntimeOperationalContext?: () => BrowserChatOperationalContext | Promise<BrowserChatOperationalContext>;
+  getRuntimeOperationalContext?: (toolNames?: readonly string[]) => BrowserChatOperationalContext | Promise<BrowserChatOperationalContext>;
   onProgress?: (step: StepExecutionResult) => void | Promise<void>;
   onTextStream?: (update: BrowserChatTextStreamUpdate) => void | Promise<void>;
   onReasoningStream?: (update: BrowserChatReasoningStreamUpdate) => void | Promise<void>;
@@ -1439,7 +1404,7 @@ export async function executeInteractiveBrowserTurn(input: {
   memoryTools?: ToolSet;
 }): Promise<InteractiveBrowserTurnResult> {
   return executeAppServerBrowserTurn(input, {
-    prompt: input => runtimePrompt(createInteractiveBrowserRuntimeRecord(input)),
+    prompt: (input, tools) => runtimePrompt(createInteractiveBrowserRuntimeRecord(input), input, tools),
     tools: async (input, options) => {
       const visualContext = new VisualContextManager();
       if (options.visualContext) visualContext.restore(options.visualContext);

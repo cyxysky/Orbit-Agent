@@ -20,6 +20,7 @@ import { integrationDriverForm, integrationPanels } from '@/config/integration-s
 import { AppModal } from '@/components/ui/app-modal';
 import { ConfirmDeleteModal } from '@/components/ConfirmDeleteModal';
 import { McpToolSettings } from '@/components/McpToolSettings';
+import { SortableSettingsList } from '@/components/SortableSettingsList';
 import { useI18n } from '@/i18n/I18nProvider';
 import { readApiJson } from '@/lib/api-client';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
@@ -626,8 +627,8 @@ export function ExternalIntegrationSettings({
       {loading ? (
         <div className="external-integration-loading"><Loader2 className="spin" size={16} />{t('正在读取配置')}</div>
       ) : items.length ? (
-        <div className="external-integration-list">
-          {items.map((item) => {
+        <SortableSettingsList group={category === 'connector' ? 'mcp' : category} className="external-integration-list"
+          items={items} itemId={item => item.id} itemLabel={item => item.name} renderItem={(item) => {
             const driver = drivers.find((candidate) => candidate.id === item.driverId);
             return (
               <div className="external-integration-row" key={item.id}>
@@ -647,8 +648,7 @@ export function ExternalIntegrationSettings({
                 </div>
               </div>
             );
-          })}
-        </div>
+          }} />
       ) : (
         <div className="external-integration-empty">
           <span className="external-integration-icon" aria-hidden="true">

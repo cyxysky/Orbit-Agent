@@ -36,7 +36,7 @@ export function runtimeSettingGroup(tab: SettingsTab, key: string, configuredGro
     if (/^BROWSER_CHAT_/.test(key)) return '对话运行';
     if (/^AI_PERSONAL_MEMORY_/.test(key)) return '个性化记忆';
     if (/^AI_(?:CONTEXT|GLM_CONTEXT|IMAGE_CONTEXT|VISUAL_)/.test(key)) return '上下文管理';
-    if (key === 'AI_CUSTOM_SYSTEM_PROMPT') return '运行规则';
+    if (/^AI_(?:SYSTEM_PROMPT_|TOOL_PROMPT_MODE)/.test(key)) return '系统提示词';
     if (/^AI_(?:REQUEST_TIMEOUT|RUNTIME_REQUEST_TIMEOUT|RUNTIME_FIRST_CHUNK_TIMEOUT|STREAM_FIRST_CHUNK_TIMEOUT|STREAM_CHUNK_TIMEOUT)_MS$/.test(key)) return '请求超时';
     return '执行控制';
   }

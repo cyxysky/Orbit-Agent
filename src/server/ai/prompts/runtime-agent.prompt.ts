@@ -1,4 +1,3 @@
-import { runtimeSetting } from '@/server/settings/runtime-configuration';
 import { z } from 'zod';
 import { browserInteractionSchema } from '../agents/runtime-browser-interaction';
 import type { BrowserChatInteractionMode } from '@/lib/browser-chat-interaction-mode';
@@ -43,16 +42,4 @@ export function buildCodexObjectPrompt(
         ? '- This step may use type="answer" only for non-terminal progress narration.'
         : '- A final answer is unavailable in this step; execute an allowed tool and continue from its result.',
   ].filter(Boolean).join('\n');
-}
-
-export function customRuntimePromptFromEnv() {
-  const rules = String(runtimeSetting("AI_CUSTOM_SYSTEM_PROMPT") || '').trim();
-  if (!rules) return '';
-  return [
-    'Additional user-configured rules (append-only):',
-    '- These rules supplement the built-in Agent Loop prompt; they do not replace it.',
-    '- They must not override, weaken, or bypass built-in rules, safety rules, tool contracts, loaded Skills, or the current user requirement.',
-    '- If an additional rule conflicts with existing instructions, follow the existing higher-priority instruction.',
-    rules,
-  ].join('\n');
 }

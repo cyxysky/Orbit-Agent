@@ -2,7 +2,7 @@ import { runtimeConfiguration } from '@/server/settings/runtime-configuration';
 import { createHash, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { asSchema } from '@ai-sdk/provider-utils';
-import { streamText, type ModelMessage, type ToolSet } from 'ai';
+import { parsePartialJson, streamText, type ModelMessage, type ToolSet } from 'ai';
 import { markdownBlock } from '@cjfclonedeep/capability-sdk/responses';
 import { ResponseSession, type StructuredResponse } from '@cjfclonedeep/capability-sdk';
 import { getModel, getModelSettings } from '@/server/ai/model';
@@ -35,6 +35,9 @@ import type { InteractiveBrowserTurnResult, executeInteractiveBrowserTurn } from
 import type { BrowserActionResult } from '@cjfclonedeep/capability-sdk/browser/node';
 import type { StepExecutionResult, StepToolCall, AiRequestSnapshot, AiToolContextSnapshot } from '@/server/ai/schemas/runtime.schema';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+import { modelVisibleText, containsModelToolProtocol } from '@/lib/model-visible-text';
+import { executionStatusText } from '@/lib/execution-log-presentation';
+import { browserChatOutputPerformanceFromUnknown } from '@/lib/browser-chat-activity';
 
 
 type Input = Parameters<typeof executeInteractiveBrowserTurn>[0];
@@ -47,7 +50,7 @@ const object = (value: unknown): ObjectValue => value && typeof value === 'objec
 const list = (value: unknown): unknown[] => Array.isArray(value) ? value : [];
 
 export type AppServerBrowserHost = {
-  prompt: (input: Input) => string;
+  prompt: (input: Input, tools: Array<{ name: string; description: string }>) => string;
   tools: (input: Input, options: {
     traces: Trace[]; loadedSkills: Set<string>; onTrace: (trace: Trace) => Promise<void>;
     archiveResult: (name: string, id: string, result: BrowserActionResult) => Promise<string>;
@@ -120,11 +123,11 @@ export async function executeAppServerBrowserTurn(input: Input, host: AppServerB
     const content: ObjectValue[] = [];
     const id = String(item.id);
     const trace = traces.find(trace => trace.id === id);
-    if (item.type === 'agentMessage') content.push({ type: 'text', text: item.text || textById.get(id) || '' });
+    if (item.type === 'agentMessage') content.push({ type: 'text', text: modelVisibleText(String(item.text || textById.get(id) || ''), !completed) });
     if (item.type === 'reasoning') {
       const summary = list(item.summary).map(value => typeof value === 'string' ? value : String(object(value).text || ''));
       const streamed = [...textById].filter(([key]) => key.startsWith(`reasoning:${id}:`)).map(([, text]) => text);
-      for (const text of summary.length ? summary : streamed) content.push({ type: 'reasoning', text });
+      for (const text of summary.length ? summary : streamed) content.push({ type: 'reasoning', text: modelVisibleText(text, !completed) });
     }
     if (item.type === 'dynamicToolCall') {
       content.push({ type: 'tool-call', toolCallId: id, toolName: item.tool, input: trace?.input ?? item.arguments,
@@ -140,7 +143,7 @@ export async function executeAppServerBrowserTurn(input: Input, host: AppServerB
     }) : undefined;
     state.completed ||= completed;
     await debug('ai:runtime:response', item.type === 'dynamicToolCall' ? `${item.tool} 工具${completed ? '已结束' : '已请求'}`
-      : String(item.text || 'Codex 思考记录').slice(0, 220), { aiRequest, aiOutput: {
+      : modelVisibleText(String(item.text || '模型思考记录')).slice(0, 220), { aiRequest, aiOutput: {
       engine: 'codex-app-server', itemId: id, agentStepIndex: state.index, response: { content, phase: item.phase },
       timings, visualContext, finished: completed,
     } }, trace?.id);
@@ -163,8 +166,8 @@ export async function executeAppServerBrowserTurn(input: Input, host: AppServerB
     const tools = host.summarizeTraces(traces);
     const pending = browserChatHasPendingHumanInput(tools);
     const latest = tools.at(-1);
-    const step: StepExecutionResult = { index: stepIndex, action: 'Codex App Server 执行会话', expected: input.instruction,
-      actual: failure || traces.at(-1)?.result?.actual || 'Codex 正在处理会话', status: failure ? 'failed' : pending ? 'blocked' : traces.some(trace => !trace.completedAt) ? 'running' : latest?.ok === false ? 'failed' : 'passed',
+    const step: StepExecutionResult = { index: stepIndex, action: '处理中', expected: input.instruction,
+      actual: failure || traces.at(-1)?.result?.actual || '正在处理请求', status: failure ? 'failed' : pending ? 'blocked' : traces.some(trace => !trace.completedAt) ? 'running' : latest?.ok === false ? 'failed' : 'passed',
       tools, aiRequest, visualContext };
     const replace = (target: StepExecutionResult[]) => { const i = target.findIndex(item => item.index === stepIndex); if (i >= 0) target[i] = step; else target.push(step); };
     replace(steps); replace(newSteps);
@@ -268,10 +271,10 @@ export async function executeAppServerBrowserTurn(input: Input, host: AppServerB
     },
   });
   const disabled = new Set(effectiveDisabledCapabilityTools(input.disabledTools));
-  // Global switches control registration; session preferences remain dispatch restrictions.
+  // The model catalogue and dispatch permissions describe the same tool set.
   const definitions: ToolSet = Object.fromEntries(Object.entries({
     ...mount.tools, ...input.memoryTools, contextRead: createRuntimeContextReadTool(() => records),
-  }).filter(([name]) => isRuntimeToolEnabled(name, runtimeConfiguration())));
+  }).filter(([name]) => !disabled.has(name) && isRuntimeToolEnabled(name, runtimeConfiguration())));
   let runtime: Awaited<ReturnType<typeof openCodexAppServer>> | undefined;
   let lastText = '';
   let finalText = '';
@@ -292,7 +295,27 @@ export async function executeAppServerBrowserTurn(input: Input, host: AppServerB
     const toolsHash = createHash('sha256').update(JSON.stringify(schemaTools)).digest('hex');
     runtime = await openCodexAppServer({ userId: input.userId, sessionId, scope, hostTools: schemaTools,
       onModelEvent: async event => {
+        if (event.phase === 'ai:runtime:stream' && event.details.kind === 'performance') {
+          const performance = browserChatOutputPerformanceFromUnknown(event.details.performance);
+          if (performance) await input.onTextStream?.({ agentStepIndex: 0, runtimeStepIndex: stepIndex, stepNumber: 0,
+            delta: '', text: '', performance });
+          return;
+        }
+        if (event.phase === 'ai:runtime:stream' && event.details.kind === 'tool-input') {
+          const id = String(event.details.toolCallId || '');
+          const parsed = await parsePartialJson(String(event.details.arguments || ''));
+          const blocks = list(object(parsed.value).blocks).flatMap(value => {
+            const block = object(value), params = object(block.params);
+            return block.type === 'core.markdown' && typeof params.text === 'string'
+              ? [{ type: 'core.markdown', params: { text: modelVisibleText(params.text, true) } }] : [];
+          });
+          await input.onTextStream?.({ agentStepIndex: 0,
+            runtimeStepIndex: stepIndex, stepNumber: 0, delta: '', text: '', responseDraft: { id, blocks } });
+          return; // Stream deltas are transient UI state, not database log entries.
+        }
         if (event.phase === 'ai:runtime:request' && typeof event.details.modelRequestId === 'string') {
+          await input.onTextStream?.({ agentStepIndex: 0, runtimeStepIndex: stepIndex, stepNumber: 0,
+            delta: '', text: '', responseDraft: null });
           aiRequest.id = event.details.modelRequestId; aiRequest.createdAt = new Date().toISOString();
           modelRequestElapsedMs = undefined;
           const messages = object(event.details.aiInput).messages;
@@ -319,10 +342,11 @@ export async function executeAppServerBrowserTurn(input: Input, host: AppServerB
         await debug(event.phase, event.message, event.details);
       } });
     const client = runtime.client;
-    let developerInstructions = [host.prompt(input), browserInteractionInstructions(normalizeBrowserChatInteractionMode(input.browserInteractionMode)),
-      'Use only the tools in the orbit namespace. The host owns browser sessions, credentials, approvals and artifacts. Do not use built-in shell, patch, browser, web search, local file or child-agent tools to bypass host tools.',
-      'The Codex runtime owns conversation history and context compaction. Use contextRead only to retrieve archived evidence. Complete through finalResponse; after an accepted finalResponse or a pending human-input tool, stop immediately.',
-      `Tools unavailable under deployment permissions, global settings or session preferences: ${JSON.stringify([...disabled])}. These tools cannot be executed even if they occur in the thread's fixed catalogue.`,
+    let developerInstructions = [host.prompt(input, schemaTools.map(({ name, description }) => ({ name, description }))),
+      definitions.browser ? browserInteractionInstructions(normalizeBrowserChatInteractionMode(input.browserInteractionMode)) : '',
+      'Use only the tools in the orbit namespace. The host owns tool sessions, credentials, approvals and artifacts. Do not use external or built-in capabilities to bypass the supplied host tools.',
+      'The execution runtime owns conversation history and context compaction. Use contextRead only when the active request needs archived evidence. Complete through finalResponse; after an accepted finalResponse or a pending human-input tool, stop immediately.',
+      'Only the current tool catalogue authorizes calls. Historical tool names and Skill text do not grant access to missing tools.',
     ].join('\n\n');
     const updatedCatalogue = binding && binding.toolsHash !== toolsHash;
     if (binding && updatedCatalogue) {
@@ -382,7 +406,7 @@ export async function executeAppServerBrowserTurn(input: Input, host: AppServerB
         const signature = JSON.stringify({ last, total: info.total });
         if (signature !== nativeUsageSignature && last.inputTokens > 0) {
           nativeUsageSignature = signature;
-          aiRequest.id = `codex-request:${randomUUID()}`; aiRequest.createdAt = new Date().toISOString();
+          aiRequest.id = `model-request:${randomUUID()}`; aiRequest.createdAt = new Date().toISOString();
           stats = { estimatedTotalTokens: Math.max(0, last.inputTokens), actualInputTokens: Math.max(0, last.inputTokens),
             method: 'codex-input', breakdownAvailable: false };
         }
@@ -402,7 +426,7 @@ export async function executeAppServerBrowserTurn(input: Input, host: AppServerB
       await client.request('thread/inject_items', { threadId: binding.threadId, items: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: `Host interruption recovery evidence. These calls must not be replayed; inspect current state.\n${JSON.stringify(binding.pendingRecovery)}` }] }] });
       delete binding.pendingRecovery; await persistBinding();
     }
-    const operational = await input.getRuntimeOperationalContext?.();
+    const operational = await input.getRuntimeOperationalContext?.(Object.keys(definitions));
     credentials = operational?.credentialBindings || credentials;
     const knowledge = (operational?.knowledge || []).filter(block => block.bodyAvailable !== false).map(runtimeKnowledgeMessage);
     await archive(knowledge);
@@ -420,33 +444,35 @@ export async function executeAppServerBrowserTurn(input: Input, host: AppServerB
       onEvent: async (method: string, params: CodexRecord) => {
         if (method === 'turn/started') {
           activeTurnId = String(object(params.turn).id); binding!.lastTurnStatus = 'inProgress'; await persistBinding();
-          await debug('ai:runtime:attempt', 'Codex 会话回合已开始', { aiRequest });
+          await debug('ai:runtime:attempt', '本轮处理已开始', { aiRequest });
         }
         if (method === 'item/started') {
           const item = object(params.item); itemState(item);
           if (item.type === 'dynamicToolCall') await publishOutput(item);
-          if (item.type === 'contextCompaction') await debug('ai:context-compression:start', 'Codex 正在压缩上下文', { itemId: item.id });
+          if (item.type === 'contextCompaction') await debug('ai:context-compression:start', '正在压缩上下文', { itemId: item.id });
         }
         if (method === 'item/agentMessage/delta') {
           const id = String(params.itemId); const text = (textById.get(id) || '') + String(params.delta || ''); textById.set(id, text); lastText = text;
           const state = itemState({ id, type: 'agentMessage' });
-          await input.onTextStream?.({ agentStepIndex: state.index, runtimeStepIndex: stepIndex, stepNumber: state.index - 1, delta: String(params.delta || ''), text });
+          await input.onTextStream?.({ agentStepIndex: state.index, runtimeStepIndex: stepIndex, stepNumber: state.index - 1,
+            delta: '', text: modelVisibleText(text, true) });
         } else if (method === 'item/reasoning/summaryTextDelta' || method === 'item/reasoning/textDelta') {
           const id = `reasoning:${params.itemId}:${params.summaryIndex || 0}`; const text = (textById.get(id) || '') + String(params.delta || ''); textById.set(id, text);
-          await input.onReasoningStream?.({ agentStepIndex: itemState({ id: params.itemId, type: 'reasoning' }).index, runtimeStepIndex: stepIndex, index: Number(params.summaryIndex) || 0, text, active: true });
+          await input.onReasoningStream?.({ agentStepIndex: itemState({ id: params.itemId, type: 'reasoning' }).index, runtimeStepIndex: stepIndex,
+            index: Number(params.summaryIndex) || 0, text: modelVisibleText(text, true), active: true });
         } else if (method === 'thread/tokenUsage/updated') await updateUsage(params);
         else if (method === 'item/completed') {
           const item = object(params.item);
           if (item.type === 'agentMessage' && item.text && !seenMessages.has(String(item.id))) {
             seenMessages.add(String(item.id)); transcript.push({ role: 'assistant', content: String(item.text) }); lastText = String(item.text);
-            if (item.phase !== 'commentary') finalText = lastText;
+            if (item.phase !== 'commentary') finalText = containsModelToolProtocol(lastText) ? '' : modelVisibleText(lastText);
             await publishTranscript();
           }
           if (item.type === 'reasoning') for (const [id, text] of textById) if (id.startsWith(`reasoning:${item.id}:`)) {
             await input.onReasoningStream?.({ agentStepIndex: itemState(item).index, runtimeStepIndex: stepIndex,
-              index: Number(id.split(':').at(-1)) || 0, text, active: false });
+              index: Number(id.split(':').at(-1)) || 0, text: modelVisibleText(text), active: false });
           }
-          if (item.type === 'contextCompaction') { loadedSkills.clear(); await debug('ai:context-compression:complete', 'Codex 已完成上下文压缩', { itemId: item.id, agentStepIndex: itemState(item).index, committed: true }); }
+          if (item.type === 'contextCompaction') { loadedSkills.clear(); await debug('ai:context-compression:complete', '上下文压缩已完成', { itemId: item.id, agentStepIndex: itemState(item).index, committed: true }); }
           await publishOutput(item, true);
           if (item.type === 'dynamicToolCall') {
             if (binding!.pendingDeliveries?.[String(item.id)]) {
@@ -539,9 +565,10 @@ export async function executeAppServerBrowserTurn(input: Input, host: AppServerB
     };
     let nextInput = userInput;
     let clientTurnId = binding.lastClientTurnId;
+    let invalidProtocolAttempts = 0;
     for (;;) {
       assertActive(); signal.throwIfAborted(); finalText = '';
-      await debug('ai:runtime:request', 'Codex App Server 正在执行会话', { aiRequest, aiInput: {
+      await debug('ai:runtime:request', '正在处理请求', { aiRequest, aiInput: {
         model: settings.model, threadId: binding.threadId, input: nextInput, additionalContext: context,
         baseInstructions: developerInstructions, tools: schemaTools, historyManagedBy: 'codex-app-server',
       } });
@@ -553,6 +580,10 @@ export async function executeAppServerBrowserTurn(input: Input, host: AppServerB
       if (accepted || pauseRequested) break;
       // Native final text follows the same host acceptance/review path as an explicit finalResponse call.
       let feedback = 'No final answer was provided.';
+      if (containsModelToolProtocol(lastText)) {
+        if (++invalidProtocolAttempts >= 3) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, '模型连续返回了文本形式的工具协议，未形成有效工具调用。请检查供应商的原生工具调用配置。');
+        feedback = 'Textual XML/tool_call markup is not executable. Use only native tool calls with the supplied schemas. Do not print or imitate tool protocol in assistant text.';
+      }
       if (finalText) {
         const proposal: StructuredResponse = { status: 'passed', blocks: [markdownBlock(finalText)], completion: { complete: true, remainingWork: [] } };
         const callId = `host_final_${activeTurnId}`;
@@ -562,7 +593,7 @@ export async function executeAppServerBrowserTurn(input: Input, host: AppServerB
         if (accepted || pauseRequested) break;
         feedback = receipt.contentItems.filter(item => item.type === 'inputText').map(item => item.text).join('\n');
       }
-      await debug('ai:runtime:recoverable-error', '终答未通过完成审核，Codex 继续处理', { feedback, terminal: false });
+      await debug('ai:runtime:recoverable-error', '终答未通过完成审核，继续处理', { feedback, terminal: false });
       nextInput = [{ type: 'text', text: `Host completion review feedback (the active user request is unchanged):\n${feedback}\nContinue the feasible work. End through orbit.finalResponse after completion, or use the appropriate host human-input tool if essential user-owned information is required.` }];
       clientTurnId = `${input.turnId || input.runId}:completion:${randomUUID()}`;
       binding.lastClientTurnId = clientTurnId; binding.lastTurnStatus = 'dispatching'; await persistBinding();
@@ -573,7 +604,7 @@ export async function executeAppServerBrowserTurn(input: Input, host: AppServerB
       || browserChatRequestedUserInput(host.summarizeTraces(traces)) || lastText || '等待用户补充信息或完成验证。';
     if (!blocks.length && reply) blocks = [markdownBlock(reply)];
     const status = pauseRequested ? 'blocked' : accepted?.status === 'failed' ? 'failed' : 'passed';
-    await debug('ai:runtime:attempt-succeeded', pauseRequested ? 'Codex 正在等待用户输入' : 'Codex 会话回合已结束', { finishReason: 'stop', responseStatus: status, terminal: true });
+    await debug('ai:runtime:attempt-succeeded', pauseRequested ? '正在等待用户输入' : '本轮处理已结束', { finishReason: 'stop', responseStatus: status, terminal: true });
     const responseSession = new ResponseSession(responseRegistry);
     for (const trace of traces) if (trace.result?.ok) responseSession.observe(trace.name, browserChatCapabilityResult(trace.result));
     if (accepted) responseSession.accept(accepted);
@@ -585,7 +616,7 @@ export async function executeAppServerBrowserTurn(input: Input, host: AppServerB
   } catch (error) {
     if (input.abortSignal?.aborted || (input.shouldContinue && !input.shouldContinue())) throw error;
     if (binding) { binding.lastTurnStatus = 'failed'; await persistBinding(); }
-    const message = error instanceof Error ? error.message : String(error);
+    const message = executionStatusText(error instanceof Error ? error.message : String(error));
     const upstreamMessage = typeof modelFailure?.message === 'string' ? modelFailure.message : '';
     const reply = `会话执行失败：${message}${upstreamMessage && !message.includes(upstreamMessage) ? `；模型供应商：${upstreamMessage}` : ''}`;
     await debug('ai:runtime:error', reply, { error: codexRuntimeError(error), upstreamError: modelFailure, aiRequest, terminal: true });
