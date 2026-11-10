@@ -3,6 +3,7 @@ import path from 'node:path';
 import { applicationMigrations } from '../src/server/db/migrations/index.ts';
 import { consolidatedTables } from '../src/server/db/migrations/1794268800000-consolidated-records.ts';
 import { compactedTables } from '../src/server/db/migrations/1794272400000-compact-operational-storage.ts';
+import { workspaceTables } from '../src/server/db/migrations/1794276000000-workspace-storage.ts';
 
 // Execute the current migration DDL against an empty-schema recorder, without a database connection.
 const statements = ['BEGIN', 'CREATE TABLE typeorm_migration ("id" SERIAL PRIMARY KEY, "timestamp" BIGINT NOT NULL, "name" VARCHAR NOT NULL)'];
@@ -52,7 +53,13 @@ statements.push('COMMIT');
 const output = path.resolve('sql/postgresql-init.sql');
 await fs.mkdir(path.dirname(output), { recursive: true });
 // Historical data-copy statements are unnecessary on an empty database. Keep only the current physical schema.
-const retired = new RegExp(`\\b(?:${[...consolidatedTables, ...compactedTables].join('|')})\\b`, 'i');
+const retired = new Set([...consolidatedTables, ...compactedTables, ...workspaceTables]);
+function referencesRetiredTable(sql) {
+  // Kind values can have the same spelling as retired tables. Inspect identifiers, not data literals.
+  const identifiers = sql.replace(/'(?:''|[^'])*'/g, "''").replace(/--[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  return [...identifiers.matchAll(/\b(?:FROM|JOIN|INTO|UPDATE|REFERENCES|TABLE(?:\s+IF\s+(?:NOT\s+)?EXISTS)?|ON)\s+"?(\w+)"?/gi)]
+    .some(match => retired.has(match[1]));
+}
 // A retired function can be referenced by a trigger on a retained table.
 // Track function lifetimes so the empty schema never creates a dangling trigger.
 const activeFunctions = new Map();
@@ -63,7 +70,7 @@ for (const [index, sql] of statements.entries()) {
   if (dropped) activeFunctions.delete(dropped);
 }
 const current = statements.filter((sql, index) => {
-  if (retired.test(sql)) return false;
+  if (referencesRetiredTable(sql)) return false;
   const created = /^CREATE(?: OR REPLACE)? FUNCTION\s+(\w+)/i.exec(sql)?.[1];
   if (created && activeFunctions.get(created) !== index) return false;
   const dependency = /^CREATE TRIGGER\b[\s\S]*EXECUTE FUNCTION\s+(\w+)/i.exec(sql)?.[1];

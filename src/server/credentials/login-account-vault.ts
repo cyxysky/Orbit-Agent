@@ -1,3 +1,4 @@
+import { userRecords } from '@/server/storage/record-sources';
 import { randomUUID } from 'node:crypto';
 import { normalizeApplicationUserId } from '@/server/auth/user-context';
 import { executeDatabase, queryDatabase, queryDatabaseOne, runDatabaseTransaction, type DatabaseExecutor } from '@/server/db/database';
@@ -180,14 +181,14 @@ function metadataFromRow(row: LoginAccountRow): LoginAccountMetadata {
 function metadataById(id: string, userId: string, database?: DatabaseExecutor) {
   return queryDatabaseOne<LoginAccountRow>(`
     SELECT ${metadataColumns}
-    FROM login_account
+    FROM ${userRecords('account')}
     WHERE id = ? AND (user_id = ? OR shared = ?)
   `, [id, userId, true], database);
 }
 
 function fullRowById(id: string, userId: string, database?: DatabaseExecutor) {
   return queryDatabaseOne<LoginAccountRow>(`
-    SELECT * FROM login_account WHERE id = ? AND (user_id = ? OR shared = ?)
+    SELECT * FROM ${userRecords('account')} WHERE id = ? AND (user_id = ? OR shared = ?)
   `, [id, userId, true], database);
 }
 
@@ -199,13 +200,13 @@ export async function listLoginAccounts(input: { userId?: unknown; domain?: unkn
   const rows = domain
     ? await queryDatabase<LoginAccountRow>(`
         SELECT ${metadataColumns}
-        FROM login_account
+        FROM ${userRecords('account')}
         WHERE (user_id = ? OR shared = ?) AND domain = ?
         ORDER BY CASE WHEN user_id = ? THEN 0 ELSE 1 END, updated_at DESC
       `, [userId, true, domain, userId])
     : await queryDatabase<LoginAccountRow>(`
         SELECT ${metadataColumns}
-        FROM login_account
+        FROM ${userRecords('account')}
         WHERE user_id = ? OR shared = ?
         ORDER BY CASE WHEN user_id = ? THEN 0 ELSE 1 END, updated_at DESC
       `, [userId, true, userId]);
@@ -215,7 +216,7 @@ export async function listLoginAccounts(input: { userId?: unknown; domain?: unkn
 export async function exportLoginAccountCredentials(userId?: unknown): Promise<LoginAccountPortableRecord[]> {
   const normalizedUserId = normalizeLoginAccountUserId(userId);
   const rows = await queryDatabase<LoginAccountRow>(`
-    SELECT * FROM login_account
+    SELECT * FROM ${userRecords('account')}
     WHERE user_id = ?
     ORDER BY updated_at DESC
   `, [normalizedUserId]);
@@ -255,10 +256,10 @@ export async function createLoginAccount(input: CreateLoginAccountInput) {
   const passwordEnvelope = encryptPassword(input.password, identity);
   try {
     await executeDatabase(`
-      INSERT INTO login_account (
+      INSERT INTO user_record (kind,
         id, user_id, shared, domain, username, label, login_url, status,
         password_envelope, created_at, updated_at, last_used_at, use_count
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0)
+      ) VALUES ('account',?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0)
     `, [
       id,
       userId,
@@ -285,7 +286,7 @@ export async function updateLoginAccount(id: string, input: UpdateLoginAccountIn
   const normalizedUserId = normalizeLoginAccountUserId(userId);
   return runDatabaseTransaction(async (database) => {
     const previous = await queryDatabaseOne<LoginAccountRow>(`
-      SELECT * FROM login_account WHERE id = ? AND user_id = ?
+      SELECT * FROM ${userRecords('account')} WHERE id = ? AND user_id = ?
     `, [id.trim(), normalizedUserId], database);
     if (!previous) return undefined;
 
@@ -312,10 +313,10 @@ export async function updateLoginAccount(id: string, input: UpdateLoginAccountIn
     const timestamp = now();
     try {
       await executeDatabase(`
-        UPDATE login_account
+        UPDATE user_record
         SET domain = ?, username = ?, label = ?, login_url = ?, status = ?, shared = ?,
             password_envelope = ?, updated_at = ?
-        WHERE id = ? AND user_id = ?
+        WHERE kind='account' AND id = ? AND user_id = ?
       `, [
         domain,
         username,
@@ -336,7 +337,7 @@ export async function updateLoginAccount(id: string, input: UpdateLoginAccountIn
     }
     const updated = await queryDatabaseOne<LoginAccountRow>(`
       SELECT ${metadataColumns}
-      FROM login_account
+      FROM ${userRecords('account')}
       WHERE id = ? AND user_id = ?
     `, [previous.id, previous.user_id], database);
     if (!updated) return undefined;
@@ -347,7 +348,7 @@ export async function updateLoginAccount(id: string, input: UpdateLoginAccountIn
 export async function importLoginAccountsQueued(items: CreateLoginAccountInput[], userId?: unknown) {
   const normalizedUserId = normalizeLoginAccountUserId(userId);
   const existing = await queryDatabase<LoginAccountRow>(`
-    SELECT * FROM login_account WHERE user_id = ?
+    SELECT * FROM ${userRecords('account')} WHERE user_id = ?
   `, [normalizedUserId]);
   const byIdentity = new Map(existing.map((row) => [`${row.domain}\u0001${row.username}`, row]));
   const statements: DatabaseWriteStatement[] = [];
@@ -368,11 +369,11 @@ export async function importLoginAccountsQueued(items: CreateLoginAccountInput[]
     });
     statements.push({
       sql: `
-        INSERT INTO login_account (
+        INSERT INTO user_record (kind,
           id, user_id, shared, domain, username, label, login_url, status,
           password_envelope, created_at, updated_at, last_used_at, use_count
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0)
-        ON CONFLICT(user_id, domain, username) DO UPDATE SET
+        ) VALUES ('account',?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0)
+        ON CONFLICT(user_id, domain, username) WHERE kind='account' DO UPDATE SET
           shared = excluded.shared,
           label = excluded.label,
           login_url = excluded.login_url,
@@ -418,7 +419,7 @@ export async function importLoginAccountsQueued(items: CreateLoginAccountInput[]
 export async function deleteLoginAccount(id: string, userId?: unknown) {
   const normalizedUserId = normalizeLoginAccountUserId(userId);
   const rows = await queryDatabase<{ id: string }>(`
-    DELETE FROM login_account WHERE id = ? AND user_id = ? RETURNING id
+    DELETE FROM user_record WHERE kind='account' AND id = ? AND user_id = ? RETURNING id
   `, [id.trim(), normalizedUserId]);
   return rows.length > 0;
 }
@@ -436,9 +437,9 @@ async function resolveCredentialRow(row: LoginAccountRow, options: ResolveCreden
   }
   const timestamp = now();
   await executeDatabase(`
-    UPDATE login_account
+    UPDATE user_record
     SET last_used_at = ?, use_count = use_count + 1
-    WHERE id = ? AND user_id = ?
+    WHERE kind='account' AND id = ? AND user_id = ?
   `, [timestamp, row.id, row.user_id]);
   return {
     account: metadataFromRow({

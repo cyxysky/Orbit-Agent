@@ -61,8 +61,8 @@ export function splitBrowserChatContextSnapshot<T>(sessionId: string, snapshot: 
     statements: [...Object.entries(records).filter(([id]) => !known?.has(`context:${id}`)).map(([id, value]) => {
       const stored = encodeConversationJson('context', JSON.stringify(value));
       return {
-        sql: `INSERT INTO conversation_record (session_id, kind, id, record_json, record_gzip) VALUES (?, 'context', ?, ?, ?)
-          ON CONFLICT(session_id, kind, id) DO NOTHING`,
+        sql: `INSERT INTO workspace_record (collection,owner_kind,partition_id, kind, id, record_json, record_gzip) VALUES ('conversation','chat',?, 'context', ?, ?, ?)
+          ON CONFLICT(collection,partition_id,kind,scope_id,id) DO NOTHING`,
         params: [sessionId, id, stored.record_json, stored.record_gzip],
       };
     }), ...manifests
@@ -70,8 +70,8 @@ export function splitBrowserChatContextSnapshot<T>(sessionId: string, snapshot: 
         if (!manifest || known?.has(`request:${manifest.id}`)) return [];
         const stored = encodeConversationJson('request', JSON.stringify(manifest));
         return [{
-          sql: `INSERT INTO conversation_record (session_id, kind, id, record_json, record_gzip) VALUES (?, 'request', ?, ?, ?)
-            ON CONFLICT(session_id, kind, id) DO NOTHING`,
+          sql: `INSERT INTO workspace_record (collection,owner_kind,partition_id, kind, id, record_json, record_gzip) VALUES ('conversation','chat',?, 'request', ?, ?, ?)
+            ON CONFLICT(collection,partition_id,kind,scope_id,id) DO NOTHING`,
           params: [sessionId, manifest.id, stored.record_json, stored.record_gzip],
         }];
       })],

@@ -1,3 +1,4 @@
+import { userRecords } from '@/server/storage/record-sources';
 import { existsSync } from 'node:fs';
 import { chromium } from 'patchright';
 import { managedChromiumOptions } from '@cjfclonedeep/capability-sdk/runtime';
@@ -26,7 +27,7 @@ import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 
 export async function readOnboardingState(userId: string): Promise<WebPilotOnboardingState> {
   const row = await queryDatabaseOne<{ onboarding_json: string | null }>(
-    'SELECT onboarding_json FROM application_user WHERE id = ?', [userId]);
+    `SELECT onboarding_json FROM ${userRecords('profile')} WHERE user_id = ?`, [userId]);
   const current = parseDatabaseJson<WebPilotOnboardingState | undefined>(row?.onboarding_json, undefined);
   if (current?.tutorialVersion === WEBPILOT_ONBOARDING_VERSION) return current;
   return writeOnboardingState(userId, { completedSteps: [], status: 'not_started' });
@@ -44,8 +45,8 @@ async function writeOnboardingState(userId: string, input: {
     dismissedAt: input.dismissedAt, updatedAt: timestamp,
   };
   await executeDatabase(
-    'INSERT INTO application_user(id,onboarding_json,created_at,updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET onboarding_json=excluded.onboarding_json',
-    [userId, JSON.stringify(state), timestamp, timestamp]);
+    "INSERT INTO user_record(kind,user_id,id,onboarding_json,created_at,updated_at) VALUES ('profile',?, ?, ?, ?, ?) ON CONFLICT(kind,user_id,id) DO UPDATE SET onboarding_json=excluded.onboarding_json",
+    [userId, userId, JSON.stringify(state), timestamp, timestamp]);
   return state;
 }
 

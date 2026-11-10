@@ -1,3 +1,4 @@
+import { userRecords } from '@/server/storage/record-sources';
 import { normalizeApplicationUserId } from '@/server/auth/user-context';
 import { executeDatabase, queryDatabase, type DatabaseExecutor } from '@/server/db/database';
 import { decryptCredentialSecret, encryptCredentialSecret } from './credential-master-key';
@@ -99,13 +100,13 @@ export async function saveBrowserDomainCookie(userIdValue: unknown, domainValue:
   const cookies = parseBrowserCookieHeader(cookie, domain);
   const timestamp = now();
   await executeDatabase(`
-    INSERT INTO browser_domain_cookie (
-      user_id, domain, cookie_envelope, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(user_id, domain) DO UPDATE SET
+    INSERT INTO user_record (
+      kind, id, user_id, domain, cookie_envelope, created_at, updated_at
+    ) VALUES ('cookie',?, ?, ?, ?, ?, ?)
+    ON CONFLICT(kind,user_id,id) DO UPDATE SET
       cookie_envelope = excluded.cookie_envelope,
       updated_at = excluded.updated_at
-  `, [userId, domain, encryptCookie(cookie, userId, domain), timestamp, timestamp], executor);
+  `, [domain, userId, domain, encryptCookie(cookie, userId, domain), timestamp, timestamp], executor);
   return { cookieCount: cookies.length, domain, updatedAt: timestamp, userId };
 }
 
@@ -113,7 +114,7 @@ export async function readBrowserDomainCookies(userIdValue: unknown) {
   const userId = normalizeApplicationUserId(userIdValue);
   const rows = await queryDatabase<CookieRow>(`
     SELECT user_id, domain, cookie_envelope, created_at, updated_at
-    FROM browser_domain_cookie
+    FROM ${userRecords('cookie')}
     WHERE user_id = ?
     ORDER BY updated_at DESC
   `, [userId]);

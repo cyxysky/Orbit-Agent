@@ -1,7 +1,8 @@
+import { workspaceEntities } from './record-sources';
 import { databaseDriver, executeDatabase, type DatabaseExecutor } from '@/server/db/database';
 
 export function runtimeOwnerStatement(id: string) {
-  return { sql: 'INSERT INTO agent_runtime_owner (id) VALUES (?) ON CONFLICT (id) DO NOTHING', params: [id] };
+  return { sql: `INSERT INTO workspace_entity (kind,id) VALUES ('runtime',?) ON CONFLICT(kind,id) DO NOTHING`, params: [id] };
 }
 
 export async function ensureRuntimeOwner(id: string, executor: DatabaseExecutor) {
@@ -12,5 +13,5 @@ export async function ensureRuntimeOwner(id: string, executor: DatabaseExecutor)
 /** Serialize bounded per-execution collections before reading their count/revision. */
 export async function lockRuntimeOwner(id: string, executor: DatabaseExecutor) {
   await ensureRuntimeOwner(id, executor);
-  if (databaseDriver() === 'postgres') await executeDatabase('SELECT id FROM agent_runtime_owner WHERE id = ? FOR UPDATE', [id], executor);
+  if (databaseDriver() === 'postgres') await executeDatabase(`SELECT id FROM ${workspaceEntities('runtime')} WHERE id = ? FOR UPDATE`, [id], executor);
 }

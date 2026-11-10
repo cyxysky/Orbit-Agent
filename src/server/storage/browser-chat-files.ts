@@ -1,4 +1,4 @@
-import { conversationRecords } from '@/server/storage/record-sources';
+import { conversationRecords, workspaceEntities } from './record-sources';
 import { databaseDriver, queryDatabase, queryDatabaseOne } from '@/server/db/database';
 import type { BrowserChatArtifactSummary, BrowserChatMessageFileGroup } from '@/lib/browser-chat-artifacts';
 import { browserChatDeliveredArtifacts } from '@/lib/browser-chat-delivered-artifacts';
@@ -6,7 +6,7 @@ import { browserChatDeliveredArtifacts } from '@/lib/browser-chat-delivered-arti
 /** Include every output message in this conversation, independently of loaded history pages. */
 export async function readBrowserChatMessageFileGroups(sessionId: string, userId: string): Promise<BrowserChatMessageFileGroup[] | undefined> {
   const session = await queryDatabaseOne<{ id: string }>(
-    'SELECT id FROM browser_chat_session WHERE id = ? AND user_id = ?', [sessionId, userId],
+    `SELECT id FROM ${workspaceEntities('chat')} WHERE id = ? AND user_id = ?`, [sessionId, userId],
   );
   if (!session) return undefined;
   const field = (key: string) => databaseDriver() === 'postgres'
@@ -17,7 +17,7 @@ export async function readBrowserChatMessageFileGroups(sessionId: string, userId
       CASE WHEN ${field('role')} = 'user' THEN SUBSTR(${field('content')}, 1, 320) ELSE ${field('content')} END AS content,
       CASE WHEN f.id IS NOT NULL THEN ${field('parts')} ELSE NULL END AS parts_json,
       COALESCE(${field('createdAt')}, m.time) AS created_at, f.record_json
-      FROM ${conversationRecords('message')} m JOIN browser_chat_session s ON s.id = m.session_id
+      FROM ${conversationRecords('message')} m JOIN ${workspaceEntities('chat')} s ON s.id = m.session_id
       LEFT JOIN ${conversationRecords('file')} f ON f.session_id = m.session_id AND f.id = m.id
       WHERE m.session_id = ? AND s.user_id = ?
         AND (${field('role')} = 'user' OR f.id IS NOT NULL)

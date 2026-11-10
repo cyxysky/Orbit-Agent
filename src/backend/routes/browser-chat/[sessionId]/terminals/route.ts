@@ -1,4 +1,5 @@
 import { runtimeConfiguration } from '@/server/settings/runtime-configuration';
+import { workspaceEntities } from '@/server/storage/record-sources';
 import { terminalHttpResponse, createPollingTerminalHttpOperations } from '@cjfclonedeep/capability-sdk/execution/terminal/http';
 import { managedToolConnector } from '@/server/capabilities/managed-tools';
 import type { CapabilityResult } from '@cjfclonedeep/capability-sdk';
@@ -19,7 +20,7 @@ async function authorizedManager(request: Request, context: BrowserChatSessionRo
   const { sessionId } = await context.params;
   const userId = requestApplicationUserId(request);
   const session = await queryDatabaseOne<{ status: string }>(
-    'SELECT status FROM browser_chat_session WHERE id = ? AND user_id = ?', [sessionId, userId],
+    `SELECT status FROM ${workspaceEntities('chat')} WHERE id = ? AND user_id = ?`, [sessionId, userId],
   );
   if (!session) throw new ApiRequestError('对话不存在。', { code: ERROR_CODES.NOT_FOUND, status: 404 });
   const connector = await managedToolConnector({ id: 'terminal', userId, sessionId, runId: sessionId, observe: request.method === 'GET' });

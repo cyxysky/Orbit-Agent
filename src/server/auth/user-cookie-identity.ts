@@ -1,3 +1,4 @@
+import { userRecords } from '@/server/storage/record-sources';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { credentialMasterKey, encryptCredentialSecret } from '@/server/credentials/credential-master-key';
 import { normalizeBrowserCookieDomain, parseBrowserCookieHeader, saveBrowserDomainCookie } from '@/server/credentials/browser-domain-cookie-vault';
@@ -28,12 +29,12 @@ export async function bindUserIdentityCookie(request: Request, domainValue: stri
   const digest = fingerprint(cookie, domain), timestamp = new Date().toISOString();
   const encrypted = encryptCredentialSecret(cookie, Buffer.from(JSON.stringify(['user-cookie', principal.userId, domain])));
   return runDatabaseTransaction(async database => {
-    const duplicate = await queryDatabaseOne<{ id: string }>('SELECT id FROM application_user WHERE cookie_domain = ? AND cookie_fingerprint = ? AND id <> ?', [domain, digest, principal.userId], database);
+    const duplicate = await queryDatabaseOne<{ id: string }>(`SELECT id FROM ${userRecords('profile')} WHERE cookie_domain = ? AND cookie_fingerprint = ? AND id <> ?`, [domain, digest, principal.userId], database);
     if (duplicate) throw new ApiRequestError('此登录 Cookie 已绑定其他用户。', { status: 409 });
-    await executeDatabase(`INSERT INTO application_user(id, cookie, cookie_domain, cookie_fingerprint, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET cookie=excluded.cookie,
+    await executeDatabase(`INSERT INTO user_record(kind,user_id,id, cookie, cookie_domain, cookie_fingerprint, created_at, updated_at)
+      VALUES ('profile',?, ?, ?, ?, ?, ?, ?) ON CONFLICT(kind,user_id,id) DO UPDATE SET cookie=excluded.cookie,
       cookie_domain=excluded.cookie_domain, cookie_fingerprint=excluded.cookie_fingerprint, updated_at=excluded.updated_at`,
-    [principal.userId, encrypted, domain, digest, timestamp, timestamp], database);
+    [principal.userId, principal.userId, encrypted, domain, digest, timestamp, timestamp], database);
     // Tickets are short lived, but a replaced identity must invalidate outstanding ones immediately.
     await executeDatabase("DELETE FROM request_record WHERE kind='ticket' AND user_id = ?", [principal.userId], database);
     const businessCookies = parseBrowserCookieHeader(request.headers.get('cookie') || '', domain)
@@ -44,7 +45,7 @@ export async function bindUserIdentityCookie(request: Request, domainValue: stri
 export async function assertUserIdentityCookie(request: Request, userId: string) {
   if (!userCookieCheckEnabled()) return;
   const identity = await queryDatabaseOne<{ cookie_domain: string; cookie_fingerprint: string }>(
-    'SELECT cookie_domain, cookie_fingerprint FROM application_user WHERE id = ?', [userId]);
+    `SELECT cookie_domain, cookie_fingerprint FROM ${userRecords('profile')} WHERE user_id = ?`, [userId]);
   if (!identity?.cookie_domain || !identity.cookie_fingerprint) throw new ApiRequestError('此用户尚未绑定登录 Cookie。请先完成可信身份绑定。', { status: 401 });
   const cookie = canonicalIdentityCookie(request.headers.get('cookie') || '', identity.cookie_domain);
   const supplied = Buffer.from(fingerprint(cookie, identity.cookie_domain)), expected = Buffer.from(identity.cookie_fingerprint);

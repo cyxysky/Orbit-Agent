@@ -1,3 +1,4 @@
+import { workspaceRecords } from '../../storage/record-sources';
 import { queryDatabaseOne, executeDatabase, runDatabaseTransaction } from '@/server/db/database';
 import { ensureRuntimeOwner } from '@/server/storage/runtime-owner';
 import type { ModelMessage } from 'ai';
@@ -24,7 +25,7 @@ export type CodexRuntimeBinding = {
 
 export async function readCodexRuntimeBinding(sessionId: string, scope: string, userId?: string) {
   const row = await queryDatabaseOne<{ record_json: string }>(
-    `SELECT record_json FROM execution_record WHERE kind='state' AND id='current' AND session_id = ? AND scope_id = ?`, [sessionId, `codex-app-server:${scope}`],
+    `SELECT record_json FROM ${workspaceRecords('execution')} WHERE kind='state' AND id='current' AND session_id = ? AND scope_id = ?`, [sessionId, `codex-app-server:${scope}`],
   );
   if (!row) return;
   const binding = JSON.parse(row.record_json) as CodexRuntimeBinding;
@@ -38,12 +39,12 @@ export async function writeCodexRuntimeBinding(sessionId: string, scope: string,
   if (!previous) {
     await runDatabaseTransaction(async executor => {
       await ensureRuntimeOwner(sessionId, executor);
-      await executeDatabase(`INSERT INTO execution_record (session_id, scope_id, kind, id, revision, record_json) VALUES (?, ?, 'state', 'current', ?, ?)`,
+      await executeDatabase(`INSERT INTO workspace_record (collection,owner_kind,partition_id, scope_id, kind, id, revision, record_json) VALUES ('execution','runtime',?, ?, 'state', 'current', ?, ?)`,
         [sessionId, `codex-app-server:${scope}`, next.revision, JSON.stringify(next)], executor);
     });
   } else {
     const row = await queryDatabaseOne<{ revision: number }>(
-      `UPDATE execution_record SET revision = ?, record_json = ? WHERE kind='state' AND id='current' AND session_id = ? AND scope_id = ? AND revision = ? RETURNING revision`,
+      `UPDATE workspace_record SET revision = ?, record_json = ? WHERE collection='execution' AND kind='state' AND id='current' AND partition_id = ? AND scope_id = ? AND revision = ? RETURNING revision`,
       [next.revision, JSON.stringify(next), sessionId, `codex-app-server:${scope}`, previous],
     );
     if (!row) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Another writer changed this Codex thread binding.');

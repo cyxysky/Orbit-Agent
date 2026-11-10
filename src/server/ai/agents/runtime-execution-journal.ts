@@ -1,3 +1,4 @@
+import { workspaceRecords } from '../../storage/record-sources';
 import { randomUUID } from 'node:crypto';
 import type { ModelMessage } from 'ai';
 import { queryDatabaseOne, queryDatabase, executeDatabase, runDatabaseTransaction, type DatabaseExecutor } from '@/server/db/database';
@@ -11,7 +12,7 @@ export class RuntimeExecutionJournal {
   state: RuntimeJournalState = { revision: 0 };
   constructor(readonly sessionId: string, readonly scopeId = 'main') {}
   async load() {
-    const row = await queryDatabaseOne<{ record_json: string }>(`SELECT record_json FROM execution_record WHERE kind='state' AND id='current' AND session_id = ? AND scope_id = ?`, [this.sessionId, this.scopeId]);
+    const row = await queryDatabaseOne<{ record_json: string }>(`SELECT record_json FROM ${workspaceRecords('execution')} WHERE kind='state' AND id='current' AND session_id = ? AND scope_id = ?`, [this.sessionId, this.scopeId]);
     this.state = row ? JSON.parse(row.record_json) : { revision: 0 };
     return this.state;
   }
@@ -21,9 +22,9 @@ export class RuntimeExecutionJournal {
     next.lastEvent = { name: event, at: new Date().toISOString() };
     await runDatabaseTransaction(async executor => {
       if (!previous) await ensureRuntimeOwner(this.sessionId, executor);
-      if (!previous) await executeDatabase(`INSERT INTO execution_record (session_id, scope_id, kind, id, revision, record_json) VALUES (?, ?, 'state', 'current', ?, ?)`, [this.sessionId, this.scopeId, next.revision, JSON.stringify(next)], executor);
+      if (!previous) await executeDatabase(`INSERT INTO workspace_record (collection,owner_kind,partition_id, scope_id, kind, id, revision, record_json) VALUES ('execution','runtime',?, ?, 'state', 'current', ?, ?)`, [this.sessionId, this.scopeId, next.revision, JSON.stringify(next)], executor);
       else {
-        const rows = await queryDatabase(`UPDATE execution_record SET revision = ?, record_json = ? WHERE kind='state' AND id='current' AND session_id = ? AND scope_id = ? AND revision = ? RETURNING session_id`, [next.revision, JSON.stringify(next), this.sessionId, this.scopeId, previous], executor);
+        const rows = await queryDatabase(`UPDATE workspace_record SET revision = ?, record_json = ? WHERE collection='execution' AND kind='state' AND id='current' AND partition_id = ? AND scope_id = ? AND revision = ? RETURNING partition_id`, [next.revision, JSON.stringify(next), this.sessionId, this.scopeId, previous], executor);
         if (!rows.length) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Agent runtime revision conflict; another writer owns this state.');
       }
       await effect?.(executor);
@@ -63,7 +64,7 @@ export class RuntimeExecutionJournal {
     if (this.state.pending) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Cannot replace an uncheckpointed tool exchange.');
     if (new Set(calls.map(call => call.toolCallId)).size !== calls.length) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Duplicate tool call IDs in decision.');
     await this.save('model_planned', n => { n.pending = { id: randomUUID(), phase: 'planned', messages, calls, results: [], startedCallIds: [] }; }, async executor => {
-      for (const call of calls) await executeDatabase(`INSERT INTO execution_record (session_id, scope_id, kind, id) VALUES (?, ?, 'call', ?)`, [this.sessionId, this.scopeId, call.toolCallId], executor);
+      for (const call of calls) await executeDatabase(`INSERT INTO workspace_record (collection,owner_kind,partition_id, scope_id, kind, id) VALUES ('execution','runtime',?, ?, 'call', ?)`, [this.sessionId, this.scopeId, call.toolCallId], executor);
     });
   }
   async begin(callId?: string) {

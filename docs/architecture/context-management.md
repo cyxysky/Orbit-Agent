@@ -21,7 +21,7 @@
 
 ## 持久化与中断
 
-`execution_record(kind=state)` 的 `codex-app-server:<scope>` 记录保存线程所有权、版本、迁移状态和待确认回执。Codex rollout 保存在 `APP_DATA_DIR/codex/<user hash>`。数据库绑定与该目录必须一起保留；丢失 rollout 会报错，不会透明重建空会话。
+`workspace_record(collection=execution, kind=state)` 的 `codex-app-server:<scope>` 记录保存线程所有权、版本、迁移状态和待确认回执。Codex rollout 保存在 `APP_DATA_DIR/codex/<user hash>`。数据库绑定与该目录必须一起保留；丢失 rollout 会报错，不会透明重建空会话。
 
 原有执行 journal 仅负责操作安全和审计。调用 ID 在执行前持久登记，重复 ID 不重放。结果写入 journal 和待投递记录后才能回到 Codex；收到 dynamicToolCall 完成通知后才清除待投递记录。进程中断后，区分未执行、结果未知和已完成但未确认投递的操作，把恢复证据注入线程，要求检查当前状态，禁止透明重放。浏览器视觉引用亦持久保存，恢复后可继续按已有图片 ID 取证。
 

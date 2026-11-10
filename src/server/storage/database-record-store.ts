@@ -1,4 +1,4 @@
-import { conversationRecords } from '@/server/storage/record-sources';
+import { conversationRecords, knowledgeRecords, workspaceEntities, workspaceRecords } from './record-sources';
 import { hydrateBrowserChatContextSnapshot, splitBrowserChatContextSnapshot, markBrowserChatContextCommitted } from './browser-chat-context-store';
 import type { EntityManager } from 'typeorm';
 import type { SkillRecord, RuntimeSettingRecord } from '@/server/ai/schemas/runtime.schema';
@@ -119,7 +119,7 @@ export async function readSkills(userId?: string, input: {
     : undefined;
   if (limit) values.push(limit);
   const rows = await queryDatabase<SkillJsonRow>(`
-    SELECT id, user_id, shared, record_json FROM skill
+    SELECT id, user_id, shared, record_json FROM ${knowledgeRecords('skill')}
     ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''}
     ORDER BY updated_at DESC, id DESC
     ${limit ? 'LIMIT ?' : ''}
@@ -132,9 +132,9 @@ export async function readSkills(userId?: string, input: {
 
 export async function readSkillById(skillId: string, userId?: string) {
   const row = userId === undefined
-    ? await queryDatabaseOne<SkillJsonRow>('SELECT user_id, shared, record_json FROM skill WHERE id = ?', [skillId])
+    ? await queryDatabaseOne<SkillJsonRow>(`SELECT user_id, shared, record_json FROM ${knowledgeRecords('skill')} WHERE id = ?`, [skillId])
     : await queryDatabaseOne<SkillJsonRow>(`
-        SELECT user_id, shared, record_json FROM skill
+        SELECT user_id, shared, record_json FROM ${knowledgeRecords('skill')}
         WHERE id = ? AND (user_id = ? OR shared = ?)
       `, [skillId, userId, true]);
   if (!row) return undefined;
@@ -146,7 +146,7 @@ export async function readSkillsByIds(skillIds: string[], userId: string) {
   const ids = Array.from(new Set(skillIds.map((id) => id.trim()).filter(Boolean))).slice(0, 200);
   if (!ids.length) return [];
   const rows = await queryDatabase<SkillJsonRow>(`
-    SELECT user_id, shared, record_json FROM skill
+    SELECT user_id, shared, record_json FROM ${knowledgeRecords('skill')}
     WHERE id IN (${ids.map(() => '?').join(', ')}) AND (user_id = ? OR shared = ?)
   `, [...ids, userId, true]);
   return rows.map((row) => {
@@ -157,15 +157,15 @@ export async function readSkillsByIds(skillIds: string[], userId: string) {
 
 async function upsertSkillRecord(executor: DatabaseExecutor, skill: SkillRecord, userId: string) {
   await executeDatabase(`
-    INSERT INTO skill (id, user_id, shared, title, status, record_json, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET
+    INSERT INTO knowledge_record (kind,id, user_id, shared, title, status, record_json, created_at, updated_at)
+    VALUES ('skill',?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(kind,id) DO UPDATE SET
       shared = excluded.shared,
       title = excluded.title,
       status = excluded.status,
       record_json = excluded.record_json,
       updated_at = excluded.updated_at
-    WHERE skill.user_id = excluded.user_id
+    WHERE knowledge_record.user_id = excluded.user_id
   `, [skill.id, userId, skill.shared, skill.title, skill.status, JSON.stringify(skill), skill.createdAt, skill.updatedAt], executor);
 }
 
@@ -182,24 +182,24 @@ export async function writeSkillRecords(items: Array<{ skill: SkillRecord; userI
 export function writeSkillRecordsQueued(items: Array<{ skill: SkillRecord; userId: string }>) {
   return queueDatabaseWrite(items.map(({ skill, userId }) => ({
     sql: `
-      INSERT INTO skill (id, user_id, shared, title, status, record_json, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
+      INSERT INTO knowledge_record (kind,id, user_id, shared, title, status, record_json, created_at, updated_at)
+      VALUES ('skill',?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(kind,id) DO UPDATE SET
         shared = excluded.shared,
         title = excluded.title,
         status = excluded.status,
         record_json = excluded.record_json,
         updated_at = excluded.updated_at
-      WHERE skill.user_id = excluded.user_id
+      WHERE knowledge_record.user_id = excluded.user_id
     `,
     params: [skill.id, userId, skill.shared, skill.title, skill.status, JSON.stringify(skill), skill.createdAt, skill.updatedAt],
   })));
 }
 
 export async function deleteSkillRecord(skillId: string, userId: string) {
-  const existing = await queryDatabaseOne('SELECT id FROM skill WHERE id = ? AND user_id = ?', [skillId, userId]);
+  const existing = await queryDatabaseOne(`SELECT id FROM ${knowledgeRecords('skill')} WHERE id = ? AND user_id = ?`, [skillId, userId]);
   if (!existing) return false;
-  await executeDatabase('DELETE FROM skill WHERE id = ? AND user_id = ?', [skillId, userId]);
+  await executeDatabase(`DELETE FROM knowledge_record WHERE kind='skill' AND id = ? AND user_id = ?`, [skillId, userId]);
   return true;
 }
 
@@ -246,7 +246,7 @@ export async function readPersonalMemoryRecords<T>(input: {
     : undefined;
   if (limit) values.push(limit);
   const rows = await queryDatabase<JsonRow>(`
-    SELECT record_json FROM personal_memory_item
+    SELECT record_json FROM ${knowledgeRecords('memory')}
     ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''}
     ORDER BY updated_at DESC
     ${limit ? 'LIMIT ?' : ''}
@@ -263,7 +263,7 @@ export async function readPersonalMemoryRecordByIdentity<T>(input: {
   userId: string;
 }) {
   const row = await queryDatabaseOne<JsonRow>(`
-    SELECT record_json FROM personal_memory_item
+    SELECT record_json FROM ${knowledgeRecords('memory')}
     WHERE user_id = ? AND scope = ? AND domain = ? AND type = ? AND LOWER(memory_key) = LOWER(?)
     LIMIT 1
   `, [input.userId, input.scope, input.domain, input.type, input.key]);
@@ -272,10 +272,10 @@ export async function readPersonalMemoryRecordByIdentity<T>(input: {
 
 async function upsertPersonalMemoryRecord<T extends PersonalMemoryRecordFields>(executor: DatabaseExecutor, item: T) {
   await executeDatabase(`
-    INSERT INTO personal_memory_item (
+    INSERT INTO knowledge_record (kind,
       id, user_id, shared, scope, domain, type, memory_key, status, record_json, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET
+    ) VALUES ('memory',?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(kind,id) DO UPDATE SET
       shared = excluded.shared,
       scope = excluded.scope,
       domain = excluded.domain,
@@ -284,7 +284,7 @@ async function upsertPersonalMemoryRecord<T extends PersonalMemoryRecordFields>(
       status = excluded.status,
       record_json = excluded.record_json,
       updated_at = excluded.updated_at
-    WHERE personal_memory_item.user_id = excluded.user_id
+    WHERE knowledge_record.user_id = excluded.user_id
   `, [
     item.id, item.userId, item.shared, item.scope, item.domain, item.type,
     item.key, item.status, JSON.stringify(item), item.createdAt, item.updatedAt,
@@ -303,7 +303,7 @@ export async function writePersonalMemoryRecords<T extends PersonalMemoryRecordF
 
 export async function hasPersonalMemoryReceipt(userId: string, sourceKey: string) {
   return Boolean(await queryDatabaseOne(
-    "SELECT id FROM memory_operation WHERE user_id = ? AND kind='receipt' AND id = ?", [userId, sourceKey],
+    `SELECT id FROM ${workspaceRecords('memory')} WHERE user_id = ? AND kind='receipt' AND id = ?`, [userId, sourceKey],
   ));
 }
 
@@ -319,11 +319,11 @@ export async function commitPersonalMemoryReview<T extends PersonalMemoryRecordF
     if (databaseDriver() === 'postgres') {
       await queryDatabase('SELECT pg_advisory_xact_lock(hashtext(?))', [input.userId], manager);
     }
-    const receipt = await queryDatabaseOne("SELECT id FROM memory_operation WHERE user_id = ? AND kind='receipt' AND id = ?",
+    const receipt = await queryDatabaseOne(`SELECT id FROM ${workspaceRecords('memory')} WHERE user_id = ? AND kind='receipt' AND id = ?`,
       [input.userId, input.sourceKey], manager);
     if (receipt) return 'duplicate' as const;
     const rows = await queryDatabase<JsonRow>(
-      `SELECT record_json FROM personal_memory_item WHERE user_id = ? OR shared = ?${databaseDriver() === 'postgres' ? ' FOR UPDATE' : ''}`,
+      `SELECT record_json FROM ${knowledgeRecords('memory')} WHERE user_id = ? OR shared = ?${databaseDriver() === 'postgres' ? ' FOR UPDATE' : ''}`,
       [input.userId, true], manager,
     );
     const current = rows.map((row) => parseDatabaseJson<T | undefined>(row.record_json, undefined))
@@ -336,7 +336,7 @@ export async function commitPersonalMemoryReview<T extends PersonalMemoryRecordF
         ...(latest ? { useCount: latest.useCount, lastUsedAt: latest.lastUsedAt } : {}),
       });
     }
-    await executeDatabase("INSERT INTO memory_operation (user_id, kind, id, status, created_at) VALUES (?, 'receipt', ?, 'completed', ?)",
+    await executeDatabase(`INSERT INTO workspace_record (collection,partition_id, kind, id, status, created_at) VALUES ('memory',?, 'receipt', ?, 'completed', ?)`,
       [input.userId, input.sourceKey, now()], manager);
     await input.afterCommit?.(manager);
     return 'committed' as const;
@@ -346,10 +346,10 @@ export async function commitPersonalMemoryReview<T extends PersonalMemoryRecordF
 export function writePersonalMemoryRecordsQueued<T extends PersonalMemoryRecordFields>(items: T[]) {
   return queueDatabaseWrite(items.map((item) => ({
     sql: `
-      INSERT INTO personal_memory_item (
+      INSERT INTO knowledge_record (kind,
         id, user_id, shared, scope, domain, type, memory_key, status, record_json, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
+      ) VALUES ('memory',?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(kind,id) DO UPDATE SET
         shared = excluded.shared,
         scope = excluded.scope,
         domain = excluded.domain,
@@ -358,7 +358,7 @@ export function writePersonalMemoryRecordsQueued<T extends PersonalMemoryRecordF
         status = excluded.status,
         record_json = excluded.record_json,
         updated_at = excluded.updated_at
-      WHERE personal_memory_item.user_id = excluded.user_id
+      WHERE knowledge_record.user_id = excluded.user_id
     `,
     params: [
       item.id, item.userId, item.shared, item.scope, item.domain, item.type,
@@ -368,9 +368,9 @@ export function writePersonalMemoryRecordsQueued<T extends PersonalMemoryRecordF
 }
 
 export async function deletePersonalMemoryRecord(id: string, userId: string) {
-  const existing = await queryDatabaseOne('SELECT id FROM personal_memory_item WHERE id = ? AND user_id = ?', [id, userId]);
+  const existing = await queryDatabaseOne(`SELECT id FROM ${knowledgeRecords('memory')} WHERE id = ? AND user_id = ?`, [id, userId]);
   if (!existing) return false;
-  await executeDatabase('DELETE FROM personal_memory_item WHERE id = ? AND user_id = ?', [id, userId]);
+  await executeDatabase(`DELETE FROM knowledge_record WHERE kind='memory' AND id = ? AND user_id = ?`, [id, userId]);
   return true;
 }
 
@@ -382,7 +382,7 @@ export async function markPersonalMemoryRecordsUsed<T extends PersonalMemoryReco
   if (!normalizedIds.length) return [];
   return runDatabaseTransaction(async (manager) => {
     const rows = await queryDatabase<JsonRow>(`
-      SELECT record_json FROM personal_memory_item
+      SELECT record_json FROM ${knowledgeRecords('memory')}
       WHERE id IN (${normalizedIds.map(() => '?').join(', ')})
     `, normalizedIds, manager);
     const items = rows.map((row) => parseDatabaseJson<T | undefined>(row.record_json, undefined))
@@ -425,7 +425,7 @@ function readBrowserChatSteps<T>(sessionId: string) {
 }
 
 export async function readBrowserChatSessionRecord<T extends { logs?: unknown[]; messages?: unknown[]; steps?: unknown[] }>(sessionId: string) {
-  const row = await queryDatabaseOne<{ snapshot_json?: string }>('SELECT snapshot_json FROM browser_chat_session WHERE id = ?', [sessionId]);
+  const row = await queryDatabaseOne<{ snapshot_json?: string }>(`SELECT snapshot_json FROM ${workspaceEntities('chat')} WHERE id = ?`, [sessionId]);
   const snapshot = parseDatabaseJson<T | undefined>(row?.snapshot_json, undefined);
   if (!snapshot) return undefined;
   const [messages, steps, logs] = await Promise.all([
@@ -456,7 +456,7 @@ export async function readBrowserChatSessionSummaries<T>(input: {
     values.push(input.status);
   }
   if (input.hasMessagesOnly) clauses.push(`EXISTS (
-    SELECT 1 FROM ${conversationRecords('message')} AS chat_records WHERE chat_records.session_id = browser_chat_session.id
+    SELECT 1 FROM ${conversationRecords('message')} AS chat_records WHERE chat_records.session_id = chat.id
   )`);
   if (input.beforeCreatedAt && input.beforeId) {
     clauses.push('(created_at < ? OR (created_at = ? AND id < ?))');
@@ -469,7 +469,7 @@ export async function readBrowserChatSessionSummaries<T>(input: {
   if (limit) values.push(limit);
   if (limit && offset) values.push(offset);
   const rows = await queryDatabase<{ summary_json?: string }>(`
-    SELECT summary_json FROM browser_chat_session
+    SELECT summary_json FROM ${workspaceEntities('chat')} AS chat
     ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''}
     ORDER BY created_at DESC, id DESC
     ${limit ? 'LIMIT ?' : ''}
@@ -480,15 +480,15 @@ export async function readBrowserChatSessionSummaries<T>(input: {
 }
 
 const sessionUpsertSql = `
-  INSERT INTO browser_chat_session (
-    id, user_id, title, status, revision, snapshot_json, summary_json, created_at, updated_at
-  ) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)
-  ON CONFLICT(id) DO UPDATE SET
+  INSERT INTO workspace_entity (kind,
+    id, user_id, title, status, revision, record_json, summary_json, created_at, updated_at
+  ) VALUES ('chat',?, ?, ?, ?, 1, ?, ?, ?, ?)
+  ON CONFLICT(kind,id) DO UPDATE SET
     user_id = excluded.user_id,
     title = excluded.title,
     status = excluded.status,
-    revision = browser_chat_session.revision + 1,
-    snapshot_json = excluded.snapshot_json,
+    revision = workspace_entity.revision + 1,
+    record_json = excluded.record_json,
     summary_json = excluded.summary_json,
     updated_at = excluded.updated_at
 `;
@@ -513,24 +513,24 @@ async function upsertSessionRows<
   ], manager);
   for (const statement of contextWrite.statements) await executeDatabase(statement.sql, statement.params, manager);
   for (const message of delta.messages || []) await executeDatabase(`
-    INSERT INTO conversation_record (session_id, kind, id, time, record_json) VALUES (?, 'message', ?, ?, ?)
-    ON CONFLICT(session_id, kind, id) DO UPDATE SET time = excluded.time, record_json = excluded.record_json
+    INSERT INTO workspace_record (collection,owner_kind,partition_id, kind, id, time, record_json) VALUES ('conversation','chat',?, 'message', ?, ?, ?)
+    ON CONFLICT(collection,partition_id,kind,scope_id,id) DO UPDATE SET time = excluded.time, record_json = excluded.record_json
   `, [snapshot.id, message.id, message.updatedAt || message.createdAt, JSON.stringify(message)], manager);
   for (const step of delta.steps || []) await executeDatabase(`
-    INSERT INTO conversation_record (session_id, kind, id, step_index, record_json) VALUES (?, 'step', ?, ?, ?)
-    ON CONFLICT(session_id, kind, id) DO UPDATE SET record_json = excluded.record_json
+    INSERT INTO workspace_record (collection,owner_kind,partition_id, kind, id, step_index, record_json) VALUES ('conversation','chat',?, 'step', ?, ?, ?)
+    ON CONFLICT(collection,partition_id,kind,scope_id,id) DO UPDATE SET record_json = excluded.record_json
   `, [snapshot.id, String(step.index), step.index, JSON.stringify(step)], manager);
   for (const log of delta.logs || []) {
     const stored = encodeConversationJson('log', JSON.stringify(log));
     await executeDatabase(`
-    INSERT INTO conversation_record (session_id, kind, id, time, message_id, record_json, record_gzip) VALUES (?, 'log', ?, ?, ?, ?, ?)
-    ON CONFLICT(session_id, kind, id) DO UPDATE SET
+    INSERT INTO workspace_record (collection,owner_kind,partition_id, kind, id, time, message_id, record_json, record_gzip) VALUES ('conversation','chat',?, 'log', ?, ?, ?, ?, ?)
+    ON CONFLICT(collection,partition_id,kind,scope_id,id) DO UPDATE SET
       time = excluded.time, message_id = excluded.message_id, record_json = excluded.record_json, record_gzip = excluded.record_gzip
   `, [snapshot.id, log.id, log.time, log.messageId || null, stored.record_json, stored.record_gzip], manager);
   }
-  for (const id of delta.removedMessageIds || []) await executeDatabase(`DELETE FROM conversation_record WHERE kind='message' AND session_id = ? AND id = ?`, [snapshot.id, id], manager);
-  for (const index of delta.removedStepIndexes || []) await executeDatabase(`DELETE FROM conversation_record WHERE kind='step' AND session_id = ? AND step_index = ?`, [snapshot.id, index], manager);
-  for (const id of delta.removedLogIds || []) await executeDatabase(`DELETE FROM conversation_record WHERE kind='log' AND session_id = ? AND id = ?`, [snapshot.id, id], manager);
+  for (const id of delta.removedMessageIds || []) await executeDatabase(`DELETE FROM workspace_record WHERE collection='conversation' AND kind='message' AND partition_id = ? AND id = ?`, [snapshot.id, id], manager);
+  for (const index of delta.removedStepIndexes || []) await executeDatabase(`DELETE FROM workspace_record WHERE collection='conversation' AND kind='step' AND partition_id = ? AND step_index = ?`, [snapshot.id, index], manager);
+  for (const id of delta.removedLogIds || []) await executeDatabase(`DELETE FROM workspace_record WHERE collection='conversation' AND kind='log' AND partition_id = ? AND id = ?`, [snapshot.id, id], manager);
   return contextWrite.committedKeys;
 }
 
@@ -578,12 +578,12 @@ export async function readReferencedUploadPaths(userId?: string) {
   const rows = await queryDatabase<JsonRow>(`SELECT record_json FROM ${conversationRecords('message')} WHERE record_json LIKE ?`, [`%${prefix}%`]);
   // Received files can wait for a separate text message before entering chat history.
   // Keep them under the same quota/retention rules without deleting referenced inputs.
-  const pending = await queryDatabase<JsonRow>(`SELECT m.record_json FROM communication_inbound m
-    JOIN communication_conversation c ON c.id = m.conversation_id
+  const pending = await queryDatabase<JsonRow>(`SELECT m.record_json FROM ${workspaceRecords('communication')} m
+    JOIN ${workspaceEntities('communication')} c ON c.id = m.conversation_id
     WHERE m.status IN ('received', 'waiting', 'running', 'replying')${userId ? ' AND c.user_id = ?' : ''}`,
   userId ? [userId] : []);
   const sessions = pending.length ? new Set((await queryDatabase<{ id: string }>(
-    `SELECT id FROM browser_chat_session WHERE status <> 'closed'${userId ? ' AND user_id = ?' : ''}`, userId ? [userId] : [],
+    `SELECT id FROM ${workspaceEntities('chat')} WHERE status <> 'closed'${userId ? ' AND user_id = ?' : ''}`, userId ? [userId] : [],
   )).map(session => session.id)) : new Set<string>();
   const retainedPending = pending.filter(row => {
     const item = parseDatabaseJson<{ sessionId?: string }>(row.record_json, {});
@@ -616,26 +616,26 @@ export function writeBrowserChatSessionDeltaQueued<
   }];
   statements.push(...contextWrite.statements);
   for (const message of delta.messages || []) statements.push({
-    sql: `INSERT INTO conversation_record (session_id, kind, id, time, record_json) VALUES (?, 'message', ?, ?, ?)
-      ON CONFLICT(session_id, kind, id) DO UPDATE SET time = excluded.time, record_json = excluded.record_json`,
+    sql: `INSERT INTO workspace_record (collection,owner_kind,partition_id, kind, id, time, record_json) VALUES ('conversation','chat',?, 'message', ?, ?, ?)
+      ON CONFLICT(collection,partition_id,kind,scope_id,id) DO UPDATE SET time = excluded.time, record_json = excluded.record_json`,
     params: [snapshot.id, message.id, message.updatedAt || message.createdAt, JSON.stringify(message)],
   });
   for (const step of delta.steps || []) statements.push({
-    sql: `INSERT INTO conversation_record (session_id, kind, id, step_index, record_json) VALUES (?, 'step', ?, ?, ?)
-      ON CONFLICT(session_id, kind, id) DO UPDATE SET record_json = excluded.record_json`,
+    sql: `INSERT INTO workspace_record (collection,owner_kind,partition_id, kind, id, step_index, record_json) VALUES ('conversation','chat',?, 'step', ?, ?, ?)
+      ON CONFLICT(collection,partition_id,kind,scope_id,id) DO UPDATE SET record_json = excluded.record_json`,
     params: [snapshot.id, String(step.index), step.index, JSON.stringify(step)],
   });
   for (const log of delta.logs || []) {
     const stored = encodeConversationJson('log', JSON.stringify(log));
     statements.push({
-      sql: `INSERT INTO conversation_record (session_id, kind, id, time, message_id, record_json, record_gzip) VALUES (?, 'log', ?, ?, ?, ?, ?)
-        ON CONFLICT(session_id, kind, id) DO UPDATE SET time = excluded.time, message_id = excluded.message_id, record_json = excluded.record_json, record_gzip = excluded.record_gzip`,
+      sql: `INSERT INTO workspace_record (collection,owner_kind,partition_id, kind, id, time, message_id, record_json, record_gzip) VALUES ('conversation','chat',?, 'log', ?, ?, ?, ?, ?)
+        ON CONFLICT(collection,partition_id,kind,scope_id,id) DO UPDATE SET time = excluded.time, message_id = excluded.message_id, record_json = excluded.record_json, record_gzip = excluded.record_gzip`,
       params: [snapshot.id, log.id, log.time, log.messageId || null, stored.record_json, stored.record_gzip],
     });
   }
-  for (const id of delta.removedMessageIds || []) statements.push({ sql: `DELETE FROM conversation_record WHERE kind='message' AND session_id = ? AND id = ?`, params: [snapshot.id, id] });
-  for (const index of delta.removedStepIndexes || []) statements.push({ sql: `DELETE FROM conversation_record WHERE kind='step' AND session_id = ? AND step_index = ?`, params: [snapshot.id, index] });
-  for (const id of delta.removedLogIds || []) statements.push({ sql: `DELETE FROM conversation_record WHERE kind='log' AND session_id = ? AND id = ?`, params: [snapshot.id, id] });
+  for (const id of delta.removedMessageIds || []) statements.push({ sql: `DELETE FROM workspace_record WHERE collection='conversation' AND kind='message' AND partition_id = ? AND id = ?`, params: [snapshot.id, id] });
+  for (const index of delta.removedStepIndexes || []) statements.push({ sql: `DELETE FROM workspace_record WHERE collection='conversation' AND kind='step' AND partition_id = ? AND step_index = ?`, params: [snapshot.id, index] });
+  for (const id of delta.removedLogIds || []) statements.push({ sql: `DELETE FROM workspace_record WHERE collection='conversation' AND kind='log' AND partition_id = ? AND id = ?`, params: [snapshot.id, id] });
   return queueDatabaseWrite(statements).then(() => markBrowserChatContextCommitted(snapshot.id, contextWrite.committedKeys));
 }
 
@@ -647,11 +647,11 @@ async function pruneBrowserChatRows(
   retainedKeys: Array<string | number>,
 ) {
   if (!retainedKeys.length) {
-    await executeDatabase(`DELETE FROM conversation_record WHERE kind = ? AND session_id = ?`, [kind, sessionId], executor);
+    await executeDatabase(`DELETE FROM workspace_record WHERE collection='conversation' AND kind = ? AND partition_id = ?`, [kind, sessionId], executor);
     return;
   }
   await executeDatabase(
-    `DELETE FROM conversation_record WHERE kind = ? AND session_id = ? AND ${key} NOT IN (${retainedKeys.map(() => '?').join(', ')})`,
+    `DELETE FROM workspace_record WHERE collection='conversation' AND kind = ? AND partition_id = ? AND ${key} NOT IN (${retainedKeys.map(() => '?').join(', ')})`,
     [kind, sessionId, ...retainedKeys],
     executor,
   );
@@ -659,7 +659,7 @@ async function pruneBrowserChatRows(
 
 export function deleteBrowserChatSessionRecordQueued(sessionId: string) {
   return queueDatabaseWrite([
-    { sql: 'DELETE FROM agent_runtime_owner WHERE id = ?', params: [sessionId] },
-    { sql: 'DELETE FROM browser_chat_session WHERE id = ?', params: [sessionId] },
+    { sql: `DELETE FROM workspace_entity WHERE kind='runtime' AND id = ?`, params: [sessionId] },
+    { sql: `DELETE FROM workspace_entity WHERE kind='chat' AND id = ?`, params: [sessionId] },
   ]);
 }

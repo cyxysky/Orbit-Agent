@@ -1,3 +1,4 @@
+import { workspaceEntities } from '../storage/record-sources';
 import type { BrowserChatSessionSnapshot } from '@/server/ai/agents/browser-chat.service';
 import { executeDatabase, queryDatabase } from '@/server/db/database';
 
@@ -144,10 +145,10 @@ export async function archiveAiOperationsChatSession(session: BrowserChatSession
     userId: String(session.userId || '').trim() || 'unknown',
   };
   await executeDatabase(`
-    INSERT INTO ai_operations_chat_archive (
-      session_id, user_id, record_json, first_event_at, last_event_at, archived_at
-    ) VALUES (?, ?, ?, ?, ?, ?)
-    ON CONFLICT(session_id) DO UPDATE SET
+    INSERT INTO workspace_entity (kind,
+      id, user_id, record_json, first_event_at, last_event_at, archived_at
+    ) VALUES ('archive',?, ?, ?, ?, ?, ?)
+    ON CONFLICT(kind,id) DO UPDATE SET
       user_id = excluded.user_id,
       record_json = excluded.record_json,
       first_event_at = excluded.first_event_at,
@@ -165,7 +166,7 @@ export async function archiveAiOperationsChatSession(session: BrowserChatSession
 
 export async function readArchivedAiOperationsChatSessions() {
   const rows = await queryDatabase<ArchiveRow>(`
-    SELECT record_json FROM ai_operations_chat_archive
+    SELECT record_json FROM ${workspaceEntities('archive')}
     ORDER BY last_event_at DESC
   `);
   return rows.flatMap<ArchivedAiOperationsChatSession>((row) => {

@@ -9,8 +9,9 @@ import { RuntimeExecutionOwners1793836800000 } from './1793836800000-runtime-exe
 import { UserCookieIdentity1793923200000 } from './1793923200000-user-cookie-identity';
 import { ConsolidatedRecords1794268800000 } from './1794268800000-consolidated-records';
 import { CompactOperationalStorage1794272400000 } from './1794272400000-compact-operational-storage';
+import { WorkspaceStorage1794276000000 } from './1794276000000-workspace-storage';
 
 export const applicationMigrations = [InitialBackendSchema1788307200000, BrowserChatContextRecords1788566400000,
   RuntimeReadIndexes1788652800000, CommunicationConversations1788832800000, PersonalMemoryReceipts1789084800000,
   HybridRuntime1790000200000, MemoryJobResults1790600000000, RuntimeExecutionOwners1793836800000, UserCookieIdentity1793923200000,
-  ConsolidatedRecords1794268800000, CompactOperationalStorage1794272400000];
+  ConsolidatedRecords1794268800000, CompactOperationalStorage1794272400000, WorkspaceStorage1794276000000];

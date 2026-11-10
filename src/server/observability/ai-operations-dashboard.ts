@@ -1,5 +1,5 @@
+import { conversationRecords, workspaceEntities } from '../storage/record-sources';
 import { browserChatLogUsage as usageFromLog } from '@/lib/browser-chat-log-usage';
-import { conversationRecords } from '@/server/storage/record-sources';
 import { databaseDriver, queryDatabase, queryDatabaseOne } from '@/server/db/database';
 import { projectDatabaseJsonFields } from '@/server/db/json-projection';
 import { queryReadOnlyDatabase } from '@/server/db/read-only-query';
@@ -404,18 +404,18 @@ async function buildAiOperationsDashboard(
   const [sessions, allLiveSessions, archivedChatSessions, automationCases, scheduleCount] = await Promise.all([
     queryDatabase<SessionRow>(`
     SELECT id, user_id, title, status, ${projectDatabaseJsonFields('summary_json', ['model', 'modelProvider', 'userId', 'targetUrl', 'error', 'title'])} AS summary_json, created_at, updated_at
-    FROM browser_chat_session
+    FROM ${workspaceEntities('chat')}
     WHERE updated_at >= ?
   `, [sinceIso]),
     queryDatabase<{ id: string }>(`
-    SELECT id FROM browser_chat_session
+    SELECT id FROM ${workspaceEntities('chat')}
   `),
     readArchivedAiOperationsChatSessions(),
     queryDatabase<AutomationCaseRow>(`
-    SELECT id, title, ${projectDatabaseJsonFields('record_json', ['targetUrl', 'title'])} AS record_json FROM automation_case
+    SELECT id, title, ${projectDatabaseJsonFields('record_json', ['targetUrl', 'title'])} AS record_json FROM ${workspaceEntities('case')}
   `),
     queryDatabaseOne<{ count?: number }>(`
-      SELECT COUNT(*) AS count FROM automation_schedule WHERE enabled = ?
+      SELECT COUNT(*) AS count FROM ${workspaceEntities('schedule')} WHERE enabled = ?
     `, [true]),
   ]);
   signal.throwIfAborted();
@@ -464,7 +464,7 @@ async function buildAiOperationsDashboard(
   ` : 'message.record_json';
   for await (const row of dashboardRows<MessageRow>(`
     SELECT message.id, message.session_id, message.time, ${messageRecord} AS record_json,
-      (SELECT user_id FROM browser_chat_session WHERE id = message.session_id) AS user_id
+      (SELECT user_id FROM ${workspaceEntities('chat')} WHERE id = message.session_id) AS user_id
     FROM ${conversationRecords('message')} AS message
     WHERE message.time >= ?
   `, [sinceIso], ['message.session_id', 'message.id'], signal)) {
@@ -523,7 +523,7 @@ async function buildAiOperationsDashboard(
   const logPhase = databaseDriver() === 'postgres' ? "CAST(log.record_json AS jsonb)->>'phase'" : "json_extract(log.record_json, '$.phase')";
   for await (const row of dashboardRows<LogRow>(`
     SELECT log.id, log.session_id, log.time, log.record_json,
-      (SELECT user_id FROM browser_chat_session WHERE id = log.session_id) AS user_id
+      (SELECT user_id FROM ${workspaceEntities('chat')} WHERE id = log.session_id) AS user_id
     FROM ${conversationRecords('log')} AS log
     WHERE log.time >= ? AND ${logPhase} IN ('ai:runtime:object', 'ai:runtime:response')
   `, [sinceIso], ['log.session_id', 'log.id'], signal)) {
@@ -548,7 +548,7 @@ async function buildAiOperationsDashboard(
   for await (const row of dashboardRows<StepRow>(`
     SELECT step.session_id, step.step_index, ${recovered}
     FROM ${conversationRecords('step')} AS step
-    WHERE EXISTS (SELECT 1 FROM browser_chat_session WHERE id = step.session_id AND updated_at >= ?)
+    WHERE EXISTS (SELECT 1 FROM ${workspaceEntities('chat')} WHERE id = step.session_id AND updated_at >= ?)
   `, [sinceIso], ['step.session_id', 'step.step_index'], signal)) {
     if (row.recovered_count !== undefined) { repairs += numberValue(row.recovered_count); continue; }
     const step = parseRecord(row.record_json);
@@ -631,7 +631,7 @@ async function buildAiOperationsDashboard(
   let automationRunCount = 0;
   for await (const row of dashboardRows<AutomationRunRow>(`
     SELECT id, user_id, case_id, status, record_json, created_at, updated_at
-    FROM automation_run
+    FROM ${workspaceEntities('run')}
     WHERE updated_at >= ?
   `, [sinceIso], ['id'], signal)) {
     automationRunCount += 1;

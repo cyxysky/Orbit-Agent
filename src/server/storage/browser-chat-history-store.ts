@@ -1,4 +1,4 @@
-import { conversationRecords } from '@/server/storage/record-sources';
+import { conversationRecords, workspaceEntities } from './record-sources';
 import { hydrateBrowserChatContextSnapshot } from './browser-chat-context-store';
 import { queryDatabase, queryDatabaseOne } from '@/server/db/database';
 import { storedJsonText, type StoredJsonRow } from './stored-json';
@@ -246,7 +246,7 @@ export async function readBrowserChatSessionWindow<
   TLog,
 >(sessionId: string, options: { logLimit?: number; messageLimit?: number; stepLimit?: number } = {}) {
   const row = await queryDatabaseOne<{ snapshot_json?: string }>(`
-    SELECT snapshot_json FROM browser_chat_session WHERE id = ?
+    SELECT snapshot_json FROM ${workspaceEntities('chat')} WHERE id = ?
   `, [sessionId]);
   const snapshot = row?.snapshot_json ? parseJson<TSession>(row.snapshot_json) : undefined;
   if (!snapshot) return undefined;
@@ -270,7 +270,7 @@ export async function readBrowserChatSessionWindow<
 
 export async function readBrowserChatSessionHeader<TSession>(sessionId: string) {
   const row = await queryDatabaseOne<{ snapshot_json?: string }>(`
-    SELECT snapshot_json FROM browser_chat_session WHERE id = ?
+    SELECT snapshot_json FROM ${workspaceEntities('chat')} WHERE id = ?
   `, [sessionId]);
   const snapshot = row?.snapshot_json ? parseJson<TSession>(row.snapshot_json) : undefined;
   return snapshot ? hydrateBrowserChatContextSnapshot(sessionId, snapshot) : undefined;
@@ -278,14 +278,14 @@ export async function readBrowserChatSessionHeader<TSession>(sessionId: string) 
 
 export async function readBrowserChatSessionOwner(sessionId: string) {
   const row = await queryDatabaseOne<{ user_id?: string | null }>(`
-    SELECT user_id FROM browser_chat_session WHERE id = ?
+    SELECT user_id FROM ${workspaceEntities('chat')} WHERE id = ?
   `, [sessionId]);
   return row ? { userId: row.user_id || undefined } : undefined;
 }
 
 export async function browserChatSessionHasQueuedTurns(sessionId: string) {
   const row = await queryDatabaseOne<{ snapshot_json?: string }>(
-    'SELECT snapshot_json FROM browser_chat_session WHERE id = ?', [sessionId],
+    `SELECT snapshot_json FROM ${workspaceEntities('chat')} WHERE id = ?`, [sessionId],
   );
   const snapshot = row?.snapshot_json ? parseJson<{ queuedTurns?: unknown[] }>(row.snapshot_json) : undefined;
   return Boolean(snapshot?.queuedTurns?.length);

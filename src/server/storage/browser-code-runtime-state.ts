@@ -1,3 +1,4 @@
+import { workspaceRecords } from './record-sources';
 import { lockRuntimeOwner } from './runtime-owner';
 import {
   executeDatabase,
@@ -195,8 +196,8 @@ function serializeRuntimeStateValue(value: unknown) {
 
 async function purgeExpiredState(database: DatabaseExecutor, timestamp: string) {
   await executeDatabase(`
-    DELETE FROM execution_record
-    WHERE kind='variable' AND expires_at IS NOT NULL AND expires_at <= ?
+    DELETE FROM workspace_record
+    WHERE collection='execution' AND kind='variable' AND expires_at IS NOT NULL AND expires_at <= ?
   `, [timestamp], database);
 }
 
@@ -213,7 +214,7 @@ function stateEntry(row: RuntimeStateRow) {
 function currentRow(database: DatabaseExecutor, sessionId: string, key: string) {
   return queryDatabaseOne<RuntimeStateRow>(`
     SELECT key, value_json, revision, updated_at, expires_at
-    FROM (SELECT session_id,scope_id AS namespace,id AS key,record_json AS value_json,revision,updated_at,expires_at FROM execution_record WHERE kind='variable')
+    FROM (SELECT session_id,scope_id AS namespace,id AS key,record_json AS value_json,revision,updated_at,expires_at FROM ${workspaceRecords('execution')} WHERE kind='variable')
     WHERE session_id = ? AND namespace = ? AND key = ?
   `, [sessionId, runtimeStateNamespace, key], database);
 }
@@ -302,7 +303,7 @@ export async function executeBrowserCodeRuntimeStateOperation(
       }
       const aggregate = await queryDatabaseOne<{ key_count?: number }>(`
         SELECT COUNT(*) AS key_count
-        FROM (SELECT session_id,scope_id AS namespace,id AS key,record_json AS value_json,revision,updated_at,expires_at FROM execution_record WHERE kind='variable')
+        FROM (SELECT session_id,scope_id AS namespace,id AS key,record_json AS value_json,revision,updated_at,expires_at FROM ${workspaceRecords('execution')} WHERE kind='variable')
         WHERE session_id = ? AND namespace = ?
       `, [sessionId, runtimeStateNamespace], database);
       const keyCount = Number(aggregate?.key_count) || 0;
@@ -315,10 +316,10 @@ export async function executeBrowserCodeRuntimeStateOperation(
       const expiresAt =
         ttlMs === undefined ? null : new Date(Date.now() + ttlMs).toISOString();
       await executeDatabase(`
-        INSERT INTO execution_record (
-          session_id, scope_id, kind, id, record_json, revision, updated_at, expires_at
-        ) VALUES (?, ?, 'variable', ?, ?, ?, ?, ?)
-        ON CONFLICT(session_id, scope_id, kind, id) DO UPDATE SET
+        INSERT INTO workspace_record (collection,owner_kind,
+          partition_id, scope_id, kind, id, record_json, revision, updated_at, expires_at
+        ) VALUES ('execution','runtime',?, ?, 'variable', ?, ?, ?, ?, ?)
+        ON CONFLICT(collection,partition_id,kind,scope_id,id) DO UPDATE SET
           record_json = excluded.record_json,
           revision = excluded.revision,
           updated_at = excluded.updated_at,
@@ -366,8 +367,8 @@ export async function executeBrowserCodeRuntimeStateOperation(
       }
       if (!existing) return { deleted: false, key };
       await executeDatabase(`
-        DELETE FROM execution_record
-        WHERE kind='variable' AND session_id = ? AND scope_id = ? AND id = ?
+        DELETE FROM workspace_record
+        WHERE collection='execution' AND kind='variable' AND partition_id = ? AND scope_id = ? AND id = ?
       `, [sessionId, runtimeStateNamespace, key], database);
       return { deleted: true, key, revision: currentRevision };
     });
@@ -396,7 +397,7 @@ export async function executeBrowserCodeRuntimeStateOperation(
       await purgeExpiredState(database, timestamp);
       const matching = (await queryDatabase<RuntimeStateRow>(`
         SELECT key, value_json, revision, updated_at, expires_at
-        FROM (SELECT session_id,scope_id AS namespace,id AS key,record_json AS value_json,revision,updated_at,expires_at FROM execution_record WHERE kind='variable')
+        FROM (SELECT session_id,scope_id AS namespace,id AS key,record_json AS value_json,revision,updated_at,expires_at FROM ${workspaceRecords('execution')} WHERE kind='variable')
         WHERE session_id = ? AND namespace = ?
         ORDER BY key ASC
       `, [sessionId, runtimeStateNamespace], database)).filter((row) => row.key.startsWith(prefix));
@@ -416,7 +417,7 @@ export async function executeBrowserCodeRuntimeStateOperation(
       await lockRuntimeOwner(sessionId, database);
       await purgeExpiredState(database, timestamp);
       const keys = (await queryDatabase<{ key: string }>(`
-        SELECT key FROM (SELECT session_id,scope_id AS namespace,id AS key,record_json AS value_json,revision,updated_at,expires_at FROM execution_record WHERE kind='variable')
+        SELECT key FROM (SELECT session_id,scope_id AS namespace,id AS key,record_json AS value_json,revision,updated_at,expires_at FROM ${workspaceRecords('execution')} WHERE kind='variable')
         WHERE session_id = ? AND namespace = ?
       `, [sessionId, runtimeStateNamespace], database))
         .map((row) => row.key)
@@ -424,8 +425,8 @@ export async function executeBrowserCodeRuntimeStateOperation(
       if (!keys.length) return { deleted: 0, prefix };
       const placeholders = keys.map(() => "?").join(", ");
       await executeDatabase(`
-        DELETE FROM execution_record
-        WHERE kind='variable' AND session_id = ? AND scope_id = ? AND id IN (${placeholders})
+        DELETE FROM workspace_record
+        WHERE collection='execution' AND kind='variable' AND partition_id = ? AND scope_id = ? AND id IN (${placeholders})
       `, [sessionId, runtimeStateNamespace, ...keys], database);
       return { deleted: keys.length, prefix };
     });

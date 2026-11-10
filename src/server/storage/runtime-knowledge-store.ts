@@ -1,3 +1,4 @@
+import { knowledgeRecords } from './record-sources';
 import { databaseDriver, parseDatabaseJson, queryDatabase } from '@/server/db/database';
 import type { SkillRecord } from '@/server/ai/schemas/runtime.schema';
 
@@ -21,7 +22,7 @@ export async function readRuntimeSkillCatalog(userId: string): Promise<SkillReco
     created_at: string; updated_at: string; description: string; triggers: string; version: string | number;
   }>(`SELECT id, user_id, shared, title, status, created_at, updated_at,
     ${field('description')} AS description, ${field('triggerPhrases')} AS triggers, ${field('version')} AS version
-    FROM skill WHERE (user_id = ? OR shared = ?) AND status = 'ready' ORDER BY id`, [userId, true]);
+    FROM ${knowledgeRecords('skill')} WHERE (user_id = ? OR shared = ?) AND status = 'ready' ORDER BY id`, [userId, true]);
   return rows.map((row) => ({
     id: row.id, userId: row.user_id, shared: Boolean(row.shared), title: row.title,
     status: row.status, description: row.description || '', triggerPhrases: parseDatabaseJson<string[]>(row.triggers, []),

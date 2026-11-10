@@ -1,3 +1,4 @@
+import { workspaceEntities } from './record-sources';
 import { randomUUID } from 'node:crypto';
 import {
   automationCaseRecordSchema,
@@ -28,7 +29,7 @@ import { automationTaskGuidance } from '@/server/automation/automation-task';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 
 
-type JsonRow = { record_json: string };
+type JsonRow = { record_json: string; schedule_id?: string | null };
 
 const terminalRunStatuses = new Set<AutomationRunStatus>([
   'completed', 'passed', 'failed', 'blocked', 'cancelled', 'skipped',
@@ -68,10 +69,11 @@ function parseCaseRow(row?: JsonRow): AutomationCaseRecord | undefined {
   return parsed.success ? { ...parsed.data, guidance: automationTaskGuidance(parsed.data) } : undefined;
 }
 
-function parseRunRow(row?: JsonRow) {
+function parseRunRow(row?: JsonRow): AutomationRunRecord | undefined {
   if (!row) return undefined;
   const parsed = automationRunRecordSchema.safeParse(parseDatabaseJson<unknown>(row.record_json, undefined));
-  return parsed.success ? parsed.data : undefined;
+  // The schedule relation is authoritative: deleting a schedule retains its runs with a null link.
+  return parsed.success ? { ...parsed.data, scheduleId: row.schedule_id ?? undefined } : undefined;
 }
 
 function parseScheduleRow(row?: JsonRow) {
@@ -82,22 +84,22 @@ function parseScheduleRow(row?: JsonRow) {
 
 async function readCase(executor: DatabaseExecutor, id: string, userId?: string) {
   const row = userId === undefined
-    ? await queryDatabaseOne<JsonRow>('SELECT record_json FROM automation_case WHERE id = ?', [id], executor)
-    : await queryDatabaseOne<JsonRow>('SELECT record_json FROM automation_case WHERE id = ? AND user_id = ?', [id, userId], executor);
+    ? await queryDatabaseOne<JsonRow>(`SELECT record_json FROM ${workspaceEntities('case')} WHERE id = ?`, [id], executor)
+    : await queryDatabaseOne<JsonRow>(`SELECT record_json FROM ${workspaceEntities('case')} WHERE id = ? AND user_id = ?`, [id, userId], executor);
   return parseCaseRow(row);
 }
 
 async function readRun(executor: DatabaseExecutor, id: string, userId?: string) {
   const row = userId === undefined
-    ? await queryDatabaseOne<JsonRow>('SELECT record_json FROM automation_run WHERE id = ?', [id], executor)
-    : await queryDatabaseOne<JsonRow>('SELECT record_json FROM automation_run WHERE id = ? AND user_id = ?', [id, userId], executor);
+    ? await queryDatabaseOne<JsonRow>(`SELECT record_json, schedule_id FROM ${workspaceEntities('run')} WHERE id = ?`, [id], executor)
+    : await queryDatabaseOne<JsonRow>(`SELECT record_json, schedule_id FROM ${workspaceEntities('run')} WHERE id = ? AND user_id = ?`, [id, userId], executor);
   return parseRunRow(row);
 }
 
 async function readSchedule(executor: DatabaseExecutor, id: string, userId?: string) {
   const row = userId === undefined
-    ? await queryDatabaseOne<JsonRow>('SELECT record_json FROM automation_schedule WHERE id = ?', [id], executor)
-    : await queryDatabaseOne<JsonRow>('SELECT record_json FROM automation_schedule WHERE id = ? AND user_id = ?', [id, userId], executor);
+    ? await queryDatabaseOne<JsonRow>(`SELECT record_json FROM ${workspaceEntities('schedule')} WHERE id = ?`, [id], executor)
+    : await queryDatabaseOne<JsonRow>(`SELECT record_json FROM ${workspaceEntities('schedule')} WHERE id = ? AND user_id = ?`, [id, userId], executor);
   return parseScheduleRow(row);
 }
 
@@ -109,10 +111,10 @@ async function ensureCaseOwner(executor: DatabaseExecutor, caseId: string, userI
 
 async function insertRun(executor: DatabaseExecutor, record: AutomationRunRecord) {
   await executeDatabase(`
-    INSERT INTO automation_run (
-      id, user_id, case_id, schedule_id, occurrence_key, trigger, status,
+    INSERT INTO workspace_entity (kind,parent_kind,link_kind,
+      id, user_id, parent_id, link_id, occurrence_key, trigger, status,
       lease_expires_at, record_json, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES ('run','case','schedule',?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `, [record.id, record.userId, record.caseId, record.scheduleId || null,
     record.occurrenceKey || null, record.trigger, record.status, record.lease?.expiresAt || null,
     JSON.stringify(record), record.createdAt, record.updatedAt], executor);
@@ -120,9 +122,9 @@ async function insertRun(executor: DatabaseExecutor, record: AutomationRunRecord
 
 async function persistRun(executor: DatabaseExecutor, record: AutomationRunRecord) {
   await executeDatabase(`
-    UPDATE automation_run SET schedule_id = ?, occurrence_key = ?, trigger = ?, status = ?,
+    UPDATE workspace_entity SET link_kind='schedule', link_id = ?, occurrence_key = ?, trigger = ?, status = ?,
       lease_expires_at = ?, record_json = ?, updated_at = ?
-    WHERE id = ? AND user_id = ?
+    WHERE kind='run' AND id = ? AND user_id = ?
   `, [record.scheduleId || null, record.occurrenceKey || null, record.trigger, record.status,
     record.lease?.expiresAt || null, JSON.stringify(record), record.updatedAt, record.id, record.userId], executor);
 }
@@ -142,7 +144,7 @@ export async function listAutomationCases(options: AutomationCaseListOptions = {
   }
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
   const rows = await queryDatabase<JsonRow>(`
-    SELECT record_json FROM automation_case ${where}
+    SELECT record_json FROM ${workspaceEntities('case')} ${where}
     ORDER BY updated_at DESC, id DESC LIMIT ?
   `, [...values, normalizedLimit(options.limit)]);
   return rows.map(parseCaseRow).filter((record): record is AutomationCaseRecord => Boolean(record));
@@ -158,9 +160,9 @@ export async function createAutomationCase(input: CreateAutomationCaseInput) {
     ...input, id: input.id || newId('case'), createdAt: timestamp, updatedAt: timestamp,
   });
   await executeDatabase(`
-    INSERT INTO automation_case (
+    INSERT INTO workspace_entity (kind,
       id, user_id, source_session_id, title, target_url, record_json, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES ('case',?, ?, ?, ?, ?, ?, ?, ?)
   `, [record.id, record.userId, record.sourceSessionId, record.title, record.targetUrl,
     JSON.stringify(record), record.createdAt, record.updatedAt]);
   publishAutomationRecord('automationCase', record);
@@ -177,8 +179,8 @@ export async function updateAutomationCase(id: string, userId: string, patch: Up
       updatedAt: now(),
     });
     await executeDatabase(`
-      UPDATE automation_case SET title = ?, target_url = ?, record_json = ?, updated_at = ?
-      WHERE id = ? AND user_id = ?
+      UPDATE workspace_entity SET title = ?, target_url = ?, record_json = ?, updated_at = ?
+      WHERE kind='case' AND id = ? AND user_id = ?
     `, [next.title, next.targetUrl, JSON.stringify(next), next.updatedAt, id, userId], manager);
     return next;
   });
@@ -190,10 +192,10 @@ export async function deleteAutomationCase(id: string, userId?: string) {
   const record = await runDatabaseTransaction(async (manager) => {
     const current = await readCase(manager, id, userId);
     if (!current) return undefined;
-    await executeDatabase('DELETE FROM agent_runtime_owner WHERE id IN (SELECT id FROM automation_run WHERE case_id = ?)', [id], manager);
+    await executeDatabase(`DELETE FROM workspace_entity WHERE kind='runtime' AND id IN (SELECT id FROM ${workspaceEntities('run')} WHERE case_id = ?)`, [id], manager);
     const rows = userId === undefined
-      ? await queryDatabase<{ id: string }>('DELETE FROM automation_case WHERE id = ? RETURNING id', [id], manager)
-      : await queryDatabase<{ id: string }>('DELETE FROM automation_case WHERE id = ? AND user_id = ? RETURNING id', [id, userId], manager);
+      ? await queryDatabase<{ id: string }>(`DELETE FROM workspace_entity WHERE kind='case' AND id = ? RETURNING id`, [id], manager)
+      : await queryDatabase<{ id: string }>(`DELETE FROM workspace_entity WHERE kind='case' AND id = ? AND user_id = ? RETURNING id`, [id, userId], manager);
     return rows.length ? current : undefined;
   });
   if (record) publishAutomationRecord('automationCase', record, true);
@@ -215,7 +217,7 @@ export async function listAutomationRuns(options: AutomationRunListOptions = {})
   }
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
   const rows = await queryDatabase<JsonRow>(`
-    SELECT record_json FROM automation_run ${where}
+    SELECT record_json, schedule_id FROM ${workspaceEntities('run')} ${where}
     ORDER BY created_at DESC LIMIT ?
   `, [...values, normalizedLimit(options.limit)]);
   return rows.map(parseRunRow).filter((record): record is AutomationRunRecord => Boolean(record));
@@ -333,7 +335,7 @@ export async function listAutomationSchedules(options: AutomationScheduleListOpt
   if (options.enabled !== undefined) { clauses.push('enabled = ?'); values.push(options.enabled); }
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
   const rows = await queryDatabase<JsonRow>(`
-    SELECT record_json FROM automation_schedule ${where}
+    SELECT record_json FROM ${workspaceEntities('schedule')} ${where}
     ORDER BY updated_at DESC LIMIT ?
   `, [...values, normalizedLimit(options.limit)]);
   return rows.map(parseScheduleRow).filter((record): record is AutomationScheduleRecord => Boolean(record));
@@ -347,10 +349,10 @@ export async function createAutomationSchedule(input: CreateAutomationScheduleIn
       ...input, id: input.id || newId('schedule'), createdAt: timestamp, updatedAt: timestamp,
     });
     await executeDatabase(`
-      INSERT INTO automation_schedule (
-        id, user_id, case_id, title, recurrence, enabled, next_run_at,
+      INSERT INTO workspace_entity (kind,parent_kind,
+        id, user_id, parent_id, title, recurrence, enabled, next_run_at,
         record_json, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES ('schedule','case',?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [next.id, next.userId, next.caseId, next.title, next.recurrence, next.enabled,
       next.nextRunAt, JSON.stringify(next), next.createdAt, next.updatedAt], manager);
     return next;
@@ -364,8 +366,8 @@ export async function deleteAutomationSchedule(id: string, userId?: string) {
     const current = await readSchedule(manager, id, userId);
     if (!current) return undefined;
     const rows = userId === undefined
-      ? await queryDatabase<{ id: string }>('DELETE FROM automation_schedule WHERE id = ? RETURNING id', [id], manager)
-      : await queryDatabase<{ id: string }>('DELETE FROM automation_schedule WHERE id = ? AND user_id = ? RETURNING id', [id, userId], manager);
+      ? await queryDatabase<{ id: string }>(`DELETE FROM workspace_entity WHERE kind='schedule' AND id = ? RETURNING id`, [id], manager)
+      : await queryDatabase<{ id: string }>(`DELETE FROM workspace_entity WHERE kind='schedule' AND id = ? AND user_id = ? RETURNING id`, [id, userId], manager);
     return rows.length ? current : undefined;
   });
   if (record) publishAutomationRecord('automationSchedule', record, true);
@@ -378,11 +380,11 @@ export async function listDueAutomationSchedules(options: DueAutomationScheduleO
   const dueAt = options.at || now();
   const rows = options.userId === undefined
     ? await queryDatabase<JsonRow>(`
-        SELECT record_json FROM automation_schedule
+        SELECT record_json FROM ${workspaceEntities('schedule')}
         WHERE enabled = ? AND next_run_at <= ? ORDER BY next_run_at ASC LIMIT ?
       `, [true, dueAt, normalizedLimit(options.limit)])
     : await queryDatabase<JsonRow>(`
-        SELECT record_json FROM automation_schedule
+        SELECT record_json FROM ${workspaceEntities('schedule')}
         WHERE enabled = ? AND next_run_at <= ? AND user_id = ? ORDER BY next_run_at ASC LIMIT ?
       `, [true, dueAt, options.userId, normalizedLimit(options.limit)]);
   return rows.map(parseScheduleRow).filter((record): record is AutomationScheduleRecord => Boolean(record));
@@ -407,7 +409,7 @@ export async function createAutomationScheduleOccurrence(
     if (!schedule) return undefined;
     const occurrenceAt = input.expectedNextRunAt || schedule.nextRunAt;
     const existing = parseRunRow(await queryDatabaseOne<JsonRow>(`
-      SELECT record_json FROM automation_run WHERE schedule_id = ? AND occurrence_key = ?
+      SELECT record_json, schedule_id FROM ${workspaceEntities('run')} WHERE schedule_id = ? AND occurrence_key = ?
     `, [schedule.id, occurrenceAt], manager));
     if (existing) return { created: false, schedule, run: existing, reason: 'duplicate' as const };
     if (!schedule.enabled) return { created: false, schedule, reason: 'disabled' as const };
@@ -415,7 +417,7 @@ export async function createAutomationScheduleOccurrence(
 
     const timestamp = input.triggeredAt || now();
     const active = await queryDatabaseOne<{ active: number }>(`
-      SELECT 1 AS active FROM automation_run
+      SELECT 1 AS active FROM ${workspaceEntities('run')}
       WHERE schedule_id = ? AND status IN ('queued', 'running') LIMIT 1
     `, [schedule.id], manager);
     const overlapping = schedule.overlap === 'skip' && Boolean(active);
@@ -437,8 +439,8 @@ export async function createAutomationScheduleOccurrence(
     });
     await insertRun(manager, run);
     const updated = await queryDatabase<{ id: string }>(`
-      UPDATE automation_schedule SET next_run_at = ?, record_json = ?, updated_at = ?
-      WHERE id = ? AND enabled = ? AND next_run_at = ? RETURNING id
+      UPDATE workspace_entity SET next_run_at = ?, record_json = ?, updated_at = ?
+      WHERE kind='schedule' AND id = ? AND enabled = ? AND next_run_at = ? RETURNING id
     `, [advancedSchedule.nextRunAt, JSON.stringify(advancedSchedule), advancedSchedule.updatedAt,
       advancedSchedule.id, true, occurrenceAt], manager);
     if (updated.length !== 1) {
