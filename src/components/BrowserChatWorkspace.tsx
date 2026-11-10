@@ -3447,30 +3447,31 @@ const BrowserChatFinalResponseDraft = memo(function BrowserChatFinalResponseDraf
 }) {
   const { t } = useI18n();
   const live = useContext(BrowserChatResponseDraftContext);
+  const liveDraft = live?.id === (tool.id || toolCallId) ? live : undefined;
   const streaming = tool.ok === undefined;
   const [disclosure, setDisclosure] = useState<{ streaming: boolean; expanded: boolean }>();
   const bodyId = useId();
   const input = tool.input && typeof tool.input === 'object' ? tool.input as { blocks?: BrowserChatFinalBlock[] } : undefined;
   const blocks = tool.name === 'finalResponse'
-    ? live && live.id === (tool.id || toolCallId) ? live.blocks : input?.blocks
+    ? liveDraft ? liveDraft.blocks : input?.blocks
     : undefined;
   // Markdown can stream in place. Rich previews remain opt-in until committed,
   // so partial HTML does not recreate an iframe for every argument delta.
   const expanded = disclosure?.streaming === streaming ? disclosure.expanded
-    : streaming && Boolean(blocks?.length && blocks.every(block => block.type === 'core.markdown'));
+    : (streaming || Boolean(liveDraft)) && Array.isArray(blocks) && blocks.length > 0 && blocks.every(block => block?.type === 'core.markdown');
   const parts = useMemo(() => expanded && Array.isArray(blocks) ? browserChatFinalBlocksToParts(blocks.filter(block =>
     block && typeof block.type === 'string' && block.params && typeof block.params === 'object')) : [], [expanded, blocks]);
-  const hasDraft = !live && Array.isArray(blocks) && blocks.length > 0;
+  const hasDraft = Array.isArray(blocks) && blocks.length > 0;
   return <>
     <div className="browser-chat-tool-card-row">
       {children}
       {hasDraft ? <button type="button" className="browser-chat-tool-draft-toggle"
         aria-expanded={expanded} aria-controls={expanded ? bodyId : undefined}
-        aria-label={t(tool.ok === true ? '回复内容' : '回复草稿 · 尚未通过完成校验')}
+        aria-label={t(tool.ok === true ? '回复内容' : '回复草稿')}
         onClick={() => setDisclosure({ streaming, expanded: !expanded })}>{t(expanded ? '收起' : '展开')}</button> : null}
     </div>
     {hasDraft && expanded ? <div id={bodyId} className="browser-chat-tool-response-draft browser-chat-answer is-draft">
-      <span className="browser-chat-draft-status">{t('回复草稿 · 尚未通过完成校验')}</span>
+      <span className="browser-chat-draft-status">{t(tool.ok === true ? '回复内容' : '回复草稿')}</span>
       <BrowserChatOrderedResponse fallbackText="" parts={parts} streaming={streaming} />
     </div> : null}
   </>;
@@ -5036,11 +5037,7 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
           ) : null}
         </BrowserChatProcessDisclosure>
       ) : null}
-      {running && message.responseDraft?.blocks.length ? <div className="browser-chat-answer is-draft">
-        <span className="browser-chat-draft-status">{t('回复草稿 · 尚未通过完成校验')}</span>
-        <BrowserChatOrderedResponse fallbackText="" parts={browserChatFinalBlocksToParts(message.responseDraft.blocks)} streaming />
-      </div> : null}
-      {/* The committed answer replaces the live draft after completion review. */}
+      {/* Streaming drafts stay with their finalResponse tool until validation completes. */}
       {hasFinalResponse && !running ? (
         <div className="browser-chat-answer">
           {message.status === 'failed' && isBrowserChatFailureNotice(displayFinalText)

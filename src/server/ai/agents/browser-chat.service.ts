@@ -4822,7 +4822,6 @@ function runningActivityFromLog(phase: string, message: string) {
   if (phase === 'perf:runtime-input') return '正在准备页面上下文';
   if (phase === 'ai:prepare') return '正在请求 AI 决策';
   if (phase === 'ai:runtime:attempt') return message;
-  if (phase.startsWith('ai:completion-review:')) return message;
   if (phase === 'ai:runtime:prepare') return '正在检查上下文与压缩阈值';
   if (phase === 'ai:context-compression:start') return '正在压缩上下文';
   if (phase === 'ai:context-compression:progress' || phase === 'ai:context-compression:error'

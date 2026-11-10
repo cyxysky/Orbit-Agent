@@ -208,12 +208,6 @@ export function classifyRuntimeRetry(error: unknown, signal?: AbortSignal): Runt
   if (records.some(record => record.code === ERROR_CODES.PERSISTENCE_CHECKPOINT_FAILED)) {
     return { category: 'persistence', reason: 'durable context write failed; resolve storage failure before requesting the model again', retryable: false, statusCode };
   }
-  if (code === ERROR_CODES.COMPLETION_REVIEW_UNAVAILABLE) {
-    const retryable = records.some(record => record.code === ERROR_CODES.COMPLETION_REVIEW_UNAVAILABLE && record.retryable === true);
-    return { category: 'protocol', reason: retryable
-      ? 'completion review response failed after internal recovery; retry from preserved evidence without replaying completed actions'
-      : 'completion review has a non-retryable infrastructure failure; execution state is preserved', retryable, statusCode };
-  }
   if (records.some((record) =>
     [record.code, record.type, record.message, record.responseBody].some((value) =>
       typeof value === 'string' && /\bMissingSessionID\b|\bmissing\s+x-opencode-session\b/i.test(value)))

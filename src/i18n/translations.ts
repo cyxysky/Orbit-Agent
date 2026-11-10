@@ -3,6 +3,7 @@ import type { Language } from '@/i18n/language';
 export type { Language } from '@/i18n/language';
 
 const en: Record<string, string> = {
+  "回复草稿": "Reply draft",
   "输入任务名称": "Enter a task name",
   "读取设置失败": "Unable to load settings",
   "调整筛选条件后重试，或清除筛选查看全部记录。": "Adjust the filters or clear them to view all records.",

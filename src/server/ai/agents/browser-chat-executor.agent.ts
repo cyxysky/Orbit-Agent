@@ -1,7 +1,7 @@
 import { runtimeConfiguration } from '@/server/settings/runtime-configuration';
 import { runtimeCapabilityConfigStore } from '@/server/settings/capability-config-store';
 import { runtimeSetting } from '@/server/settings/runtime-configuration';
-import { executeAppServerBrowserTurn, reviewAppServerCompletion } from './browser-chat-app-server-runtime';
+import { executeAppServerBrowserTurn } from './browser-chat-app-server-runtime';
 import { executeBrowserInteraction } from './runtime-browser-interaction';
 import { type BrowserChatInteractionMode } from '@/lib/browser-chat-interaction-mode';
 import { artifactApiUrl } from '@/lib/artifacts';
@@ -878,7 +878,7 @@ async function makeBrowserTools(
     visualContext?: VisualContextManager;
     getAiRequest?: () => AiRequestSnapshot | undefined;
     archiveResult?: (name: string, id: string, result: BrowserActionResult) => Promise<string>;
-    reviewFinalResponse: (response: StructuredResponse) => Promise<string | undefined>;
+    validateFinalResponse: (response: StructuredResponse) => Promise<string | undefined>;
     getAiRequestElapsedMs?: (toolCallId?: string) => number | undefined;
     abortSignal?: AbortSignal;
     shouldContinue?: () => boolean;
@@ -1183,8 +1183,8 @@ async function makeBrowserTools(
       description: runtimeBuiltinToolPrompts.finalResponse,
       onAccept: async (input, execution) => {
         const result = await record('finalResponse', input, async () => {
-          const completionError = referenceOptions ? await referenceOptions.reviewFinalResponse(input)
-            : browserChatFinalResponseCompletionError(input) || 'Completion review is unavailable; final response was not accepted.';
+          const completionError = referenceOptions ? await referenceOptions.validateFinalResponse(input)
+            : browserChatFinalResponseCompletionError(input);
           return completionError ? { ok: false, actual: completionError }
             : { ok: true, actual: JSON.stringify({ accepted: true, blockCount: input.blocks.length }) };
         }, execution);
@@ -1414,7 +1414,7 @@ export async function executeInteractiveBrowserTurn(input: {
         loadedHiddenRuntimeSkillIds: options.loadedSkills,
         archiveResult: options.archiveResult, onReferenceImage: options.onImage,
         getCredentialBindings: options.getCredentials,
-        reviewFinalResponse: options.reviewFinalResponse,
+        validateFinalResponse: options.validateFinalResponse,
         onVisualContextChange: () => options.onVisualContextChange(visualContext.persisted()),
       });
     },
@@ -1424,8 +1424,7 @@ export async function executeInteractiveBrowserTurn(input: {
     }) !== 'denied',
     summarizeTraces: summarizeToolTraces,
     humanPause: subagentHumanPauseReplyFromTraces,
-    review: async (response, messages, records, input, threadId) => browserChatFinalResponseCompletionError(response)
-      || await reviewAppServerCompletion({ response, messages, records, input, threadId }),
+    validateFinalResponse: browserChatFinalResponseCompletionError,
   });
 }
 
