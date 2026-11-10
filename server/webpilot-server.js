@@ -412,10 +412,10 @@ function proxyHttpRequest(request, response, target, onResponse) {
       return;
     }
     response.writeHead(502, {
-      'Content-Type': 'text/plain; charset=utf-8',
+      'Content-Type': 'application/json; charset=utf-8',
       'Retry-After': '1',
     });
-    response.end('API request failed');
+    response.end(JSON.stringify({ code: 'backend_unavailable', error: '服务连接已断开，请稍后重试。' }));
   });
   const disconnect = () => { clientDisconnected = true; upstream.destroy(); };
   request.once('aborted', disconnect);
@@ -656,17 +656,22 @@ async function main() {
           console.error('[webpilot-server] API runtime is unavailable.', error);
           if (!response.headersSent) {
             response.writeHead(503, {
-              'Content-Type': 'text/plain; charset=utf-8',
+              'Content-Type': 'application/json; charset=utf-8',
               'Retry-After': '1',
             });
           }
-          response.end('API Runtime Unavailable');
+          response.end(JSON.stringify({ code: 'backend_unavailable', error: '服务正在恢复，请稍后重试。' }));
         }
         return;
       }
       await handle(request, response);
     })().catch((error) => {
       console.error('[webpilot-server] HTTP request failed.', error);
+      if (error.code === 'authentication_service_unavailable' && !response.headersSent) {
+        response.writeHead(503, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'Retry-After': '1' });
+        response.end(JSON.stringify({ code: error.code, error: '身份验证服务暂时不可用，请稍后重试。' }));
+        return;
+      }
       if (!response.headersSent) response.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
       response.end('Internal Server Error');
     });

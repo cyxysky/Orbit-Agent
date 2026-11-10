@@ -829,6 +829,8 @@ export function EnvironmentSettings({
   const [deleteLoginAccountTarget, setDeleteLoginAccountTarget] = useState<LoginAccountMetadata | null>(null);
   const [deleteLoginAccountError, setDeleteLoginAccountError] = useState('');
   const [loading, setLoading] = useState(!initialData && shouldLoadEnvironmentConfig);
+  const [loadError, setLoadError] = useState('');
+  const settingsLoadRequest = useRef<AbortController | null>(null);
   const [savingEnv, setSavingEnv] = useState(false);
   const [savingModel, setSavingModel] = useState(false);
   const [deleteModelProviderTarget, setDeleteModelProviderTarget] = useState<{ provider: OpenAICompatibleModelProvider; label: string } | null>(null);
@@ -927,6 +929,7 @@ export function EnvironmentSettings({
     setHasDirectoryPicker(typeof window !== 'undefined' && Boolean(window.webPilotSystem?.selectDirectory));
     if (!initialData && shouldLoadEnvironmentConfig) void load();
     else setLoading(false);
+    return () => settingsLoadRequest.current?.abort();
   // The server snapshot is immutable for this component instance; saves update local state directly.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -981,14 +984,18 @@ export function EnvironmentSettings({
   }, [activeTab, highlightedSettingKey]);
 
   async function load() {
+    settingsLoadRequest.current?.abort();
+    const controller = new AbortController();
+    settingsLoadRequest.current = controller;
     setLoading(true);
+    setLoadError('');
     try {
-      const [envResponse, modelResponse] = await Promise.all([
-        fetch(withWebPilotBasePath('/api/settings/runtime'), { cache: 'no-store', headers: settingsRequestHeaders }),
-        fetch(withWebPilotBasePath('/api/settings/model'), { cache: 'no-store', headers: settingsRequestHeaders }),
+      const options = { cache: 'no-store' as const, headers: settingsRequestHeaders, signal: controller.signal };
+      const [envData, modelData] = await Promise.all([
+        fetch(withWebPilotBasePath('/api/settings/runtime'), options).then(response => readApiJson<{ saved?: RuntimeSettingRow[] }>(response, t('读取运行配置失败'))),
+        fetch(withWebPilotBasePath('/api/settings/model'), options).then(response => readApiJson<{ config?: Partial<ModelConfig> }>(response, t('读取模型配置失败'))),
       ]);
-      const envData = await readApiJson<{ saved?: RuntimeSettingRow[] }>(envResponse, t('读取运行配置失败'));
-      const modelData = await readApiJson<{ config?: Partial<ModelConfig> }>(modelResponse, t('读取模型配置失败'));
+      if (controller.signal.aborted) return;
       const nextModel = createModelConfig(modelData.config);
       setItems(envData.saved || []);
       setSavedItems(envData.saved || []);
@@ -996,8 +1003,13 @@ export function EnvironmentSettings({
       setModelDraft(nextModel);
       setSelectedModelProvider(nextModel.provider);
       setExtraRequestParameterRows(extraRequestParameterDrafts(nextModel));
+    } catch (error) {
+      if (!controller.signal.aborted) setLoadError(error instanceof Error ? error.message : t('读取运行配置失败'));
     } finally {
-      setLoading(false);
+      if (settingsLoadRequest.current === controller) {
+        settingsLoadRequest.current = null;
+        if (!controller.signal.aborted) setLoading(false);
+      }
     }
   }
 
@@ -2506,6 +2518,7 @@ export function EnvironmentSettings({
     const fingerprint = runtimeItemsFingerprint(items);
     if (
       loading
+      || loadError
       || savingEnv
       || !envDirty
       || fingerprint === envFailedFingerprintRef.current
@@ -2515,7 +2528,7 @@ export function EnvironmentSettings({
     return () => window.clearTimeout(timeout);
   // Saving is intentionally debounced from the complete settings snapshot.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [envDirty, items, loading, savingEnv]);
+  }, [envDirty, items, loading, loadError, savingEnv]);
 
   useEffect(() => {
     const fingerprint = JSON.stringify(createModelConfig(modelDraft));
@@ -2524,6 +2537,7 @@ export function EnvironmentSettings({
     ));
     if (
       loading
+      || loadError
       || savingModel
       || !modelDirty
       || hasDuplicateKeys
@@ -2534,7 +2548,7 @@ export function EnvironmentSettings({
     return () => window.clearTimeout(timeout);
   // Saving is intentionally debounced from the complete provider snapshot.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [extraRequestParameterRows, loading, modelDirty, modelDraft, savingModel]);
+  }, [extraRequestParameterRows, loading, loadError, modelDirty, modelDraft, savingModel]);
 
   useEffect(() => {
     if (
@@ -2810,7 +2824,7 @@ export function EnvironmentSettings({
                     onImported={reloadModelConfigAfterImport}
                   />
                 ) : null}
-                {activeTab === 'general' && preferenceStatus !== 'saved' ? (
+                {loadError ? <span className="is-error">{t('读取设置失败')}</span> : activeTab === 'general' && preferenceStatus !== 'saved' ? (
                   <span className={preferenceStatus === 'error' ? 'is-error' : 'is-saving'}>{t(preferenceStatus === 'error' ? '自动保存失败，修改后重试' : '正在自动保存')}</span>
                 ) : activeTab === 'model' ? (
                   <span className={modelAutoSaveError ? 'is-error' : savingModel ? 'is-saving' : modelDirty ? 'is-dirty' : 'is-saved'} title={modelAutoSaveError || undefined}>
@@ -2833,6 +2847,12 @@ export function EnvironmentSettings({
                 <h2>{t('正在读取运行配置')}</h2>
                 <span>{t('正在加载模型、浏览器、敏感数据过滤、运行控制和调试参数。')}</span>
               </div>
+            </section>
+          ) : loadError ? (
+            <section className="settings-loading-panel" role="alert">
+              <AlertCircle size={24} />
+              <div><h2>{t('读取设置失败')}</h2><span>{loadError}</span></div>
+              <button type="button" className="ui-button ui-button--neutral" onClick={() => void load()}><RefreshCw size={16} />{t('重试')}</button>
             </section>
           ) : (
             <>

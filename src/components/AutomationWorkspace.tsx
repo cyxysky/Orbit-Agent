@@ -1478,7 +1478,7 @@ export function AutomationWorkspace({
                   id="automation-case-name"
                   maxLength={160}
                   onChange={(event) => setCaseDraft((current) => ({ ...current, name: event.target.value }))}
-                  placeholder={t('例如：打开直播间并检查主播状态')}
+                  placeholder={t('输入任务名称')}
                   value={caseDraft.name}
                 />
               </div>

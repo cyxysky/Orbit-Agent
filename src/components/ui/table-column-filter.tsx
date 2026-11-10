@@ -16,7 +16,7 @@ export function TableColumnFilter({ label, value, onApply }: { label: string; va
   const [draft, setDraft] = useState(value);
   return <span onClick={event => event.stopPropagation()} onPointerDown={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}>
     <Popover isOpen={open} onOpenChange={next => { if (next) setDraft(value); setOpen(next); }}>
-      <Button aria-label={`${label} · ${t('筛选')}`} className="app-table-filter-trigger" isIconOnly size="sm" variant={value ? 'tertiary' : 'ghost'}>
+      <Button aria-label={`${label} · ${t('筛选')}`} className="app-table-filter-trigger" data-filtered={Boolean(value) || undefined} isIconOnly size="sm" variant="ghost">
         <ListFilter aria-hidden="true" size={15} strokeWidth={1.75} />
       </Button>
       <Popover.Content className="app-table-filter-popover" placement="bottom start" offset={6} containerPadding={12}>

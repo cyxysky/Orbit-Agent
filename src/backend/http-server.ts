@@ -79,11 +79,13 @@ export async function startBackend({ codeSandbox }: { codeSandbox?: CodeSandboxL
       if (pathname === '/api/health') {
         await sendWebResponse(Response.json({ ok: !closing, role: execution ? 'execution' : 'api', pid: process.pid, execution: supervisor?.status() }), outgoing); return;
       }
-      // Refresh the process-local configuration snapshot, never process.env.
-      await refreshRuntime();
-      // Runner health/recovery must not hold up unrelated page/API requests.
-      // Its manager coalesces concurrent checks and monitors recovery itself.
-      void syncCodeSandbox();
+      // Authentication uses the deployment policy and session store. Keep its
+      // control path independent of tool configuration refresh and recovery.
+      if (!pathname.startsWith('/api/auth/')) {
+        await refreshRuntime();
+        // Its manager coalesces concurrent checks and monitors recovery itself.
+        void syncCodeSandbox();
+      }
       const identityHeaders = new Headers();
       for (let i = 0; i < incoming.rawHeaders.length; i += 2) identityHeaders.append(incoming.rawHeaders[i], incoming.rawHeaders[i + 1]);
       // Read handlers share their per-request authentication cache. Do not attach

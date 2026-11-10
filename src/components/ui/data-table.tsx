@@ -10,7 +10,7 @@ import { NumberField } from '@heroui/react/number-field';
 import { Pagination } from '@heroui/react/pagination';
 import { Select } from '@heroui/react/select';
 import { Table } from '@heroui/react/table';
-import { Layers } from 'lucide-react';
+import { Layers, SearchX } from 'lucide-react';
 import { TableColumnFilter } from '@/components/ui/table-column-filter';
 import type { SortDescriptor } from 'react-aria-components';
 import { useDeferredValue, useMemo, useState, type ReactNode } from 'react';
@@ -135,8 +135,8 @@ export function DataTable<T>({
   return (
     <div className="app-data-table-region">
     {activeFilters.length ? <div className="app-data-table-active-filters" aria-label={t('筛选条件')}>
-      {activeFilters.map(column => <Chip className="app-data-table-filter-chip" color="accent" key={column.id} size="sm" variant="soft">
-        <Chip.Label>{column.header}: {filters[column.id]}</Chip.Label>
+      {activeFilters.map(column => <Chip className="app-data-table-filter-chip" color="default" key={column.id} size="md" variant="soft">
+        <Chip.Label><span>{column.header}:</span><strong>{filters[column.id]}</strong></Chip.Label>
         <CloseButton aria-label={`${t('清除')} ${typeof column.header === 'string' ? column.header : column.id} · ${filters[column.id]}`} onPress={() => { setFilters(current => ({ ...current, [column.id]: '' })); setPage(1); }} />
       </Chip>)}
       <Button className="app-data-table-clear-filters" onPress={() => { setFilters({}); setPage(1); }} size="sm" variant="ghost">{t('清除全部')}</Button>
@@ -173,7 +173,11 @@ export function DataTable<T>({
               </Table.Column>
             ))}
           </Table.Header>
-          <Table.Body items={rows} dependencies={[columns, rowClassName]} renderEmptyState={() => t('没有符合条件的记录')}>
+          <Table.Body items={rows} dependencies={[columns, rowClassName]} renderEmptyState={() => <EmptyState className="app-data-table-filter-empty" role="status">
+            <SearchX aria-hidden="true" size={24} strokeWidth={1.5} />
+            <div><p>{t('没有符合条件的记录')}</p><span>{t('调整筛选条件后重试，或清除筛选查看全部记录。')}</span></div>
+            <Button size="sm" variant="secondary" onPress={() => { setFilters({}); setPage(1); }}>{t('清除筛选')}</Button>
+          </EmptyState>}>
             {(row) => row.kind === 'expanded' ? (
               <Table.Row id={row.id}>
                 <Table.Cell colSpan={columns.length}>{row.content}</Table.Cell>
