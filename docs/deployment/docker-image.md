@@ -63,11 +63,13 @@ docker build --build-arg ORBIT_BASE_PATH=webpilot --build-arg BUILD_BUNDLER=webp
 
 ## 独立本地运行
 
+先在当前终端环境中设置 `ORBIT_ADMIN_SETTINGS_PASSWORD`。下面的命令将该变量传给容器，不把密码写入示例。
+
 ```powershell
-docker run -d --name orbit -p 127.0.0.1:3001:3000 -e ORBIT_REQUIRE_MOUNT_USER_ID=false -v orbit-data:/app/.data -v orbit-artifacts:/app/artifacts -v orbit-knowledge:/app/knowledge orbit:latest
+docker run -d --name orbit -p 127.0.0.1:3001:3000 -e ORBIT_ADMIN_SETTINGS_PASSWORD_ENABLED=true -e ORBIT_ADMIN_SETTINGS_PASSWORD -v orbit-data:/app/.data -v orbit-artifacts:/app/artifacts -v orbit-knowledge:/app/knowledge orbit:latest
 ```
 
-访问 `http://localhost:3001/webpilot`。示例使用默认本地身份；挂载到宿主应用时使用项目已有的挂载身份配置。模型等配置可在设置页保存到新实例数据库。
+访问 `http://localhost:3001/webpilot` 后进入管理员登录页。挂载到宿主应用时使用项目已有的普通用户挂载身份流程；不再提供默认匿名管理员。模型等配置可在登录后的设置页保存。详见[管理员登录与嵌入身份](administrator-authentication.md)。
 
 `.env`、本地数据库、上传文件、浏览器配置和构建日志均不进入镜像。数据与生成文件分别持久化到 `/app/.data`、`/app/artifacts`。构建过程不连接或迁移正在使用的数据库。
 

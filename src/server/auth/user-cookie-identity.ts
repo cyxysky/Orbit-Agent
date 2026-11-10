@@ -4,8 +4,9 @@ import { normalizeBrowserCookieDomain, parseBrowserCookieHeader, saveBrowserDoma
 import { executeDatabase, queryDatabaseOne, runDatabaseTransaction } from '@/server/db/database';
 import { ApiRequestError } from '@/server/http/api-request';
 import { requestApplicationPrincipal } from './user-context';
+import { ADMIN_SESSION_COOKIE_NAME } from '../../../server/authentication-policy.cjs';
 
-const internalCookies = new Set(['webpilot_identity', 'WEBPILOTQA_LANGUAGE', 'webpilotqa_sidebar_collapsed']);
+const internalCookies = new Set(['webpilot_identity', ADMIN_SESSION_COOKIE_NAME, 'WEBPILOTQA_LANGUAGE', 'webpilotqa_sidebar_collapsed']);
 export function userCookieCheckEnabled() {
   return String(process.env.ORBIT_USER_COOKIE_CHECK_ENABLED ?? process.env.WEBPILOT_USER_COOKIE_CHECK_ENABLED ?? '').trim().toLowerCase() === 'true';
 }

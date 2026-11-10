@@ -18,6 +18,7 @@ import {
 } from '@/server/embed/browser-chat-embed';
 import { parseJsonRequest } from '@/server/http/api-request';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+import { ADMIN_USER_ID } from '../../../../../../server/authentication-policy.cjs';
 
 
 
@@ -38,6 +39,7 @@ export function OPTIONS() {
 export async function POST(request: Request) {
   try {
     const body = await parseJsonRequest(request, initSchema, { maxBytes: 64 * 1024 });
+    if (String(body.userId).trim() === ADMIN_USER_ID) return embedJson({ error: '管理员必须通过管理员登录页登录。' }, { status: 403 });
     await store.refreshRuntimeSettings();
 
     await assertUserIdentityCookie(request, String(body.userId).trim());

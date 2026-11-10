@@ -1,0 +1,16 @@
+.page { min-height: 100dvh; display: grid; grid-template-rows: auto 1fr; background: var(--background); color: var(--foreground); padding: 24px 32px; }
+.header { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.brand { display: flex; align-items: center; gap: 10px; font-size: 16px; font-weight: 600; }
+.center { display: grid; place-items: center; padding: 48px 0 96px; }
+.form { width: min(100%, 360px); min-width: 0; }
+.form h1 { margin: 0 0 40px; font-size: 28px; font-weight: 600; line-height: 1.25; letter-spacing: -.02em; }
+.form > label { display: block; margin-bottom: 10px; font-size: 14px; font-weight: 500; }
+.password { min-width: 0; }
+.password input { min-height: 44px; }
+.password button { min-width: 40px; min-height: 40px; }
+.status { min-height: 48px; padding-block: 10px; color: var(--muted); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.status p { margin: 0; }
+.status .error { color: var(--danger); }
+.submit { width: 100%; min-height: 44px; border-radius: var(--control-radius); }
+@media (max-width: 640px) { .page { padding: 20px; } .center { padding-block: 48px; } .password input { font-size: 16px; } }
+@media (max-height: 540px) { .center { padding-block: 32px; } .form h1 { margin-bottom: 24px; } }

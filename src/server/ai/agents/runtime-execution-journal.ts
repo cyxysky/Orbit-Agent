@@ -11,7 +11,7 @@ export class RuntimeExecutionJournal {
   state: RuntimeJournalState = { revision: 0 };
   constructor(readonly sessionId: string, readonly scopeId = 'main') {}
   async load() {
-    const row = await queryDatabaseOne<{ record_json: string }>('SELECT record_json FROM agent_runtime_state WHERE session_id = ? AND scope_id = ?', [this.sessionId, this.scopeId]);
+    const row = await queryDatabaseOne<{ record_json: string }>(`SELECT record_json FROM execution_record WHERE kind='state' AND id='current' AND session_id = ? AND scope_id = ?`, [this.sessionId, this.scopeId]);
     this.state = row ? JSON.parse(row.record_json) : { revision: 0 };
     return this.state;
   }
@@ -20,13 +20,13 @@ export class RuntimeExecutionJournal {
     const next = structuredClone(this.state); mutate(next); next.revision++;
     await runDatabaseTransaction(async executor => {
       if (!previous) await ensureRuntimeOwner(this.sessionId, executor);
-      if (!previous) await executeDatabase('INSERT INTO agent_runtime_state (session_id, scope_id, revision, record_json) VALUES (?, ?, ?, ?)', [this.sessionId, this.scopeId, next.revision, JSON.stringify(next)], executor);
+      if (!previous) await executeDatabase(`INSERT INTO execution_record (session_id, scope_id, kind, id, revision, record_json) VALUES (?, ?, 'state', 'current', ?, ?)`, [this.sessionId, this.scopeId, next.revision, JSON.stringify(next)], executor);
       else {
-        const rows = await queryDatabase('UPDATE agent_runtime_state SET revision = ?, record_json = ? WHERE session_id = ? AND scope_id = ? AND revision = ? RETURNING session_id', [next.revision, JSON.stringify(next), this.sessionId, this.scopeId, previous], executor);
+        const rows = await queryDatabase(`UPDATE execution_record SET revision = ?, record_json = ? WHERE kind='state' AND id='current' AND session_id = ? AND scope_id = ? AND revision = ? RETURNING session_id`, [next.revision, JSON.stringify(next), this.sessionId, this.scopeId, previous], executor);
         if (!rows.length) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Agent runtime revision conflict; another writer owns this state.');
       }
       await effect?.(executor);
-      await executeDatabase('INSERT INTO agent_runtime_event (session_id, scope_id, revision, event_json) VALUES (?, ?, ?, ?)', [this.sessionId, this.scopeId, next.revision, JSON.stringify({ event, at: new Date().toISOString(), pending: next.pending, observations: event === 'observation' ? next.observations : undefined })], executor);
+      await executeDatabase(`INSERT INTO execution_record (session_id, scope_id, kind, id, revision, record_json) VALUES (?, ?, 'event', ?, ?, ?)`, [this.sessionId, this.scopeId, String(next.revision), next.revision, JSON.stringify({ event, at: new Date().toISOString(), pending: next.pending, observations: event === 'observation' ? next.observations : undefined })], executor);
     });
     this.state = next;
   }
@@ -63,7 +63,7 @@ export class RuntimeExecutionJournal {
     if (this.state.pending) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Cannot replace an uncheckpointed tool exchange.');
     if (new Set(calls.map(call => call.toolCallId)).size !== calls.length) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Duplicate tool call IDs in decision.');
     await this.save('model_planned', n => { n.pending = { id: randomUUID(), phase: 'planned', messages, calls, results: [], startedCallIds: [] }; }, async executor => {
-      for (const call of calls) await executeDatabase('INSERT INTO agent_runtime_call (session_id, scope_id, call_id) VALUES (?, ?, ?)', [this.sessionId, this.scopeId, call.toolCallId], executor);
+      for (const call of calls) await executeDatabase(`INSERT INTO execution_record (session_id, scope_id, kind, id) VALUES (?, ?, 'call', ?)`, [this.sessionId, this.scopeId, call.toolCallId], executor);
     });
   }
   async begin(callId?: string) {

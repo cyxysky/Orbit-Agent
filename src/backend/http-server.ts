@@ -86,15 +86,20 @@ export async function startBackend({ codeSandbox }: { codeSandbox?: CodeSandboxL
       void syncCodeSandbox();
       const identityHeaders = new Headers();
       for (let i = 0; i < incoming.rawHeaders.length; i += 2) identityHeaders.append(incoming.rawHeaders[i], incoming.rawHeaders[i + 1]);
-      const identityDenied = await authorizeRequestCookie(new Request(url, { headers: identityHeaders, method: incoming.method }), pathname);
+      // Read handlers share their per-request authentication cache. Do not attach
+      // a body reader until authorization, or before handing a stream to a proxy.
+      const executionProxy = supervisor && executionRequest(pathname, incoming.method);
+      const localRead = !executionProxy && ['GET', 'HEAD'].includes(incoming.method || 'GET');
+      const request = localRead ? webRequest(incoming, outgoing) : new Request(url, { headers: identityHeaders, method: incoming.method });
+      const identityDenied = await authorizeRequestCookie(request, pathname);
       if (identityDenied) { await sendWebResponse(identityDenied, outgoing); return; }
-      if (supervisor && executionRequest(pathname, incoming.method)) {
+      if (supervisor && executionProxy) {
         if (supervisor.configurationBarrierRequired(pathname, incoming.method)) await syncCodeSandbox();
         await supervisor.proxy(incoming, outgoing, pathname);
         return;
       }
-      const request = webRequest(incoming, outgoing);
-      const response = await route(request, pathname);
+      const routeRequest = localRead ? request : webRequest(incoming, outgoing);
+      const response = await route(routeRequest, pathname);
       if (pathname === '/api/settings/runtime' && incoming.method === 'POST' && response.ok) {
         await refreshing;
         await refreshRuntime();

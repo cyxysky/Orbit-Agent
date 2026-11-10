@@ -7,7 +7,7 @@ import sharp from 'sharp';
 import type { ChartRecord } from '@cjfclonedeep/capability-sdk/chart';
 import type { ChartExportWindow } from '@/components/ChartPngExport';
 import { normalizeApplicationUserId } from '@/server/auth/user-context';
-import { createMountIdentityTicket } from '@/server/auth/mount-identity';
+import { internalReadHeaders } from '@/server/auth/internal-request';
 import { readBrowserChatSessionOwner } from '@/server/storage/browser-chat-history-store';
 import { artifactPath } from '@/server/storage/paths';
 import { normalizeWebPilotBasePath } from '@/lib/webpilot-base-path';
@@ -26,15 +26,14 @@ async function renderPng(chart: ChartRecord, userId: string) {
   const origin = `http://127.0.0.1:${port}`;
   const basePath = normalizeWebPilotBasePath(process.env.ORBIT_BASE_PATH ?? process.env.WEBPILOT_BASE_PATH);
   const url = new URL(`${basePath}/chart-export`, origin);
-  const identityTicket = createMountIdentityTicket({ userId }).ticket;
-  url.searchParams.set('identityTicket', identityTicket);
   const browser = await chromium.launch({ headless: true, timeout: 30_000,
     ...(runtimeSetting('AI_WEB_TEST_CHROMIUM_EXECUTABLE_PATH')?.trim()
       ? { executablePath: runtimeSetting('AI_WEB_TEST_CHROMIUM_EXECUTABLE_PATH')?.trim() } : {}),
   });
   const deadline = setTimeout(() => { void browser.close().catch(() => {}); }, 90_000);
   try {
-    const page = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 1000, height: 800 }, deviceScaleFactor: 2 });
+    const page = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 1000, height: 800 }, deviceScaleFactor: 2,
+      extraHTTPHeaders: internalReadHeaders(userId) });
     // Scene images are embedded data. Only local application code/fonts may load.
     await page.route('**/*', route => new URL(route.request().url()).origin === origin
       ? route.continue() : route.abort());
@@ -54,9 +53,8 @@ async function renderPng(chart: ChartRecord, userId: string) {
     }
     throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '画布 PNG 超过图片发送大小限制，请简化画布后重试。');
   } catch (error) {
-    // Navigation diagnostics can include the URL; never send its ticket to chat.
     const detail = error instanceof Error ? error.message : '画布导出失败。';
-    throw new CodedError(ERROR_CODES.APPLICATION_ERROR, identityTicket ? detail.replaceAll(identityTicket, '[redacted]') : detail);
+    throw new CodedError(ERROR_CODES.APPLICATION_ERROR, detail);
   } finally {
     clearTimeout(deadline);
     await browser.close();

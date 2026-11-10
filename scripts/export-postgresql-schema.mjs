@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { applicationMigrations } from '../src/server/db/migrations/index.ts';
+import { consolidatedTables } from '../src/server/db/migrations/1794268800000-consolidated-records.ts';
 
 // Execute the current migration DDL against an empty-schema recorder, without a database connection.
 const statements = ['BEGIN', 'CREATE TABLE typeorm_migration ("id" SERIAL PRIMARY KEY, "timestamp" BIGINT NOT NULL, "name" VARCHAR NOT NULL)'];
@@ -18,6 +19,8 @@ const runner = {
       }));
       tables.set(table, { name: table, foreignKeys });
     }
+    const dropped = /^\s*DROP TABLE(?: IF EXISTS)?\s+(\w+)/i.exec(sql)?.[1];
+    if (dropped) tables.delete(dropped);
     statements.push(sql.trim().replace(/;\s*$/, ''));
     return [];
   },
@@ -47,5 +50,8 @@ for (const Migration of applicationMigrations) {
 statements.push('COMMIT');
 const output = path.resolve('sql/postgresql-init.sql');
 await fs.mkdir(path.dirname(output), { recursive: true });
-await fs.writeFile(output, '-- Generated from applicationMigrations. For a new empty PostgreSQL database.\n-- Regenerate: npm run db:postgres:init-sql\n\n' + statements.map(sql => sql.startsWith('--') ? sql : `${sql};`).join('\n\n') + '\n', 'utf8');
+// Historical data-copy statements are unnecessary on an empty database. Keep only the current physical schema.
+const retired = new RegExp(`\\b(?:${consolidatedTables.join('|')})\\b`, 'i');
+const current = statements.filter(sql => !retired.test(sql));
+await fs.writeFile(output, '-- Generated from applicationMigrations. For a new empty PostgreSQL database.\n-- Regenerate: npm run db:postgres:init-sql\n\n' + current.map(sql => sql.startsWith('--') ? sql : `${sql};`).join('\n\n') + '\n', 'utf8');
 console.log(`Exported ${tables.size} tables and ${applicationMigrations.length} migrations to ${path.relative(process.cwd(), output)}.`);

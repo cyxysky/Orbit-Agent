@@ -154,13 +154,11 @@ function IntegrationEditorFrame({ embedded, ...props }: ComponentProps<typeof Ap
 }
 
 export function ExternalIntegrationSettings({
-  accessToken = '',
   category,
   permission,
   embedded = false,
   onBusyChange,
 }: {
-  accessToken?: string;
   category: IntegrationCategory;
   embedded?: boolean;
   onBusyChange?: (busy: boolean) => void;
@@ -190,11 +188,7 @@ export function ExternalIntegrationSettings({
   const [testResult, setTestResult] = useState<{ message: string; operations?: string[]; targets?: IntegrationTestTarget[] } | null>(null);
   const testAbortRef = useRef<AbortController | null>(null);
   const [hasFilePicker, setHasFilePicker] = useState(false);
-  const headers = useMemo<Record<string, string>>(() => {
-    const result: Record<string, string> = {};
-    if (accessToken) result.Authorization = `Bearer ${accessToken}`;
-    return result;
-  }, [accessToken]);
+  const headers = useMemo<Record<string, string>>(() => ({}), []);
   const activeDriver = editor ? drivers.find((driver) => driver.id === editor.driverId) : undefined;
 
   const load = useCallback(async () => {

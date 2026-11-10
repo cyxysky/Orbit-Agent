@@ -8,6 +8,7 @@ const { createRequire } = require('node:module');
 const { randomBytes } = require('node:crypto');
 const {
   identityCookie,
+  clearAuthenticationCookie,
   mountTicketClaims,
   requestIdentity,
 } = require('./webpilot-identity');
@@ -15,7 +16,9 @@ const { createRealtimeRefreshHub } = require('./realtime-refresh-hub');
 const { applyOrbitEnvironment } = require('./orbit-environment');
 const { stopProcessTree } = require('./process-tree.cjs');
 const { browserChatStreamPath, createBrowserChatStreamHub } = require('./browser-chat-stream');
-const { userCookieCheckEnabled, validateUpgradeCookieIdentity } = require('./user-cookie-access');
+const { validateUpgradeCookieIdentity } = require('./user-cookie-access');
+const { ADMIN_USER_ID, ADMIN_SESSION_COOKIE_NAME, assertAdministratorConfiguration, safeReturnPath } = require('./authentication-policy.cjs');
+const { administratorSessionKey, readAdministratorPrincipal, revokeAdministratorSession, createAuthenticatedConnections } = require('./admin-session-client.cjs');
 
 function normalizeBasePath(value) {
   const normalized = String(value || '').trim().replace(/^\/+|\/+$/g, '');
@@ -78,7 +81,9 @@ function stripBasePath(pathname, basePath) {
 }
 
 function publicPath(pathname) {
-  return pathname === '/favicon.ico'
+  return pathname === '/login'
+    || ['/api/auth/login', '/api/auth/session', '/api/auth/logout'].includes(pathname)
+    || pathname === '/favicon.ico'
     || pathname === '/icon.png'
     || pathname === '/apple-icon.png'
     || pathname === '/robots.txt'
@@ -143,6 +148,7 @@ function internalPort(value, fallback) {
 }
 
 const identityHeaderNames = new Set([
+  'x-webpilot-client-address',
   'x-webpilot-identity-user-id',
   'x-webpilot-identity-username',
   'x-webpilot-identity-roles',
@@ -151,6 +157,9 @@ const identityHeaderNames = new Set([
 ]);
 
 function applyTrustedIdentityHeaders(request, principal, proof) {
+  const forwardedAddress = String(request.headers['x-real-ip'] || '').trim();
+  const clientAddress = String(process.env.WEBPILOT_TRUST_PROXY || '').toLowerCase() === 'true' && net.isIP(forwardedAddress)
+    ? forwardedAddress : request.socket?.remoteAddress || '';
   for (const name of identityHeaderNames) delete request.headers[name];
   if (Array.isArray(request.rawHeaders)) {
     const retained = [];
@@ -161,6 +170,8 @@ function applyTrustedIdentityHeaders(request, principal, proof) {
     }
     request.rawHeaders.splice(0, request.rawHeaders.length, ...retained);
   }
+  request.headers['x-webpilot-client-address'] = clientAddress;
+  request.rawHeaders?.push('x-webpilot-client-address', clientAddress);
   if (!principal) return;
   const userId = String(principal.userId || '').trim();
   const username = String(principal.username || '').trim();
@@ -172,7 +183,7 @@ function applyTrustedIdentityHeaders(request, principal, proof) {
     'x-webpilot-identity-username': username,
     'x-webpilot-identity-roles': roles.join(','),
     'x-webpilot-identity-proof': trustedProof,
-    'x-webpilot-identity-source': principal.source === 'mounted' ? 'mounted' : principal.source === 'internal' ? 'internal' : 'default',
+    'x-webpilot-identity-source': principal.source,
   };
   for (const [name, value] of Object.entries(values)) {
     request.headers[name] = value;
@@ -376,7 +387,7 @@ function createApiRuntimeSupervisor({
   return { ensure, stop };
 }
 
-function proxyHttpRequest(request, response, target) {
+function proxyHttpRequest(request, response, target, onResponse) {
   let clientDisconnected = false;
   const upstream = http.request({
     headers: { ...proxyRequestHeaders(request.headers, target), 'x-webpilot-backend-token': process.env.WEBPILOT_INTERNAL_REQUEST_TOKEN },
@@ -386,6 +397,7 @@ function proxyHttpRequest(request, response, target) {
     port: target.port,
   }, (upstreamResponse) => {
     if (clientDisconnected) { upstreamResponse.destroy(); return; }
+    onResponse?.(upstreamResponse.statusCode);
     response.writeHead(upstreamResponse.statusCode || 502, upstreamResponse.headers);
     upstreamResponse.once('error', (error) => response.destroy(error));
     upstreamResponse.pipe(response);
@@ -430,6 +442,10 @@ function nextDevelopmentUpgrade(requestUrl, basePath, dev) {
 }
 
 function internalRequestAuthorized(request, pathname) {
+  if (['GET', 'HEAD'].includes(request.method) && request.headers['x-webpilot-internal-purpose'] === 'render') {
+    const expected = String(process.env.WEBPILOT_INTERNAL_REQUEST_TOKEN || '');
+    return Boolean(expected) && request.headers['x-webpilot-internal-token'] === expected;
+  }
   if (pathname === '/api/system/shutdown') {
     const expected = String(process.env.WEBPILOT_INTERNAL_SHUTDOWN_TOKEN || '');
     return Boolean(expected) && request.headers['x-webpilot-shutdown-token'] === expected;
@@ -451,11 +467,15 @@ function internalPrincipal(request, pathname) {
   if (!internalRequestAuthorized(request, pathname)) return undefined;
   const userId = String(request.headers['x-webpilot-internal-user-id'] || '').trim();
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(userId)) return undefined;
-  return { userId, username: 'internal-scheduler', roles: ['user'], source: 'internal' };
+  return { userId, username: 'internal-service', roles: ['user'], source: 'internal' };
 }
 
-function rejectMissingIdentity(response) {
-  const body = Buffer.from(JSON.stringify({ error: 'A mounted user ID is required' }), 'utf8');
+function rejectMissingIdentity(response, requestUrl, basePath = '') {
+  const loginUrl = basePath + '/login' + (requestUrl ? '?next=' + encodeURIComponent(requestUrl.pathname + requestUrl.search) : '');
+  if (requestUrl && !stripBasePath(requestUrl.pathname, basePath).startsWith('/api/')) {
+    response.writeHead(303, { 'Cache-Control': 'no-store', Location: loginUrl }); response.end(); return;
+  }
+  const body = Buffer.from(JSON.stringify({ code: 'authentication_required', error: '请先登录。', loginUrl }), 'utf8');
   response.writeHead(401, {
     'Cache-Control': 'no-store',
     'Content-Type': 'application/json; charset=utf-8',
@@ -464,11 +484,11 @@ function rejectMissingIdentity(response) {
   response.end(body);
 }
 
-function initializeMountedIdentity(request, response, requestUrl) {
+async function initializeMountedIdentity(request, response, requestUrl, beforeSwitch) {
   const ticket = requestUrl.searchParams.get('identityTicket') || '';
   if (!ticket) return false;
   const claims = mountTicketClaims(ticket);
-  if (!claims) {
+  if (!claims || claims.userId === ADMIN_USER_ID) {
     rejectMissingIdentity(response);
     return true;
   }
@@ -477,11 +497,12 @@ function initializeMountedIdentity(request, response, requestUrl) {
     rejectMissingIdentity(response);
     return true;
   }
+  await beforeSwitch?.();
   requestUrl.searchParams.delete('identityTicket');
   response.writeHead(303, {
     'Cache-Control': 'no-store',
     'Location': `${requestUrl.pathname}${requestUrl.search}`,
-    'Set-Cookie': identityCookie(claims.userId, request),
+    'Set-Cookie': [identityCookie(claims.userId, request), clearAuthenticationCookie(ADMIN_SESSION_COOKIE_NAME, request)],
   });
   response.end();
   return true;
@@ -518,6 +539,7 @@ async function main() {
   const { loadEnvConfig, updateInitialEnv } = requireRuntimeDependency(appDir, '@next/env');
   loadEnvConfig(appDir, dev);
   const orbitEnvironment = applyOrbitEnvironment();
+  assertAdministratorConfiguration();
   updateInitialEnv(orbitEnvironment);
   // App modules may bundle another @next/env instance. Route all persisted
   // setting updates to the same snapshot used by this native Next server.
@@ -576,12 +598,13 @@ async function main() {
   const basePath = applicationBasePath(dev, compiledConfig);
 
   const refreshHub = createRealtimeRefreshHub({ appDir });
+  const connections = createAuthenticatedConnections();
+  const authenticate = async request => administratorSessionKey(request)
+    ? await readAdministratorPrincipal(request, await apiRuntimeSupervisor.ensure()) : requestIdentity(request);
   const chatStreamHub = createBrowserChatStreamHub({
     getRuntime: () => apiRuntimeSupervisor.ensure(),
     authenticateRequest: request => {
-      const principal = requestIdentity(request);
-      applyTrustedIdentityHeaders(request, principal, identityHeaderSecret);
-      return Boolean(principal);
+      return request.headers['x-webpilot-identity-proof'] === identityHeaderSecret && Boolean(request.headers['x-webpilot-identity-user-id']);
     },
   });
   const server = http.createServer((request, response) => {
@@ -604,19 +627,31 @@ async function main() {
         return;
       }
 
-      if (request.method === 'GET' && pathname === '/browser-chat' && initializeMountedIdentity(request, response, requestUrl)) return;
+      if (request.method === 'GET' && pathname === '/browser-chat' && await initializeMountedIdentity(request, response, requestUrl, async () => {
+        if (!administratorSessionKey(request)) return;
+        await revokeAdministratorSession(request, await apiRuntimeSupervisor.ensure());
+        connections.revoke(request);
+      })) return;
 
-      const principal = internalPrincipal(request, pathname) || requestIdentity(request);
+      const principal = internalPrincipal(request, pathname) || (!publicPath(pathname) || pathname === '/login' ? await authenticate(request) : undefined);
       applyTrustedIdentityHeaders(request, principal, identityHeaderSecret);
 
+      if (pathname === '/login' && principal?.source === 'admin' && ['GET', 'HEAD'].includes(request.method)) {
+        response.writeHead(303, { 'Cache-Control': 'no-store', Location: safeReturnPath(requestUrl.searchParams.get('next'), basePath) }); response.end(); return;
+      }
+      if (pathname === '/api/auth/logout' && request.method === 'POST') connections.revoke(request);
+
       if (!principal && !publicPath(pathname) && !internalRequestAuthorized(request, pathname)) {
-        rejectMissingIdentity(response);
+        rejectMissingIdentity(response, requestUrl, basePath);
         return;
       }
+      if (principal?.source === 'admin' && pathname !== '/api/auth/logout') connections.track(request, response, principal);
       if (apiRuntimeSupervisor && runtimeApiRequest(pathname)) {
         try {
           const apiRuntime = await apiRuntimeSupervisor.ensure();
-          proxyHttpRequest(request, response, apiRuntime);
+          proxyHttpRequest(request, response, apiRuntime, status => {
+            if (pathname === '/api/auth/login' && status >= 200 && status < 300) connections.revoke(request);
+          });
         } catch (error) {
           console.error('[webpilot-server] API runtime is unavailable.', error);
           if (!response.headersSent) {
@@ -641,12 +676,13 @@ async function main() {
     void (async () => {
     removeUntrustedProxyHeaders(request);
     const requestUrl = new URL(request.url || '/', `http://${request.headers.host || `${hostname}:${port}`}`);
-    if (userCookieCheckEnabled() && (browserChatStreamPath(stripBasePath(requestUrl.pathname, basePath)) || webSocketUpgradeTarget(requestUrl, basePath))) {
-      const principal = requestIdentity(request);
+    if (browserChatStreamPath(stripBasePath(requestUrl.pathname, basePath)) || webSocketUpgradeTarget(requestUrl, basePath)) {
+      const principal = await authenticate(request);
       applyTrustedIdentityHeaders(request, principal, identityHeaderSecret);
       if (!principal || !await validateUpgradeCookieIdentity(request, await apiRuntimeSupervisor.ensure(), requestUrl.searchParams.get('ticket'))) {
         socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n'); return;
       }
+      connections.track(request, socket, principal);
     }
     if (browserChatStreamPath(stripBasePath(requestUrl.pathname, basePath))) {
       chatStreamHub.acceptUpgrade(request, socket, head);
@@ -705,6 +741,8 @@ if (require.main === module) {
 module.exports = {
   applyTrustedIdentityHeaders,
   applicationBasePath,
+  initializeMountedIdentity,
+  internalPrincipal,
   createApiRuntimeSupervisor,
   configureCompiledNextRuntime,
   configureNextDevelopmentRuntime,

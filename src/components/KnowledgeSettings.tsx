@@ -10,7 +10,7 @@ import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 import './KnowledgeSettings.css';
 
 const endpoint = '/api/settings/knowledge';
-export function KnowledgeSettings({ authorizationToken = '' }: { authorizationToken?: string }) {
+export function KnowledgeSettings() {
   const { t } = useI18n();
   const fileInput = useRef<HTMLInputElement>(null);
   const [packages, setPackages] = useState<KnowledgePackageSummary[]>([]);
@@ -22,9 +22,8 @@ export function KnowledgeSettings({ authorizationToken = '' }: { authorizationTo
   const [deleteTarget, setDeleteTarget] = useState<KnowledgePackageSummary | null>(null);
   const request = useCallback((url: string, init: RequestInit = {}) => {
     const headers = new Headers(init.headers);
-    if (authorizationToken) headers.set('Authorization', `Bearer ${authorizationToken}`);
     return fetch(url, { ...init, headers });
-  }, [authorizationToken]);
+  }, []);
   const load = useCallback(async (offset = 0) => {
     setLoading(true);
     try {

@@ -15,7 +15,10 @@ export async function readApiJson<T = Record<string, unknown>>(response: Respons
     if (response.ok) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, `${fallback}：服务器返回了无效的 JSON`);
     return {};
   });
-  if (!response.ok) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, apiErrorMessage(data, fallback));
+  if (!response.ok) {
+    if (response.status === 401 && data?.code === 'authentication_required' && typeof window !== 'undefined') window.dispatchEvent(new Event('orbit:authentication-required'));
+    throw new CodedError(ERROR_CODES.APPLICATION_ERROR, apiErrorMessage(data, fallback));
+  }
   return data as T;
 }
 

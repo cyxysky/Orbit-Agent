@@ -1,3 +1,4 @@
+import { conversationRecords } from '@/server/storage/record-sources';
 import { hydrateBrowserChatContextSnapshot } from './browser-chat-context-store';
 import { queryDatabase, queryDatabaseOne } from '@/server/db/database';
 
@@ -97,7 +98,7 @@ export async function readBrowserChatMessagesPage<T>(
   params.push(limit + 1);
   const rows = await queryDatabase<JsonHistoryRow>(`
     SELECT id, time AS sort_value, record_json
-    FROM browser_chat_message
+    FROM ${conversationRecords('message')}
     WHERE session_id = ? ${cursorWhere}
     ORDER BY time DESC, id DESC
     LIMIT ?
@@ -110,7 +111,7 @@ export async function readBrowserChatMessageById<T>(sessionId: string, messageId
   if (!normalizedMessageId) return undefined;
   const row = await queryDatabaseOne<{ record_json?: string }>(`
     SELECT record_json
-    FROM browser_chat_message
+    FROM ${conversationRecords('message')}
     WHERE session_id = ? AND id = ?
   `, [sessionId, normalizedMessageId]);
   return row?.record_json ? parseJson<T>(row.record_json) : undefined;
@@ -119,7 +120,7 @@ export async function readBrowserChatMessageById<T>(sessionId: string, messageId
 export async function readAllBrowserChatMessages<T>(sessionId: string) {
   const rows = await queryDatabase<{ record_json: string }>(`
     SELECT record_json
-    FROM browser_chat_message
+    FROM ${conversationRecords('message')}
     WHERE session_id = ?
     ORDER BY time ASC, id ASC
   `, [sessionId]);
@@ -131,7 +132,7 @@ export async function readAllBrowserChatMessages<T>(sessionId: string) {
 /** Only attachment/artifact metadata is needed for tool bindings, not the full conversation. */
 export async function readBrowserChatFileMessages<T>(sessionId: string) {
   const rows = await queryDatabase<{ record_json: string }>(`
-    SELECT record_json FROM browser_chat_file_message WHERE session_id = ? ORDER BY time ASC, id ASC
+    SELECT record_json FROM ${conversationRecords('file')} WHERE session_id = ? ORDER BY time ASC, id ASC
   `, [sessionId]);
   return rows.map((row) => parseJson<T>(row.record_json)).filter((item): item is T => item !== undefined);
 }
@@ -139,7 +140,7 @@ export async function readBrowserChatFileMessages<T>(sessionId: string) {
 export async function readBrowserChatLatestActiveAssistantMessage<T>(sessionId: string) {
   const rows = await queryDatabase<{ record_json: string }>(`
     SELECT record_json
-    FROM browser_chat_message
+    FROM ${conversationRecords('message')}
     WHERE session_id = ?
     ORDER BY time DESC, id DESC
     LIMIT 100
@@ -166,7 +167,7 @@ export async function readBrowserChatStepsPage<T>(
   params.push(limit + 1);
   const rows = await queryDatabase<JsonHistoryRow>(`
     SELECT CAST(step_index AS TEXT) AS id, step_index AS sort_value, record_json
-    FROM browser_chat_step
+    FROM ${conversationRecords('step')}
     WHERE session_id = ? ${cursorWhere}
     ORDER BY step_index DESC
     LIMIT ?
@@ -187,7 +188,7 @@ export async function readBrowserChatStepsByIndexes<T>(sessionId: string, stepIn
     const placeholders = chunk.map(() => '?').join(', ');
     rows.push(...await queryDatabase<{ record_json: string }>(`
       SELECT record_json
-      FROM browser_chat_step
+      FROM ${conversationRecords('step')}
       WHERE session_id = ? AND step_index IN (${placeholders})
       ORDER BY step_index ASC
     `, [sessionId, ...chunk]));
@@ -200,7 +201,7 @@ export async function readBrowserChatStepsByIndexes<T>(sessionId: string, stepIn
 export async function readAllBrowserChatSteps<T>(sessionId: string) {
   const rows = await queryDatabase<{ record_json: string }>(`
     SELECT record_json
-    FROM browser_chat_step
+    FROM ${conversationRecords('step')}
     WHERE session_id = ?
     ORDER BY step_index ASC
   `, [sessionId]);
@@ -229,7 +230,7 @@ export async function readBrowserChatLogsPage<T>(
   params.push(limit + 1);
   const rows = await queryDatabase<JsonHistoryRow>(`
     SELECT id, time AS sort_value, record_json
-    FROM browser_chat_log
+    FROM ${conversationRecords('log')}
     WHERE session_id = ? ${messageWhere} ${cursorWhere}
     ORDER BY time DESC, id DESC
     LIMIT ?

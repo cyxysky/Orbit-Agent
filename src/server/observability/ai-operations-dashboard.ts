@@ -1,3 +1,4 @@
+import { conversationRecords } from '@/server/storage/record-sources';
 import { databaseDriver, queryDatabase, queryDatabaseOne } from '@/server/db/database';
 import { projectDatabaseJsonFields } from '@/server/db/json-projection';
 import { queryReadOnlyDatabase } from '@/server/db/read-only-query';
@@ -485,7 +486,7 @@ async function buildAiOperationsDashboard(
   for await (const row of dashboardRows<MessageRow>(`
     SELECT message.id, message.session_id, message.time, ${messageRecord} AS record_json,
       (SELECT user_id FROM browser_chat_session WHERE id = message.session_id) AS user_id
-    FROM browser_chat_message AS message
+    FROM ${conversationRecords('message')} AS message
     WHERE message.time >= ?
   `, [sinceIso], ['message.session_id', 'message.id'], signal)) {
     const message = parseRecord(row.record_json);
@@ -544,7 +545,7 @@ async function buildAiOperationsDashboard(
   for await (const row of dashboardRows<LogRow>(`
     SELECT log.id, log.session_id, log.time, log.record_json,
       (SELECT user_id FROM browser_chat_session WHERE id = log.session_id) AS user_id
-    FROM browser_chat_log AS log
+    FROM ${conversationRecords('log')} AS log
     WHERE log.time >= ? AND ${logPhase} IN ('ai:runtime:object', 'ai:runtime:response')
   `, [sinceIso], ['log.session_id', 'log.id'], signal)) {
     const usage = usageFromLog(row.record_json);
@@ -567,7 +568,7 @@ async function buildAiOperationsDashboard(
   ` : 'step.record_json';
   for await (const row of dashboardRows<StepRow>(`
     SELECT step.session_id, step.step_index, ${recovered}
-    FROM browser_chat_step AS step
+    FROM ${conversationRecords('step')} AS step
     WHERE EXISTS (SELECT 1 FROM browser_chat_session WHERE id = step.session_id AND updated_at >= ?)
   `, [sinceIso], ['step.session_id', 'step.step_index'], signal)) {
     if (row.recovered_count !== undefined) { repairs += numberValue(row.recovered_count); continue; }

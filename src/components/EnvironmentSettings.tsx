@@ -7,7 +7,7 @@ import { useSettingsCatalog } from '@/components/useSettingsCatalog';
 import { updateSettingsPreference, settingsPreferencesStatus, subscribeSettingsPreferencesStatus } from '@/lib/settings-preferences';
 import { useTheme } from '@/theme/ThemeProvider';
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { TextArea } from '@heroui/react/textarea';
 import { InputGroup } from '@heroui/react/input-group';
 import { ExpandableActionLabel } from '@/components/ui/expandable-action-label';
@@ -764,8 +764,6 @@ function isSecret(item: RuntimeSettingRow) {
 
 export function EnvironmentSettings({
   activeTab: controlledActiveTab,
-  adminSettingsAccessToken = '',
-  adminSettingsPasswordRequired = false,
   defaultUserId = '1',
   embedded = false,
   initialData,
@@ -780,8 +778,6 @@ export function EnvironmentSettings({
   userId,
 }: {
   activeTab?: SettingsTab;
-  adminSettingsAccessToken?: string;
-  adminSettingsPasswordRequired?: boolean;
   defaultUserId?: string;
   embedded?: boolean;
   initialData?: EnvironmentSettingsInitialData;
@@ -831,7 +827,7 @@ export function EnvironmentSettings({
   const [deletingLoginAccountId, setDeletingLoginAccountId] = useState('');
   const [deleteLoginAccountTarget, setDeleteLoginAccountTarget] = useState<LoginAccountMetadata | null>(null);
   const [deleteLoginAccountError, setDeleteLoginAccountError] = useState('');
-  const [loading, setLoading] = useState(!initialData && shouldLoadEnvironmentConfig && (!adminSettingsPasswordRequired || Boolean(adminSettingsAccessToken)));
+  const [loading, setLoading] = useState(!initialData && shouldLoadEnvironmentConfig);
   const [savingEnv, setSavingEnv] = useState(false);
   const [savingModel, setSavingModel] = useState(false);
   const [deleteModelProviderTarget, setDeleteModelProviderTarget] = useState<{ provider: OpenAICompatibleModelProvider; label: string } | null>(null);
@@ -880,16 +876,14 @@ export function EnvironmentSettings({
   const requestedActiveTab = requestedSourceTab === 'browser' ? 'capabilities' : requestedSourceTab;
   const standaloneManagementTab = !showTabs && ['skills', 'memory', 'accounts', 'knowledge'].includes(requestedActiveTab);
   const activeTab = standaloneManagementTab || visibleSettingsTabs.some((tab) => tab.id === requestedActiveTab) ? requestedActiveTab : 'general';
-  const adminSettingsAuthorizationHeaders: Record<string, string> = adminSettingsAccessToken
-    ? { Authorization: `Bearer ${adminSettingsAccessToken}` }
-    : {};
-  const settingsCatalog = useSettingsCatalog(adminSettingsAuthorizationHeaders);
+  const settingsRequestHeaders = useMemo<Record<string, string>>(() => ({}), []);
+  const settingsCatalog = useSettingsCatalog(settingsRequestHeaders);
   const form = useSettingsForms();
   const runtimeSettingDefinition = (key: string) => settingsCatalog.definitions.find(field => field.key === key);
   const confirmedRuntimeItems = useRef(savedItems);
   confirmedRuntimeItems.current = savedItems;
   useEffect(() => {
-    if (!shouldLoadEnvironmentConfig || (adminSettingsPasswordRequired && !adminSettingsAccessToken)) return;
+    if (!shouldLoadEnvironmentConfig) return;
     let active = true;
     let pending = false;
     const controller = new AbortController();
@@ -899,7 +893,7 @@ export function EnvironmentSettings({
       const before = runtimeItemsFingerprint(itemsRef.current);
       const confirmedBefore = runtimeItemsFingerprint(confirmedRuntimeItems.current);
       try {
-        const response = await fetch(withWebPilotBasePath('/api/settings/runtime'), { headers: adminSettingsAccessToken ? { Authorization: `Bearer ${adminSettingsAccessToken}` } : {}, cache: 'no-store', signal: controller.signal });
+        const response = await fetch(withWebPilotBasePath('/api/settings/runtime'), { headers: settingsRequestHeaders, cache: 'no-store', signal: controller.signal });
         if (!response.ok) return;
         const data = await response.json() as { saved?: RuntimeSettingRow[] };
         if (!active || !data.saved || before !== runtimeItemsFingerprint(itemsRef.current) || confirmedBefore !== runtimeItemsFingerprint(confirmedRuntimeItems.current)) return;
@@ -913,7 +907,7 @@ export function EnvironmentSettings({
     };
     const timer = setInterval(() => void refresh(), 3000);
     return () => { active = false; controller.abort(); clearInterval(timer); };
-  }, [adminSettingsAccessToken, adminSettingsPasswordRequired, shouldLoadEnvironmentConfig]);
+  }, [shouldLoadEnvironmentConfig]);
   const selectTab = (tab: SettingsTab) => {
     const nextTab = tab === 'browser' ? 'capabilities' : tab;
     if (!visibleSettingsTabs.some((item) => item.id === nextTab)) return;
@@ -930,17 +924,17 @@ export function EnvironmentSettings({
 
   useEffect(() => {
     setHasDirectoryPicker(typeof window !== 'undefined' && Boolean(window.webPilotSystem?.selectDirectory));
-    if (!initialData && shouldLoadEnvironmentConfig && (!adminSettingsPasswordRequired || adminSettingsAccessToken)) void load();
+    if (!initialData && shouldLoadEnvironmentConfig) void load();
     else setLoading(false);
   // The server snapshot is immutable for this component instance; saves update local state directly.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [adminSettingsAccessToken, adminSettingsPasswordRequired]);
+  }, []);
 
   useEffect(() => {
     if (
       activeTab !== 'sensitive-data'
       || sensitiveDataEvaluationLoaded
-      || (adminSettingsPasswordRequired && !adminSettingsAccessToken)
+
     ) return;
     const controller = new AbortController();
     setLoadingSensitiveDataEvaluation(true);
@@ -949,7 +943,7 @@ export function EnvironmentSettings({
       try {
         const response = await fetch(withWebPilotBasePath('/api/settings/sensitive-data-evaluation'), {
           cache: 'no-store',
-          headers: adminSettingsAccessToken ? { Authorization: `Bearer ${adminSettingsAccessToken}` } : {},
+          headers: settingsRequestHeaders,
           signal: controller.signal,
         });
         const data = await readApiJson<{ cases?: SensitiveDataEvaluationCase[] }>(response, '读取脱敏评测集失败');
@@ -969,7 +963,7 @@ export function EnvironmentSettings({
     return () => controller.abort();
   // Loading is intentionally keyed to the selected tab and admin access grant.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, adminSettingsAccessToken, adminSettingsPasswordRequired]);
+  }, [activeTab]);
 
   useEffect(() => {
     if (!highlightedSettingKey) return;
@@ -989,8 +983,8 @@ export function EnvironmentSettings({
     setLoading(true);
     try {
       const [envResponse, modelResponse] = await Promise.all([
-        fetch(withWebPilotBasePath('/api/settings/runtime'), { cache: 'no-store', headers: adminSettingsAuthorizationHeaders }),
-        fetch(withWebPilotBasePath('/api/settings/model'), { cache: 'no-store', headers: adminSettingsAuthorizationHeaders }),
+        fetch(withWebPilotBasePath('/api/settings/runtime'), { cache: 'no-store', headers: settingsRequestHeaders }),
+        fetch(withWebPilotBasePath('/api/settings/model'), { cache: 'no-store', headers: settingsRequestHeaders }),
       ]);
       const envData = await readApiJson<{ saved?: RuntimeSettingRow[] }>(envResponse, t('读取运行配置失败'));
       const modelData = await readApiJson<{ config?: Partial<ModelConfig> }>(modelResponse, t('读取模型配置失败'));
@@ -1038,7 +1032,7 @@ export function EnvironmentSettings({
     try {
       const response = await fetch(withWebPilotBasePath('/api/settings/runtime'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...adminSettingsAuthorizationHeaders },
+        headers: { 'Content-Type': 'application/json', ...settingsRequestHeaders },
         body: JSON.stringify({ items: items.filter(item => {
           const saved = savedItems.find(previous => previous.key === item.key);
           return !saved || item.value !== saved.value;
@@ -1117,7 +1111,7 @@ export function EnvironmentSettings({
     try {
       const response = await fetch(withWebPilotBasePath('/api/settings/sensitive-data-test'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...adminSettingsAuthorizationHeaders },
+        headers: { 'Content-Type': 'application/json', ...settingsRequestHeaders },
         body: JSON.stringify({ text: sensitiveDataTestInput }),
       });
       const data = await readApiJson<SensitiveDataTestResult>(response, t('敏感数据过滤测试失败'));
@@ -1241,7 +1235,7 @@ export function EnvironmentSettings({
     try {
       const response = await fetch(withWebPilotBasePath('/api/settings/sensitive-data-evaluation'), {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json', ...adminSettingsAuthorizationHeaders },
+        headers: { 'Content-Type': 'application/json', ...settingsRequestHeaders },
         body: JSON.stringify({ cases }),
       });
       const data = await readApiJson<{ cases?: SensitiveDataEvaluationCase[] }>(response, t('保存脱敏评测集失败'));
@@ -1274,7 +1268,7 @@ export function EnvironmentSettings({
     try {
       const response = await fetch(withWebPilotBasePath('/api/settings/sensitive-data-evaluation'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...adminSettingsAuthorizationHeaders },
+        headers: { 'Content-Type': 'application/json', ...settingsRequestHeaders },
         body: JSON.stringify({ cases }),
       });
       const data = await readApiJson<SensitiveDataEvaluationRun>(response, t('运行脱敏评测失败'));
@@ -1418,7 +1412,7 @@ export function EnvironmentSettings({
     try {
       const response = await fetch(withWebPilotBasePath('/api/settings/model'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...adminSettingsAuthorizationHeaders },
+        headers: { 'Content-Type': 'application/json', ...settingsRequestHeaders },
         body: JSON.stringify(changes),
       });
       const data = await readApiJson<{ config?: Partial<ModelConfig> }>(response, t('保存模型配置失败'));
@@ -1462,7 +1456,7 @@ export function EnvironmentSettings({
   async function reloadModelConfigAfterImport() {
     const response = await fetch(withWebPilotBasePath('/api/settings/model'), {
       cache: 'no-store',
-      headers: adminSettingsAuthorizationHeaders,
+      headers: settingsRequestHeaders,
     });
     const data = await readApiJson<{ config?: Partial<ModelConfig> }>(response, t('读取模型配置失败'));
     const nextModel = createModelConfig(data.config);
@@ -1916,7 +1910,7 @@ export function EnvironmentSettings({
     if (!definition) return null;
     return <SettingsFieldControl field={definition} value={item.value} onChange={value => update(index, { value })}
       secretPreview={item.secretPreview || (item.hasValue ? '••••••••••••' : undefined)}
-      secretSource={{ kind: 'runtime', key: item.key }} headers={adminSettingsAuthorizationHeaders}
+      secretSource={{ kind: 'runtime', key: item.key }} headers={settingsRequestHeaders}
       onPickDirectory={hasDirectoryPicker ? () => void chooseRuntimeDirectory(index, item) : undefined} />;
   }
 
@@ -2471,7 +2465,7 @@ export function EnvironmentSettings({
   const modelSnapshotRef = useRef({ modelDraft, modelConfig, savingModel, extraRequestParameterRows });
   modelSnapshotRef.current = { modelDraft, modelConfig, savingModel, extraRequestParameterRows };
   useEffect(() => {
-    if (!shouldLoadEnvironmentConfig || (adminSettingsPasswordRequired && !adminSettingsAccessToken)) return;
+    if (!shouldLoadEnvironmentConfig) return;
     const controller = new AbortController();
     let pending = false;
     const refresh = async () => {
@@ -2484,7 +2478,7 @@ export function EnvironmentSettings({
       if (hasPendingPairs) return;
       pending = true;
       try {
-        const response = await fetch(withWebPilotBasePath('/api/settings/model'), { headers: adminSettingsAccessToken ? { Authorization: `Bearer ${adminSettingsAccessToken}` } : {}, cache: 'no-store', signal: controller.signal });
+        const response = await fetch(withWebPilotBasePath('/api/settings/model'), { headers: settingsRequestHeaders, cache: 'no-store', signal: controller.signal });
         if (!response.ok) return;
         const data = await response.json() as { config?: Partial<ModelConfig> };
         const current = modelSnapshotRef.current;
@@ -2500,7 +2494,7 @@ export function EnvironmentSettings({
     };
     const timer = setInterval(() => void refresh(), 3000);
     return () => { controller.abort(); clearInterval(timer); };
-  }, [adminSettingsAccessToken, adminSettingsPasswordRequired, shouldLoadEnvironmentConfig]);
+  }, [shouldLoadEnvironmentConfig]);
   const sensitiveDataEvaluationFingerprint = JSON.stringify(sensitiveDataEvaluationPayload(sensitiveDataEvaluationCases));
   const sensitiveDataEvaluationDirty = sensitiveDataEvaluationFingerprint !== JSON.stringify(sensitiveDataEvaluationPayload(savedSensitiveDataEvaluationCases));
 
@@ -2511,13 +2505,13 @@ export function EnvironmentSettings({
       || savingEnv
       || !envDirty
       || fingerprint === envFailedFingerprintRef.current
-      || (adminSettingsPasswordRequired && !adminSettingsAccessToken)
+
     ) return;
     const timeout = window.setTimeout(() => void saveEnv().catch(() => undefined), 700);
     return () => window.clearTimeout(timeout);
   // Saving is intentionally debounced from the complete settings snapshot.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [adminSettingsAccessToken, adminSettingsPasswordRequired, envDirty, items, loading, savingEnv]);
+  }, [envDirty, items, loading, savingEnv]);
 
   useEffect(() => {
     const fingerprint = JSON.stringify(createModelConfig(modelDraft));
@@ -2530,13 +2524,13 @@ export function EnvironmentSettings({
       || !modelDirty
       || hasDuplicateKeys
       || fingerprint === modelFailedFingerprintRef.current
-      || (adminSettingsPasswordRequired && !adminSettingsAccessToken)
+
     ) return;
     const timeout = window.setTimeout(() => void saveModel().catch(() => undefined), 700);
     return () => window.clearTimeout(timeout);
   // Saving is intentionally debounced from the complete provider snapshot.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [adminSettingsAccessToken, adminSettingsPasswordRequired, extraRequestParameterRows, loading, modelDirty, modelDraft, savingModel]);
+  }, [extraRequestParameterRows, loading, modelDirty, modelDraft, savingModel]);
 
   useEffect(() => {
     if (
@@ -2545,13 +2539,13 @@ export function EnvironmentSettings({
       || !sensitiveDataEvaluationDirty
       || sensitiveDataEvaluationCases.some((item) => !item.text.trim())
       || sensitiveDataEvaluationFingerprint === sensitiveDataEvaluationFailedFingerprintRef.current
-      || (adminSettingsPasswordRequired && !adminSettingsAccessToken)
+
     ) return;
     const timeout = window.setTimeout(() => void saveSensitiveDataEvaluationCases().catch(() => undefined), 700);
     return () => window.clearTimeout(timeout);
   // Evaluation cases use the same debounced auto-save behavior as the other settings.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [adminSettingsAccessToken, adminSettingsPasswordRequired, savingSensitiveDataEvaluation, sensitiveDataEvaluationCases, sensitiveDataEvaluationDirty, sensitiveDataEvaluationFingerprint, sensitiveDataEvaluationLoaded]);
+  }, [savingSensitiveDataEvaluation, sensitiveDataEvaluationCases, sensitiveDataEvaluationDirty, sensitiveDataEvaluationFingerprint, sensitiveDataEvaluationLoaded]);
 
   const editingModelConfig = modelDraft || modelConfig;
   const activeProvider = selectedModelProvider;
@@ -2708,7 +2702,7 @@ export function EnvironmentSettings({
       && (!normalized || (setting.item.key + ' ' + (setting.definition?.label || '') + ' ' + (setting.definition?.description || '')).toLocaleLowerCase().includes(normalized)));
     const category = tool === 'communication' ? 'communication' : tool === 'data' ? 'data' : undefined;
     return <>
-      {category ? <ExternalIntegrationSettings accessToken={adminSettingsAccessToken} category={category} embedded onBusyChange={onBusyChange}
+      {category ? <ExternalIntegrationSettings category={category} embedded onBusyChange={onBusyChange}
         permission={category === 'communication' ? {
           enabled: communicationSendSetting?.item.value === 'true', label: '允许 Agent 请求发送消息',
           description: '更改会自动保存；每次正式发送仍会暂停并等待你的确认。',
@@ -2806,7 +2800,7 @@ export function EnvironmentSettings({
               <div className="settings-save-state">
                 {activeTab === 'model' ? (
                   <DataTransferButtons
-                    authorizationToken={adminSettingsAccessToken}
+
                     disabled={savingModel || loading}
                     kind="model"
                     onImported={reloadModelConfigAfterImport}
@@ -2912,7 +2906,7 @@ export function EnvironmentSettings({
                     apiKey: { description: activeProviderOption.keyLabel, disabled: Boolean(activeProviderOption.localAuth) },
                   }}
                   secretPreview={activeProviderSettings.apiKeyPreview || (activeProviderSettings.hasApiKey ? '••••••••••••' : undefined)}
-                  secretSource={{ kind: 'provider', provider: activeProvider }} headers={adminSettingsAuthorizationHeaders}
+                  secretSource={{ kind: 'provider', provider: activeProvider }} headers={settingsRequestHeaders}
                   onChange={(key, value) => key === 'provider' ? selectDefaultProvider(value as ModelProvider)
                     : updateActiveProviderSettings({ [key]: key === 'enabled' ? value === 'true' : value })} />
               <div className="settings-model-types" role="tablist" aria-label={t('模型类型')}>
@@ -2972,7 +2966,7 @@ export function EnvironmentSettings({
 
           {activeTab === 'skills' ? <SkillsManager onChanged={onSkillsChanged} showTitle={showSectionTitles} userId={normalizedUserId} /> : null}
 
-          {activeTab === 'knowledge' ? <KnowledgeSettings authorizationToken={adminSettingsAccessToken} /> : null}
+          {activeTab === 'knowledge' ? <KnowledgeSettings  /> : null}
 
           {activeTab === 'memory' ? (
             <div className="settings-memory-page">
@@ -3017,7 +3011,7 @@ export function EnvironmentSettings({
           {activeTab === 'accounts' ? renderLoginAccountsPanel() : null}
 
           {activeTab === 'capabilities' ? <ManagedToolSettings
-            accessToken={adminSettingsAccessToken} items={items} onChange={updateToolCapability}
+            items={items} onChange={updateToolCapability}
             saving={savingEnv} onSave={saveEnv} renderConfiguration={renderToolConfiguration}
             openTool={Object.keys(toolConfigurationTargets).find(name => toolConfigurationTargets[name] === activeSettingsSections.capabilities)}
             onConfigurationClosed={() => setActiveSettingsSections(current => ({ ...current, capabilities: 'capability:overview' }))}
@@ -3034,7 +3028,7 @@ export function EnvironmentSettings({
                 />
                 <div className="settings-detail-content">
                   {activeSettingsSection === 'sensitive:test' ? renderSensitiveDataToolPanel('test') : null}
-                  {activeSettingsSection === 'sensitive:runtime' ? <SensitiveDataRuntimeSettings accessToken={adminSettingsAccessToken} /> : null}
+                  {activeSettingsSection === 'sensitive:runtime' ? <SensitiveDataRuntimeSettings /> : null}
                   {activeSettingsSection === 'sensitive:evaluation' ? renderSensitiveDataToolPanel('evaluation') : null}
 
                   {activeEnvGroup && groupEnvSettingCards(activeEnvGroup.items).length > 1 ? (

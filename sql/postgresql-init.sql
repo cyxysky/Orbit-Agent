@@ -7,13 +7,6 @@ CREATE TABLE typeorm_migration ("id" SERIAL PRIMARY KEY, "timestamp" BIGINT NOT 
 
 -- InitialBackendSchema1788307200000
 
-CREATE TABLE IF NOT EXISTS app_config (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
-    runtime_env_json TEXT NOT NULL DEFAULT '[]',
-    model_config_json TEXT,
-    updated_at TEXT NOT NULL
-  );
-
 CREATE TABLE IF NOT EXISTS runtime_meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
@@ -55,43 +48,6 @@ CREATE INDEX IF NOT EXISTS browser_chat_session_updated_at_idx ON browser_chat_s
 
 CREATE INDEX IF NOT EXISTS browser_chat_session_user_updated_id_idx ON browser_chat_session(user_id, updated_at DESC, id DESC);
 
-CREATE TABLE IF NOT EXISTS browser_chat_message (
-    session_id TEXT NOT NULL,
-    id TEXT NOT NULL,
-    time TEXT NOT NULL,
-    record_json TEXT NOT NULL,
-    PRIMARY KEY (session_id, id),
-    FOREIGN KEY (session_id) REFERENCES browser_chat_session(id) ON DELETE CASCADE
-  );
-
-CREATE INDEX IF NOT EXISTS browser_chat_message_session_time_idx ON browser_chat_message(session_id, time);
-
-CREATE INDEX IF NOT EXISTS browser_chat_message_session_time_id_idx ON browser_chat_message(session_id, time DESC, id DESC);
-
-CREATE TABLE IF NOT EXISTS browser_chat_step (
-    session_id TEXT NOT NULL,
-    step_index INTEGER NOT NULL,
-    record_json TEXT NOT NULL,
-    PRIMARY KEY (session_id, step_index),
-    FOREIGN KEY (session_id) REFERENCES browser_chat_session(id) ON DELETE CASCADE
-  );
-
-CREATE TABLE IF NOT EXISTS browser_chat_log (
-    session_id TEXT NOT NULL,
-    id TEXT NOT NULL,
-    time TEXT NOT NULL,
-    message_id TEXT,
-    record_json TEXT NOT NULL,
-    PRIMARY KEY (session_id, id),
-    FOREIGN KEY (session_id) REFERENCES browser_chat_session(id) ON DELETE CASCADE
-  );
-
-CREATE INDEX IF NOT EXISTS browser_chat_log_session_time_idx ON browser_chat_log(session_id, time);
-
-CREATE INDEX IF NOT EXISTS browser_chat_log_session_time_id_idx ON browser_chat_log(session_id, time DESC, id DESC);
-
-CREATE INDEX IF NOT EXISTS browser_chat_log_session_message_time_idx ON browser_chat_log(session_id, message_id, time DESC, id DESC);
-
 CREATE TABLE IF NOT EXISTS ai_operations_chat_archive (
     session_id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
@@ -122,16 +78,6 @@ CREATE TABLE IF NOT EXISTS personal_memory_item (
 CREATE UNIQUE INDEX IF NOT EXISTS personal_memory_identity_idx ON personal_memory_item(user_id, scope, domain, type, memory_key);
 
 CREATE INDEX IF NOT EXISTS personal_memory_updated_at_idx ON personal_memory_item(updated_at DESC);
-
-CREATE TABLE IF NOT EXISTS user_onboarding_state (
-    user_id TEXT PRIMARY KEY,
-    tutorial_version INTEGER NOT NULL,
-    status TEXT NOT NULL,
-    completed_steps_json TEXT NOT NULL DEFAULT '[]',
-    dismissed_at TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  );
 
 CREATE TABLE IF NOT EXISTS login_account (
     id TEXT PRIMARY KEY,
@@ -167,19 +113,6 @@ CREATE TABLE IF NOT EXISTS websocket_ticket (
   );
 
 CREATE INDEX IF NOT EXISTS websocket_ticket_token_idx ON websocket_ticket(token_hash, expires_at);
-
-CREATE TABLE IF NOT EXISTS browser_code_runtime_state (
-    session_id TEXT NOT NULL,
-    namespace TEXT NOT NULL DEFAULT 'conversation',
-    key TEXT NOT NULL,
-    value_json TEXT NOT NULL,
-    revision INTEGER NOT NULL,
-    updated_at TEXT NOT NULL,
-    expires_at TEXT,
-    PRIMARY KEY (session_id, namespace, key)
-  );
-
-CREATE INDEX IF NOT EXISTS browser_code_runtime_state_expiry_idx ON browser_code_runtime_state(expires_at) WHERE expires_at IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS automation_case (
     id TEXT PRIMARY KEY,
@@ -275,41 +208,9 @@ INSERT INTO typeorm_migration("timestamp", "name") VALUES (1788307200000, 'Initi
 
 -- BrowserChatContextRecords1788566400000
 
-CREATE TABLE IF NOT EXISTS browser_chat_context_record (
-      session_id TEXT NOT NULL REFERENCES browser_chat_session(id) ON DELETE CASCADE,
-      id TEXT NOT NULL,
-      record_json TEXT NOT NULL,
-      PRIMARY KEY (session_id, id)
-    );
-
-CREATE TABLE IF NOT EXISTS browser_chat_context_request (
-      session_id TEXT NOT NULL REFERENCES browser_chat_session(id) ON DELETE CASCADE,
-      id TEXT NOT NULL,
-      manifest_json TEXT NOT NULL,
-      PRIMARY KEY (session_id, id)
-    );
-
 INSERT INTO typeorm_migration("timestamp", "name") VALUES (1788566400000, 'BrowserChatContextRecords1788566400000');
 
 -- RuntimeReadIndexes1788652800000
-
-CREATE TABLE browser_chat_file_message (
-      session_id TEXT NOT NULL, id TEXT NOT NULL, time TEXT NOT NULL, record_json TEXT NOT NULL,
-      PRIMARY KEY(session_id, id),
-      FOREIGN KEY(session_id, id) REFERENCES browser_chat_message(session_id, id) ON DELETE CASCADE
-    );
-
-CREATE INDEX browser_chat_file_message_time ON browser_chat_file_message(session_id, time, id);
-
-INSERT INTO browser_chat_file_message SELECT m.session_id, m.id, m.time, jsonb_build_object('id', m.id, 'role', CAST(m.record_json AS jsonb)->'role', 'createdAt', CAST(m.record_json AS jsonb)->'createdAt', 'updatedAt', CAST(m.record_json AS jsonb)->'updatedAt', 'content', '', 'attachments', CAST(m.record_json AS jsonb)->'attachments', 'artifacts', CAST(m.record_json AS jsonb)->'artifacts')::text FROM browser_chat_message m WHERE (COALESCE(CAST(m.record_json AS jsonb)->'attachments', '[]'::jsonb) NOT IN ('[]'::jsonb, 'null'::jsonb) OR COALESCE(CAST(m.record_json AS jsonb)->'artifacts', '[]'::jsonb) NOT IN ('[]'::jsonb, 'null'::jsonb));
-
-CREATE FUNCTION webpilot_index_message_files() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
-        IF (COALESCE(CAST(NEW.record_json AS jsonb)->'attachments', '[]'::jsonb) NOT IN ('[]'::jsonb, 'null'::jsonb) OR COALESCE(CAST(NEW.record_json AS jsonb)->'artifacts', '[]'::jsonb) NOT IN ('[]'::jsonb, 'null'::jsonb)) THEN INSERT INTO browser_chat_file_message VALUES (NEW.session_id, NEW.id, NEW.time, jsonb_build_object('id', NEW.id, 'role', CAST(NEW.record_json AS jsonb)->'role', 'createdAt', CAST(NEW.record_json AS jsonb)->'createdAt', 'updatedAt', CAST(NEW.record_json AS jsonb)->'updatedAt', 'content', '', 'attachments', CAST(NEW.record_json AS jsonb)->'attachments', 'artifacts', CAST(NEW.record_json AS jsonb)->'artifacts')::text)
-      ON CONFLICT(session_id,id) DO UPDATE SET time=excluded.time, record_json=excluded.record_json;
-        ELSE DELETE FROM browser_chat_file_message WHERE session_id=NEW.session_id AND id=NEW.id; END IF;
-        RETURN NULL; END $$;
-
-CREATE TRIGGER webpilot_message_files AFTER INSERT OR UPDATE OF record_json ON browser_chat_message FOR EACH ROW EXECUTE FUNCTION webpilot_index_message_files();
 
 CREATE TABLE runtime_knowledge_revision (scope TEXT NOT NULL, kind TEXT NOT NULL, revision BIGINT NOT NULL, PRIMARY KEY(scope,kind));
 
@@ -371,14 +272,6 @@ INSERT INTO typeorm_migration("timestamp", "name") VALUES (1789084800000, 'Perso
 
 -- HybridRuntime1790000200000
 
-CREATE TABLE agent_runtime_state (session_id TEXT NOT NULL REFERENCES browser_chat_session(id) ON DELETE CASCADE, scope_id TEXT NOT NULL, revision INTEGER NOT NULL, record_json TEXT NOT NULL, PRIMARY KEY(session_id, scope_id));
-
-CREATE TABLE agent_runtime_event (session_id TEXT NOT NULL REFERENCES browser_chat_session(id) ON DELETE CASCADE, scope_id TEXT NOT NULL, revision INTEGER NOT NULL, event_json TEXT NOT NULL, PRIMARY KEY(session_id, scope_id, revision));
-
-CREATE TABLE agent_runtime_call (session_id TEXT NOT NULL REFERENCES browser_chat_session(id) ON DELETE CASCADE, scope_id TEXT NOT NULL, call_id TEXT NOT NULL, PRIMARY KEY(session_id, scope_id, call_id));
-
-CREATE TABLE agent_runtime_compaction (session_id TEXT NOT NULL REFERENCES browser_chat_session(id) ON DELETE CASCADE, scope_id TEXT NOT NULL, epoch INTEGER NOT NULL, snapshot_json TEXT NOT NULL, PRIMARY KEY(session_id, scope_id, epoch));
-
 CREATE TABLE agent_memory_candidate (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, session_id TEXT NOT NULL REFERENCES browser_chat_session(id) ON DELETE CASCADE, source_key TEXT NOT NULL, status TEXT NOT NULL, record_json TEXT NOT NULL, UNIQUE(user_id, source_key));
 
 CREATE TABLE agent_memory_job (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, session_id TEXT NOT NULL REFERENCES browser_chat_session(id) ON DELETE CASCADE, status TEXT NOT NULL, attempts INTEGER NOT NULL, available_at BIGINT NOT NULL, lease_until BIGINT NOT NULL, lease_id TEXT, payload_json TEXT NOT NULL, error TEXT);
@@ -397,30 +290,6 @@ INSERT INTO typeorm_migration("timestamp", "name") VALUES (1790600000000, 'Memor
 
 CREATE TABLE agent_runtime_owner (id TEXT PRIMARY KEY);
 
-INSERT INTO agent_runtime_owner (id) SELECT DISTINCT session_id FROM agent_runtime_state WHERE 1 = 1 ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO agent_runtime_owner (id) SELECT DISTINCT session_id FROM agent_runtime_event WHERE 1 = 1 ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO agent_runtime_owner (id) SELECT DISTINCT session_id FROM agent_runtime_call WHERE 1 = 1 ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO agent_runtime_owner (id) SELECT DISTINCT session_id FROM agent_runtime_compaction WHERE 1 = 1 ON CONFLICT (id) DO NOTHING;
-
-ALTER TABLE "agent_runtime_state" DROP CONSTRAINT "agent_runtime_state_session_id_fkey";
-
-ALTER TABLE "agent_runtime_state" ADD CONSTRAINT "agent_runtime_state_session_id_fkey" FOREIGN KEY ("session_id") REFERENCES "agent_runtime_owner" ("id") ON DELETE CASCADE;
-
-ALTER TABLE "agent_runtime_event" DROP CONSTRAINT "agent_runtime_event_session_id_fkey";
-
-ALTER TABLE "agent_runtime_event" ADD CONSTRAINT "agent_runtime_event_session_id_fkey" FOREIGN KEY ("session_id") REFERENCES "agent_runtime_owner" ("id") ON DELETE CASCADE;
-
-ALTER TABLE "agent_runtime_call" DROP CONSTRAINT "agent_runtime_call_session_id_fkey";
-
-ALTER TABLE "agent_runtime_call" ADD CONSTRAINT "agent_runtime_call_session_id_fkey" FOREIGN KEY ("session_id") REFERENCES "agent_runtime_owner" ("id") ON DELETE CASCADE;
-
-ALTER TABLE "agent_runtime_compaction" DROP CONSTRAINT "agent_runtime_compaction_session_id_fkey";
-
-ALTER TABLE "agent_runtime_compaction" ADD CONSTRAINT "agent_runtime_compaction_session_id_fkey" FOREIGN KEY ("session_id") REFERENCES "agent_runtime_owner" ("id") ON DELETE CASCADE;
-
 INSERT INTO typeorm_migration("timestamp", "name") VALUES (1793836800000, 'RuntimeExecutionOwners1793836800000');
 
 -- UserCookieIdentity1793923200000
@@ -437,5 +306,45 @@ CREATE TABLE application_user (
 CREATE UNIQUE INDEX application_user_cookie_identity ON application_user(cookie_domain, cookie_fingerprint) WHERE cookie_fingerprint IS NOT NULL;
 
 INSERT INTO typeorm_migration("timestamp", "name") VALUES (1793923200000, 'UserCookieIdentity1793923200000');
+
+-- ConsolidatedRecords1794268800000
+
+CREATE TABLE conversation_record (
+      session_id TEXT NOT NULL REFERENCES browser_chat_session(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK(kind IN ('message','step','log','context','request','file')),
+      id TEXT NOT NULL, step_index INTEGER, time TEXT NOT NULL DEFAULT '', message_id TEXT,
+      record_json TEXT NOT NULL, parent_kind TEXT, parent_id TEXT,
+      PRIMARY KEY(session_id,kind,id),
+      FOREIGN KEY(session_id,parent_kind,parent_id) REFERENCES conversation_record(session_id,kind,id) ON DELETE CASCADE
+    );
+
+CREATE INDEX conversation_record_time ON conversation_record(session_id,kind,time DESC,id DESC);
+
+CREATE INDEX conversation_record_step ON conversation_record(session_id,kind,step_index DESC);
+
+CREATE INDEX conversation_record_message ON conversation_record(session_id,kind,message_id,time DESC);
+
+CREATE TABLE execution_record (
+      session_id TEXT NOT NULL REFERENCES agent_runtime_owner(id) ON DELETE CASCADE,
+      scope_id TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('state','event','call','compaction','variable')),
+      id TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0, record_json TEXT NOT NULL DEFAULT '{}',
+      updated_at TEXT NOT NULL DEFAULT '', expires_at TEXT,
+      PRIMARY KEY(session_id,scope_id,kind,id)
+    );
+
+CREATE INDEX execution_record_expiry ON execution_record(expires_at) WHERE expires_at IS NOT NULL;
+
+ALTER TABLE application_user ADD COLUMN onboarding_json TEXT;
+
+DROP FUNCTION IF EXISTS webpilot_index_message_files();
+
+CREATE FUNCTION orbit_index_message_files() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+        IF COALESCE(CAST(NEW.record_json AS jsonb)->'attachments','[]'::jsonb) NOT IN ('[]'::jsonb,'null'::jsonb) OR COALESCE(CAST(NEW.record_json AS jsonb)->'artifacts','[]'::jsonb) NOT IN ('[]'::jsonb,'null'::jsonb) THEN INSERT INTO conversation_record(session_id,kind,id,time,record_json,parent_kind,parent_id)
+      VALUES(NEW.session_id,'file',NEW.id,NEW.time,jsonb_build_object('id',NEW.id,'role',CAST(NEW.record_json AS jsonb)->'role','createdAt',CAST(NEW.record_json AS jsonb)->'createdAt','updatedAt',CAST(NEW.record_json AS jsonb)->'updatedAt','content','','attachments',CAST(NEW.record_json AS jsonb)->'attachments','artifacts',CAST(NEW.record_json AS jsonb)->'artifacts')::text,'message',NEW.id)
+      ON CONFLICT(session_id,kind,id) DO UPDATE SET time=excluded.time,record_json=excluded.record_json; ELSE DELETE FROM conversation_record WHERE session_id=NEW.session_id AND kind='file' AND id=NEW.id; END IF; RETURN NULL; END $$;
+
+CREATE TRIGGER orbit_message_files AFTER INSERT OR UPDATE OF record_json ON conversation_record FOR EACH ROW WHEN (NEW.kind='message') EXECUTE FUNCTION orbit_index_message_files();
+
+INSERT INTO typeorm_migration("timestamp", "name") VALUES (1794268800000, 'ConsolidatedRecords1794268800000');
 
 COMMIT;

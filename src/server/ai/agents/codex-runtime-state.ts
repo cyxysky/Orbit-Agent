@@ -24,7 +24,7 @@ export type CodexRuntimeBinding = {
 
 export async function readCodexRuntimeBinding(sessionId: string, scope: string, userId?: string) {
   const row = await queryDatabaseOne<{ record_json: string }>(
-    'SELECT record_json FROM agent_runtime_state WHERE session_id = ? AND scope_id = ?', [sessionId, `codex-app-server:${scope}`],
+    `SELECT record_json FROM execution_record WHERE kind='state' AND id='current' AND session_id = ? AND scope_id = ?`, [sessionId, `codex-app-server:${scope}`],
   );
   if (!row) return;
   const binding = JSON.parse(row.record_json) as CodexRuntimeBinding;
@@ -38,12 +38,12 @@ export async function writeCodexRuntimeBinding(sessionId: string, scope: string,
   if (!previous) {
     await runDatabaseTransaction(async executor => {
       await ensureRuntimeOwner(sessionId, executor);
-      await executeDatabase('INSERT INTO agent_runtime_state (session_id, scope_id, revision, record_json) VALUES (?, ?, ?, ?)',
+      await executeDatabase(`INSERT INTO execution_record (session_id, scope_id, kind, id, revision, record_json) VALUES (?, ?, 'state', 'current', ?, ?)`,
         [sessionId, `codex-app-server:${scope}`, next.revision, JSON.stringify(next)], executor);
     });
   } else {
     const row = await queryDatabaseOne<{ revision: number }>(
-      'UPDATE agent_runtime_state SET revision = ?, record_json = ? WHERE session_id = ? AND scope_id = ? AND revision = ? RETURNING revision',
+      `UPDATE execution_record SET revision = ?, record_json = ? WHERE kind='state' AND id='current' AND session_id = ? AND scope_id = ? AND revision = ? RETURNING revision`,
       [next.revision, JSON.stringify(next), sessionId, `codex-app-server:${scope}`, previous],
     );
     if (!row) throw new CodedError(ERROR_CODES.AI_RUNTIME_FAILED, 'Another writer changed this Codex thread binding.');

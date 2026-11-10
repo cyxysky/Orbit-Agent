@@ -47,7 +47,7 @@ export async function readBackendPageData<T>(pathname: string): Promise<T> {
 
 export const readWorkspacePageContext = cache(async () => {
   const [context, requestCookies] = await Promise.all([
-    readBackendPageData<{ userId: string; admin: boolean; adminSettingsPasswordRequired: boolean }>('/api/workspace/context'), cookies(),
+    readBackendPageData<{ userId: string; admin: boolean; administratorAuthenticated: boolean; administratorExpiresAt?: number }>('/api/workspace/context'), cookies(),
   ]);
-  return { ...context, settingsMenuVisible: !context.adminSettingsPasswordRequired || context.admin, sidebarCollapsed: sidebarCollapsedFromCookie(requestCookies.get(SIDEBAR_COLLAPSED_COOKIE_NAME)?.value) };
+  return { ...context, settingsMenuVisible: context.admin, sidebarCollapsed: sidebarCollapsedFromCookie(requestCookies.get(SIDEBAR_COLLAPSED_COOKIE_NAME)?.value) };
 });

@@ -1,3 +1,4 @@
+import { conversationRecords } from '@/server/storage/record-sources';
 import { databaseDriver, sqliteDatabasePath, queryDatabase } from '@/server/db/database';
 import type { DatabaseWriteStatement } from './database-write-queue';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
@@ -50,19 +51,19 @@ export function splitBrowserChatContextSnapshot<T>(sessionId: string, snapshot: 
     let state: { version?: number; epoch?: number };
     try { state = JSON.parse(view.continuationSummary || '{}'); } catch { return []; }
     if (state.version !== 3 || !state.epoch) return [];
-    return [{ sql: 'INSERT INTO agent_runtime_compaction (session_id, scope_id, epoch, snapshot_json) VALUES (?, ?, ?, ?) ON CONFLICT(session_id, scope_id, epoch) DO NOTHING',
-      params: [sessionId, scopeId, state.epoch, JSON.stringify({ active: view.active, continuationSummary: view.continuationSummary })] }];
+    return [{ sql: `INSERT INTO execution_record (session_id, scope_id, kind, id, revision, record_json) VALUES (?, ?, 'compaction', ?, ?, ?) ON CONFLICT(session_id, scope_id, kind, id) DO NOTHING`,
+      params: [sessionId, scopeId, String(state.epoch), state.epoch, JSON.stringify({ active: view.active, continuationSummary: view.continuationSummary })] }];
   });
   return {
     snapshot: { ...snapshot, modelContext: { ...index, recordIds: Object.keys(records), externalRecords: true } },
     statements: [...(compactions.length ? [runtimeOwnerStatement(sessionId)] : []), ...compactions, ...Object.entries(records).filter(([id]) => !known?.has(id)).map(([id, value]) => ({
-      sql: `INSERT INTO browser_chat_context_record (session_id, id, record_json) VALUES (?, ?, ?)
-        ON CONFLICT(session_id, id) DO NOTHING`,
+      sql: `INSERT INTO conversation_record (session_id, kind, id, record_json) VALUES (?, 'context', ?, ?)
+        ON CONFLICT(session_id, kind, id) DO NOTHING`,
       params: [sessionId, id, JSON.stringify(value)],
     })), ...[context.lastRequest, ...Object.values(context.branches || {}).map((branch) => branch.lastRequest)]
       .flatMap((manifest) => manifest ? [{
-        sql: `INSERT INTO browser_chat_context_request (session_id, id, manifest_json) VALUES (?, ?, ?)
-          ON CONFLICT(session_id, id) DO NOTHING`,
+        sql: `INSERT INTO conversation_record (session_id, kind, id, record_json) VALUES (?, 'request', ?, ?)
+          ON CONFLICT(session_id, kind, id) DO NOTHING`,
         params: [sessionId, manifest.id, JSON.stringify(manifest)],
       }] : [])],
   };
@@ -74,7 +75,7 @@ export async function hydrateBrowserChatContextSnapshot<T>(sessionId: string, sn
   const records: Record<string, unknown> = {};
   const readRecords = async (ids?: string[]) => {
     const rows = await queryDatabase<{ id: string; record_json: string }>(
-      `SELECT id, record_json FROM browser_chat_context_record WHERE session_id = ?${ids ? ` AND id IN (${ids.map(() => '?').join(',')})` : ''}`,
+      `SELECT id, record_json FROM ${conversationRecords('context')} WHERE session_id = ?${ids ? ` AND id IN (${ids.map(() => '?').join(',')})` : ''}`,
       [sessionId, ...(ids || [])],
     );
     for (const row of rows) records[row.id] = JSON.parse(row.record_json);

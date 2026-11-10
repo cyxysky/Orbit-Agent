@@ -21,7 +21,6 @@ import styles from './ManagedToolSettings.module.css';
 type Tool = ManagedToolStatus & { enabled: boolean; running: boolean; configuration: { envKeys: string[]; config: Record<string, unknown> } };
 type EnvironmentRow = { id: string; key: string; original: string; value: string };
 type Props = {
-  accessToken: string;
   items: readonly { key: string; value: string; enabled?: boolean }[];
   onChange: (key: string, enabled: boolean) => void;
   onSave: () => Promise<void>;
@@ -31,9 +30,9 @@ type Props = {
   onConfigurationClosed?: () => void;
 };
 
-export function ManagedToolSettings({ accessToken, items, onChange, onSave, renderConfiguration, saving = false, openTool, onConfigurationClosed }: Props) {
+export function ManagedToolSettings({ items, onChange, onSave, renderConfiguration, saving = false, openTool, onConfigurationClosed }: Props) {
   const { t } = useI18n();
-  const headers = useMemo(() => { const value: Record<string, string> = {}; if (accessToken) value.Authorization = 'Bearer ' + accessToken; return value; }, [accessToken]);
+  const headers = useMemo<Record<string, string>>(() => ({}), []);
   const endpoint = withWebPilotBasePath('/api/settings/tools');
   const [tools, setTools] = useState<Tool[]>([]);
   const [loading, setLoading] = useState(true);
@@ -122,7 +121,7 @@ export function ManagedToolSettings({ accessToken, items, onChange, onSave, rend
     {loading ? <WorkspaceContentSkeleton label={t('正在读取工具组件')} /> : <>
       <ToolCapabilitySettings items={items} components={tools} busy={busy} onChange={(key, enabled) => void toggle(key, enabled)} onConfigure={configure} />
       <SettingsDetailSection heading={t('MCP 服务')} description={t('每个服务单独启停，服务内的工具在齿轮配置中分别控制。')}>
-        <ExternalIntegrationSettings accessToken={accessToken} category="connector" />
+        <ExternalIntegrationSettings category="connector" />
       </SettingsDetailSection>
     </>}
     {definition ? <AppModal size="wide" dialogClassName={styles.modal} ariaLabel={t(definition.label) + ' · ' + t('工具配置')} dismissable={!locked} keyboardDismissable={!locked} onClose={close}>

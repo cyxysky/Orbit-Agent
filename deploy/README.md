@@ -29,7 +29,7 @@ docker build --platform linux/amd64 \
 docker push registry.gitlab.internal/ai/orbit:YOUR_RELEASE_TAG
 ```
 
-构建默认执行类型检查。资源有限的构建机可参照 [低内存构建参数](../docs/managed-mcp-tools-validation.md#构建与部署要点)。本轮源码交付没有重新运行应用 dev/build，也没有替换 Docker Hub 现有镜像；侧边栏修复在本源码包中，部署时应由本次源码构建镜像。
+构建默认执行类型检查。资源有限的构建机可参照 [低内存构建参数](../docs/managed-mcp-tools-validation.md#构建与部署要点)。本轮源码交付没有运行应用 dev/build，也没有替换 Docker Hub 现有镜像；管理员登录、后端鉴权、数据库表合并和侧边栏修复在本源码包中，部署时应由本次源码构建镜像。
 
 将官方 `nginx:stable-alpine` 同步到内网镜像仓库，并在 `deploy/kustomization.yaml` 修改两个镜像地址与标签。正式部署建议固定版本或 digest。应用和沙箱使用同一个 Orbit 镜像；Nginx 是代理镜像。
 
@@ -57,7 +57,13 @@ kubectl -n orbit create secret generic orbit-secrets \
 
 也可复制 `k8s/secret.example.yaml` 到仓库外，替换全部占位符后应用。使用密码管理器保管管理员密码与主密钥；已有数据迁移必须使用原来的凭据主密钥，否则数据库中的模型密钥、账号和 MCP 密文无法解密。**不要在每次升级时重新生成这些密钥。**
 
-默认 `ORBIT_REQUIRE_MOUNT_USER_ID=true`，沿用宿主系统挂载身份流程，不为所有访问者自动分配管理员身份。直接独立使用而没有宿主身份时，可显式设为 `false`，但所有未携带身份的请求会使用 `ORBIT_DEFAULT_USER_ID=1`，这不提供多用户登录隔离。Cookie 一致性校验应在可信身份完成绑定后再开启。
+未登录的页面访问会转到 `/login`，API 返回 401。管理员输入 `ORBIT_ADMIN_SETTINGS_PASSWORD` 后，服务端签发独立的 HttpOnly 会话 Cookie，有效期 8 小时；退出会撤销会话，修改密码并重启后原会话失效。`ORBIT_ADMIN_SETTINGS_PASSWORD_ENABLED=false` 会关闭管理员登录，不会开放匿名管理员。开启登录却未设置密码时，启动会直接报错。原 WEBPILOT 前缀的同名环境变量仍由环境变量映射统一读取。
+
+普通用户沿用宿主系统挂载身份流程；挂载接口不允许签发管理员 ID `1`。`ORBIT_DEFAULT_USER_ID` 只用于服务端资源的默认归属，不能用于登录。已移除匿名访问开关 `ORBIT_REQUIRE_MOUNT_USER_ID`。Cookie 一致性校验应在可信身份完成绑定后再开启；未开启校验的挂载初始化接口不适合作为公网用户登录认证。管理员登录不会读取或复制主站的登录 Cookie。
+
+同一反向代理源下的 iframe 可以使用 Orbit 自己的会话 Cookie。跨站 iframe 必须通过 HTTPS 并设置 `ORBIT_CROSS_SITE_MOUNT=true`，浏览器仍可能阻止第三方 Cookie；优先采用同源代理。不要公开 API/执行子进程端口，Nginx 应覆盖 `X-Real-IP` 和转发头，管理员登录限流才会使用真实客户端地址。
+
+详细鉴权流程见[管理员登录与嵌入身份](../docs/deployment/administrator-authentication.md)。当前数据库为 22 张业务表和 1 张迁移表；升级前停止旧应用并备份数据库，合并迁移只向新结构转换。见[数据表合并](../docs/architecture/storage-table-review.md)。
 
 私有镜像仓库需要创建 `orbit-registry` 拉取凭据，并取消 Deployment 中 `imagePullSecrets` 的注释；企业镜像仓库 CA 需在集群节点的容器运行时中配置。
 

@@ -36,13 +36,13 @@ export async function registerConfigurationFields(raw: unknown) {
   }
   await runDatabaseTransaction(async manager => {
     const timestamp = new Date().toISOString();
-    await executeDatabase('INSERT INTO app_config (id, runtime_env_json, updated_at) VALUES (1, ?, ?) ON CONFLICT(id) DO NOTHING', ['[]', timestamp], manager);
+    await executeDatabase('INSERT INTO runtime_meta(key,value,updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING', ['app:runtime', '[]', timestamp], manager);
     const lock = databaseDriver() === 'postgres' ? ' FOR UPDATE' : '';
-    const values = await queryDatabaseOne<{ runtime_env_json: string }>(`SELECT runtime_env_json FROM app_config WHERE id = 1${lock}`, [], manager);
+    const values = await queryDatabaseOne<{ value: string }>(`SELECT value FROM runtime_meta WHERE key = ?${lock}`, ['app:runtime'], manager);
     await executeDatabase('INSERT INTO runtime_meta (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING', [settingsSchemaMetaKey, '[]', timestamp], manager);
     const row = await queryDatabaseOne<{ value: string }>(`SELECT value FROM runtime_meta WHERE key = ?${lock}`, [settingsSchemaMetaKey], manager);
     const fields = new Map(parseDatabaseJson<RegisteredSetting[]>(row?.value, []).map(field => [field.key, field]));
-    const saved = new Map(parseDatabaseJson<Array<{ key: string; value: string }>>(values?.runtime_env_json, []).map(item => [item.key, item.value]));
+    const saved = new Map(parseDatabaseJson<Array<{ key: string; value: string }>>(values?.value, []).map(item => [item.key, item.value]));
     for (const field of input.fields) {
       const existing = fields.get(field.key);
       if (existing && existing.namespace !== input.namespace) throw new Error('Configuration namespace ownership mismatch.');

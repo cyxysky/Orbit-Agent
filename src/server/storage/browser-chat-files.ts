@@ -1,3 +1,4 @@
+import { conversationRecords } from '@/server/storage/record-sources';
 import { databaseDriver, queryDatabase, queryDatabaseOne } from '@/server/db/database';
 import type { BrowserChatArtifactSummary, BrowserChatMessageFileGroup } from '@/lib/browser-chat-artifacts';
 import { browserChatDeliveredArtifacts } from '@/lib/browser-chat-delivered-artifacts';
@@ -16,8 +17,8 @@ export async function readBrowserChatMessageFileGroups(sessionId: string, userId
       CASE WHEN ${field('role')} = 'user' THEN SUBSTR(${field('content')}, 1, 320) ELSE ${field('content')} END AS content,
       CASE WHEN f.id IS NOT NULL THEN ${field('parts')} ELSE NULL END AS parts_json,
       COALESCE(${field('createdAt')}, m.time) AS created_at, f.record_json
-      FROM browser_chat_message m JOIN browser_chat_session s ON s.id = m.session_id
-      LEFT JOIN browser_chat_file_message f ON f.session_id = m.session_id AND f.id = m.id
+      FROM ${conversationRecords('message')} m JOIN browser_chat_session s ON s.id = m.session_id
+      LEFT JOIN ${conversationRecords('file')} f ON f.session_id = m.session_id AND f.id = m.id
       WHERE m.session_id = ? AND s.user_id = ?
         AND (${field('role')} = 'user' OR f.id IS NOT NULL)
       ORDER BY created_at ASC, CASE WHEN ${field('role')} = 'user' THEN 0 ELSE 1 END, m.id ASC`, [sessionId, userId]);

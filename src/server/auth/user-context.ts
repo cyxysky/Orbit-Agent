@@ -28,7 +28,7 @@ export function applicationUserRuntimeKey(value: unknown) {
 }
 
 export type ApplicationPrincipal = {
-  source: 'mounted' | 'internal' | 'default';
+  source: 'mounted' | 'internal' | 'admin';
   roles: string[];
   userId: string;
   username: string;
@@ -48,9 +48,10 @@ export function requestApplicationPrincipal(request: Pick<Request, 'headers'>): 
   const userId = String(request.headers.get('x-webpilot-identity-user-id') || '').trim();
   const username = String(request.headers.get('x-webpilot-identity-username') || '').trim();
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(userId) || !username) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Authentication required');
+  const source = request.headers.get('x-webpilot-identity-source');
+  if (source !== 'admin' && source !== 'mounted' && source !== 'internal') throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'Authentication required');
   return {
-    source: request.headers.get('x-webpilot-identity-source') === 'mounted' ? 'mounted'
-      : request.headers.get('x-webpilot-identity-source') === 'internal' ? 'internal' : 'default',
+    source,
     userId: normalizeApplicationUserId(userId),
     username,
     roles: String(request.headers.get('x-webpilot-identity-roles') || '')
@@ -74,7 +75,8 @@ export function requestWorkspaceApplicationPrincipal(request: Pick<Request, 'hea
     const username = String(request.headers.get('x-webpilot-identity-username') || '').trim();
     if (/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(userId) && username) {
       return {
-        source: 'default',
+        source: request.headers.get('x-webpilot-identity-source') === 'admin' ? 'admin'
+          : request.headers.get('x-webpilot-identity-source') === 'internal' ? 'internal' : 'mounted',
         userId: normalizeApplicationUserId(userId),
         username,
         roles: String(request.headers.get('x-webpilot-identity-roles') || '')
@@ -83,9 +85,7 @@ export function requestWorkspaceApplicationPrincipal(request: Pick<Request, 'hea
           .filter(Boolean),
       };
     }
-    if (String(process.env.WEBPILOT_REQUIRE_MOUNT_USER_ID || '').trim().toLowerCase() === 'true') throw error;
-    const fallbackUserId = defaultApplicationUserId();
-    return { userId: fallbackUserId, username: fallbackUserId, roles: ['user'], source: 'default' };
+    throw error;
   }
 }
 

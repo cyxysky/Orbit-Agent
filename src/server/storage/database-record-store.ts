@@ -1,3 +1,4 @@
+import { conversationRecords } from '@/server/storage/record-sources';
 import { hydrateBrowserChatContextSnapshot, splitBrowserChatContextSnapshot, markBrowserChatContextWritten } from './browser-chat-context-store';
 import type { EntityManager } from 'typeorm';
 import type { SkillRecord, RuntimeSettingRecord } from '@/server/ai/schemas/runtime.schema';
@@ -41,48 +42,39 @@ export async function writeRuntimeMeta(key: string, value: string) {
 }
 
 export async function readConfigRecord(): Promise<ConfigRecord> {
-  const row = await queryDatabaseOne<{ runtime_env_json?: string; model_config_json?: string | null; settings_schema_json?: string }>(`
-    SELECT runtime_env_json, model_config_json,
-      (SELECT value FROM runtime_meta WHERE key = 'settings-schema-v1') AS settings_schema_json
-    FROM app_config WHERE id = 1
-  `);
-  if (!row) return { runtimeSettings: [] };
+  const rows = await queryDatabase<{ key: string; value: string }>(
+    'SELECT key,value FROM runtime_meta WHERE key IN (?, ?, ?)', ['app:runtime', 'app:model', settingsSchemaMetaKey]);
+  const values = new Map(rows.map(row => [row.key, row.value]));
   return {
-    runtimeSettings: parseDatabaseJson<unknown[]>(row.runtime_env_json, []),
-    modelConfig: parseDatabaseJson<unknown>(row.model_config_json, undefined),
-    registeredSettings: parseDatabaseJson<unknown[]>(row.settings_schema_json, []),
+    runtimeSettings: parseDatabaseJson<unknown[]>(values.get('app:runtime'), []),
+    modelConfig: parseDatabaseJson<unknown>(values.get('app:model'), undefined),
+    registeredSettings: parseDatabaseJson<unknown[]>(values.get(settingsSchemaMetaKey), []),
   };
 }
 
 export async function writeModelConfigRecord(modelConfig: unknown) {
-  await executeDatabase(`
-    INSERT INTO app_config (id, runtime_env_json, model_config_json, updated_at)
-    VALUES (1, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET
-      model_config_json = excluded.model_config_json,
-      updated_at = excluded.updated_at
-  `, ['[]', JSON.stringify(modelConfig), now()]);
+  await writeRuntimeMeta('app:model', JSON.stringify(modelConfig));
 }
 
 export async function updateModelConfigRecord<T>(update: (current: unknown) => Promise<T>) {
   return runDatabaseTransaction(async manager => {
-    await executeDatabase('INSERT INTO app_config (id, runtime_env_json, updated_at) VALUES (1, ?, ?) ON CONFLICT(id) DO NOTHING', ['[]', now()], manager);
-    const row = await queryDatabaseOne<{ model_config_json?: string }>(
-      `SELECT model_config_json FROM app_config WHERE id = 1${databaseDriver() === 'postgres' ? ' FOR UPDATE' : ''}`, [], manager);
-    const next = await update(parseDatabaseJson<unknown>(row?.model_config_json, undefined));
-    await executeDatabase('UPDATE app_config SET model_config_json = ?, updated_at = ? WHERE id = 1', [JSON.stringify(next), now()], manager);
+    await executeDatabase('INSERT INTO runtime_meta(key,value,updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING', ['app:model', 'null', now()], manager);
+    const row = await queryDatabaseOne<{ value?: string }>(
+      `SELECT value FROM runtime_meta WHERE key = ?${databaseDriver() === 'postgres' ? ' FOR UPDATE' : ''}`, ['app:model'], manager);
+    const next = await update(parseDatabaseJson<unknown>(row?.value, undefined));
+    await executeDatabase('UPDATE runtime_meta SET value = ?, updated_at = ? WHERE key = ?', [JSON.stringify(next), now(), 'app:model'], manager);
     return next;
   });
 }
 
 /** Merge only submitted setting keys under the database lock. Model saves and
- * independent settings clients must not overwrite one another's columns. */
+ * independent settings clients must not overwrite one another's records. */
 export async function patchRuntimeSettingsRecords(patch: readonly RuntimeSettingRecord[]) {
   return runDatabaseTransaction(async manager => {
-    await executeDatabase('INSERT INTO app_config (id, runtime_env_json, updated_at) VALUES (1, ?, ?) ON CONFLICT(id) DO NOTHING', ['[]', now()], manager);
-    const row = await queryDatabaseOne<{ runtime_env_json: string }>(
-      `SELECT runtime_env_json FROM app_config WHERE id = 1${databaseDriver() === 'postgres' ? ' FOR UPDATE' : ''}`, [], manager);
-    const values = new Map(parseDatabaseJson<RuntimeSettingRecord[]>(row?.runtime_env_json, []).map(item => [item.key, item]));
+    await executeDatabase('INSERT INTO runtime_meta(key,value,updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING', ['app:runtime', '[]', now()], manager);
+    const row = await queryDatabaseOne<{ value: string }>(
+      `SELECT value FROM runtime_meta WHERE key = ?${databaseDriver() === 'postgres' ? ' FOR UPDATE' : ''}`, ['app:runtime'], manager);
+    const values = new Map(parseDatabaseJson<RuntimeSettingRecord[]>(row?.value, []).map(item => [item.key, item]));
     const registry = await queryDatabaseOne<{ value: string }>('SELECT value FROM runtime_meta WHERE key = ?', [settingsSchemaMetaKey], manager);
     const definitions = new Map(parseDatabaseJson<RegisteredSetting[]>(registry?.value, []).map(field => [field.key, field]));
     for (const item of patch) {
@@ -94,7 +86,7 @@ export async function patchRuntimeSettingsRecords(patch: readonly RuntimeSetting
       values.set(item.key, { ...item, secret: Boolean(item.secret || values.get(item.key)?.secret || definition?.secret) });
     }
     const settings = [...values.values()];
-    await executeDatabase('UPDATE app_config SET runtime_env_json = ?, updated_at = ? WHERE id = 1', [JSON.stringify(settings), now()], manager);
+    await executeDatabase('UPDATE runtime_meta SET value = ?, updated_at = ? WHERE key = ?', [JSON.stringify(settings), now(), 'app:runtime'], manager);
     return settings;
   });
 }
@@ -428,15 +420,15 @@ async function readJsonRows<T>(sql: string, parameters: unknown[] = [], executor
 }
 
 export function readBrowserChatLogs<T>(sessionId: string) {
-  return readJsonRows<T>('SELECT record_json FROM browser_chat_log WHERE session_id = ? ORDER BY time ASC', [sessionId]);
+  return readJsonRows<T>(`SELECT record_json FROM ${conversationRecords('log')} WHERE session_id = ? ORDER BY time ASC`, [sessionId]);
 }
 
 function readBrowserChatMessages<T>(sessionId: string) {
-  return readJsonRows<T>('SELECT record_json FROM browser_chat_message WHERE session_id = ? ORDER BY time ASC', [sessionId]);
+  return readJsonRows<T>(`SELECT record_json FROM ${conversationRecords('message')} WHERE session_id = ? ORDER BY time ASC`, [sessionId]);
 }
 
 function readBrowserChatSteps<T>(sessionId: string) {
-  return readJsonRows<T>('SELECT record_json FROM browser_chat_step WHERE session_id = ? ORDER BY step_index ASC', [sessionId]);
+  return readJsonRows<T>(`SELECT record_json FROM ${conversationRecords('step')} WHERE session_id = ? ORDER BY step_index ASC`, [sessionId]);
 }
 
 export async function readBrowserChatSessionRecord<T extends { logs?: unknown[]; messages?: unknown[]; steps?: unknown[] }>(sessionId: string) {
@@ -471,7 +463,7 @@ export async function readBrowserChatSessionSummaries<T>(input: {
     values.push(input.status);
   }
   if (input.hasMessagesOnly) clauses.push(`EXISTS (
-    SELECT 1 FROM browser_chat_message WHERE browser_chat_message.session_id = browser_chat_session.id
+    SELECT 1 FROM ${conversationRecords('message')} AS chat_records WHERE chat_records.session_id = browser_chat_session.id
   )`);
   if (input.beforeCreatedAt && input.beforeId) {
     clauses.push('(created_at < ? OR (created_at = ? AND id < ?))');
@@ -528,21 +520,21 @@ async function upsertSessionRows<
   ], manager);
   for (const statement of contextWrite.statements) await executeDatabase(statement.sql, statement.params, manager);
   for (const message of delta.messages || []) await executeDatabase(`
-    INSERT INTO browser_chat_message (session_id, id, time, record_json) VALUES (?, ?, ?, ?)
-    ON CONFLICT(session_id, id) DO UPDATE SET time = excluded.time, record_json = excluded.record_json
+    INSERT INTO conversation_record (session_id, kind, id, time, record_json) VALUES (?, 'message', ?, ?, ?)
+    ON CONFLICT(session_id, kind, id) DO UPDATE SET time = excluded.time, record_json = excluded.record_json
   `, [snapshot.id, message.id, message.updatedAt || message.createdAt, JSON.stringify(message)], manager);
   for (const step of delta.steps || []) await executeDatabase(`
-    INSERT INTO browser_chat_step (session_id, step_index, record_json) VALUES (?, ?, ?)
-    ON CONFLICT(session_id, step_index) DO UPDATE SET record_json = excluded.record_json
-  `, [snapshot.id, step.index, JSON.stringify(step)], manager);
+    INSERT INTO conversation_record (session_id, kind, id, step_index, record_json) VALUES (?, 'step', ?, ?, ?)
+    ON CONFLICT(session_id, kind, id) DO UPDATE SET record_json = excluded.record_json
+  `, [snapshot.id, String(step.index), step.index, JSON.stringify(step)], manager);
   for (const log of delta.logs || []) await executeDatabase(`
-    INSERT INTO browser_chat_log (session_id, id, time, message_id, record_json) VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(session_id, id) DO UPDATE SET
+    INSERT INTO conversation_record (session_id, kind, id, time, message_id, record_json) VALUES (?, 'log', ?, ?, ?, ?)
+    ON CONFLICT(session_id, kind, id) DO UPDATE SET
       time = excluded.time, message_id = excluded.message_id, record_json = excluded.record_json
   `, [snapshot.id, log.id, log.time, log.messageId || null, JSON.stringify(log)], manager);
-  for (const id of delta.removedMessageIds || []) await executeDatabase('DELETE FROM browser_chat_message WHERE session_id = ? AND id = ?', [snapshot.id, id], manager);
-  for (const index of delta.removedStepIndexes || []) await executeDatabase('DELETE FROM browser_chat_step WHERE session_id = ? AND step_index = ?', [snapshot.id, index], manager);
-  for (const id of delta.removedLogIds || []) await executeDatabase('DELETE FROM browser_chat_log WHERE session_id = ? AND id = ?', [snapshot.id, id], manager);
+  for (const id of delta.removedMessageIds || []) await executeDatabase(`DELETE FROM conversation_record WHERE kind='message' AND session_id = ? AND id = ?`, [snapshot.id, id], manager);
+  for (const index of delta.removedStepIndexes || []) await executeDatabase(`DELETE FROM conversation_record WHERE kind='step' AND session_id = ? AND step_index = ?`, [snapshot.id, index], manager);
+  for (const id of delta.removedLogIds || []) await executeDatabase(`DELETE FROM conversation_record WHERE kind='log' AND session_id = ? AND id = ?`, [snapshot.id, id], manager);
 }
 
 export async function writeBrowserChatSessionRecord<
@@ -553,9 +545,9 @@ export async function writeBrowserChatSessionRecord<
 >(snapshot: TSnapshot, summary: unknown, messages: TMessage[], steps: TStep[], logs: TLog[]) {
   await runDatabaseTransaction(async (manager) => {
     await upsertSessionRows(manager, snapshot, summary, { messages, steps, logs });
-    await pruneBrowserChatRows(manager, 'browser_chat_message', 'id', snapshot.id, messages.map((message) => message.id));
-    await pruneBrowserChatRows(manager, 'browser_chat_step', 'step_index', snapshot.id, steps.map((step) => step.index));
-    await pruneBrowserChatRows(manager, 'browser_chat_log', 'id', snapshot.id, logs.map((log) => log.id));
+    await pruneBrowserChatRows(manager, 'message', 'id', snapshot.id, messages.map((message) => message.id));
+    await pruneBrowserChatRows(manager, 'step', 'step_index', snapshot.id, steps.map((step) => step.index));
+    await pruneBrowserChatRows(manager, 'log', 'id', snapshot.id, logs.map((log) => log.id));
   });
   markBrowserChatContextWritten(snapshot.id, snapshot);
 }
@@ -585,7 +577,7 @@ export function writeBrowserChatSessionDelta<
 
 export async function readReferencedUploadPaths(userId?: string) {
   const prefix = userId ? `uploads/${userId}/` : 'uploads/';
-  const rows = await queryDatabase<JsonRow>('SELECT record_json FROM browser_chat_message WHERE record_json LIKE ?', [`%${prefix}%`]);
+  const rows = await queryDatabase<JsonRow>(`SELECT record_json FROM ${conversationRecords('message')} WHERE record_json LIKE ?`, [`%${prefix}%`]);
   // Received files can wait for a separate text message before entering chat history.
   // Keep them under the same quota/retention rules without deleting referenced inputs.
   const pending = await queryDatabase<JsonRow>(`SELECT m.record_json FROM communication_inbound m
@@ -626,40 +618,40 @@ export function writeBrowserChatSessionDeltaQueued<
   }];
   statements.push(...contextWrite.statements);
   for (const message of delta.messages || []) statements.push({
-    sql: `INSERT INTO browser_chat_message (session_id, id, time, record_json) VALUES (?, ?, ?, ?)
-      ON CONFLICT(session_id, id) DO UPDATE SET time = excluded.time, record_json = excluded.record_json`,
+    sql: `INSERT INTO conversation_record (session_id, kind, id, time, record_json) VALUES (?, 'message', ?, ?, ?)
+      ON CONFLICT(session_id, kind, id) DO UPDATE SET time = excluded.time, record_json = excluded.record_json`,
     params: [snapshot.id, message.id, message.updatedAt || message.createdAt, JSON.stringify(message)],
   });
   for (const step of delta.steps || []) statements.push({
-    sql: `INSERT INTO browser_chat_step (session_id, step_index, record_json) VALUES (?, ?, ?)
-      ON CONFLICT(session_id, step_index) DO UPDATE SET record_json = excluded.record_json`,
-    params: [snapshot.id, step.index, JSON.stringify(step)],
+    sql: `INSERT INTO conversation_record (session_id, kind, id, step_index, record_json) VALUES (?, 'step', ?, ?, ?)
+      ON CONFLICT(session_id, kind, id) DO UPDATE SET record_json = excluded.record_json`,
+    params: [snapshot.id, String(step.index), step.index, JSON.stringify(step)],
   });
   for (const log of delta.logs || []) statements.push({
-    sql: `INSERT INTO browser_chat_log (session_id, id, time, message_id, record_json) VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(session_id, id) DO UPDATE SET time = excluded.time, message_id = excluded.message_id, record_json = excluded.record_json`,
+    sql: `INSERT INTO conversation_record (session_id, kind, id, time, message_id, record_json) VALUES (?, 'log', ?, ?, ?, ?)
+      ON CONFLICT(session_id, kind, id) DO UPDATE SET time = excluded.time, message_id = excluded.message_id, record_json = excluded.record_json`,
     params: [snapshot.id, log.id, log.time, log.messageId || null, JSON.stringify(log)],
   });
-  for (const id of delta.removedMessageIds || []) statements.push({ sql: 'DELETE FROM browser_chat_message WHERE session_id = ? AND id = ?', params: [snapshot.id, id] });
-  for (const index of delta.removedStepIndexes || []) statements.push({ sql: 'DELETE FROM browser_chat_step WHERE session_id = ? AND step_index = ?', params: [snapshot.id, index] });
-  for (const id of delta.removedLogIds || []) statements.push({ sql: 'DELETE FROM browser_chat_log WHERE session_id = ? AND id = ?', params: [snapshot.id, id] });
+  for (const id of delta.removedMessageIds || []) statements.push({ sql: `DELETE FROM conversation_record WHERE kind='message' AND session_id = ? AND id = ?`, params: [snapshot.id, id] });
+  for (const index of delta.removedStepIndexes || []) statements.push({ sql: `DELETE FROM conversation_record WHERE kind='step' AND session_id = ? AND step_index = ?`, params: [snapshot.id, index] });
+  for (const id of delta.removedLogIds || []) statements.push({ sql: `DELETE FROM conversation_record WHERE kind='log' AND session_id = ? AND id = ?`, params: [snapshot.id, id] });
   return queueDatabaseWrite(statements).then(() => markBrowserChatContextWritten(snapshot.id, snapshot));
 }
 
 async function pruneBrowserChatRows(
   executor: DatabaseExecutor,
-  table: 'browser_chat_message' | 'browser_chat_step' | 'browser_chat_log',
+  kind: 'message' | 'step' | 'log',
   key: 'id' | 'step_index',
   sessionId: string,
   retainedKeys: Array<string | number>,
 ) {
   if (!retainedKeys.length) {
-    await executeDatabase(`DELETE FROM ${table} WHERE session_id = ?`, [sessionId], executor);
+    await executeDatabase(`DELETE FROM conversation_record WHERE kind = ? AND session_id = ?`, [kind, sessionId], executor);
     return;
   }
   await executeDatabase(
-    `DELETE FROM ${table} WHERE session_id = ? AND ${key} NOT IN (${retainedKeys.map(() => '?').join(', ')})`,
-    [sessionId, ...retainedKeys],
+    `DELETE FROM conversation_record WHERE kind = ? AND session_id = ? AND ${key} NOT IN (${retainedKeys.map(() => '?').join(', ')})`,
+    [kind, sessionId, ...retainedKeys],
     executor,
   );
 }
@@ -667,7 +659,6 @@ async function pruneBrowserChatRows(
 export function deleteBrowserChatSessionRecordQueued(sessionId: string) {
   return queueDatabaseWrite([
     { sql: 'DELETE FROM agent_runtime_owner WHERE id = ?', params: [sessionId] },
-    { sql: 'DELETE FROM browser_code_runtime_state WHERE session_id = ?', params: [sessionId] },
     { sql: 'DELETE FROM browser_chat_session WHERE id = ?', params: [sessionId] },
   ]);
 }

@@ -1,5 +1,6 @@
 import { createHmac } from 'node:crypto';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+import { ADMIN_USER_ID } from '../../../server/authentication-policy.cjs';
 
 
 function identitySecret() {
@@ -10,6 +11,7 @@ function identitySecret() {
 
 function normalizeMountedUserId(value: unknown) {
   const userId = typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
+  if (userId === ADMIN_USER_ID) throw new CodedError(ERROR_CODES.FORBIDDEN, 'Administrator identity requires password login.');
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(userId)) {
     throw new CodedError(ERROR_CODES.APPLICATION_ERROR, 'A valid mounted user ID is required');
   }

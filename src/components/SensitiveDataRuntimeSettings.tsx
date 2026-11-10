@@ -8,7 +8,7 @@ import { readApiJson } from '@/lib/api-client';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 import './SensitiveDataRuntimeSettings.css';
 
-export function SensitiveDataRuntimeSettings({ accessToken }: { accessToken: string }) {
+export function SensitiveDataRuntimeSettings() {
   const { t } = useI18n();
   const [runtime, setRuntime] = useState<SensitiveDataInstallStatus>();
   const [busy, setBusy] = useState(false);
@@ -16,12 +16,11 @@ export function SensitiveDataRuntimeSettings({ accessToken }: { accessToken: str
   const request = useCallback(async (install = false) => {
     const response = await fetch(withWebPilotBasePath('/api/settings/sensitive-data-runtime'), {
       method: install ? 'POST' : 'GET', cache: 'no-store',
-      headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
     });
     const data = await readApiJson<{ runtime: SensitiveDataInstallStatus }>(response, t('读取或下载本地脱敏组件失败'));
     setRuntime(data.runtime);
     setError('');
-  }, [accessToken, t]);
+  }, [t]);
   useEffect(() => {
     let active = true;
     const refresh = () => void request().catch(reason => { if (active) setError(reason instanceof Error ? reason.message : String(reason)); });

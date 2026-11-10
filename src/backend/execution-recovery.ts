@@ -1,3 +1,4 @@
+import { conversationRecords } from '@/server/storage/record-sources';
 import { executeDatabase, queryDatabaseOne, runDatabaseTransaction } from '@/server/db/database';
 import { updateAutomationRunIfStatus } from '@/server/storage/automation-store';
 import { publishRealtimeRefreshEvent } from '@/server/realtime/ws-refresh';
@@ -34,7 +35,7 @@ export async function recoverExecutionTasks(tasks: ExecutionTask[]) {
       // assistant lives in the separate message table rather than the header.
       if (!task.turnId && previous.turnState === 'awaiting_human' && !affectedSubagents.length) {
         const latest = await queryDatabaseOne<{ id: string; record_json: string }>(
-          'SELECT id, record_json FROM browser_chat_message WHERE session_id = ? ORDER BY time DESC LIMIT 1', [task.id], manager);
+          `SELECT id, record_json FROM ${conversationRecords('message')} WHERE session_id = ? ORDER BY time DESC LIMIT 1`, [task.id], manager);
         if (latest) {
           const message = JSON.parse(latest.record_json);
           if (message.role === 'assistant' && message.status === 'blocked') interruptedMessageIds.add(latest.id);
@@ -65,11 +66,11 @@ export async function recoverExecutionTasks(tasks: ExecutionTask[]) {
       await executeDatabase('UPDATE browser_chat_session SET status = ?, snapshot_json = ?, summary_json = ?, updated_at = ?, revision = revision + 1 WHERE id = ?',
         [snapshot.status, JSON.stringify(snapshot), JSON.stringify(patch(row.summary_json)), timestamp, task.id], manager);
       for (const messageId of interruptedMessageIds) {
-        const message = await queryDatabaseOne<{ record_json: string }>('SELECT record_json FROM browser_chat_message WHERE session_id = ? AND id = ?', [task.id, messageId], manager);
+        const message = await queryDatabaseOne<{ record_json: string }>(`SELECT record_json FROM ${conversationRecords('message')} WHERE session_id = ? AND id = ?`, [task.id, messageId], manager);
         if (message) {
           const value = JSON.parse(message.record_json);
           const patched = patchMessage(value);
-          if (patched !== value) await executeDatabase('UPDATE browser_chat_message SET record_json = ? WHERE session_id = ? AND id = ?',
+          if (patched !== value) await executeDatabase(`UPDATE conversation_record SET record_json = ? WHERE kind='message' AND session_id = ? AND id = ?`,
             [JSON.stringify(patched), task.id, messageId], manager);
         }
       }

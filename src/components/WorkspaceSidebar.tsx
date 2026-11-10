@@ -9,6 +9,7 @@ import { AnimatedThemeToggler } from '@/components/ui/animated-theme-toggler';
 import { AuroraText } from '@/components/ui/aurora-text';
 import { useWorkspaceBrand } from '@/brand/WorkspaceBrandProvider';
 import { OrbitIcon } from '@/components/OrbitIcon';
+import { AdministratorLogoutButton } from '@/components/AdministratorSession';
 import { useWorkspaceAccess } from '@/components/WorkspaceAccessProvider';
 import { useWorkspaceNavigation, type WorkspacePath } from '@/components/workspace-navigation-context';
 
@@ -123,6 +124,7 @@ export function WorkspaceSidebar({
         }}
       >
         <WebPilotHelpCenter collapsed={collapsed} />
+        <AdministratorLogoutButton />
         <AnimatedThemeToggler
           aria-label={themeToggleLabel}
           className="browser-chat-theme-toggle"

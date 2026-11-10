@@ -13,7 +13,7 @@ import {
 import { modelProviderDefinition } from '@/config/settings';
 import { modelCapabilities } from '@/lib/model-capabilities';
 import { enabledModelProviders } from '@/lib/model-selection';
-import { executeDatabase, queryDatabaseOne } from '@/server/db/database';
+import { executeDatabase, parseDatabaseJson, queryDatabaseOne } from '@/server/db/database';
 import { readModelSettingsState } from '@/server/settings/settings-snapshot';
 import {
   resolveLibreOfficeExecutable,
@@ -24,67 +24,12 @@ import { store } from '@/server/db/store';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 
 
-type OnboardingRow = {
-  completed_steps_json: string;
-  dismissed_at: string | null;
-  status: string;
-  tutorial_version: number;
-  updated_at: string;
-};
-
-function completedStepsFromJson(value: string) {
-  try {
-    const parsed = JSON.parse(value) as unknown[];
-    return Array.isArray(parsed) ? parsed.filter(isWebPilotOnboardingStep) : [];
-  } catch {
-    return [];
-  }
-}
-
-function stateFromRow(row: OnboardingRow): WebPilotOnboardingState {
-  const status: WebPilotOnboardingStatus = ['completed', 'dismissed', 'in_progress', 'not_started'].includes(row.status)
-    ? row.status as WebPilotOnboardingStatus
-    : 'not_started';
-  return {
-    completedSteps: completedStepsFromJson(row.completed_steps_json),
-    dismissedAt: row.dismissed_at || undefined,
-    status,
-    tutorialVersion: row.tutorial_version,
-    updatedAt: row.updated_at,
-  };
-}
-
 export async function readOnboardingState(userId: string): Promise<WebPilotOnboardingState> {
-  const existing = await queryDatabaseOne<OnboardingRow>(`
-    SELECT tutorial_version, status, completed_steps_json, dismissed_at, updated_at
-    FROM user_onboarding_state
-    WHERE user_id = ?
-  `, [userId]);
-  if (existing) {
-    if (existing.tutorial_version === WEBPILOT_ONBOARDING_VERSION) return stateFromRow(existing);
-    return writeOnboardingState(userId, { completedSteps: [], status: 'not_started' });
-  }
-
-  const timestamp = new Date().toISOString();
-  const completedSteps: WebPilotOnboardingStep[] = [];
-  await executeDatabase(`
-    INSERT INTO user_onboarding_state (
-      user_id, tutorial_version, status, completed_steps_json, dismissed_at, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, NULL, ?, ?)
-  `, [
-    userId,
-    WEBPILOT_ONBOARDING_VERSION,
-    'not_started',
-    JSON.stringify(completedSteps),
-    timestamp,
-    timestamp,
-  ]);
-  return {
-    completedSteps,
-    status: 'not_started',
-    tutorialVersion: WEBPILOT_ONBOARDING_VERSION,
-    updatedAt: timestamp,
-  };
+  const row = await queryDatabaseOne<{ onboarding_json: string | null }>(
+    'SELECT onboarding_json FROM application_user WHERE id = ?', [userId]);
+  const current = parseDatabaseJson<WebPilotOnboardingState | undefined>(row?.onboarding_json, undefined);
+  if (current?.tutorialVersion === WEBPILOT_ONBOARDING_VERSION) return current;
+  return writeOnboardingState(userId, { completedSteps: [], status: 'not_started' });
 }
 
 async function writeOnboardingState(userId: string, input: {
@@ -93,26 +38,15 @@ async function writeOnboardingState(userId: string, input: {
   status: WebPilotOnboardingStatus;
 }): Promise<WebPilotOnboardingState> {
   const timestamp = new Date().toISOString();
-  await executeDatabase(`
-    INSERT INTO user_onboarding_state (
-      user_id, tutorial_version, status, completed_steps_json, dismissed_at, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(user_id) DO UPDATE SET
-      tutorial_version = excluded.tutorial_version,
-      status = excluded.status,
-      completed_steps_json = excluded.completed_steps_json,
-      dismissed_at = excluded.dismissed_at,
-      updated_at = excluded.updated_at
-  `, [
-    userId,
-    WEBPILOT_ONBOARDING_VERSION,
-    input.status,
-    JSON.stringify(Array.from(new Set(input.completedSteps)).filter(isWebPilotOnboardingStep)),
-    input.dismissedAt || null,
-    timestamp,
-    timestamp,
-  ]);
-  return readOnboardingState(userId);
+  const state: WebPilotOnboardingState = {
+    completedSteps: Array.from(new Set(input.completedSteps)).filter(isWebPilotOnboardingStep),
+    status: input.status, tutorialVersion: WEBPILOT_ONBOARDING_VERSION,
+    dismissedAt: input.dismissedAt, updatedAt: timestamp,
+  };
+  await executeDatabase(
+    'INSERT INTO application_user(id,onboarding_json,created_at,updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET onboarding_json=excluded.onboarding_json',
+    [userId, JSON.stringify(state), timestamp, timestamp]);
+  return state;
 }
 
 export async function updateOnboardingState(userId: string, input: {

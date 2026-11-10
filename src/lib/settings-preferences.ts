@@ -13,6 +13,7 @@ let timer: ReturnType<typeof setInterval> | undefined;
 let refreshing: Promise<void> | undefined;
 let saving: Promise<void> | undefined;
 let revision = 0;
+let remoteAvailable = true;
 let status: 'saved' | 'saving' | 'error' = 'saved';
 const statusListeners = new Set<() => void>();
 
@@ -57,12 +58,13 @@ async function requestPreferences(body?: unknown) {
   const response = await fetch(withWebPilotBasePath('/api/settings/preferences'), body === undefined
     ? { cache: 'no-store' }
     : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  if (response.status === 401) remoteAvailable = false;
   if (!response.ok) throw new Error('Preferences request failed.');
   return response.json() as Promise<{ values: Preferences; initialized: boolean }>;
 }
 
 function refresh() {
-  if (refreshing || saving) return refreshing;
+  if (!remoteAvailable || refreshing || saving) return refreshing;
   const before = revision;
   refreshing = (async () => {
     let snapshot = await requestPreferences();
@@ -73,7 +75,7 @@ function refresh() {
 }
 
 function save() {
-  if (saving || !Object.keys(pending).length) return;
+  if (!remoteAvailable || saving || !Object.keys(pending).length) return;
   const patch = pending;
   pending = {};
   setStatus('saving');

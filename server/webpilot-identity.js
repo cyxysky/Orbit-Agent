@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 const { createHmac, timingSafeEqual } = require('node:crypto');
+const { ADMIN_USER_ID } = require('./authentication-policy.cjs');
 
 const IDENTITY_COOKIE_NAME = 'webpilot_identity';
 
@@ -70,17 +71,24 @@ function cookiePath() {
   return configured ? `/${configured}` : '/';
 }
 
-function identityCookie(userId, request) {
-  const token = signedValue({ kind: 'identity-session', userId, version: 1 });
+function authenticationCookieAttributes(request) {
   const crossSite = String(process.env.WEBPILOT_CROSS_SITE_MOUNT || '').trim().toLowerCase() === 'true';
   const attributes = [
-    `${IDENTITY_COOKIE_NAME}=${encodeURIComponent(token)}`,
     'HttpOnly',
     `SameSite=${crossSite ? 'None' : 'Lax'}`,
     `Path=${cookiePath()}`,
   ];
   if (crossSite || requestIsSecure(request)) attributes.push('Secure');
-  return attributes.join('; ');
+  return attributes;
+}
+
+function identityCookie(userId, request) {
+  const token = signedValue({ kind: 'identity-session', userId, version: 1 });
+  return [`${IDENTITY_COOKIE_NAME}=${encodeURIComponent(token)}`, ...authenticationCookieAttributes(request)].join('; ');
+}
+
+function clearAuthenticationCookie(name, request) {
+  return [`${name}=`, 'Max-Age=0', ...authenticationCookieAttributes(request)].join('; ');
 }
 
 function mountTicketClaims(ticket) {
@@ -90,16 +98,15 @@ function mountTicketClaims(ticket) {
 function requestIdentity(request) {
   const cookie = parseCookies(request.headers.cookie).get(IDENTITY_COOKIE_NAME);
   const mounted = cookie ? verifiedClaims(cookie, 'identity-session') : undefined;
-  if (mounted) return { userId: mounted.userId, username: mounted.userId, roles: ['user'], source: 'mounted' };
-  if (String(process.env.WEBPILOT_REQUIRE_MOUNT_USER_ID || '').trim().toLowerCase() === 'true') return undefined;
-  const userId = defaultUserId();
-  return { userId, username: userId, roles: ['user'], source: 'default' };
+  if (mounted && mounted.userId !== ADMIN_USER_ID) return { userId: mounted.userId, username: mounted.userId, roles: ['user'], source: 'mounted' };
+  return undefined;
 }
 
 module.exports = {
   IDENTITY_COOKIE_NAME,
   defaultUserId,
   identityCookie,
+  clearAuthenticationCookie,
   mountTicketClaims,
   normalizeUserId,
   requestIdentity,

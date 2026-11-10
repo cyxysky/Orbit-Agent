@@ -1,0 +1,10 @@
+export const ADMIN_USER_ID: '1';
+export const ADMIN_SESSION_COOKIE_NAME: 'orbit_admin_session';
+export const MOUNT_IDENTITY_COOKIE_NAME: 'webpilot_identity';
+export const ADMIN_SESSION_TTL_MS: number;
+export function administratorLoginEnabled(environment?: NodeJS.ProcessEnv): boolean;
+export function administratorPassword(environment?: NodeJS.ProcessEnv): string;
+export function verifyAdministratorPassword(value: unknown, environment?: NodeJS.ProcessEnv): boolean;
+export function assertAdministratorConfiguration(environment?: NodeJS.ProcessEnv): void;
+export function readCookie(header: unknown, name: string): string;
+export function safeReturnPath(value: unknown, basePath?: string): string;

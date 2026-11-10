@@ -1,13 +1,23 @@
 import { apiError, ApiRequestError } from '@/server/http/api-request';
 import { readEmbedAuth } from '@/server/embed/browser-chat-embed';
 import { requestApplicationPrincipal } from './user-context';
-import { assertUserIdentityCookie, userCookieCheckEnabled } from './user-cookie-identity';
+import { assertUserIdentityCookie } from './user-cookie-identity';
+import { readAdminSession, authenticationResponse } from './admin-session';
+import { ADMIN_USER_ID } from '../../../server/authentication-policy.cjs';
 
 /** One identity boundary for API reads, mutations, files and execution proxies. */
 export async function authorizeRequestCookie(request: Request, pathname: string) {
-  if (!userCookieCheckEnabled() || request.method === 'OPTIONS') return;
-  if (['/embed/orbit.js', '/embed/webpilot.js', '/api/embed/browser-chat/init'].includes(pathname)) return;
+  if (request.method === 'OPTIONS') return;
+  if (['/api/auth/login', '/api/auth/logout', '/api/auth/session', '/embed/orbit.js', '/embed/webpilot.js', '/api/embed/browser-chat/init'].includes(pathname)) return;
   try {
+    const principal = requestApplicationPrincipal(request);
+    if (principal.source === 'admin') {
+      const session = await readAdminSession(request);
+      if (!session || session.userId !== principal.userId) return authenticationResponse({ code: 'authentication_required', error: '登录已失效，请重新登录。' }, 401);
+      return;
+    }
+    if (principal.source === 'internal') return;
+    if (principal.userId === ADMIN_USER_ID) throw new ApiRequestError('管理员必须通过密码登录。', { status: 403 });
     // Initialization validates its submitted ID before reading any saved session.
     // Cookie replacement requires the existing signed mount identity instead of the old cookie.
     if (pathname === '/api/browser-cookies/domp') {
@@ -15,13 +25,14 @@ export async function authorizeRequestCookie(request: Request, pathname: string)
       return;
     }
     if (pathname.startsWith('/api/embed/')) {
-      await assertUserIdentityCookie(request, readEmbedAuth(request).userId);
+      const embedded = readEmbedAuth(request);
+      if (embedded.userId !== principal.userId) throw new ApiRequestError('挂载身份不匹配。', { status: 403 });
+      await assertUserIdentityCookie(request, principal.userId);
       return;
     }
-    const principal = requestApplicationPrincipal(request);
-    if (principal.source === 'internal') return;
     await assertUserIdentityCookie(request, principal.userId);
   } catch (error) {
-    return apiError(request, error instanceof ApiRequestError ? error : new ApiRequestError('身份校验失败。', { status: 401 }), { fallback: '身份校验失败。' });
+    if (!(error instanceof ApiRequestError)) return authenticationResponse({ code: 'authentication_required', error: '身份校验失败。' }, 401);
+    return apiError(request, error, { fallback: '身份校验失败。' });
   }
 }

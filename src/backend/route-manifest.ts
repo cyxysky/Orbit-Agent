@@ -19,6 +19,9 @@ const settingsRoutes = [
 ].map(route => ({ ...route, authorize: authorizeAdminSettingsRequest }));
 
 export const routes = [
+  { path: '/api/auth/login', load: () => import('./routes/auth/login/route') },
+  { path: '/api/auth/logout', load: () => import('./routes/auth/logout/route') },
+  { path: '/api/auth/session', load: () => import('./routes/auth/session/route') },
   ...settingsRoutes,
   { path: '/api/knowledge', load: () => import('./routes/knowledge/route') },
   { path: '/api/settings/preferences', load: () => import('./routes/settings/preferences/route') },
@@ -91,7 +94,6 @@ export const routes = [
   { path: '/api/personal-memory/[id]', load: () => import('./routes/personal-memory/[id]/route') },
   { path: '/api/personal-memory', load: () => import('./routes/personal-memory/route') },
   { path: '/api/realtime/ws', load: () => import('./routes/realtime/ws/route') },
-  { path: '/api/settings/admin-access', authorize: authorizeSettingsMenuRequest, load: () => import('./routes/settings/admin-access/route') },
   { path: '/api/settings/model-selection', load: () => import('./routes/settings/model-selection/route') },
   { path: '/api/skills/[skillId]', load: () => import('./routes/skills/[skillId]/route') },
   { path: '/api/skills', load: () => import('./routes/skills/route') },

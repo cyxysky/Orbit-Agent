@@ -45,12 +45,10 @@ function downloadJson(fileName: string, value: unknown) {
 }
 
 export function DataTransferButtons({
-  authorizationToken,
   disabled = false,
   kind,
   onImported,
 }: {
-  authorizationToken?: string;
   disabled?: boolean;
   kind: DataTransferKind;
   onImported?: () => Promise<void> | void;
@@ -73,7 +71,6 @@ export function DataTransferButtons({
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(authorizationToken ? { Authorization: `Bearer ${authorizationToken}` } : {}),
       },
       body: JSON.stringify({ ...body, kind }),
     });
