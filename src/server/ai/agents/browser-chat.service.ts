@@ -54,6 +54,7 @@ import {
   browserChatFinalBlocksToText,
   browserChatFinalResponseSchema,
   type BrowserChatFinalBlock,
+  type BrowserChatUIMessageMetadata,
   type BrowserChatUIMessagePart,
 } from '@/lib/browser-chat-ui-message';
 import {
@@ -429,6 +430,7 @@ type BrowserChatRuntimeState = {
 };
 
 export type BrowserChatUIStreamUpdate = {
+  session: NonNullable<BrowserChatUIMessageMetadata['session']>;
   pendingToolConfirmation?: BrowserChatToolConfirmation;
   message?: BrowserChatMessage;
   outputCycles: BrowserChatAiOutputCycle[];
@@ -1992,6 +1994,7 @@ function publishBrowserChatUIStreamUpdate(sessionId: string) {
   for (const listener of listeners) {
     try {
       listener({
+        session: { id: session.id, status: session.status, turnState: session.turnState, busy: session.busy, updatedAt: session.updatedAt },
         pendingToolConfirmation: session.pendingToolConfirmation,
         message,
         outputCycles: records.outputCycles,
@@ -2028,6 +2031,9 @@ export function subscribeBrowserChatUIStream(
           ))
       : [];
     listener({
+      session: currentSession
+        ? { id: currentSession.id, status: currentSession.status, turnState: currentSession.turnState, busy: currentSession.busy, updatedAt: currentSession.updatedAt }
+        : update.session,
       pendingToolConfirmation: currentSession?.pendingToolConfirmation,
       message: message ? browserChatLiveResponseMessage(message) : undefined,
       outputCycles,
@@ -4809,6 +4815,7 @@ function runningActivityFromLog(phase: string, message: string) {
   if (phase === 'perf:runtime-input') return '正在准备页面上下文';
   if (phase === 'ai:prepare') return '正在请求 AI 决策';
   if (phase === 'ai:runtime:attempt') return message;
+  if (phase.startsWith('ai:completion-review:')) return message;
   if (phase === 'ai:runtime:prepare') return '正在检查上下文与压缩阈值';
   if (phase === 'ai:context-compression:start') return '正在压缩上下文';
   if (phase === 'ai:context-compression:progress' || phase === 'ai:context-compression:error'

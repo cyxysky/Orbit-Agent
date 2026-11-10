@@ -35,15 +35,18 @@ export async function POST(request: Request, context: BrowserChatSessionRouteCon
         let messageMetadataSignature = '';
         let resolveTerminal: () => void = () => undefined;
         const terminal = new Promise<void>((resolve) => { resolveTerminal = resolve; });
-        const unsubscribe = subscribeBrowserChatUIStream(sessionId, clientMessageId, ({ message, outputCycles, steps, subagents }) => {
+        const unsubscribe = subscribeBrowserChatUIStream(sessionId, clientMessageId, ({ session, message, outputCycles, steps, subagents }) => {
           if (!message || finished) return;
           const messageMetadata = {
             sessionId,
+            session,
             clientMessageId,
             createdAt: message.createdAt,
             updatedAt: message.updatedAt,
             status: message.status,
             responseDraft: message.responseDraft ?? null,
+            stepIndexes: message.stepIndexes || [],
+            activity: message.activity ?? null,
           };
           const nextMetadataSignature = JSON.stringify(messageMetadata);
           if (!started) {

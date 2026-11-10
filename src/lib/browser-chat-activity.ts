@@ -37,6 +37,7 @@ function operationKind(phase: string, previous?: BrowserChatActivity) {
   if (phase.startsWith('tool:') || phase === 'ai:tool') return 'tool';
   if (phase.startsWith('browser:') && previous?.operationId?.startsWith('tool:')) return 'tool';
   if (phase.startsWith('ai:context-compression:')) return 'compression';
+  if (phase.startsWith('ai:completion-review:')) return 'review';
   if (/^ai:(?:text:|runtime:(?:request|dispatch|response|receiving|object))/.test(phase)) return 'ai';
   return previous?.operationId?.split(':', 1)[0] || 'preparing';
 }

@@ -1925,8 +1925,9 @@ function overlayBrowserChatUIMessages(
       updatedAt: uiMessage.metadata.updatedAt,
       clientMessageId,
       status: uiMessage.metadata.status,
-      stepIndexes: uiMessage.parts.flatMap((part) => part.type === 'data-step' ? [part.data.index] : []),
-      activity: [...uiMessage.parts].reverse().find((part) => part.type === 'data-activity')?.data,
+      stepIndexes: uiMessage.metadata.stepIndexes || uiMessage.parts.flatMap((part) => part.type === 'data-step' ? [part.data.index] : []),
+      activity: uiMessage.metadata.activity !== undefined ? uiMessage.metadata.activity ?? undefined
+        : [...uiMessage.parts].reverse().find((part) => part.type === 'data-activity')?.data,
     };
     const index = result.findIndex((message) => (
       message.id === uiMessage.id
@@ -1948,8 +1949,9 @@ function overlayBrowserChatUIMessages(
       stepIndexes: streamed.stepIndexes?.length
         ? [...new Set([...(previous?.stepIndexes || []), ...streamed.stepIndexes])]
         : previous?.stepIndexes || [],
-      activity: streamed.activity && (!previous?.activity?.updatedAt || streamed.activity.updatedAt >= previous.activity.updatedAt)
-        ? streamed.activity : previous?.activity,
+      activity: streamed.status && !['running', 'queued'].includes(streamed.status) ? undefined
+        : streamed.activity && (!previous?.activity?.updatedAt || streamed.activity.updatedAt >= previous.activity.updatedAt)
+          ? streamed.activity : previous?.activity,
     };
     else insertBrowserChatMessageChronologically(result, streamed);
   }
@@ -5114,8 +5116,10 @@ const BrowserChatMessageItem = memo(function BrowserChatMessageItem({
   const operationRunning = item.role === 'assistant' && item.status === 'running';
   const waitingInQueue = item.role === 'user' && item.status === 'queued';
   const hasExecutionRecords = browserChatAssistantMessageHasExecutionMetadata(item)
+    || itemOutputCycles.length > 0
     || itemSteps.length > 0
     || itemLogs.length > 0;
+  const canViewLogs = hasExecutionRecords || Boolean(item.clientMessageId);
   const canGenerateSkill = item.role === 'assistant' && item.status !== 'running' && hasExecutionRecords;
   const canGenerateAutomationCase = canGenerateSkill;
   const actionDisabled = Boolean(generatingSkillMessageId || generatingAutomationMessageId);
@@ -5185,7 +5189,7 @@ const BrowserChatMessageItem = memo(function BrowserChatMessageItem({
         {item.role === 'assistant' ? (
           <div className="browser-chat-message-actions">
             <CopyTextButton text={item.parts?.some((part) => part.type === 'text') ? item.parts.flatMap((part) => part.type === 'text' ? [part.text] : []).join('\n\n') : item.content || ''} label={t('复制回复')} className="browser-chat-reply-action" disabled={operationRunning || !item.content && !item.parts?.some((part) => part.type === 'text')} />
-            {hasExecutionRecords ? <IconAction label={t('查看日志')} className="browser-chat-reply-action" onClick={() => onShowLogs(item.id)}><ScrollText size={15} /></IconAction> : null}
+            {canViewLogs ? <IconAction label={t('查看日志')} className="browser-chat-reply-action" onClick={() => onShowLogs(item.id)}><ScrollText size={15} /></IconAction> : null}
             {canGenerateSkill ? <IconAction label={t('生成 Skill')} className="browser-chat-reply-action" disabled={actionDisabled} onClick={() => void onGenerateSkill(item.id)}>{generatingSkillMessageId === item.id ? <Loader2 className="spin" size={15} /> : <Sparkles size={15} />}</IconAction> : null}
             {canGenerateAutomationCase ? <IconAction label={t('生成任务')} className="browser-chat-reply-action" disabled={actionDisabled} onClick={() => void onGenerateAutomationCase(item.id)}>{generatingAutomationMessageId === item.id ? <Loader2 className="spin" size={15} /> : <Workflow size={15} />}</IconAction> : null}
           </div>
@@ -9034,8 +9038,15 @@ export function BrowserChatWorkspace({
       id: `browser-chat:${sessionId}`,
       transport: uiChatTransport,
       onData: part => queueUIRecord(sessionId, part),
-      onError: (chatError) => { setError(chatError.message); setTimeout(() => pruneUIChats(), 0); },
-      onFinish: () => { setTimeout(() => pruneUIChats(), 0); },
+      onError: (chatError) => {
+        setError(chatError.message);
+        realtimeInvalidationRef.current([sessionId]);
+        setTimeout(() => pruneUIChats(), 0);
+      },
+      onFinish: () => {
+        realtimeInvalidationRef.current([sessionId]);
+        setTimeout(() => pruneUIChats(), 0);
+      },
     });
     uiChatsRef.current.set(sessionId, chat);
     return chat;
@@ -9049,6 +9060,19 @@ export function BrowserChatWorkspace({
     throttle: 32,
   });
   const currentRequestUIMessages = useSharedBrowserChatValue(receivedRequestUIMessages);
+  const streamedSession = [...currentRequestUIMessages].reverse().find(message => message.role === 'assistant')?.metadata?.session;
+  useEffect(() => {
+    if (!streamedSession) return;
+    setSession(current => {
+      if (!current || current.id !== streamedSession.id || streamedSession.updatedAt < current.updatedAt) return current;
+      if (current.status === streamedSession.status && current.turnState === streamedSession.turnState
+        && current.busy === streamedSession.busy && current.updatedAt === streamedSession.updatedAt) return current;
+      const guarded = applyBrowserChatInterruptGuard(normalizeSession({ ...current, ...streamedSession }),
+        interruptGuardsRef.current.get(current.id));
+      if (guarded.release) interruptGuardsRef.current.delete(current.id);
+      return guarded.session;
+    });
+  }, [streamedSession]);
   useEffect(() => { pruneUIChats(session?.id || 'unbound'); }, [session?.id, pruneUIChats]);
   useEffect(() => {
     if (toolCatalogLoaded && !browserToolEnabled) { setWebPreviewOpen(false); setBrowserGroupPickerOpen(false); setDownloadCenterOpen(false); }

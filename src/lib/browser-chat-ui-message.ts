@@ -25,11 +25,20 @@ export type BrowserChatFinalBlock = ResponseBlock;
 
 export type BrowserChatUIMessageMetadata = {
   sessionId: string;
+  session?: {
+    id: string;
+    status: 'idle' | 'running' | 'closed' | 'error';
+    turnState?: 'idle' | 'running' | 'awaiting_confirmation' | 'awaiting_human' | 'stopping' | 'completed' | 'failed' | 'interrupted' | 'closed';
+    busy: boolean;
+    updatedAt: string;
+  };
   clientMessageId?: string;
   createdAt: string;
   updatedAt?: string;
   status?: 'queued' | 'running' | 'passed' | 'failed' | 'blocked' | 'interrupted';
   responseDraft?: { id: string; blocks: ResponseBlock[] } | null;
+  stepIndexes?: number[];
+  activity?: BrowserChatActivity | null;
   attachments?: unknown[];
   skillIds?: string[];
   subagentId?: string;
@@ -82,7 +91,6 @@ export function browserChatExecutionParts(steps: StepExecutionResult[]): Browser
   return [...steps]
     .sort((left, right) => left.index - right.index)
     .flatMap((step) => {
-      if (step.tools?.length && step.tools.every((tool) => tool.name === 'finalResponse')) return [];
       return [
         ...((step.tools || []).flatMap((_tool, toolIndex) => {
         const part = browserChatToolPartFromStep(step, toolIndex);
