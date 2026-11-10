@@ -6715,6 +6715,7 @@ async function runBrowserChatMessage(
         attachmentBindings: browserCodeAttachmentBindingsForSession(session, historicalMessages),
         onReasoningStream: ({ agentStepIndex, runtimeStepIndex, index, text: reasoningText, active }) => {
           if (!isActiveBrowserChatTurn(session, assistantMessageId, abortController)) return;
+          if (session.messages.find(message => message.id === assistantMessageId)?.status === 'failed') return;
           const cycleId = browserChatStreamingOutputCycleId(assistantMessageId, runtimeStepIndex, agentStepIndex);
           const previous = session.outputCycles?.find(cycle => cycle.id === cycleId);
           upsertBrowserChatOutputCycle(session, {
@@ -6730,6 +6731,7 @@ async function runBrowserChatMessage(
         },
         onTextStream: ({ agentStepIndex, responseDraft, runtimeStepIndex, text: streamedText }) => {
           if (!isActiveBrowserChatTurn(session, assistantMessageId, abortController)) return;
+          if (session.messages.find(message => message.id === assistantMessageId)?.status === 'failed') return;
           if (!streamedText && responseDraft === undefined) return;
           if (responseDraft === null && !session.messages.some((message) => (
             message.id === assistantMessageId && message.responseDraft
@@ -6829,6 +6831,7 @@ async function runBrowserChatMessage(
           if (step.index >= fromStepIndex) {
             const timestamp = now();
             updateAssistantMessage(session, assistantMessageId, (message) => {
+              if (message.status === 'failed') return message;
               const latestTool = step.tools?.at(-1);
               const rejectedFinalResponse = step.tools?.some((tool) => (
                 tool.name === 'finalResponse' && tool.ok === false
@@ -6863,6 +6866,18 @@ async function runBrowserChatMessage(
         },
         onDebug: (event) => {
           if (!isActiveBrowserChatTurn(session, assistantMessageId, abortController)) return;
+          const failureDetails = unwrapLogDetails(event.details).value;
+          if (event.phase === 'ai:runtime:error' && failureDetails && typeof failureDetails === 'object'
+            && 'terminal' in failureDetails && failureDetails.terminal === true) {
+            const timestamp = now();
+            updateAssistantMessage(session, assistantMessageId, message => {
+              const failed: BrowserChatMessage = { ...message, status: 'failed', content: event.message,
+                activity: undefined, responseDraft: undefined, updatedAt: timestamp };
+              return { ...failed, parts: browserChatAssistantParts(session, failed, [{ type: 'core.markdown', params: { text: event.message } }]) };
+            });
+            session.error = event.message;
+            session.updatedAt = timestamp;
+          }
           if (event.phase === 'chat:subagent-wait' || event.phase === 'chat:subagent-results') {
             const timestamp = now();
             updateAssistantMessage(session, assistantMessageId, (message) => ({

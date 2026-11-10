@@ -1,7 +1,7 @@
 import { SettingsWorkspace } from '@/components/SettingsWorkspace';
 import { readWorkspacePageContext } from '@/lib/backend-page-data';
 import { redirect } from 'next/navigation';
-import '../../styles/domains/settings-workspace.css';
+import '@/app/styles/domains/settings-workspace.css';
 
 export default async function SettingsPage() {
   const context = await readWorkspacePageContext();

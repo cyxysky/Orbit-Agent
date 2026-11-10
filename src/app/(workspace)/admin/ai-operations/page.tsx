@@ -1,7 +1,7 @@
 import { redirect } from 'next/navigation';
 import { AiOperationsWorkspace } from '@/components/AiOperationsWorkspace';
 import { readWorkspacePageContext } from '@/lib/backend-page-data';
-import '../../../styles/domains/ai-operations-workspace.css';
+import '@/app/styles/domains/ai-operations-workspace.css';
 
 export const dynamic = 'force-dynamic';
 

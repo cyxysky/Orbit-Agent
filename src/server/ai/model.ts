@@ -56,7 +56,7 @@ type AiProvider =
   | 'togetherai'
   | 'vercel'
   | 'xai';
-type ApprovalMode = 'never' | 'on-request' | 'untrusted';
+type ApprovalMode = 'never' | 'on-request';
 type SandboxMode = 'danger-full-access' | 'read-only' | 'workspace-write';
 export type ModelSettingsOverride = {
   sessionId?: string;
@@ -384,7 +384,7 @@ function getCodexModel(model: string): GenerateTextModel {
   const codexPath = resolveCodexCliPath(runtimeSetting('CODEX_PATH'), projectRoot);
   const hostExecution = hostExecutionEnabled();
   const cwd = hostExecution ? runtimeSetting('CODEX_CWD') || projectRoot : path.join(appDataRoot(), 'codex', 'model-workspace');
-  const approvalMode = hostExecution ? parseApprovalMode(runtimeSetting('CODEX_APPROVAL_MODE')) || 'on-request' : 'untrusted';
+  const approvalMode = hostExecution ? parseApprovalMode(runtimeSetting('CODEX_APPROVAL_MODE')) || 'on-request' : 'on-request';
   const sandboxMode = hostExecution ? parseSandboxMode(runtimeSetting('CODEX_SANDBOX_MODE')) || 'workspace-write' : 'read-only';
   const effort = parseReasoningEffort(currentReasoningEffort()) || 'medium';
   const verbose = runtimeSetting("CODEX_VERBOSE") === 'true';
@@ -471,7 +471,7 @@ function normalizeProvider(value: string | undefined): AiProvider {
 }
 
 function parseApprovalMode(value: string | undefined): ApprovalMode | undefined {
-  if (value === 'never' || value === 'on-request' || value === 'untrusted') return value;
+  if (value === 'never' || value === 'on-request') return value;
   return undefined;
 }
 

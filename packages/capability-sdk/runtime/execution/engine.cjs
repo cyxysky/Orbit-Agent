@@ -6,6 +6,14 @@ const { acquireJobIdentity, prepareJobIdentity, validateIsolation } = require('.
 const { landlockProbe, landlockCommand } = require('./landlock.cjs');
 const { execFileSync } = require('node:child_process');
 
+function isolatedCodeRunnerHealth() {
+  return process.platform === 'linux' ? { status: 'healthy' } : {
+    status: 'needs-runtime',
+    message: 'The isolated code runner requires Linux. Use Docker or a remote Linux runner on this platform.',
+    details: { code: 'CODE_SANDBOX_UNSUPPORTED_PLATFORM', retryable: false, platform: process.platform, requiredPlatform: 'linux' },
+  };
+}
+
 // One process implementation for the SDK and HTTP runner. Transport and authentication belong to hosts.
 function createCodeExecutionEngine(options) {
   const WORKSPACE_ROOT = path.resolve(options.workspaceDirectory);
@@ -26,7 +34,10 @@ function createCodeExecutionEngine(options) {
   const children = new Set();
   const isolated = options.dropPrivileges === true && process.platform === 'linux';
   function requireIsolationPlatform() {
-    if (options.dropPrivileges === true && !isolated) throw new Error('The isolated code runner requires Linux. Use Docker or a remote Linux runner on this platform.');
+    if (options.dropPrivileges === true && !isolated) {
+      const health = isolatedCodeRunnerHealth();
+      throw Object.assign(new Error(health.message), health.details);
+    }
   }
   async function allowJobDirectoryAccess(directory, identity) {
     if (identity) await chown(directory, identity.uid, identity.gid);
@@ -358,6 +369,7 @@ function createCodeExecutionEngine(options) {
     },
     async health() {
       if (lifetime.signal.aborted) return {status:'unhealthy', message:'Code execution engine is closed.'};
+      if (options.dropPrivileges === true && !isolated) return isolatedCodeRunnerHealth();
       try {
         requireIsolationPlatform();
         await mkdir(WORKSPACE_ROOT, {recursive:true});
@@ -383,4 +395,4 @@ function createCodeExecutionEngine(options) {
     },
   };
 }
-module.exports = {createCodeExecutionEngine};
+module.exports = {createCodeExecutionEngine, isolatedCodeRunnerHealth};

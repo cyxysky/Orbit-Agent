@@ -1,7 +1,7 @@
 import { AutomationWorkspace } from '@/components/AutomationWorkspace';
 import { readWorkspacePageContext } from '@/lib/backend-page-data';
-import '../styles/domains/automation-workspace.css';
-import '../styles/domains/automation-execution-history.css';
+import '@/app/styles/domains/automation-workspace.css';
+import '@/app/styles/domains/automation-execution-history.css';
 
 export const dynamic = 'force-dynamic';
 

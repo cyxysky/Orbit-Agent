@@ -5,7 +5,8 @@ type CodeSandboxExecution = {language:'javascript'|'python'; code:string; args:s
 type CodeSandboxExecutionResult = {exitCode:number|null; signal?:string; stdout:string; stderr:string;
   truncated:boolean; elapsedMs:number; timedOut?:boolean; aborted?:boolean; outputLimitExceeded?:boolean;
   packagesInstalled?:string[]; installElapsedMs?:number; files?:TransportFile[]};
-type CapabilityHealth = {status:'healthy'|'needs-runtime'|'unhealthy'; message?:string};
+type CapabilityHealth = {status:'healthy'|'needs-runtime'|'unhealthy'; message?:string; details?:Record<string,unknown>};
+export function isolatedCodeRunnerHealth(): CapabilityHealth;
 export function createCodeExecutionEngine(options: {
   workspaceDirectory: string;
   nodeExecutable?: string;

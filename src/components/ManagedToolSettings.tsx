@@ -9,6 +9,7 @@ import { AppInput } from '@/components/ui/app-input';
 import { ConfirmDeleteModal } from '@/components/ConfirmDeleteModal';
 import { SettingsDetailSection } from '@/components/SettingsDetailSection';
 import { ToolCapabilitySettings } from '@/components/ToolCapabilitySettings';
+import { ToolInstallationProgress } from '@/components/ToolInstallationProgress';
 import { ExternalIntegrationSettings } from '@/components/ExternalIntegrationSettings';
 import { WorkspaceContentSkeleton } from '@/components/WorkspaceContentSkeleton';
 import { useI18n } from '@/i18n/I18nProvider';
@@ -139,7 +140,8 @@ export function ManagedToolSettings({ items, onChange, onSave, renderConfigurati
         {tab === 'runtime' && editing ? <section className={styles.configuration}>
           <div className={styles.sectionHeading}><h3>{t(editing.title)}</h3><span className={styles.state}>{t(editing.state === 'ready' ? '已安装' : editing.state === 'installing' ? '安装中' : editing.state === 'failed' ? '安装失败' : '未安装')}</span></div>
           <p className={styles.hint}>{t('仅安装当前工具及其必要依赖。对话和输出文件独立保留。')}</p>
-          {editing.state === 'installing' ? <p role="status"><Loader2 className="spin" size={14} /> {t(editing.message)}</p> : null}
+          {editing.progress ? <ToolInstallationProgress progress={editing.progress} message={editing.message} />
+            : editing.state === 'installing' ? <p role="status"><Loader2 className="spin" size={14} /> {t(editing.message)}</p> : null}
           {editing.error && editing.state === 'failed' ? <details><summary>{t('查看错误详情')}</summary><pre className={styles.installError}>{editing.error}</pre></details> : null}
           <div className={styles.runtimeActions}>
             {editing.state === 'ready' ? <>

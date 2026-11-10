@@ -15,6 +15,17 @@
 .json { width: 100%; font-family: var(--font-mono, monospace); font-size: 12px; font-weight: 400; }
 .runtimeActions { display: flex; gap: 12px; }
 .installError { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; }
+.installProgress { display: grid; gap: 16px; min-width: 0; }
+.installSteps { display: grid; gap: 12px; list-style: none; margin: 0; padding: 0; }
+.installStep { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 12px; color: var(--foreground); font-size: 13px; line-height: 1.5; }
+.installStep small { color: var(--muted); font-size: 12px; }
+.installStep[data-state='pending'] { color: var(--muted); }
+.installStep[data-state='failed'], .installStep[data-state='failed'] small { color: var(--danger); }
+.installStep[aria-current='step'] { font-weight: 600; }
+.installStepIcon { display: grid; place-items: center; width: 24px; height: 24px; border: 1px solid var(--border); border-radius: 50%; font-size: 11px; font-variant-numeric: tabular-nums; }
+.installStep[data-state='completed'] .installStepIcon { background: var(--panel-soft); }
+.installStep[aria-current='step'] .installStepIcon { border-color: var(--border-strong); }
+.installMessage { color: var(--muted); font-size: 12px; line-height: 1.6; margin: 0; overflow-wrap: anywhere; }
 @media (max-width: 640px) {
   .environment { grid-template-columns: minmax(0, 1fr) auto; }
   .environment > :first-child { grid-column: 1 / -1; }

@@ -5,12 +5,14 @@ import { realpath, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
+import { createInstallProgress, advanceInstallProgress, type ManagedToolInstallProgress } from '../../runtime/managed/install-progress.cjs';
 export { resolveToolModule, requireToolModule, importToolModule } from './modules.ts';
+export type { ManagedToolInstallProgress, ManagedToolInstallStep } from '../../runtime/managed/install-progress.cjs';
 
 export type ManagedToolDefinition = { id: string; title: string; description: string; group: string; runtime?: string; scope?: 'session' | 'run' };
 export type ManagedToolStatus = ManagedToolDefinition & {
   state: 'missing' | 'installing' | 'ready' | 'failed'; phase: string; message: string; error?: string;
-  version?: string; release?: string; packages?: string[]; updatedAt?: string;
+  version?: string; release?: string; packages?: string[]; updatedAt?: string; progress?: ManagedToolInstallProgress;
 };
 export type InstalledTool = { id: string; toolId: string; version: string; entry: string; args: string[];
   release: string; runtimeDirectory: string; dependencies: Record<string, string>;
@@ -73,7 +75,8 @@ export function createManagedToolInstaller(input: { root: string; sdkRoot?: stri
     if (saved?.state === 'installing') {
       let alive = Boolean(jobs.get(root + ':' + id));
       if (!alive && saved.pid) { try { process.kill(saved.pid, 0); alive = true; } catch { /* interrupted install */ } }
-      return alive ? { ...tool, ...saved } : { ...tool, ...saved, state: 'failed', phase: 'failed', message: '安装已中断，可以重试' };
+      return alive ? { ...tool, ...saved } : { ...tool, ...saved, state: 'failed', phase: 'failed', message: '安装已中断，可以重试',
+        ...(saved.progress ? { progress: advanceInstallProgress(saved.progress, 'failed') } : {}) };
     }
     return saved ? { ...tool, ...saved, state: saved.state === 'failed' ? 'failed' : 'missing' }
       : { ...tool, state: 'missing', phase: 'missing', message: '未安装' };
@@ -94,7 +97,7 @@ export function createManagedToolInstaller(input: { root: string; sdkRoot?: stri
       });
       const key = root + ':' + id;
       jobs.set(key, child);
-      const initial = { ...before, state: 'installing', phase: 'starting', message: '正在准备安装', pid: child.pid, updatedAt: new Date().toISOString() };
+      const initial = { ...before, state: 'installing', phase: 'starting', message: '正在准备安装', progress: createInstallProgress(before), pid: child.pid, updatedAt: new Date().toISOString() };
       const temporary = stateFile(id) + '.' + randomUUID() + '.tmp';
       writeFileSync(temporary, JSON.stringify(initial)); renameSync(temporary, stateFile(id));
       let output = '';
@@ -106,15 +109,17 @@ export function createManagedToolInstaller(input: { root: string; sdkRoot?: stri
         finished = true;
         jobs.delete(key);
         void rm(request, { force: true });
-        if (error && status(id).state !== 'ready') {
+        const latest = readJson<ManagedToolStatus>(stateFile(id));
+        if (error && latest?.state !== 'ready') {
           const temporary = stateFile(id) + '.' + randomUUID() + '.tmp';
-          writeFileSync(temporary, JSON.stringify({ ...before, state: 'failed', phase: 'failed', message: '安装失败，可以重试', error: error.slice(-4000), updatedAt: new Date().toISOString() }));
+          writeFileSync(temporary, JSON.stringify({ ...before, ...latest, state: 'failed', phase: 'failed', message: '安装失败，可以重试',
+            progress: advanceInstallProgress(latest?.progress || initial.progress, 'failed'), error: error.slice(-4000), updatedAt: new Date().toISOString() }));
           renameSync(temporary, stateFile(id));
         }
       };
       child.once('error', error => finish(error.message));
       child.once('close', code => finish(code ? output || 'Installer exited with code ' + code : undefined));
-      return { ...before, state: 'installing' as const, phase: 'starting', message: '正在准备安装' };
+      return { ...initial, state: 'installing' as const };
     },
     async uninstall(id: string) {
       const tool = definition(id);

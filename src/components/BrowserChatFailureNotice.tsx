@@ -6,7 +6,7 @@ import { useI18n } from '@/i18n/I18nProvider';
 import { CopyTextButton } from '@/components/ui/copy-text-button';
 
 export function isBrowserChatFailureNotice(text: string) {
-  return /^(?:上游\s*AI\s*服务|AI\s*(?:请求|模型请求|服务|SDK)\s*)/u.test(text.trim())
+  return /^(?:上游\s*AI\s*服务|AI\s*(?:请求|模型请求|服务|SDK)\s*|会话执行失败[:：])/u.test(text.trim())
     || /^(?:请求信息|技术细节|原始错误)[:：]/mu.test(text);
 }
 

@@ -19,6 +19,12 @@
 
 此前的 `orbit-code-sandbox:latest` 已不再构建或引用，独立 Dockerfile 已移除。`orbit-build-deps:local` 是之前本机打包时留下的临时依赖标签，标准 Dockerfile 不依赖它。正常构建的依赖阶段保留在 BuildKit 缓存中，不需要额外发布构建镜像；删除旧标签与主镜像减重分开统计。
 
+## 本地代码沙箱平台要求
+
+代码沙箱的隔离执行依赖 Linux。Windows 直接运行 Orbit 时，不能将原生 Runner 当作安全隔离环境；请使用 Linux/Docker Runner，并在代码沙箱配置中填写服务地址和对应 Token。健康接口在平台不支持时返回 needs-runtime 和明确原因，Orbit 不会持续重启同一不可用进程，也不会退回到未隔离执行。
+
+已经运行且健康的本机 Docker Runner 可以被复用。网络暂时不可用时自动退避重试；平台或鉴权配置错误在修改配置或重启 Orbit 后重新检查。原生日志已经刷屏时，先停止旧的开发进程，再启动修改后的代码，使旧生命周期管理器退出。
+
 ## 早期内置工具镜像的资源裁剪记录
 
 `scripts/prune-runtime-dependencies.cjs --strip-source-maps` 在编译和移除开发依赖后，删除 node_modules 中独立的 JavaScript/CSS `.map` 文件。该选项仅用于发行镜像，普通 npm 安装仍保留调试资源；开发源码、可执行文件和必要的运行时编译依赖不受此规则影响。文件遍历不跟随符号链接，删除前校验路径；`--dry-run` 可以查看计划。

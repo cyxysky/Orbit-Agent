@@ -377,7 +377,7 @@
   border-radius: 20px;
 }
 
-.browser-chat-log-dialog .browser-chat-log-dialog-header {
+html .settlement-modal.browser-chat-log-dialog .app-modal-header.browser-chat-log-dialog-header {
   display: flex;
   flex-direction: row;
   align-items: flex-start;
@@ -386,10 +386,11 @@
   gap: 16px;
   min-height: 0;
   margin: 0;
-  padding: 20px 24px 14px;
+  padding: 20px 64px 16px 24px;
 }
 
 .browser-chat-log-heading { display: grid; gap: 6px; min-width: 0; }
+html .settlement-modal.browser-chat-log-dialog .app-modal-header .settlement-modal-close { top: 16px; right: 16px; }
 .browser-chat-log-title-row { display: flex; align-items: center; gap: 10px; }
 .browser-chat-log-dialog .modal__heading { margin: 0; font-size: 17px; font-weight: 600; line-height: 1.5; }
 .browser-chat-log-status {
@@ -414,21 +415,7 @@
   line-height: 1.5;
   margin: 0;
 }
-.browser-chat-log-header-actions { flex: 0 0 auto; }
-.browser-chat-log-close {
-  display: grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-}
-.browser-chat-log-close:hover { background: var(--panel-soft); color: var(--foreground); }
-.browser-chat-log-dialog .browser-chat-log-modal-body {
+html .settlement-modal.browser-chat-log-dialog .app-modal-body.browser-chat-log-modal-body {
   display: flex;
   flex-direction: column;
   flex: 1 1 0;
@@ -437,7 +424,7 @@
   min-height: 0;
   margin: 0;
   overflow: hidden;
-  padding: 0;
+  padding: 0 !important;
 }
 .browser-chat-log-toolbar {
   display: flex;
@@ -445,7 +432,7 @@
   justify-content: space-between;
   flex: 0 0 auto;
   gap: 16px;
-  padding: 0 24px 12px;
+  padding: 12px 24px;
   border-bottom: 1px solid var(--border);
 }
 .browser-chat-log-filters { display: flex; gap: 3px; min-width: 0; overflow-x: auto; }
@@ -571,8 +558,9 @@
   .browser-chat-log-entry-meta { order: 3; width: 100%; padding-left: 12px; }
 }
 @media (max-width: 650px) {
-  .browser-chat-log-dialog .browser-chat-log-dialog-header { padding: 16px 16px 12px; }
-  .browser-chat-log-toolbar { flex-direction: column; align-items: stretch; gap: 10px; padding: 0 16px 12px; }
+  html .settlement-modal.browser-chat-log-dialog .app-modal-header.browser-chat-log-dialog-header { padding: 16px 56px 12px 16px; }
+  .browser-chat-log-toolbar { flex-direction: column; align-items: stretch; gap: 10px; padding: 12px 16px; }
+  html .settlement-modal.browser-chat-log-dialog .app-modal-header .settlement-modal-close { top: 12px; right: 12px; }
   .browser-chat-log-search { flex: 0 0 auto; width: 100%; }
   .browser-chat-log-filters { justify-content: space-between; }
   .browser-chat-log-entry { grid-template-columns: minmax(0, 1fr); gap: 0; padding: 10px 16px; }

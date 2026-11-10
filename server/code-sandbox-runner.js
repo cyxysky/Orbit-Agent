@@ -3,12 +3,7 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const { existsSync } = require('node:fs');
-const executionRuntime = existsSync(path.join(__dirname, 'capability-runtime', 'execution', 'files.cjs'))
-  ? path.join(__dirname, 'capability-runtime', 'execution')
-  : existsSync(path.join(__dirname, '..', 'capability-runtime', 'execution', 'files.cjs'))
-    ? path.join(__dirname, '..', 'capability-runtime', 'execution')
-    : path.join(__dirname, '..', 'packages', 'capability-sdk', 'runtime', 'execution');
-const { createCodeExecutionEngine } = require(path.join(executionRuntime, 'engine.cjs'));
+const { executionRuntime, createCodeExecutionEngine } = require('./code-sandbox-runtime.cjs');
 const runtimeHome = process.env.CAPABILITY_RUNTIME_HOME || (process.env.CAPABILITY_TOOLS_HOME && path.join(process.env.CAPABILITY_TOOLS_HOME, 'runtime', process.platform + '-' + process.arch));
 
 const HOST = process.env.CODE_SANDBOX_RUNNER_HOST || '127.0.0.1';

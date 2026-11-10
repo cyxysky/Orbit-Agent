@@ -607,11 +607,9 @@ export function BrowserChatLogDialog({
               <span>{t('总耗时 {time}', { time: formatTotalElapsedMs(totalElapsedMs) })}</span>
             </p>
           </div>
-          <div className="browser-chat-log-header-actions">
-            <button className="browser-chat-log-close" onClick={onClose} type="button" aria-label={t('关闭')}>
-              <X size={19} />
-            </button>
-          </div>
+          <button className="ui-icon-button ui-modal-close" onClick={onClose} type="button" aria-label={t('关闭')}>
+            <X size={19} />
+          </button>
         </header>
         <div className="ui-modal-body browser-chat-log-modal-body">
           {entries.length ? (

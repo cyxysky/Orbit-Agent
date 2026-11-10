@@ -7,7 +7,7 @@ import { markdownBlock } from '@cjfclonedeep/capability-sdk/responses';
 import { ResponseSession, type StructuredResponse } from '@cjfclonedeep/capability-sdk';
 import { getModel, getModelSettings } from '@/server/ai/model';
 import { aiReasoningEffort, aiRuntimeRequestTimeoutMs, aiRuntimeStreamTimeouts, aiTelemetry, createAiRequestWatchdog } from '@/server/ai/ai-sdk-runtime';
-import { openCodexAppServer, readCodexThreadTools, updateCodexThreadTools, type CodexDynamicTool, type CodexInput, type CodexRecord, type CodexToolOutput, type CodexToolCall } from '@/server/ai/codex-app-server';
+import { CODEX_HOST_APPROVAL_POLICY, openCodexAppServer, readCodexThreadTools, updateCodexThreadTools, type CodexDynamicTool, type CodexInput, type CodexRecord, type CodexToolOutput, type CodexToolCall } from '@/server/ai/codex-app-server';
 import { codexRuntimeError } from '@/server/ai/codex-runtime-errors';
 import { responseRegistry } from '@/lib/response-registry';
 import { browserChatHasPendingHumanInput, browserChatRequestedUserInput } from '@/lib/browser-chat-tools';
@@ -159,12 +159,12 @@ export async function executeAppServerBrowserTurn(input: Input, host: AppServerB
     // Compatibility projection for UI/archive. It is never used to assemble a model request after migration.
     await input.onModelMessages?.({ activeMessages: [...transcript], turnMessages: [...transcript] });
   };
-  const publishStep = async () => {
+  const publishStep = async (failure?: string) => {
     const tools = host.summarizeTraces(traces);
     const pending = browserChatHasPendingHumanInput(tools);
     const latest = tools.at(-1);
     const step: StepExecutionResult = { index: stepIndex, action: 'Codex App Server 执行会话', expected: input.instruction,
-      actual: traces.at(-1)?.result?.actual || 'Codex 正在处理会话', status: pending ? 'blocked' : traces.some(trace => !trace.completedAt) ? 'running' : latest?.ok === false ? 'failed' : 'passed',
+      actual: failure || traces.at(-1)?.result?.actual || 'Codex 正在处理会话', status: failure ? 'failed' : pending ? 'blocked' : traces.some(trace => !trace.completedAt) ? 'running' : latest?.ok === false ? 'failed' : 'passed',
       tools, aiRequest, visualContext };
     const replace = (target: StepExecutionResult[]) => { const i = target.findIndex(item => item.index === stepIndex); if (i >= 0) target[i] = step; else target.push(step); };
     replace(steps); replace(newSteps);
@@ -341,7 +341,7 @@ export async function executeAppServerBrowserTurn(input: Input, host: AppServerB
       }
     }
     const common = { cwd: runtime.cwd, model: settings.model, modelProvider: runtime.modelProvider,
-      baseInstructions: developerInstructions, developerInstructions: '', approvalPolicy: 'untrusted', sandbox: 'read-only', config: runtime.config };
+      baseInstructions: developerInstructions, developerInstructions: '', approvalPolicy: CODEX_HOST_APPROVAL_POLICY, sandbox: 'read-only', config: runtime.config };
     const transport = settings.provider === 'codex' ? 'native' : 'model-bridge';
     if (binding) {
       // A missing rollout is an error, never silently recreate a conversation without its context.
@@ -590,8 +590,7 @@ export async function executeAppServerBrowserTurn(input: Input, host: AppServerB
     const reply = `会话执行失败：${message}${upstreamMessage && !message.includes(upstreamMessage) ? `；模型供应商：${upstreamMessage}` : ''}`;
     await debug('ai:runtime:error', reply, { error: codexRuntimeError(error), upstreamError: modelFailure, aiRequest, terminal: true });
     transcript.push({ role: 'assistant', content: reply }); await publishTranscript();
-    await publishStep();
-    const step = newSteps.at(-1); if (step) { step.status = 'failed'; step.actual = reply; await input.onProgress?.(step); }
+    await publishStep(reply);
     return { status: 'failed', reply, blocks: [markdownBlock(reply)], steps, newSteps,
       consoleErrors: [], networkErrors: input.session.getNetworkErrors(), modelMessages: transcript, turnMessages: transcript };
   } finally { try { await runtime?.close(); } finally { await mount.dispose(); } }
@@ -741,7 +740,7 @@ async function reviewNativeCodexCompletion({ response, messages, records, input,
     const schema = asSchema(contextRead.inputSchema);
     const started = await runtime.client.request('thread/fork', { threadId: sourceThreadId, cwd: runtime.cwd, modelProvider: runtime.modelProvider,
       baseInstructions: `${completionReviewInstructions}\nUse only orbit.contextRead. Do not use any built-in tools.`,
-      developerInstructions: '', approvalPolicy: 'untrusted', sandbox: 'read-only', ephemeral: true,
+      developerInstructions: '', approvalPolicy: CODEX_HOST_APPROVAL_POLICY, sandbox: 'read-only', ephemeral: true,
     });
     const threadId = String(object(started.thread).id);
     reviewThreadId = threadId;

@@ -4930,7 +4930,9 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
   const processAutoOpen = running || hasPendingConfirmation || Boolean(manualVerificationRequired);
   const processLabel = running || manualVerificationPaused || hasPendingConfirmation
     ? t('处理中')
-    : message.status === 'failed' || message.status === 'interrupted'
+    : message.status === 'failed'
+      ? t('执行失败')
+      : message.status === 'interrupted'
       ? t('已停止')
       : t('已完成');
   const aiCycleCommonProps: BrowserChatAiCycleCommonProps = {

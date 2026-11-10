@@ -16,6 +16,7 @@ import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 
 
 export type CodexRecord = Record<string, unknown>;
+export const CODEX_HOST_APPROVAL_POLICY = 'on-request' as const;
 export type CodexInput = { type: 'text'; text: string } | { type: 'localImage'; path: string } | { type: 'image'; url: string };
 export type CodexToolOutput = { type: 'inputText'; text: string } | { type: 'inputImage'; imageUrl: string };
 export type CodexToolCall = { threadId: string; turnId: string; callId: string; namespace?: string | null; tool: string; arguments: unknown };
@@ -242,7 +243,7 @@ export async function openCodexAppServer(input: { userId?: string; sessionId: st
     'features.shell_tool': false, 'features.unified_exec': false, 'features.multi_agent': false,
     'features.apps': false, 'features.browser_use': false, 'features.computer_use': false,
     'features.code_mode': false, 'features.code_mode_host': false, 'features.in_app_browser': false,
-    web_search: 'disabled', sandbox_mode: 'read-only', approval_policy: 'untrusted',
+    web_search: 'disabled', sandbox_mode: 'read-only', approval_policy: CODEX_HOST_APPROVAL_POLICY,
     model: settings.model,
     // Unknown provider models inherit a small output budget. Long Chinese source
     // text was being cut out of otherwise complete dynamic-tool receipts.

@@ -6,6 +6,7 @@ const { spawn } = require('node:child_process');
 const { createRequire } = require('node:module');
 const { packageTool } = require('./package-tool.cjs');
 const catalog = require('./tools.json').tools;
+const { createInstallProgress, advanceInstallProgress } = require('./install-progress.cjs');
 
 async function removeWithin(root, target) {
   const actualRoot = await fsp.realpath(root);
@@ -42,8 +43,11 @@ async function installTool({ root, id, sdkRoot, env = {}, config = {}, version =
   const lock = path.join(stateDirectory, id + '.lock');
   const token = randomUUID();
   const stage = path.join(root, '.staging', id + '-' + token);
+  let progress = createInstallProgress(tool);
   const state = (phase, message, extra = {}) => {
-    const value = { id, state: 'installing', phase, message, pid: process.pid, token, updatedAt: new Date().toISOString(), ...extra };
+    const updatedAt = new Date().toISOString();
+    progress = advanceInstallProgress(progress, phase, updatedAt);
+    const value = { id, state: 'installing', phase, message, progress, pid: process.pid, token, updatedAt, ...extra };
     const temporary = statusFile + '.' + token + '.tmp';
     fs.writeFileSync(temporary, JSON.stringify(value), { mode: 0o600 });
     fs.renameSync(temporary, statusFile);
@@ -65,12 +69,14 @@ async function installTool({ root, id, sdkRoot, env = {}, config = {}, version =
     const cli = npmCli();
     if (!cli) throw new Error('The Node.js npm CLI is required to install a tool.');
     if (!sdkRoot || !fs.existsSync(path.join(sdkRoot, 'scripts', 'mcp-providers.mjs'))) {
+      state('source', '正在获取 SDK 下载信息');
       const source = path.join(stage, '.source');
       await fsp.mkdir(source, { recursive: true });
       const response = await fetch(registry.replace(/\/$/, '') + '/@cjfclonedeep%2fcapability-sdk/' + encodeURIComponent(version), { signal: AbortSignal.timeout(30000) });
       if (!response.ok) throw new Error('SDK release metadata is unavailable: HTTP ' + response.status);
       const metadata = await response.json();
       if (!metadata.dist?.tarball || !metadata.dist?.integrity) throw new Error('SDK release has no integrity-protected archive.');
+      state('source', '正在下载 SDK 源码');
       const archive = await fetch(metadata.dist.tarball, { signal: AbortSignal.timeout(180000) });
       if (!archive.ok) throw new Error('SDK download failed: HTTP ' + archive.status);
       const chunks = []; let length = 0;
@@ -82,6 +88,7 @@ async function installTool({ root, id, sdkRoot, env = {}, config = {}, version =
       const bytes = Buffer.concat(chunks);
       const integrity = metadata.dist.integrity.split(' ').find(value => value.startsWith('sha512-'));
       if (!integrity || createHash('sha512').update(bytes).digest('base64') !== integrity.slice(7)) throw new Error('SDK release integrity verification failed.');
+      state('source', '正在解压并校验 SDK 源码');
       const tar = createRequire(cli)('tar');
       const unpack = tar.x({ cwd: source, strip: 1, strict: true, preservePaths: false,
         filter: (_name, entry) => !['SymbolicLink', 'Link', 'CharacterDevice', 'BlockDevice', 'FIFO'].includes(entry.type) });
@@ -148,6 +155,7 @@ async function installTool({ root, id, sdkRoot, env = {}, config = {}, version =
       if (!tools.length) throw new Error('The MCP component did not expose any tools.');
     } finally { if (client) await client.close(); else await transport.close(); }
     // Installation paths never contain npm file: links into the staging directory.
+    state('publish', '正在保存工具并清理安装临时文件');
     const release = path.join(root, 'packages', id, token);
     await fsp.mkdir(path.dirname(release), { recursive: true });
     await removeWithin(stage, path.join(stage, '.source'));

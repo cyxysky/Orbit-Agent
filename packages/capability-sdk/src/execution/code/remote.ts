@@ -89,8 +89,9 @@ export function createHttpCodeSandboxExecutor(input: {
     async health() {
       try {
         const response = await fetch(`${baseUrl}/health`, { headers: input.token?.trim() ? { authorization: `Bearer ${input.token.trim()}` } : {}, signal: AbortSignal.timeout(3_000) });
-        const payload = await readJson(response) as { status?: string; message?: string; isolation?: string };
-        if (!response.ok) return { status: 'unhealthy', message: payload.message || `Runner returned HTTP ${response.status}.` };
+        const payload = await readJson(response) as { status?: string; message?: string; isolation?: string; details?: Record<string, unknown> };
+        if (!response.ok) return { status: payload.status === 'needs-runtime' ? 'needs-runtime' : 'unhealthy',
+          message: payload.message || `Runner returned HTTP ${response.status}.`, details: payload.details };
         if (input.requiredIsolation && payload.isolation !== input.requiredIsolation) return { status: 'needs-runtime', message: `Runner must support isolation policy ${input.requiredIsolation}. Upgrade the runner before executing code.` };
         return payload.status === 'healthy' ? { status: 'healthy' } : { status: 'needs-runtime', message: payload.message || 'Code Sandbox runner is not ready.' };
       } catch (error) {

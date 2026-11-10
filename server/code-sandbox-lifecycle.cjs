@@ -4,6 +4,7 @@ const { spawn } = require('node:child_process');
 const http = require('node:http');
 const { setTimeout: delay } = require('node:timers/promises');
 const { hostExecutionEnabled } = require('./self-bootstrap-policy.cjs');
+const { isolatedCodeRunnerHealth } = require('./code-sandbox-runtime.cjs');
 
 function retryableProbeError(error) {
   return ['ECONNRESET', 'ETIMEDOUT', 'EPIPE', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT'].includes(error?.code);
@@ -23,8 +24,15 @@ function probeRunner(url, token) {
       response.once('error', reject);
       response.once('end', () => {
         try {
-          if (response.statusCode !== 200 || JSON.parse(Buffer.concat(chunks).toString('utf8')).status !== 'healthy') {
-            throw new Error(`本机 Runner ${url.origin} 健康检查失败（HTTP ${response.statusCode}），请检查端口占用和 Runner Token。`);
+          const payload = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+          if (response.statusCode !== 200 || payload.status !== 'healthy') {
+            const authentication = [401, 403].includes(response.statusCode);
+            const detail = authentication ? 'Runner 认证失败，请检查 Runner Token。'
+              : typeof payload.message === 'string' ? payload.message.replaceAll(token, '[redacted]').slice(0, 800) : 'Runner 尚未就绪。';
+            throw Object.assign(new Error(`本机 Runner ${url.origin} 健康检查失败（HTTP ${response.statusCode}）：${detail}`), {
+              code: payload.details?.code || 'CODE_SANDBOX_RUNNER_UNAVAILABLE',
+              retryable: !authentication && payload.status !== 'needs-runtime' && payload.details?.retryable !== false,
+            });
           }
           resolve(true);
         } catch (error) { reject(error); }
@@ -56,14 +64,16 @@ function managedRunnerUrl(environment) {
 
 async function startManagedRunner({ appDir, environment, url }) {
   const token = String(environment.AGENT_CODE_SANDBOX_RUNNER_TOKEN || '').trim();
-  if (!token) throw new Error('请先配置 AGENT_CODE_SANDBOX_RUNNER_TOKEN，再启动本机代码沙箱 Runner。');
+  if (!token) throw Object.assign(new Error('请先配置 AGENT_CODE_SANDBOX_RUNNER_TOKEN，再启动本机代码沙箱 Runner。'), { retryable: false });
 
   const healthy = async () => {
     for (let attempt = 0; ; attempt++) {
       try { return await probeRunner(url, token); }
       catch (error) {
         if (retryableProbeError(error) && attempt < 2) { await delay(150 * (attempt + 1)); continue; }
-        throw new Error(`无法检查本机代码沙箱 Runner ${url.origin}，请检查地址和端口。`, { cause: error });
+        throw Object.assign(new Error(`无法检查本机代码沙箱 Runner ${url.origin}：${error.message}`, { cause: error }), {
+          code: error.code, retryable: error.retryable,
+        });
       }
     }
   };
@@ -71,6 +81,11 @@ async function startManagedRunner({ appDir, environment, url }) {
     console.log(`[code-sandbox] Reusing Runner at ${url.origin}`);
     return { healthy, stop: async () => {}, running: () => true };
   }
+
+  // A Docker/remote runner exposed on loopback can be reused on every host.
+  // Only native process creation depends on the host's isolation support.
+  const support = isolatedCodeRunnerHealth();
+  if (support.status !== 'healthy') throw Object.assign(new Error(support.message), support.details);
 
   const child = spawn(process.execPath, [path.join(__dirname, 'code-sandbox-runner.js')], {
     cwd: appDir,
@@ -129,7 +144,7 @@ async function startManagedRunner({ appDir, environment, url }) {
 }
 
 function createCodeSandboxRunnerManager({ appDir, canReconfigure = () => true }) {
-  let runner, key, latestEnvironment, closed = false, lastCheck = 0, retryAfter = 0;
+  let runner, key, latestEnvironment, closed = false, lastCheck = 0, retryAfter = 0, failures = 0;
   let pending;
   let queue = Promise.resolve();
   const sync = (environment = process.env) => {
@@ -146,7 +161,7 @@ function createCodeSandboxRunnerManager({ appDir, canReconfigure = () => true })
         // execution requests wait for this configuration barrier at the API.
         while (runner && !closed && !canReconfigure()) await delay(100);
         if (closed) return;
-        await runner?.stop(); runner = undefined; key = nextKey; retryAfter = 0;
+        await runner?.stop(); runner = undefined; key = nextKey; retryAfter = 0; failures = 0;
       }
       if (!url || Date.now() < retryAfter) return;
       try {
@@ -154,8 +169,14 @@ function createCodeSandboxRunnerManager({ appDir, canReconfigure = () => true })
         if (runner?.running() && await runner.healthy()) { lastCheck = Date.now(); return; }
         await runner?.stop(); runner = undefined;
         runner = await startManagedRunner({ appDir, environment: snapshot, url });
-        lastCheck = Date.now();
-      } catch (error) { retryAfter = Date.now() + 5_000; throw error; }
+        lastCheck = Date.now(); failures = 0;
+      } catch (error) {
+        if (error.retryable === false) {
+          await runner?.stop(); runner = undefined;
+          retryAfter = Infinity; // Retry after configuration changes or a new host lifecycle.
+        } else retryAfter = Date.now() + Math.min(60_000, 5_000 * 2 ** Math.min(failures++, 4));
+        throw error;
+      }
     });
     pending = { key: nextKey, operation };
     const clearPending = () => { if (pending?.operation === operation) pending = undefined; };
