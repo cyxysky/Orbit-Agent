@@ -5675,19 +5675,33 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
     if (!messageList || !scrollContainer) return undefined;
     let frame = 0;
     let scrollFrame = 0;
+    let previousFollowFrame = 0;
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
     const observedChildren = new Set<Element>();
+    const followContent = (now: number) => {
+      frame = 0;
+      if (!followLatestRef.current || earlierLoadInFlightRef.current) return;
+      // Native input can precede its scroll event. Recheck before every frame,
+      // including frames between content resizes, so scrolling up always wins.
+      trackScrollPosition();
+      if (!followLatestRef.current) return;
+      const target = Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight);
+      const remaining = target - scrollContainer.scrollTop;
+      const elapsed = Math.max(1, now - previousFollowFrame);
+      previousFollowFrame = now;
+      // One continuous follower, rather than a new native smooth-scroll for
+      // each token. Height collapses settle immediately; new lines ease in.
+      const settle = reducedMotion.matches || remaining <= 1 || remaining > scrollContainer.clientHeight;
+      const top = settle ? target : scrollContainer.scrollTop + Math.max(1, remaining * (1 - Math.exp(-elapsed / 45)));
+      scrollContainer.scrollTo({ behavior: 'instant', top });
+      lastObservedScrollTopRef.current = scrollContainer.scrollTop;
+      if (!settle && target - scrollContainer.scrollTop > 1) frame = requestAnimationFrame(followContent);
+    };
     const scheduleScrollToBottom = () => {
       if (!followLatestRef.current || earlierLoadInFlightRef.current) return;
       if (frame) return;
-      frame = requestAnimationFrame(() => {
-        frame = 0;
-        if (!followLatestRef.current || earlierLoadInFlightRef.current) return;
-        // The native scroll event can arrive after this resize callback.
-        trackScrollPosition();
-        if (!followLatestRef.current) return;
-        scrollContainer.scrollTo({ behavior: 'instant', top: Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight) });
-        lastObservedScrollTopRef.current = scrollContainer.scrollTop;
-      });
+      previousFollowFrame = performance.now();
+      frame = requestAnimationFrame(followContent);
     };
     const resizeObserver = new ResizeObserver(scheduleScrollToBottom);
     // Clearing the composer changes the viewport height without necessarily

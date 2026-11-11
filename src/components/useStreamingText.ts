@@ -1,27 +1,30 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 
-/** Smooth transport bursts without retaining a token queue or replaying history. */
+const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+
+/** Pace incoming bursts within a bounded window. Keep just the latest snapshot,
+ * leave mounted history intact, and finish a live tail without a final jump. */
 export function useStreamingText(text: string, streaming: boolean) {
   const [displayed, setDisplayed] = useState(text);
-  const shown = useRef(text);
-  const target = useRef(text);
-  const frame = useRef(0);
-  const receivedAt = useRef(0);
-  const previousFrame = useRef(0);
-  const allowed = useRef(false);
+  const active = streaming || displayed !== text;
+  const state = useRef({
+    shown: text, target: text, streaming, frame: 0, deadline: 0,
+    previousFrame: 0, allowed: false,
+  });
 
   useEffect(() => {
-    if (!streaming) { allowed.current = false; return; }
+    const current = state.current;
+    if (!active) { current.allowed = false; return; }
     const preference = window.matchMedia('(prefers-reduced-motion: reduce)');
     const syncPreference = () => {
-      allowed.current = !preference.matches && document.visibilityState !== 'hidden';
-      if (!allowed.current) {
-        cancelAnimationFrame(frame.current);
-        frame.current = 0;
-        shown.current = target.current;
-        setDisplayed(target.current);
+      current.allowed = !preference.matches && document.visibilityState !== 'hidden';
+      if (!current.allowed) {
+        cancelAnimationFrame(current.frame);
+        current.frame = 0;
+        current.shown = current.target;
+        setDisplayed(current.target);
       }
     };
     syncPreference();
@@ -30,41 +33,58 @@ export function useStreamingText(text: string, streaming: boolean) {
     return () => {
       preference.removeEventListener('change', syncPreference);
       document.removeEventListener('visibilitychange', syncPreference);
-      cancelAnimationFrame(frame.current);
-      frame.current = 0;
+      cancelAnimationFrame(current.frame);
+      current.frame = 0;
+      current.allowed = false;
     };
-  }, [streaming]);
+  }, [active]);
 
-  useEffect(() => {
-    target.current = text;
-    receivedAt.current = performance.now();
-    if (!streaming || !allowed.current || !text.startsWith(shown.current)) {
-      cancelAnimationFrame(frame.current);
-      frame.current = 0;
-      shown.current = text;
+  useLayoutEffect(() => {
+    const current = state.current;
+    const added = Math.max(0, text.length - current.target.length);
+    const wasStreaming = current.streaming;
+    current.target = text;
+    current.streaming = streaming;
+    if (!current.allowed || !text.startsWith(current.shown)
+      || (!streaming && !wasStreaming && !current.frame)) {
+      cancelAnimationFrame(current.frame);
+      current.frame = 0;
+      current.shown = text;
       setDisplayed(text);
       return;
     }
-    if (frame.current || shown.current === text) return;
-    previousFrame.current = performance.now();
+    if (current.shown === text) return;
+    const now = performance.now();
+    // Small packets stay responsive; larger bursts are spread across frames
+    // rather than dumping everything except a fixed 256-character tail.
+    if (added) current.deadline = now + Math.min(320, Math.max(80, Math.sqrt(added) * 12));
+    if (!streaming) current.deadline = Math.min(current.deadline, now + 120);
+    if (current.frame) return;
+    current.previousFrame = now;
     const advance = (now: number) => {
-      frame.current = 0;
-      const latest = target.current;
-      const remaining = latest.length - shown.current.length;
-      const elapsed = Math.min(32, Math.max(8, now - previousFrame.current));
-      const count = now - receivedAt.current >= 100 ? remaining
-        : Math.max(1, remaining - 256, Math.ceil(remaining * elapsed / 60));
-      let end = Math.min(latest.length, shown.current.length + count);
-      // Never paint half an emoji at the reveal boundary.
-      if (end < latest.length && /[\uD800-\uDBFF]/.test(latest[end - 1]) && /[\uDC00-\uDFFF]/.test(latest[end])) end++;
-      shown.current = latest.slice(0, end);
-      setDisplayed(shown.current);
-      previousFrame.current = now;
-      if (end < latest.length) frame.current = requestAnimationFrame(advance);
+      current.frame = 0;
+      const remaining = current.target.length - current.shown.length;
+      const elapsed = now - current.previousFrame;
+      const remainingTime = Math.max(1, current.deadline - current.previousFrame);
+      const count = Math.floor(remaining * Math.min(1, elapsed / remainingTime));
+      if (count > 0) {
+        let end = Math.min(current.target.length, current.shown.length + count);
+        if (end < current.target.length) {
+          // A grapheme may include skin tones, a flag, combining marks or ZWJ
+          // sequences; protecting only surrogate pairs still tears these apart.
+          const offset = current.shown.length;
+          const segment = graphemes.segment(current.target.slice(offset)).containing(end - offset - 1);
+          if (segment) end = offset + segment.index + segment.segment.length;
+        }
+        current.shown = current.target.slice(0, end);
+        current.previousFrame = now;
+        setDisplayed(current.shown);
+      }
+      if (current.shown.length < current.target.length) current.frame = requestAnimationFrame(advance);
     };
-    frame.current = requestAnimationFrame(advance);
+    current.frame = requestAnimationFrame(advance);
   }, [streaming, text]);
 
-  // Completion, replacement and stop never leave a final tail hidden.
-  return streaming && text.startsWith(displayed) ? displayed : text;
+  const visible = text.startsWith(displayed) ? displayed : text;
+  return { text: visible, pending: visible !== text };
 }

@@ -5,7 +5,7 @@ import { Brain, ChevronDown } from 'lucide-react';
 import { useStreamingText } from './useStreamingText';
 
 export function BrowserChatReasoning({ text, streaming, running = streaming, label }: { text: string; streaming: boolean; running?: boolean; label: string }) {
-  const displayed = useStreamingText(text, streaming);
+  const { text: displayed } = useStreamingText(text, streaming);
   const phase = streaming ? 'streaming' : running ? 'responding' : 'complete';
   const [disclosure, setDisclosure] = useState({ phase, open: streaming });
   // A completed stream/answer closes even a manually expanded section. Users

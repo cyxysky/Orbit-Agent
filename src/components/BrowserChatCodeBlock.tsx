@@ -24,14 +24,16 @@ function tokenNodes(tokens: (string | Prism.Token)[]): ReactNode[] {
   return tokens.map((token, index) => typeof token === 'string' ? token : <span className={['token', token.type, ...([token.alias || ''].flat())].filter(Boolean).join(' ')} key={index}>{tokenNodes(typeof token.content === 'string' ? [token.content] : Array.isArray(token.content) ? token.content : [token.content])}</span>);
 }
 
-export const BrowserChatCodeBlock = memo(function BrowserChatCodeBlock({ code, language = '' }: { code: string; language?: string }) {
+export const BrowserChatCodeBlock = memo(function BrowserChatCodeBlock({ code, language = '', streaming = false }: { code: string; language?: string; streaming?: boolean }) {
   const { t } = useI18n();
   const normalizedLanguage = language.toLowerCase();
   const content = useMemo(() => {
     const grammar = Prism.languages[normalizedLanguage];
-    if (!grammar || code.length > 100_000) return code;
+    // Tokenizing an unfinished fence on every animation frame adds work and
+    // repeatedly changes token boundaries. Highlight once the block is stable.
+    if (streaming || !grammar || code.length > 100_000) return code;
     try { return tokenNodes(Prism.tokenize(code, grammar)); } catch { return code; }
-  }, [code, normalizedLanguage]);
+  }, [code, normalizedLanguage, streaming]);
   return <div className="browser-chat-code-block">
     <div className="browser-chat-code-header">
       <span>{normalizedLanguage || t('纯文本')}</span>

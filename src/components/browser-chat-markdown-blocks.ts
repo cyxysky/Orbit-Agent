@@ -22,7 +22,8 @@ function independentBlocks(markdown: string): string[] | undefined {
 /** Completed blocks stay stable; only the open tail needs parsing.
  * Late references, raw HTML and display math still invalidate the document. */
 export function browserChatMarkdownBlocks(markdown: string, previous?: BrowserChatMarkdownSnapshot): string[] {
-  if (markdown.length < 4_096) return [markdown];
+  // Keep the same block identities from the first chunk. Switching from one
+  // document to many blocks at a length threshold remounts already-visible DOM.
   if (previous && previous.blocks.length > 1 && markdown.startsWith(previous.markdown)) {
     const stable = previous.blocks.slice(0, -1);
     const prefix = stable.join('');

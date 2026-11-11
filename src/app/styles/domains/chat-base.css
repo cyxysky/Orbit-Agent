@@ -2003,15 +2003,16 @@
 }
 
 @keyframes browser-chat-streaming-caret {
-  0%, 45% { opacity: 1; }
-  46%, 100% { opacity: 0.18; }
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .browser-chat-tool-card.is-running,
-  .browser-chat-answer.is-streaming .browser-chat-agent-markdown > :last-child::after {
+  .browser-chat-tool-card.is-running {
     animation: none;
   }
+
+  .browser-chat-agent-markdown { --browser-chat-caret-animation: none; }
 
   .browser-chat-tool-tail-particles { display: none; }
 }
@@ -2060,16 +2061,18 @@
   margin-bottom: 8px;
 }
 
-.browser-chat-answer.is-streaming .browser-chat-agent-markdown > :last-child::after,
-.browser-chat-agent-markdown.is-streaming > :last-child::after {
-  animation: browser-chat-streaming-caret 0.9s steps(1, end) infinite;
-  background: var(--accent-strong);
-  border-radius: 999px;
+.browser-chat-agent-markdown.is-streaming > :is(p, h1, h2, h3, h4, h5, h6):last-child::after,
+.browser-chat-agent-markdown.is-streaming > :is(ul, ol):last-child > li:last-child::after,
+.browser-chat-agent-markdown.is-streaming > blockquote:last-child > p:last-child::after,
+.browser-chat-agent-markdown.is-streaming > .browser-chat-code-block:last-child pre > code::after {
+  animation: var(--browser-chat-caret-animation, browser-chat-streaming-caret 1.2s ease-in-out infinite);
+  background: currentColor;
+  border-radius: 1px;
   content: '';
   display: inline-block;
-  height: 1em;
+  height: 0.85em;
   margin-left: 4px;
-  transform: translateY(0.12em);
+  vertical-align: -0.08em;
   width: 2px;
 }
 

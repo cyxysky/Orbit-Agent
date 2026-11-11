@@ -16,7 +16,6 @@ import {
   useContext,
   useMemo,
   useRef,
-  useDeferredValue,
 } from 'react';
 import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown';
 import { browserChatMarkdownBlocks, type BrowserChatMarkdownSnapshot } from './browser-chat-markdown-blocks';
@@ -131,6 +130,12 @@ function BrowserChatMarkdownTable({ children }: { children: ReactNode }) {
 export const BrowserChatSessionIdContext = createContext<string | undefined>(undefined);
 export const BrowserChatMarkdownArtifactsContext = createContext<readonly BrowserChatArtifactSummary[]>([]);
 export const BrowserChatAutomationRunIdContext = createContext<string | undefined>(undefined);
+const MarkdownStreamingContext = createContext(false);
+
+function MarkdownCode({ code, language }: { code: string; language: string }) {
+  const streaming = useContext(MarkdownStreamingContext);
+  return <BrowserChatCodeBlock code={code} language={language} streaming={streaming} />;
+}
 
 // Keep renderer identities stable while a streamed response grows.
 const markdownComponents: Components = {
@@ -141,7 +146,7 @@ const markdownComponents: Components = {
     const code = Children.toArray(children)[0];
     if (!isValidElement<{ className?: string; children?: ReactNode }>(code)) return <pre>{children}</pre>;
     const language = /language-([^\s]+)/.exec(code.props.className || '')?.[1] || '';
-    return <BrowserChatCodeBlock code={String(code.props.children || '')} language={language} />;
+    return <MarkdownCode code={String(code.props.children || '')} language={language} />;
   },
   a: ({ href, onClick, ...props }) => href ? (
     <a
@@ -163,37 +168,37 @@ const markdownComponents: Components = {
   td: ({ children, style }) => <td className="table__cell" style={style}>{children}</td>,
 };
 
-const BrowserChatMarkdownBlock = memo(function BrowserChatMarkdownBlock({ markdown }: { markdown: string }) {
+const BrowserChatMarkdownBlock = memo(function BrowserChatMarkdownBlock({ markdown, streaming }: { markdown: string; streaming: boolean }) {
   const artifacts = useContext(BrowserChatMarkdownArtifactsContext);
   return (
-    <ReactMarkdown
+    <MarkdownStreamingContext.Provider value={streaming}><ReactMarkdown
       urlTransform={(url, key) => defaultUrlTransform(resolveBrowserChatArtifactReference(url, artifacts, key === 'src'))}
       rehypePlugins={[rehypeRaw, [rehypeSanitize, browserChatHtmlSchema], rehypeBrowserChatSvgReferences, rehypeKatex]}
       remarkPlugins={[remarkGfm, remarkMath, remarkBrowserChatCjkStrong, remarkBrowserChatArtifactLinks]}
       components={markdownComponents}
     >
       {markdown}
-    </ReactMarkdown>
+    </ReactMarkdown></MarkdownStreamingContext.Provider>
   );
 });
 
 export const BrowserChatMarkdown = memo(function BrowserChatMarkdown({ markdown, streaming = false }: { markdown: string; streaming?: boolean }) {
-  const displayed = useStreamingText(markdown, streaming);
-  const deferred = useDeferredValue(displayed);
-  const content = streaming ? deferred : markdown;
+  // Normalize on incoming snapshots, not on every reveal frame.
+  const normalized = useMemo(() => normalizeBrowserChatMarkdown(markdown), [markdown]);
+  const { text: content, pending } = useStreamingText(normalized, streaming);
+  const revealing = streaming || pending;
   const previous = useRef<BrowserChatMarkdownSnapshot | undefined>(undefined);
   const blocks = useMemo(() => {
-    const normalized = normalizeBrowserChatMarkdown(content);
-    const blocks = browserChatMarkdownBlocks(normalized, previous.current);
-    previous.current = { markdown: normalized, blocks };
+    const blocks = browserChatMarkdownBlocks(content, previous.current);
+    previous.current = { markdown: content, blocks };
     return blocks;
   }, [content]);
   return (
-    <div className={`browser-chat-agent-markdown${streaming ? ' is-streaming' : ''}`}>
+    <div className={`browser-chat-agent-markdown${revealing ? ' is-streaming' : ''}`} aria-busy={revealing}>
       {blocks.map((block, index) => (
         <Fragment key={index}>
           {index > 0 ? '\n' : null}
-          <BrowserChatMarkdownBlock markdown={block} />
+          <BrowserChatMarkdownBlock markdown={block} streaming={revealing && index === blocks.length - 1} />
         </Fragment>
       ))}
     </div>
