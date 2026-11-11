@@ -16,8 +16,8 @@ export type RuntimeContextManifest = {
   version: 2; id: string; sessionId?: string; createdAt: string;
   contextWindowTokens: number; estimatedTokensBefore: number; estimatedTokensAfter: number;
   model?: { provider?: string; model?: string }; systemRef?: string; toolSchemaRef?: string; backgroundRef?: string;
-  inputBudgetTokens?: number; prefixHash?: string; countKind?: 'heuristic' | 'codex'; epoch?: number; compactionFailure?: string;
-  engine?: 'codex-app-server'; threadId?: string;
+  inputBudgetTokens?: number; prefixHash?: string; countKind?: 'heuristic' | 'provider'; epoch?: number; compactionFailure?: string;
+  engine?: 'openai-agents';
   modelContextStats?: RuntimeRequestContextStats;
   compactionFailureDetails?: Record<string, unknown>;
   compactionStopReason?: { code: string; message: string };

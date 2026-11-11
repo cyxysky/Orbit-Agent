@@ -285,7 +285,7 @@ To create only the unpacked server directory on the build machine, run:
 npm run server:package
 ```
 
-This produces `dist-server/Orbit-Server`. When copied directly instead of installed through the EXE, the target machine needs Node.js 22.16 or later and starts it with `start.cmd`. Runtime dependencies are collected from actual server references. Electron, Chromium, LibreOffice and optional tool libraries are omitted. Install each required tool in Settings; see [per-tool MCP deployment](docs/managed-mcp-tools.md). An external Codex executable remains required for the conversation engine.
+This produces `dist-server/Orbit-Server`. When copied directly instead of installed through the EXE, the target machine needs Node.js 22.16 or later and starts it with `start.cmd`. Runtime dependencies are collected from actual server references. Electron, Chromium, LibreOffice and optional tool libraries are omitted. Install each required tool in Settings; see [per-tool MCP deployment](docs/managed-mcp-tools.md). Conversations run through the OpenAI Agents SDK with a configured OpenAI-compatible or Anthropic-compatible model endpoint; no external model CLI is required. See [the runtime migration guide](docs/architecture/agents-sdk-migration.md).
 
 By default it listens on all network interfaces at port `3000` (locally: `http://127.0.0.1:3000`), stores application data under `runtime/`, and runs the browser headlessly. Set `PORT`, `APP_DATA_DIR`, `ARTIFACTS_DIR`, or `HEADLESS_BROWSER` before `start.cmd` to override those defaults.
 

@@ -3,17 +3,9 @@ import test from 'node:test';
 import {
   modelListForProvider,
   modelProviderDefinition,
-  normalizeMiniMaxOpenAIBaseURL,
   normalizeRuntimeSettingValue,
   runtimeSettingDefinition,
 } from './settings';
-
-test('MiniMax exposes its official AI SDK endpoint without injecting models', () => {
-  const definition = modelProviderDefinition('minimax');
-  assert.equal(definition.defaultModel, 'minimax-m3');
-  assert.equal(definition.defaultBaseURL, 'https://api.minimax.io/v1');
-  assert.deepEqual(modelListForProvider(definition), []);
-});
 
 test('custom OpenAI-compatible APIs have a dedicated provider entry', () => {
   const definition = modelProviderDefinition('openai-compatible');
@@ -46,21 +38,6 @@ test('does not retain the old synthetic custom-model placeholder', () => {
     defaultModel: 'custom-model',
     model: 'custom-model',
   }), ['deepseek-v4-flash', 'minimax-m3']);
-});
-
-test('MiniMax migrates saved official Anthropic endpoints to OpenAI endpoints', () => {
-  assert.equal(
-    normalizeMiniMaxOpenAIBaseURL('https://api.minimax.io/anthropic/v1'),
-    'https://api.minimax.io/v1',
-  );
-  assert.equal(
-    normalizeMiniMaxOpenAIBaseURL('https://api.minimaxi.com/anthropic/v1'),
-    'https://api.minimaxi.com/v1',
-  );
-  assert.equal(
-    normalizeMiniMaxOpenAIBaseURL('https://minimax-proxy.example/v1'),
-    'https://minimax-proxy.example/v1',
-  );
 });
 
 test('browser preview FPS setting is a bounded integer input', () => {

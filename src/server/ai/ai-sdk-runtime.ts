@@ -25,21 +25,14 @@ function positiveInteger(value: string | undefined, fallback: number) {
 
 export function aiReasoningEffort(setting = currentReasoningEffort()): AiReasoningEffort | undefined {
   const value = setting as AiReasoningEffort;
-  // SDK-neutral reasoning currently ends at xhigh. MiniMax's additional max
-  // level is supplied through provider options at the model boundary below.
+  // The SDK-neutral effort scale ends at xhigh.
   if (String(value) === 'max') return 'xhigh';
   return reasoningEfforts.has(value) && value !== 'provider-default' ? value : undefined;
 }
 
-export function withAiReasoningSettings(options: LanguageModelV4CallOptions, provider: string, setting: ReasoningEffortSetting = currentReasoningEffort()): LanguageModelV4CallOptions {
+export function withAiReasoningSettings(options: LanguageModelV4CallOptions, setting: ReasoningEffortSetting = currentReasoningEffort()): LanguageModelV4CallOptions {
   const reasoning = options.reasoning ?? aiReasoningEffort(setting);
-  const maximum = setting === 'max' && reasoning === 'xhigh';
-  return { ...options, reasoning,
-    ...(maximum && provider.startsWith('minimax.') ? { providerOptions: {
-      ...options.providerOptions,
-      minimax: { reasoningEffort: 'max', ...options.providerOptions?.minimax },
-    } } : {}),
-  };
+  return { ...options, reasoning };
 }
 
 export function aiRequestTimeoutMs(fallback = 120_000) {

@@ -373,7 +373,7 @@ export function browserChatAiOutputCycleFromDebugEvent(input: {
   if (!hasAiOutputView(compacted)) return undefined;
   return {
     id: typeof aiOutput.itemId === 'string'
-      ? `cycle_codex_${input.messageId}_${input.stepIndex}_${aiOutput.itemId}` : input.id,
+      ? `cycle_${input.messageId}_${input.stepIndex}_${aiOutput.itemId}` : input.id,
     messageId: input.messageId,
     output: compacted,
     performance: browserChatOutputPerformanceFromUnknown(aiOutput.performance),

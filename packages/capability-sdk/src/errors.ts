@@ -60,7 +60,6 @@ export const ERROR_CODES = Object.freeze({
   CODE_SANDBOX_DISABLED: "code-sandbox-disabled",
   CODE_SANDBOX_RUNNER_TIMEOUT: "code-sandbox-runner-timeout",
   CODE_SANDBOX_RUNNER_UNAVAILABLE: "code-sandbox-runner-unavailable",
-  CODEX_RPC_FAILED: "codex-rpc-failed",
   COMMONJS_REQUIRE: "COMMONJS_REQUIRE",
   COMMUNICATION_CHANNEL_NOT_FOUND: "communication-channel-not-found",
   COMMUNICATION_DELIVERY_PENDING: "communication-delivery-pending",

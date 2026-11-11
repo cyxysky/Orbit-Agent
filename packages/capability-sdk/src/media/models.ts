@@ -4,13 +4,12 @@ import { CodedError, ERROR_CODES } from '../errors.ts';
 
 export const mediaModelKinds = ['image', 'video', 'speech'] as const;
 export type MediaModelKind = typeof mediaModelKinds[number];
-export type MediaModelDriver = 'codex' | 'openai' | 'openai-compatible' | 'google' | 'xai' | 'alibaba' | 'minimax';
+export type MediaModelDriver = 'openai' | 'openai-compatible';
 export type MediaModelRoute = { key: string; label: string; path: string };
 export type MediaModelDriverDefinition = {
   id: MediaModelDriver;
   label: string;
   baseURL: string;
-  localAuth?: boolean;
   models: Partial<Record<MediaModelKind, { placeholder: string; routes: MediaModelRoute[] }>>;
 };
 
@@ -20,49 +19,11 @@ const imageRoutes = [
 ];
 const speechRoutes = [{ key: 'generate', label: '生成路径', path: '/audio/speech' }];
 export const mediaModelDrivers: readonly MediaModelDriverDefinition[] = [
-  { id: 'codex', label: 'Codex CLI', baseURL: '', localAuth: true, models: {
-    image: { placeholder: 'default', routes: [] },
-  } },
-  { id: 'minimax', label: 'MiniMax', baseURL: 'https://api.minimaxi.com/v1', models: {
-    image: { placeholder: 'image-01', routes: [
-      { key: 'generate', label: '生成路径', path: '/image_generation' },
-      { key: 'edit', label: '参考图生成路径', path: '/image_generation' },
-    ] },
-  } },
   { id: 'openai', label: 'OpenAI', baseURL: 'https://api.openai.com/v1', models: {
-    image: { placeholder: '填写图片模型 ID', routes: imageRoutes },
-    speech: { placeholder: '填写语音模型 ID', routes: speechRoutes },
+    image: { placeholder: '填写图片模型 ID', routes: imageRoutes }, speech: { placeholder: '填写语音模型 ID', routes: speechRoutes },
   } },
   { id: 'openai-compatible', label: 'OpenAI 兼容接口', baseURL: '', models: {
-    image: { placeholder: '填写服务商的图片模型 ID', routes: imageRoutes },
-    speech: { placeholder: '填写服务商的语音模型 ID', routes: speechRoutes },
-  } },
-  { id: 'google', label: 'Google Gemini API', baseURL: 'https://generativelanguage.googleapis.com/v1beta', models: {
-    image: { placeholder: '填写 Imagen 或 Gemini 图片模型 ID', routes: [
-      { key: 'predict', label: 'Imagen 生成路径', path: '/models/{model}:predict' },
-      { key: 'generate', label: 'Gemini 生成路径', path: '/models/{model}:generateContent' },
-    ] },
-    video: { placeholder: '填写 Veo 模型 ID', routes: [
-      { key: 'generate', label: '提交路径', path: '/models/{model}:predictLongRunning' },
-      { key: 'status', label: '查询路径', path: '/{operation}' },
-    ] },
-    speech: { placeholder: '填写 Gemini TTS 模型 ID', routes: [
-      { key: 'generate', label: '生成路径', path: '/models/{model}:generateContent' },
-    ] },
-  } },
-  { id: 'xai', label: 'xAI', baseURL: 'https://api.x.ai/v1', models: {
-    image: { placeholder: '填写 Grok 图片模型 ID', routes: imageRoutes },
-    video: { placeholder: '填写 Grok 视频模型 ID', routes: [
-      { key: 'generate', label: '提交路径', path: '/videos/generations' },
-      { key: 'status', label: '查询路径', path: '/videos/{id}' },
-    ] },
-    speech: { placeholder: 'xAI TTS（接口不接收模型 ID）', routes: [{ key: 'generate', label: '生成路径', path: '/tts' }] },
-  } },
-  { id: 'alibaba', label: 'Alibaba Cloud', baseURL: 'https://dashscope-intl.aliyuncs.com', models: {
-    video: { placeholder: '填写 Wan 视频模型 ID', routes: [
-      { key: 'generate', label: '提交路径', path: '/api/v1/services/aigc/video-generation/video-synthesis' },
-      { key: 'status', label: '查询路径', path: '/api/v1/tasks/{id}' },
-    ] },
+    image: { placeholder: '填写服务商的图片模型 ID', routes: imageRoutes }, speech: { placeholder: '填写服务商的语音模型 ID', routes: speechRoutes },
   } },
 ];
 
@@ -77,7 +38,7 @@ export const mediaModelSchema = z.object({
   id: z.string().trim().min(1).max(100),
   kind: z.enum(mediaModelKinds),
   name: z.string().trim().max(100),
-  driver: z.enum(['codex', 'openai', 'openai-compatible', 'google', 'xai', 'alibaba', 'minimax']),
+  driver: z.enum(['openai', 'openai-compatible']),
   model: z.string().trim().max(500),
   enabled: z.boolean(),
   baseURL: z.string().trim().max(4_000).default(''),
@@ -97,8 +58,9 @@ export const mediaModelSchema = z.object({
   const support = driver.models[model.kind];
   const issue = (path: string, message: string) => context.addIssue({ code: 'custom', path: [path], message });
   if (!support) issue('driver', '该供应商不支持此模型类型。');
-  if (model.enabled && !model.model && !(model.driver === 'xai' && model.kind === 'speech')) issue('model', '请填写模型 ID。');
+  if (model.enabled && !model.model) issue('model', '请填写模型 ID。');
   if (model.enabled && !model.name) issue('name', '请填写模型名称。');
+  if (model.enabled && !model.baseURL && !driver.baseURL) issue('baseURL', '请填写兼容接口的服务地址。');
   if (model.baseURL) {
     try {
       const url = new URL(model.baseURL);

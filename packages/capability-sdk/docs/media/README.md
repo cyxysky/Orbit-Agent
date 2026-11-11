@@ -8,7 +8,7 @@ Inspect media, extract frames, and connect host-selected OCR, transcription and 
 
 This README is a complete integration entrypoint. Follow steps 1–4 for any TypeScript Agent framework, or use the AI SDK/MCP routes below. All named source files are created in **your consuming project**, not inside this package.
 
-`mediaConfigurationForProviders` includes Codex CLI as the default image model, independent of language providers. It reuses local Codex login without API keys, URLs, or model configuration; explicit media selections take precedence. Install `ai-sdk-provider-codex-cli` and a Codex CLI with native image generation. The adapter discovers the CLI default model, supports reference-image edits, and saves outputs through the normal artifact publisher. Masks are unsupported. CLI/account availability and generation errors are returned directly; no automatic provider fallback occurs.
+Generation uses explicitly configured OpenAI or OpenAI-compatible image/speech endpoints. There is no built-in model, CLI authentication, or automatic fallback to another paid service.
 
 ## 1. Install and prepare
 
@@ -403,32 +403,23 @@ install `ai` and the SDK packages for the selected providers when using this ada
 | --- | --- | --- | --- |
 | OpenAI | Images API | — | Speech API |
 | OpenAI compatible | Images API, base64 or URL responses | — | OpenAI Speech protocol |
-| MiniMax | Native image generation, base64 or URL responses, subject references | — | — |
-| Google | Imagen / Gemini image | Veo | Gemini TTS |
-| xAI | Grok image | Grok video | xAI TTS (no model id) |
-| Alibaba | — | Wan / native DashScope | — |
 
-Provider implementations own request formats, authentication and video polling.
+The retained adapters own request formats and authentication.
 A base URL or path override does not translate one provider's protocol into
 another. Paths are relative to the configured base URL and preserve the shown
 `{model}`, `{id}` or `{operation}` placeholders. Extra parameters use the selected
 AI SDK provider's option names (OpenAI-compatible image parameters are raw API
 body fields). No model names are hard-coded into the runtime.
 
-MiniMax image generation uses its native `aspect_ratio`, `width` / `height`, and
-`subject_reference` fields; masks are unsupported. Existing OpenAI-compatible
-image settings that point to `/image_generation` on an official MiniMax API host
-are recognized automatically. For custom gateways, select the MiniMax driver.
-
 The `media` tool exposes `listModels`, `generateImage`, `generateVideo` and
 `generateSpeech`. Use the configuration id as `modelRef`, or omit it for the
 type's default model. Image edits accept `sourceRefs` and optional `maskRef`;
-image-to-video accepts one reference image. Speech converts `prompt` into audio,
+Speech converts `prompt` into audio,
 not music or sound effects. Results are saved artifacts with media types and
 download URLs, never large base64 payloads in tool history.
 
 Generation propagates cancellation and uses the configured total timeout;
-video polling is bounded. Automatic generation retries are disabled because
+automatic generation retries are disabled because
 resubmitting a paid generation may duplicate work. Cancelling locally does not
 promise cancellation of a remote provider job.
 

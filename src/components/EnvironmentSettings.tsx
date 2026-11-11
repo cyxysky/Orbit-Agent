@@ -39,7 +39,7 @@ import { readApiJson } from '@/lib/api-client';
 import { LoginAccountModal, type LoginAccountMetadata } from '@/components/LoginAccountModal';
 import { DataTransferButtons } from '@/components/DataTransferButtons';
 import { ManagementDataTable } from '@/components/ManagementDataTable';
-import { ModelBrandIcon } from '@/components/ModelBrandIcon';
+import { ModelProviderRow } from '@/components/ModelProviderRow';
 import { AppInput } from '@/components/ui/app-input';
 import { AppModal } from '@/components/ui/app-modal';
 import { ModelCapabilitiesModal } from '@/components/ModelCapabilitiesModal';
@@ -65,12 +65,10 @@ import { WorkspaceSidebarArchiveRow } from '@/components/WorkspaceSidebarArchive
 import { useWorkspaceBrand } from '@/brand/WorkspaceBrandProvider';
 import { ModelTypeSettings } from '@/components/ModelTypeSettings';
 import { toolCapabilitySettings, toolConfigurationTargets, TOOL_CAPABILITY_SETTINGS_CHANGED_EVENT } from '@/lib/tool-capability-settings';
-import { builtInMediaModels, createMediaTypeSettings, normalizeProviderMediaSettings, mediaModelTypeDefinitions, type MediaTypeSettings } from '@cjfclonedeep/capability-sdk/media/model-settings';
+import { createMediaTypeSettings, normalizeProviderMediaSettings, mediaModelTypeDefinitions, type MediaTypeSettings } from '@cjfclonedeep/capability-sdk/media/model-settings';
 import { type MediaModelKind, type MediaModelDriver } from '@cjfclonedeep/capability-sdk/media/models';
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
-import { SortableContext, arrayMove, rectSortingStrategy, sortableKeyboardCoordinates, useSortable } from '@dnd-kit/sortable';
-import { CSS as DndCSS } from '@dnd-kit/utilities';
-import { GripVertical } from 'lucide-react';
+import { SortableContext, arrayMove, rectSortingStrategy, sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 
 
@@ -98,48 +96,6 @@ export type RuntimeSettingRow = Pick<RuntimeSettingRecord, 'key' | 'value' | 'en
 };
 
 export type ModelConfig = Pick<ModelConfigRecord, 'provider' | 'providers' | 'providerOrder' | 'updatedAt'>;
-
-function SortableProviderRow({ provider, active, label, children, onSelect, onDelete, deleteDisabled }: {
-  provider: ModelProvider;
-  active: boolean;
-  label: string;
-  children: ReactNode;
-  onSelect: () => void;
-  onDelete?: () => void;
-  deleteDisabled?: boolean;
-}) {
-  const { t } = useI18n();
-  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id: provider });
-  return (
-    <div
-      ref={setNodeRef}
-      className={`settings-provider-row${active ? ' active' : ''}${isDragging ? ' is-dragging' : ''}`}
-      style={{ transform: DndCSS.Transform.toString(transform), transition }}
-    >
-      <button
-        {...attributes}
-        {...listeners}
-        ref={setActivatorNodeRef}
-        aria-label={t('拖拽排序：{name}', { name: label })}
-        className="settings-provider-drag-handle"
-        title={t('拖拽排序')}
-        type="button"
-      >
-        <GripVertical size={16} />
-      </button>
-      <button
-        aria-current={active ? 'true' : undefined}
-        className="settings-provider-select"
-        data-provider={provider}
-        onClick={onSelect}
-        type="button"
-      >
-        {children}
-      </button>
-      {onDelete ? <button aria-label={t('删除供应商：{name}', { name: label })} className="settings-provider-delete" disabled={deleteDisabled} onClick={onDelete} title={t('删除自定义供应商')} type="button"><Trash2 size={15} /></button> : null}
-    </div>
-  );
-}
 
 export type EnvironmentSettingsInitialData = {
   runtimeItems: RuntimeSettingRow[];
@@ -380,7 +336,6 @@ const settingsSectionIcons: Record<string, LucideIcon> = {
   '脱敏策略': ShieldCheck,
   '脱敏模型': Brain,
   '推理服务': Server,
-  'Codex CLI': Terminal,
   '调试与追踪': Bug,
 };
 
@@ -636,7 +591,7 @@ function createModelConfig(input?: Partial<ModelConfig>): ModelConfig {
     };
   }
   return {
-    provider: input?.provider || 'openrouter',
+    provider: input?.provider || 'openai',
     providers,
     providerOrder: modelProviderDefinitionsForConfig(providers, input?.providerOrder).map(({ value }) => value),
     updatedAt: input?.updatedAt || '',
@@ -2573,7 +2528,6 @@ export function EnvironmentSettings({
   const activeProviderDefaultModel = activeProviderSettings.defaultModel || activeProviderSettings.model || '';
   const activeProviderEnabled = activeProviderSettings.enabled === true;
   const activeMediaKind = modelKind === 'language' ? undefined : modelKind;
-  const activeBuiltInMedia = builtInMediaModels.filter((item) => item.provider === activeProvider && item.configuration.kind === activeMediaKind);
   const activeMediaSettings = activeMediaKind ? createMediaTypeSettings(activeProvider, activeMediaKind, activeProviderSettings.media?.[activeMediaKind]) : undefined;
 
   function updateMediaSettings(patch: Partial<MediaTypeSettings>) {
@@ -2606,7 +2560,7 @@ export function EnvironmentSettings({
     }} />;
   }
 
-  const activeProviderSupportsExtraRequestParameters = activeProvider === 'minimax' || activeProvider.startsWith('openai-compatible');
+  const activeProviderSupportsExtraRequestParameters = activeProvider.startsWith('openai-compatible');
   const activeProviderExtraRequestParameterRows = extraRequestParameterRows[activeProvider] || [];
   const activeProviderDuplicateExtraRequestParameterKeys = duplicateExtraRequestParameterKeys(activeProviderExtraRequestParameterRows);
   const configuredModelProviderDefinitions = modelProviderDefinitionsForConfig(editingModelConfig.providers, editingModelConfig.providerOrder);
@@ -2898,8 +2852,10 @@ export function EnvironmentSettings({
                           const settings = editingModelConfig.providers?.[provider.value];
                           const enabled = settings?.enabled === true;
                           return (
-                            <SortableProviderRow
+                            <ModelProviderRow
                               active={activeProvider === provider.value}
+                              enabled={enabled}
+                              model={settings?.defaultModel || provider.defaultModel}
                               provider={provider.value}
                               label={settings?.displayName?.trim() || t(provider.label)}
                               key={provider.value}
@@ -2910,11 +2866,7 @@ export function EnvironmentSettings({
                                 setDeleteModelProviderError('');
                                 setDeleteModelProviderTarget({ provider: provider.value, label: settings?.displayName?.trim() || t(provider.label) });
                               } : undefined}
-                            >
-                              <span className="settings-provider-icon"><ModelBrandIcon model={settings?.defaultModel || provider.defaultModel} provider={provider.value} /></span>
-                              <span><strong>{settings?.displayName?.trim() || t(provider.label)}</strong><small>{enabled ? t('已启用') : t('未启用')}</small></span>
-                              <i className={enabled ? 'is-enabled' : undefined} />
-                            </SortableProviderRow>
+                            />
                           );
                         })}
                       </SortableContext>
@@ -2927,7 +2879,7 @@ export function EnvironmentSettings({
                   fieldOptions={{
                     provider: { options: visibleModelProviders.map(provider => ({ label: editingModelConfig.providers?.[provider.value]?.displayName?.trim() || provider.label, value: provider.value })) },
                     displayName: { placeholder: activeProviderOption.label },
-                    apiKey: { description: activeProviderOption.keyLabel, disabled: Boolean(activeProviderOption.localAuth) },
+                    apiKey: { description: activeProviderOption.keyLabel },
                   }}
                   secretPreview={activeProviderSettings.apiKeyPreview || (activeProviderSettings.hasApiKey ? '••••••••••••' : undefined)}
                   secretSource={{ kind: 'provider', provider: activeProvider }} headers={settingsRequestHeaders}
@@ -2938,12 +2890,7 @@ export function EnvironmentSettings({
                   <button key={item.id} type="button" role="tab" aria-selected={modelKind === item.id} className={modelKind === item.id ? 'active' : ''} onClick={() => setModelKind(item.id)}>{t(item.label)}</button>
                 ))}
               </div>
-              {activeBuiltInMedia.length ? activeBuiltInMedia.map((item) => (
-                <div className="settings-row" key={item.configuration.id}>
-                  <div><strong>{t(item.configuration.name)}</strong><span>{t(item.description)}</span></div>
-                  <span>{t('本地登录，无需 Key')}</span>
-                </div>
-              )) : <ModelTypeSettings
+              <ModelTypeSettings
                 key={activeProvider + modelKind}
                 provider={activeProvider}
                 enabled={activeProviderEnabled}
@@ -2982,7 +2929,7 @@ export function EnvironmentSettings({
                 </> : renderMediaForm('connection')}
               >
                 {renderMediaForm('generation')}
-              </ModelTypeSettings>}
+              </ModelTypeSettings>
                 </div>
               </div>
             </section>

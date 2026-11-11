@@ -15,7 +15,7 @@ const imageModelIdPattern = /(?:^|[\/_-])(vision|vl|multimodal|pixtral)(?:$|[\/_
 export function defaultModelCapabilities(provider: ModelProvider, model: string): ModelCapabilities {
   const normalizedModel = model.trim();
   if (!normalizedModel) return { imageInput: false };
-  if (provider === 'google' || provider === 'anthropic' || provider === 'openai' || provider === 'codex') {
+  if (provider === 'anthropic' || provider === 'openai') {
     return { imageInput: true };
   }
   return { imageInput: imageModelIdPattern.test(normalizedModel) };

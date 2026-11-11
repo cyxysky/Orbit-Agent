@@ -13,7 +13,7 @@ import { recoverOrphanedBrowserChatSession } from '@/server/ai/agents/browser-ch
 // Session list/detail reads use database projections rather than the in-memory
 // service list, so reconcile persisted `running` flags with the live registry.
 import { browserChatActiveMessages, normalizeBrowserChatModelContext, type BrowserChatModelContext } from '@/server/ai/agents/browser-chat-model-context';
-import { browserChatActiveContextUsage, browserChatContextUsageFromRequestLogs } from '@/server/ai/agents/browser-chat-context-usage';
+import { browserChatActiveContextUsage } from '@/server/ai/agents/browser-chat-context-usage';
 import { recoverBrowserChatToolContext } from './browser-chat-tool-context-recovery';
 import {
   estimateRuntimeMessageContext,
@@ -216,7 +216,7 @@ function resolvedContextUsage(
   if ((session.busy || session.status === 'running') && stored) return stored;
   const context = normalizeBrowserChatModelContext(session.modelContext);
   const activeMessages = browserChatActiveMessages(context);
-  if (context.lastRequest?.engine === 'codex-app-server' || activeMessages.length) {
+  if (context.lastRequest?.engine === 'openai-agents' || activeMessages.length) {
     return browserChatActiveContextUsage(context, effectiveMaxTokens, stored?.toolTokens);
   }
   const source = activeMessages.length
@@ -307,13 +307,6 @@ export async function readBrowserChatSessionPage(sessionId: string, userId?: str
   const activeLogs = activeMessage
     ? (await readBrowserChatLogsPage<BrowserChatLogRecord>(sessionId, { limit: 500, messageId: activeMessage.id })).items
     : [];
-  const legacyCodexContext = persistedSession.modelContext?.lastRequest?.engine === 'codex-app-server'
-    && !persistedSession.modelContext.lastRequest.modelContextStats;
-  const contextMessageId = messages.items.findLast(message => message.role === 'assistant')?.id;
-  const contextLogs = legacyCodexContext && !activeLogs.length && contextMessageId
-    ? (await readBrowserChatLogsPage<BrowserChatLogRecord>(sessionId, { limit: 500, messageId: contextMessageId })).items : activeLogs;
-  const recoveredContextUsage = legacyCodexContext ? browserChatContextUsageFromRequestLogs(contextLogs,
-    persistedSession.modelContext?.lastRequest?.contextWindowTokens || runtimeContextWindowTokens({ provider: session.modelProvider, model: session.model })) : undefined;
   const activeRecords = activeMessage
     ? browserChatClientRecordsForMessage(
         { ...session, messages: [activeMessage] },
@@ -323,7 +316,7 @@ export async function readBrowserChatSessionPage(sessionId: string, userId?: str
     : { outputCycles: [], subagents: [] };
   return {
     ...session,
-    contextUsage: recoveredContextUsage || resolvedContextUsage(persistedSession, messages.items),
+    contextUsage: resolvedContextUsage(persistedSession, messages.items),
     hasMessages: messages.items.length > 0 || session.hasMessages === true,
     messages: recoverOrphanedBrowserChatSession({
       ...session, messages: await restoreUserInputQuestions(sessionId, messages.items),

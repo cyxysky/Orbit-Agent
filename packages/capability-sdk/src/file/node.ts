@@ -5,6 +5,7 @@ export * from './node/download.ts';
 export * from './node/generate.ts';
 export * from './node/write.ts';
 export * from './node/libreoffice.ts';
+export * from './node/pdf.ts';
 export * from './node/office/docx-template.ts';
 export * from './node/office/javascript.ts';
 export * from './node/office/program-analysis.ts';

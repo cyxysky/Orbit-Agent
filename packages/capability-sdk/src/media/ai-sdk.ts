@@ -1,10 +1,9 @@
-import { createDownload, generateImage, generateSpeech, experimental_generateVideo as generateVideo, type ImageModel } from 'ai';
+import { generateImage, generateSpeech } from 'ai';
 import { z } from 'zod';
 import type { CapabilityExecutionContext } from '../index.ts';
 import type { MediaArtifact } from './index.ts';
 import type { MediaGenerationInput, MediaGenerationOperations } from './generation.ts';
 import { mediaModelDriver, resolveMediaModel, type MediaModelConfig, type MediaModelConfiguration, type MediaModelKind } from './models.ts';
-import type { CodexImageOptions } from './codex-cli.ts';
 import { CodedError, ERROR_CODES } from '../errors.ts';
 
 
@@ -16,7 +15,6 @@ export type AiSdkMediaOperationsOptions = {
   readSource(ref: string, context: CapabilityExecutionContext): Promise<Uint8Array>;
   publishArtifact(file: MediaGenerationFile & { kind: MediaModelKind; modelRef: string }, context: CapabilityExecutionContext): Promise<MediaArtifact>;
   fetch?: typeof globalThis.fetch;
-  codex?: CodexImageOptions;
 };
 
 function parameters(model: MediaModelConfig) {
@@ -97,107 +95,27 @@ function modelFetch(model: MediaModelConfig, fetcher: typeof globalThis.fetch, s
   };
 }
 
-// Older settings used an OpenAI-compatible driver with MiniMax's native path.
-// Recognize only MiniMax hosts and that exact endpoint; custom gateways can
-// select the explicit MiniMax driver without changing their connection settings.
-function effectiveMediaModel(model: MediaModelConfig): MediaModelConfig {
-  if (model.driver !== 'openai-compatible' || model.kind !== 'image' || !model.baseURL) return model;
-  const host = new URL(model.baseURL).hostname;
-  return ['api.minimax.cn', 'api.minimaxi.com', 'api.minimax.io'].includes(host)
-    && model.paths.generate === '/image_generation' ? { ...model, driver: 'minimax' } : model;
-}
-
-function minimaxImageModel(model: MediaModelConfig, fetcher: typeof globalThis.fetch): ImageModel {
-  return {
-    specificationVersion: 'v4', provider: 'minimax.image', modelId: model.model, maxImagesPerCall: 9,
-    async doGenerate({ prompt, n, size, aspectRatio, seed, files, mask, abortSignal, providerOptions }) {
-      if (mask) throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, 'MiniMax image generation does not support masks.');
-      const signal = abortSignal || AbortSignal.timeout(model.timeoutMs);
-      const [width, height] = size ? size.split('x').map(Number) : [];
-      const route = files?.length ? model.paths.edit : model.paths.generate;
-      const url = (model.baseURL || mediaModelDriver('minimax').baseURL).replace(/\/+$/, '') + (route || '/image_generation');
-      const response = await fetcher(url, {
-        method: 'POST', signal,
-        headers: { Authorization: `Bearer ${model.apiKey || ''}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          response_format: 'base64', ...providerOptions.minimax,
-          model: model.model, prompt, n,
-          ...(aspectRatio ? { aspect_ratio: aspectRatio } : {}),
-          ...(size ? { width, height } : {}),
-          ...(seed !== undefined ? { seed } : {}),
-          ...(files?.length ? { subject_reference: files.map((file) => ({
-            type: 'character',
-            image_file: file.type === 'url' ? file.url : `data:${file.mediaType};base64,${typeof file.data === 'string' ? file.data : Buffer.from(file.data).toString('base64')}`,
-          })) } : {}),
-        }),
-      });
-      const payload = z.object({
-        base_resp: z.object({ status_code: z.number(), status_msg: z.string().optional() }).optional(),
-        data: z.object({ image_base64: z.array(z.string()).optional(), image_urls: z.array(z.string()).optional() }).nullish(),
-      }).parse(JSON.parse(new TextDecoder().decode(await boundedBytes(response, signal, 100 * 1024 * 1024))));
-      if (payload.base_resp && payload.base_resp.status_code !== 0) {
-        throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, `MiniMax image generation failed (${payload.base_resp.status_code}): ${payload.base_resp.status_msg || 'Unknown error'}`);
-      }
-      const images: Uint8Array[] = (payload.data?.image_base64 || []).filter(Boolean).map((data) => Buffer.from(data, 'base64'));
-      if (!images.length) {
-        for (const ref of payload.data?.image_urls || []) {
-          const imageUrl = new URL(ref);
-          if (!['https:', 'http:'].includes(imageUrl.protocol) || imageUrl.username || imageUrl.password) throw new CodedError(ERROR_CODES.MEDIA_OPERATION_FAILED, 'Invalid generated image URL.');
-          // CDN downloads must never receive the model API key.
-          images.push(await boundedBytes(await fetcher(imageUrl, { signal }), signal));
-        }
-      }
-      return { images, warnings: [], response: { timestamp: new Date(), modelId: model.model, headers: Object.fromEntries(response.headers) } };
-    },
-  };
-}
-
-async function loadModels(model: MediaModelConfig, fetch: typeof globalThis.fetch, codex?: CodexImageOptions) {
+async function loadModels(model: MediaModelConfig, fetch: typeof globalThis.fetch) {
   const settings = { apiKey: model.apiKey || '', baseURL: (model.baseURL || mediaModelDriver(model.driver).baseURL).replace(/\/+$/, ''), fetch };
-  switch (model.driver) {
-    case 'codex': {
-      const { createCodexImageModel } = await import('./codex-cli.ts');
-      return { image: () => createCodexImageModel(model, codex) };
-    }
-    case 'minimax': return { image: () => minimaxImageModel(model, fetch) };
-    case 'openai': {
-      const { createOpenAI } = await import('@ai-sdk/openai');
-      const provider = createOpenAI(settings);
-      return { image: () => provider.image(model.model), speech: () => provider.speech(model.model) };
-    }
-    case 'openai-compatible': {
-      if (model.kind === 'speech') {
-        const { createOpenAI } = await import('@ai-sdk/openai');
-        return { speech: () => createOpenAI(settings).speech(model.model) };
-      }
-      const { createOpenAICompatible } = await import('@ai-sdk/openai-compatible');
-      return { image: () => createOpenAICompatible({ ...settings, name: 'compatible' }).imageModel(model.model) };
-    }
-    case 'google': {
-      const { createGoogleGenerativeAI } = await import('@ai-sdk/google');
-      const provider = createGoogleGenerativeAI(settings);
-      return { image: () => provider.image(model.model), video: () => provider.video(model.model), speech: () => provider.speech(model.model) };
-    }
-    case 'xai': {
-      const { createXai } = await import('@ai-sdk/xai');
-      const provider = createXai(settings);
-      return { image: () => provider.image(model.model), video: () => provider.video(model.model), speech: () => provider.speech() };
-    }
-    case 'alibaba': {
-      const { createAlibaba } = await import('@ai-sdk/alibaba');
-      return { video: () => createAlibaba({ ...settings, videoBaseURL: settings.baseURL }).video(model.model) };
-    }
+  if (model.driver === 'openai') {
+    const { createOpenAI } = await import('@ai-sdk/openai');
+    const provider = createOpenAI(settings);
+    return { image: () => provider.image(model.model), speech: () => provider.speech(model.model) };
   }
+  const { createOpenAICompatible } = await import('@ai-sdk/openai-compatible');
+  const { createOpenAI } = await import('@ai-sdk/openai');
+  return { image: () => createOpenAICompatible({ ...settings, name: 'compatible' }).imageModel(model.model),
+    speech: () => createOpenAI(settings).speech(model.model) };
 }
 
 export function createAiSdkMediaGenerationOperations(options: AiSdkMediaOperationsOptions): MediaGenerationOperations {
   async function generate(kind: MediaModelKind, request: MediaGenerationInput, context: CapabilityExecutionContext) {
     context.abortSignal?.throwIfAborted();
-    const model = effectiveMediaModel(resolveMediaModel(options.configuration, kind, options.selectedModels?.[kind] || request.modelRef));
+    const model = resolveMediaModel(options.configuration, kind, options.selectedModels?.[kind] || request.modelRef);
     const signal = AbortSignal.any([AbortSignal.timeout(model.timeoutMs), ...(context.abortSignal ? [context.abortSignal] : [])]);
     const execution = { ...context, abortSignal: signal };
     await context.reportProgress?.({ phase: 'generating', message: `Generating ${kind} with ${model.name}.` });
-    const models = await loadModels(model, modelFetch(model, options.fetch || globalThis.fetch, signal), options.codex);
+    const models = await loadModels(model, modelFetch(model, options.fetch || globalThis.fetch, signal));
     const namespace = model.driver === 'openai-compatible' ? kind === 'speech' ? 'openai' : 'compatible' : model.driver;
     const providerOptions = { [namespace]: parameters(model) };
     const size = request.size || model.size || undefined;
@@ -213,16 +131,6 @@ export function createAiSdkMediaGenerationOperations(options: AiSdkMediaOperatio
         providerOptions, abortSignal: signal, maxRetries: 0,
       });
       files = result.images.map((image) => ({ data: image.uint8Array, mediaType: image.mediaType }));
-    } else if (kind === 'video' && models.video) {
-      const result = await generateVideo({
-        model: models.video(), prompt: sources.length ? { text: request.prompt, image: sources[0] } : request.prompt,
-        n: request.count || 1, resolution: size as `${number}x${number}` | undefined,
-        aspectRatio: aspectRatio as `${number}:${number}` | undefined,
-        duration: request.duration ?? model.duration, providerOptions, abortSignal: signal, maxRetries: 0,
-        poll: { intervalMs: 5_000, timeoutMs: model.timeoutMs },
-        download: createDownload({ maxBytes: 512 * 1024 * 1024 }),
-      });
-      files = result.videos.map((video) => ({ data: video.uint8Array, mediaType: video.mediaType }));
     } else if (kind === 'speech' && models.speech) {
       const result = await generateSpeech({
         model: models.speech(), text: request.prompt, voice: request.voice || model.voice || undefined,
@@ -247,7 +155,6 @@ export function createAiSdkMediaGenerationOperations(options: AiSdkMediaOperatio
       }));
     },
     generateImage: (request, context) => generate('image', request, context),
-    generateVideo: (request, context) => generate('video', request, context),
     generateSpeech: (request, context) => generate('speech', request, context),
   };
 }

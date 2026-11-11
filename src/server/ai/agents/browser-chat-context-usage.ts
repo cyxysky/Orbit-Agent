@@ -18,14 +18,14 @@ export function browserChatActiveContextUsage(
   fallbackToolTokens = 0,
 ): BrowserChatContextUsageSnapshot {
   const manifest = context.lastRequest;
-  if (manifest?.engine === 'codex-app-server') {
+  if (manifest?.engine === 'openai-agents') {
     if (manifest.modelContextStats) {
       const usage = browserChatContextUsageFromDebugRecord({ modelContextStats: manifest.modelContextStats }, manifest.contextWindowTokens || maxTokens);
       if (usage) return usage;
     }
     const tokens = Math.max(0, manifest.estimatedTokensAfter);
     return { currentTokens: tokens, maxTokens: manifest.contextWindowTokens || maxTokens,
-      imageTokens: 0, textTokens: 0, toolTokens: 0, breakdownAvailable: false, method: 'codex-input' };
+      imageTokens: 0, textTokens: 0, toolTokens: 0, breakdownAvailable: false, method: 'provider-input' };
   }
   const system = manifest?.systemRef ? context.records[manifest.systemRef]?.content : '';
   const backgroundRef = manifest ? manifest.backgroundRef : context.backgroundRef;
@@ -65,7 +65,7 @@ export function browserChatContextUsageFromDebugRecord(
     textTokens: Number.isFinite(textTokens) && textTokens > 0 ? Math.round(textTokens) : 0,
     toolTokens: Number.isFinite(toolTokens) && toolTokens > 0 ? Math.round(toolTokens) : 0,
     ...(typeof stats.breakdownAvailable === 'boolean' ? { breakdownAvailable: stats.breakdownAvailable }
-      : stats.engine === 'codex-app-server' && !Number.isFinite(textTokens) && !Number.isFinite(toolTokens)
+      : stats.engine === 'openai-agents' && !Number.isFinite(textTokens) && !Number.isFinite(toolTokens)
         ? { breakdownAvailable: false } : {}),
     ...(typeof stats.method === 'string' ? { method: stats.method } : {}),
   };

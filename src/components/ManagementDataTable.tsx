@@ -78,6 +78,7 @@ export function ManagementDataTable<T>({
         .includes(normalizedQuery));
   }, [deferredQuery, getSearchText, items]);
   const hasActiveFilters = Boolean(query.trim());
+  const selectionEnabled = Boolean(onDeleteItem) && items.some(item => !canDeleteItem || canDeleteItem(item));
   const selectableItems = filteredItems.filter(item => !canDeleteItem || canDeleteItem(item));
   const selectedItems = selectableItems.filter(item => selectedIds.has(getId(item)));
   const allSelected = selectableItems.length > 0 && selectedItems.length === selectableItems.length;
@@ -138,7 +139,7 @@ export function ManagementDataTable<T>({
         <div className="domain-list-toolbar-meta">
           <span className="domain-list-count">{t('显示 {visible} / {total} 条', { visible: filteredItems.length, total: items.length })}</span>
           <div className="management-toolbar-actions">
-            {onDeleteItem ? <>
+            {selectionEnabled ? <>
               {selectedItems.length > 0 ? <button className="ui-button ui-button--ghost" disabled={deleting} onClick={() => setSelectedIds(new Set())} type="button">{t('取消选择')}</button> : null}
               <button aria-label={`${t('批量删除')} (${selectedItems.length})`} className="ui-button ui-button--danger management-toolbar-action is-danger" disabled={!selectedItems.length || deleting}
                 onClick={() => { setDeleteTargets([...selectedItems]); setDeleteError(''); }} type="button">
@@ -153,7 +154,7 @@ export function ManagementDataTable<T>({
       <DataTable
         className="management-data-table-grid"
         columns={[
-          ...(onDeleteItem ? [{
+          ...(selectionEnabled ? [{
             id: '__selection', className: 'management-table-selection-column', sortable: false,
             header: <input type="checkbox" aria-label={t('全选当前筛选结果（仅可删除项）')} checked={allSelected}
               ref={element => { if (element) element.indeterminate = selectedItems.length > 0 && !allSelected; }}

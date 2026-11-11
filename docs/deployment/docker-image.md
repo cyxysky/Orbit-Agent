@@ -33,17 +33,15 @@
 
 这会减少发行环境的依赖源码调试能力；运行日志和应用错误仍保留。裁剪后需验证浏览器、文档和 Remotion 的运行时编译与渲染。
 
-## 外部 Codex 运行时
+## 模型执行运行时
 
-项目不再直接依赖或内置 `@openai/codex`；转接包引入的同名可选依赖及其平台二进制由安装后的依赖策略排除。转接包本身保留，继续支持外部 Codex 接入。
+主对话、自动化和子 Agent 共用 OpenAI Agents SDK 运行时，在 Node 进程内通过模型适配器请求供应商 API。镜像不需要安装或挂载 Codex CLI，也不再使用 `CODEX_PATH`、`CODEX_HOME` 或 Codex 登录状态。
 
-当前主对话、自动化和子 Agent 的执行引擎都是 Codex App Server，因此外部 CLI 是执行任务的必要条件，其他模型供应商也需要它。宿主机可使用全局安装的 Codex，或在设置页指定 `CODEX_PATH`；此配置保存到数据库，不通过同名环境变量覆盖。
+模型层保留 OpenAI、OpenAI 兼容及 Anthropic 协议入口。模型地址、密钥和请求参数在设置页配置；浏览器、文件等工具仍通过 CAP SDK 和按需安装的 MCP 服务提供。
 
-Windows 的 npm 全局安装会生成 `.cmd` 入口。后端按 PATH 找到其 Node 入口后直接启动，不通过 shell 拼接参数；裁剪脚本同时清理指向已删除包的失效命令入口。
+从旧版升级时，需要使用新源码重新构建镜像并重建 Orbit 容器。仅更新前端资源或重启旧容器不会替换执行引擎。旧镜像出现 `spawn codex ENOENT`，表示它仍在启动外部 CLI；界面可能将程序名显示为“模型运行时”。
 
-Linux 容器必须提供兼容 Linux 和目标 CPU 架构的 CLI，不能直接使用 Windows 的 `codex.exe`。例如在下方启动命令中增加 `--mount type=bind,source=/absolute/path/to/linux-codex,target=/usr/local/bin/codex,readonly`，将原生可执行文件放入容器的 `PATH`。也可以将完整 CLI 目录挂载到容器内，再在设置页填写对应路径。挂载文件须具有执行权限。
-
-缺少外部 CLI 时，Web 页面仍可打开，但对话任务无法执行；移除二进制包不等于已替换执行引擎。
+模型历史、审批恢复及验证边界见 [Agents SDK 迁移与运行说明](../architecture/agents-sdk-migration.md)。
 
 ## 构建
 
@@ -86,7 +84,7 @@ docker run -d --name orbit -p 127.0.0.1:3001:3000 -e ORBIT_ADMIN_SETTINGS_PASSWO
 `scripts/prune-runtime-dependencies.cjs` 在普通 `npm install`/`npm ci` 的 `postinstall` 中运行；Docker 复制运行依赖之前和服务端/桌面包复制依赖之后，也会再次执行同一规则。
 
 - 根依赖移除了未使用的 `@lobehub/icons-static-png`，界面继续使用 `public/model-brands` 中的图标。
-- `package.json` 的 `runtimeDependencyPolicy.excludedOptionalPackages` 声明不随项目分发的可选包。上游 Codex 转接包仍在锁文件中声明这个可选依赖，安装后会移除其实际目录；不能把锁文件中的上游依赖记录误认为镜像仍内置 CLI。
+- 已移除 Codex CLI 转接包及无用的供应商适配器声明；当前模型执行依赖以 `package.json` 和锁文件为准。
 - 依据包的 `os`、`cpu`、`libc` 元数据及通用 `prebuilds/<platform>-<arch>` 目录约定裁剪异平台文件，不删除仍在使用的终端、图片、视频处理包。
 - 每次递归删除都检查解析后的路径位于目标 `node_modules` 内，跳过工作区链接。排除策略仅允许删除锁文件明确标记为可选的包，防止静默移除必要依赖。
 

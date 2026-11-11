@@ -94,9 +94,9 @@ file 默认开启 visualInputAvailable。生成并 render 文件后，使用 vis
 
 ## 图片、视频与语音生成
 
-默认 \`media.listModels\` 会列出内置 Codex 图片模型，\`generateImage\` 复用本机已登录账号，不需要另填 API Key。要求 Codex CLI >=0.142；Windows 优先检查 Codex 桌面应用自带程序，其次使用 PATH。可通过 \`tools.media.codexPath\` 或 \`CAPABILITY_CODEX_PATH\` 指定程序。设置 \`codexImage=false\` 可关闭内置模型。账号是否支持原生图片工具，需要实际生成验证。
+图片与语音生成需要在模型配置文件中指定 OpenAI 或 OpenAI 兼容接口、模型及 API Key。未配置模型时，媒体检查、抽帧和视频合成仍可使用。
 
-独立 MCP 不读取宿主 agent 的模型配置。要接入其他图片、视频或语音模型，设置 \`tools.media.modelsFile\` 指向项目内 JSON，结构为 \`{models: [...], defaults: {...}}\`，模型字段见 \`docs/media/README.zh-CN.md\`。每个模型可将 \`apiKey\` 改为 \`apiKeyEnv\`，引用 MCP 进程的环境变量；不要把密钥放进工具参数或提交到仓库。自定义模型排在内置模型之前，defaults 可指定默认模型配置 ID。
+独立 MCP 不读取宿主 agent 的模型配置。要接入图片或语音模型，设置 \`tools.media.modelsFile\` 指向项目内 JSON，结构为 \`{models: [...], defaults: {...}}\`，模型字段见 \`docs/media/README.zh-CN.md\`。每个模型可将 \`apiKey\` 改为 \`apiKeyEnv\`，引用 MCP 进程的环境变量；不要把密钥放进工具参数或提交到仓库。defaults 可指定默认模型配置 ID。
 
 ## 字段参考
 

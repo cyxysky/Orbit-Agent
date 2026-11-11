@@ -16,27 +16,16 @@ type BrandIcon = {
 
 const brands = {
   anthropic: { dark: withWebPilotBasePath('/model-brands/dark/claude-color.png'), label: 'Anthropic Claude', light: withWebPilotBasePath('/model-brands/light/claude-color.png') },
-  azure: { dark: withWebPilotBasePath('/model-brands/dark/azureai-color.png'), label: 'Azure AI', light: withWebPilotBasePath('/model-brands/light/azureai-color.png') },
-  bedrock: { dark: withWebPilotBasePath('/model-brands/dark/bedrock-color.png'), label: 'Amazon Bedrock', light: withWebPilotBasePath('/model-brands/light/bedrock-color.png') },
-  cerebras: { dark: withWebPilotBasePath('/model-brands/dark/cerebras-color.png'), label: 'Cerebras', light: withWebPilotBasePath('/model-brands/light/cerebras-color.png') },
   cohere: { dark: withWebPilotBasePath('/model-brands/dark/cohere-color.png'), label: 'Cohere', light: withWebPilotBasePath('/model-brands/light/cohere-color.png') },
   deepseek: { dark: withWebPilotBasePath('/model-brands/dark/deepseek-color.png'), label: 'DeepSeek', light: withWebPilotBasePath('/model-brands/light/deepseek-color.png') },
-  fireworks: { dark: withWebPilotBasePath('/model-brands/dark/fireworks-color.png'), label: 'Fireworks AI', light: withWebPilotBasePath('/model-brands/light/fireworks-color.png') },
   gemini: { dark: withWebPilotBasePath('/model-brands/dark/gemini-color.png'), label: 'Google Gemini', light: withWebPilotBasePath('/model-brands/light/gemini-color.png') },
   grok: { dark: withWebPilotBasePath('/model-brands/dark/grok.png'), label: 'xAI Grok', light: withWebPilotBasePath('/model-brands/light/grok.png') },
-  groq: { dark: withWebPilotBasePath('/model-brands/dark/groq.png'), label: 'Groq', light: withWebPilotBasePath('/model-brands/light/groq.png') },
-  huggingface: { dark: withWebPilotBasePath('/model-brands/dark/huggingface-color.png'), label: 'Hugging Face', light: withWebPilotBasePath('/model-brands/light/huggingface-color.png') },
-  lmstudio: { dark: withWebPilotBasePath('/model-brands/dark/lmstudio.png'), label: 'LM Studio', light: withWebPilotBasePath('/model-brands/light/lmstudio.png') },
   meta: { dark: withWebPilotBasePath('/model-brands/dark/meta-color.png'), label: 'Meta Llama', light: withWebPilotBasePath('/model-brands/light/meta-color.png') },
   minimax: { dark: withWebPilotBasePath('/model-brands/dark/minimax-color.png'), label: 'MiniMax', light: withWebPilotBasePath('/model-brands/light/minimax-color.png') },
   mistral: { dark: withWebPilotBasePath('/model-brands/dark/mistral-color.png'), label: 'Mistral AI', light: withWebPilotBasePath('/model-brands/light/mistral-color.png') },
-  ollama: { dark: withWebPilotBasePath('/model-brands/dark/ollama.png'), label: 'Ollama', light: withWebPilotBasePath('/model-brands/light/ollama.png') },
   openai: { dark: withWebPilotBasePath('/model-brands/dark/openai.png'), label: 'OpenAI', light: withWebPilotBasePath('/model-brands/light/openai.png') },
-  openrouter: { dark: withWebPilotBasePath('/model-brands/dark/openrouter.png'), label: 'OpenRouter', light: withWebPilotBasePath('/model-brands/light/openrouter.png') },
   perplexity: { dark: withWebPilotBasePath('/model-brands/dark/perplexity-color.png'), label: 'Perplexity', light: withWebPilotBasePath('/model-brands/light/perplexity-color.png') },
   qwen: { dark: withWebPilotBasePath('/model-brands/dark/qwen-color.png'), label: 'Alibaba Qwen', light: withWebPilotBasePath('/model-brands/light/qwen-color.png') },
-  together: { dark: withWebPilotBasePath('/model-brands/dark/together-color.png'), label: 'Together AI', light: withWebPilotBasePath('/model-brands/light/together-color.png') },
-  vercel: { dark: withWebPilotBasePath('/model-brands/dark/vercel.png'), label: 'Vercel', light: withWebPilotBasePath('/model-brands/light/vercel.png') },
   zhipu: { dark: withWebPilotBasePath('/model-brands/dark/zhipu-color.png'), label: 'Zhipu GLM', light: withWebPilotBasePath('/model-brands/light/zhipu-color.png') },
 } satisfies Record<string, BrandIcon>;
 
@@ -58,30 +47,8 @@ const modelMatchers: Array<[RegExp, BrandName]> = [
 ];
 
 const providerBrands: Partial<Record<ModelProvider, BrandName>> = {
-  'ai-gateway': 'vercel',
-  'alibaba': 'qwen',
-  'anthropic': 'anthropic',
-  'azure-openai': 'azure',
-  'bedrock': 'bedrock',
-  'cerebras': 'cerebras',
-  'codex': 'openai',
-  'cohere': 'cohere',
-  'deepseek': 'deepseek',
-  'fireworks': 'fireworks',
-  'google': 'gemini',
-  'groq': 'groq',
-  'huggingface': 'huggingface',
-  'llama-cpp': 'meta',
-  'lmstudio': 'lmstudio',
-  'minimax': 'minimax',
-  'mistral': 'mistral',
-  'ollama': 'ollama',
-  'openai': 'openai',
-  'openrouter': 'openrouter',
-  'perplexity': 'perplexity',
-  'togetherai': 'together',
-  'vercel': 'vercel',
-  'xai': 'grok',
+  openai: 'openai',
+  anthropic: 'anthropic',
 };
 
 export function modelBrandName(model: string, provider: ModelProvider): BrandName | undefined {

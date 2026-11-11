@@ -11,7 +11,6 @@ import {
   type WebPilotOnboardingStatus,
   type WebPilotOnboardingStep,
 } from '@/lib/onboarding';
-import { modelProviderDefinition } from '@/config/settings';
 import { modelCapabilities } from '@/lib/model-capabilities';
 import { enabledModelProviders } from '@/lib/model-selection';
 import { executeDatabase, parseDatabaseJson, queryDatabaseOne } from '@/server/db/database';
@@ -84,12 +83,10 @@ export async function readOnboardingReadiness(): Promise<WebPilotOnboardingReadi
   const provider = modelState.config.providers?.[configuredProvider]?.enabled
     ? configuredProvider
     : enabledModelProviders(modelState.config)[0] || configuredProvider;
-  const providerDefinition = modelProviderDefinition(provider);
   const providerSettings = modelState.config.providers?.[provider];
-  const localProvider = ['codex', 'llama-cpp', 'lmstudio', 'ollama'].includes(provider);
   const customCompatibleReady = provider.startsWith('openai-compatible') && Boolean(providerSettings?.baseURL);
   const modelReady = Boolean(providerSettings?.enabled && providerSettings.model && (
-    providerDefinition.localAuth || localProvider || customCompatibleReady || providerSettings.hasApiKey
+    customCompatibleReady || providerSettings.hasApiKey
   ));
   const selectedModel = String(providerSettings?.model || '');
   const visionReady = modelCapabilities(providerSettings, provider, selectedModel).imageInput;

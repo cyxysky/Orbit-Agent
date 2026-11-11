@@ -38,7 +38,7 @@ export const settingsForms: SettingsForm[] = [
     return [
       { id: `media.${kind}.${driver.id}.connection`, title: '连接配置', description: '服务地址、接口路径和请求参数仅用于当前类型。', fields: [
         { key: 'driver', label: '接口协议', description: '选择供应商实际使用的协议；自定义服务地址和路径不会转换请求或响应格式。', control: 'select', options: mediaModelDrivers.filter(item => item.models[kind]).map(item => ({ label: item.label, value: item.id })) },
-        ...(!driver.localAuth ? [{ key: 'baseURL', label: '服务地址', description: '填写当前类型的 API 基础地址，与其他类型独立。', control: 'text', placeholder: driver.baseURL } as const] : []),
+        { key: 'baseURL', label: '服务地址', description: '填写当前类型的 API 基础地址，与其他类型独立。', control: 'text', placeholder: driver.baseURL },
         ...(driver.models[kind]?.routes || []).map(route => ({ key: `paths.${route.key}`, label: route.label, description: '留空使用供应商默认路径；自定义路径以 / 开头，并保留占位符。', control: 'text' as const, placeholder: route.path })),
         ...fields.filter(field => field.group === 'connection'),
         { key: 'parameters', label: '额外请求参数', description: '填写当前类型 AI SDK 支持的参数名和值。', control: 'pairs' },

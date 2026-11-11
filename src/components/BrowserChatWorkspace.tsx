@@ -174,7 +174,7 @@ import {
 import { browserChatCurrentTurnAssistantMessageId } from '@/components/browser-chat-output-files-state';
 import {
   aiCycleToolKey,
-  buildAiCycleToolDetailMap,
+  buildBrowserChatToolTimeline,
   mergeBrowserChatToolDetail,
   hasAiOutputView,
   stringFromUnknown,
@@ -319,7 +319,6 @@ import type {
   BrowserChatAiOutputCycle,
   BrowserChatAiOutputPart,
   BrowserChatAiOutputTool,
-  BrowserChatAiOutputView,
   BrowserChatSubagentRecord,
   ModelProvider,
   SkillRecord,
@@ -716,11 +715,6 @@ function BrowserChatTransientLogDialog({
   );
 }
 
-type BrowserChatTimelineStepEntry = {
-  step: StepExecutionResult;
-  visibleToolIndexes?: readonly number[];
-};
-
 type EmbeddedBrowserBounds = {
   x: number;
   y: number;
@@ -985,22 +979,21 @@ function browserChatToolPresentation(
   tool: BrowserChatToolCall | undefined,
   step: StepExecutionResult | undefined,
   turnRunning: boolean,
-  supersededByLaterRequest = false,
 ) {
   if (!tool || !step) return { isActive: false, stateClass: '', status: '已请求' };
-  const isActive = turnRunning && step.status === 'running' && tool.ok === undefined && !supersededByLaterRequest;
-  const inferredFailed = !isActive && tool.ok === undefined && step.status === 'failed';
+  const isActive = turnRunning && (step.status === 'running' || step.status === 'queued') && tool.ok === undefined;
   const rawResult = tool.rawResult ?? tool.error ?? tool.result;
   const skillReadRequired = isRuntimeSkillReadRequired(rawResult);
   const skipped = browserChatToolActionSkipped(rawResult);
   const failed = !skipped && !skillReadRequired && (Boolean(browserChatToolOutcomeLabel(rawResult))
-    || (tool.ok === false && !isRecoveredTransientTool(tool)) || inferredFailed);
+    || (tool.ok === false && !isRecoveredTransientTool(tool)));
   return {
     isActive,
     stateClass: failed ? ' is-failed' : isActive ? ' is-running' : skipped ? ' is-skipped' : '',
     status: tool.ok !== undefined
       ? toolStatusLabel(tool)
-      : isActive ? '执行中' : inferredFailed ? '失败' : step.status === 'blocked' ? '已暂停' : '已完成',
+      : isActive ? step.status === 'queued' ? '等待执行' : '执行中'
+        : step.status === 'blocked' ? '已暂停' : '未返回结果',
   };
 }
 
@@ -3477,165 +3470,6 @@ const BrowserChatFinalResponseDraft = memo(function BrowserChatFinalResponseDraf
   </>;
 });
 
-const BrowserChatStepToolCards = memo(function BrowserChatStepToolCards({
-  logs,
-  onLoadSubagentRecords,
-  onSelectTool,
-  onResumeHumanVerification,
-  onResolveToolConfirmation,
-  onlyPendingConfirmation = false,
-  pendingToolConfirmation,
-  pendingManualVerificationToolKey,
-  userInputQuestionInAnswer,
-  resolvingConfirmationAction,
-  resolvingConfirmationId,
-  resumingHumanVerification,
-  running,
-  step,
-  structuredSubagents,
-  visibleToolIndexes,
-}: {
-  logs: BrowserChatLogRecord[];
-  onLoadSubagentRecords?: () => void | Promise<void>;
-  onSelectTool: (detail: BrowserChatToolDetail) => void;
-  onResumeHumanVerification?: (subagentId?: string) => void | Promise<void>;
-  onResolveToolConfirmation?: (confirmationId: string, action: BrowserChatToolConfirmationAction) => void | Promise<void>;
-  onlyPendingConfirmation?: boolean;
-  pendingToolConfirmation?: BrowserChatToolConfirmation;
-  pendingManualVerificationToolKey?: string;
-  userInputQuestionInAnswer?: boolean;
-  resolvingConfirmationAction?: BrowserChatToolConfirmationAction | null;
-  resolvingConfirmationId?: string | null;
-  resumingHumanVerification?: boolean;
-  running: boolean;
-  step: StepExecutionResult;
-  structuredSubagents?: BrowserChatSubagentRecord[];
-  visibleToolIndexes?: readonly number[];
-}) {
-  const { t } = useI18n();
-  const allToolCalls = step.tools || [];
-  const visibleToolIndexSet = visibleToolIndexes ? new Set(visibleToolIndexes) : undefined;
-  const toolCalls = allToolCalls
-    .map((tool, toolIndex) => ({ tool, toolIndex }))
-    .filter(({ toolIndex }) => !visibleToolIndexSet || visibleToolIndexSet.has(toolIndex));
-  if (!running && !toolCalls.length) return null;
-  if (onlyPendingConfirmation && !toolCalls.some(({ tool }) => pendingConfirmationForTool({
-    pending: pendingToolConfirmation,
-    stepIndex: step.index,
-    toolName: tool.name,
-    toolInput: tool.input,
-    toolOk: tool.ok,
-  }))) return null;
-  if (running && !toolCalls.length) {
-    if (allToolCalls.length) return null;
-    if (onlyPendingConfirmation) return null;
-    return (
-      <div className="browser-chat-tool-card is-waiting">
-        <span className="browser-chat-tool-icon" aria-hidden="true">
-          <Loader2 className="spin" size={13} />
-        </span>
-        <span className="browser-chat-tool-content">
-          <span className="browser-chat-tool-label">
-            <span className="browser-chat-tool-name">{t('准备工具')}</span>
-          </span>
-          <small className="browser-chat-tool-meta"><span>{t('正在选择下一步浏览器动作')}</span></small>
-        </span>
-      </div>
-    );
-  }
-
-  return (
-    <>
-      {toolCalls.map(({ tool, toolIndex }) => {
-        const source = browserChatToolSource(tool, allToolCalls);
-        const label = browserChatToolLabel(tool.name, tool.input, t, source);
-        const failureMeta = browserChatToolFailureSummary(tool.rawResult ?? tool.error ?? tool.result);
-        const meta = tool.invalid
-          ? browserChatToolValidationSummary(tool.error || tool.result)
-          : compactText(failureMeta || (tool.ok === false ? tool.error || tool.result : undefined) || tool.reason || browserChatToolMeta(source?.toolName || tool.name, source ? { action: source.action } : tool.input, t), 150);
-        const displayText = `${label}${meta ? `: ${meta}` : ''}`;
-        const requestCreatedAt = tool.contextBefore?.requestCreatedAt;
-        const supersededByLaterRequest = tool.ok === undefined && Boolean(requestCreatedAt) && allToolCalls
-          .slice(toolIndex + 1)
-          .some((candidate) => candidate.contextBefore?.requestCreatedAt
-            && candidate.contextBefore.requestCreatedAt !== requestCreatedAt);
-        const presentation = browserChatToolPresentation(tool, step, running, supersededByLaterRequest);
-        const { isActive: isActiveTool, stateClass, status } = presentation;
-        const translatedStatus = t(isSubagentSpawnTool(tool.name, tool.input)
-          && browserChatSubagentBatchIsPending(tool.rawResult ?? tool.result) ? '已异步启动' : status);
-        const pendingConfirmation = pendingConfirmationForTool({
-          pending: pendingToolConfirmation,
-          stepIndex: step.index,
-          toolName: tool.name,
-          toolInput: tool.input,
-          toolOk: tool.ok,
-        });
-        if (onlyPendingConfirmation && !pendingConfirmation) return null;
-        const progressMeta = isActiveTool && tool.progress?.message
-          ? `${tool.progress.message}${tool.progress.current !== undefined && tool.progress.total ? ` ${tool.progress.current}/${tool.progress.total}` : ''}`
-          : '';
-        const visibleMeta = [meta, progressMeta, pendingConfirmation ? t('等待用户确认') : translatedStatus].filter(Boolean).join(' · ');
-        const userAction = pendingConfirmation
-          ? undefined
-          : toolUserActionForTool(logs, step.index, tool.name, tool.input);
-        return (
-          <div
-            className={`browser-chat-tool-call${isSubagentSpawnTool(tool.name, tool.input) ? ' has-subagents' : ''}`}
-            key={`${step.index}-${toolIndex}-${tool.name}`}
-          >
-            {isSubagentSpawnTool(tool.name, tool.input) ? (
-              <BrowserChatSubagentToolDisclosure
-                batchId={tool.id}
-                cardContent={(
-                  <BrowserChatToolCardContent active={isActiveTool} input={source ? { action: source.action } : tool.input} label={label} meta={visibleMeta} name={source?.toolName || tool.name} userAction={userAction} />
-                )}
-                className={stateClass}
-                isActive={isActiveTool}
-                onLoadSubagentRecords={onLoadSubagentRecords}
-                onResolveToolConfirmation={onResolveToolConfirmation}
-                onSelectTool={onSelectTool}
-                onResume={onResumeHumanVerification}
-                pendingToolConfirmation={pendingToolConfirmation}
-                resolvingConfirmationAction={resolvingConfirmationAction}
-                resolvingConfirmationId={resolvingConfirmationId}
-                resuming={resumingHumanVerification}
-                running={running}
-                structuredSubagents={structuredSubagents}
-                title={`${displayText} · ${translatedStatus}`}
-                tool={tool}
-                toolResult={tool.rawResult ?? tool.result}
-              />
-            ) : (
-              <BrowserChatToolResponseDraft tool={tool}>
-                <button
-                  aria-label={`${displayText}，${translatedStatus}`}
-                  className={`browser-chat-tool-card${stateClass}`}
-                  onClick={() => onSelectTool({ stepIndex: step.index, step, toolIndex, tool })}
-                  type="button"
-                >
-                  <BrowserChatToolCardContent active={isActiveTool} input={source ? { action: source.action } : tool.input} label={label} meta={visibleMeta} name={source?.toolName || tool.name} userAction={userAction} />
-                  {isActiveTool ? <BrowserChatToolTailParticles /> : null}
-                </button>
-                <BrowserChatToolContextTokenInfo tool={tool} />
-                <BrowserChatToolScreenshotButton tool={tool} />
-              </BrowserChatToolResponseDraft>
-            )}
-            {pendingManualVerificationToolKey === `${step.index}:${toolIndex}` ? (
-              <BrowserChatManualVerificationCard input={tool.input} messageId={step.messageId} questionInAnswer={userInputQuestionInAnswer} onResume={!running ? onResumeHumanVerification : undefined} resuming={resumingHumanVerification} />
-            ) : null}
-            <BrowserChatToolConfirmationActions
-              pending={pendingConfirmation}
-              resolvingConfirmationAction={resolvingConfirmationAction}
-              resolvingConfirmationId={resolvingConfirmationId}
-              onResolveToolConfirmation={onResolveToolConfirmation}
-            />
-          </div>
-        );
-      })}
-    </>
-  );
-});
-
 type BrowserChatAiCycleCommonProps = {
   logs: BrowserChatLogRecord[];
   onLoadSubagentRecords?: () => void | Promise<void>;
@@ -4761,24 +4595,13 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
       }];
     });
   }), [processAiOutputCycles]));
-  const matchedAiCycleToolDetails = useMemo(() => (
-    buildAiCycleToolDetailMap(pairedAiOutputCycles, steps, running)
-  ), [pairedAiOutputCycles, running, steps]);
-  const aiCycleRepresentedToolKeys = useMemo(() => new Set([...matchedAiCycleToolDetails.values()].map((detail) => (
-    detail.toolIndex >= 0 ? `${detail.stepIndex}:${detail.toolIndex}` : ''
-  )).filter(Boolean)), [matchedAiCycleToolDetails]);
+  const toolTimeline = useMemo(() => buildBrowserChatToolTimeline(pairedAiOutputCycles, steps, {
+    messageId: message.id, running, logs,
+  }), [pairedAiOutputCycles, steps, message.id, running, logs]);
+  const aiCycleToolDetails = toolTimeline.toolDetails;
+  const renderAiOutputCycles = useSharedBrowserChatValue(toolTimeline.cycles);
   const waitingForTool = running && steps.some((step) => step.status === 'running' && !(step.tools || []).length);
   const timelineSteps = useMemo(() => steps.filter((step) => (step.tools || []).length || (running && step.status === 'running')), [running, steps]);
-  // Persisted step traces are the source of truth. Keep every trace that could not
-  // be matched to an AI output cycle, including tools that have only just started,
-  // so the card is rendered before execution finishes.
-  const unrepresentedTimelineEntries = useMemo(() => timelineSteps.flatMap((step): BrowserChatTimelineStepEntry[] => {
-    const visibleToolIndexes = (step.tools || []).flatMap((_tool, toolIndex) => (
-      !aiCycleRepresentedToolKeys.has(`${step.index}:${toolIndex}`) ? [toolIndex] : []
-    ));
-    if (visibleToolIndexes.length) return [{ step, visibleToolIndexes }];
-    return [];
-  }), [aiCycleRepresentedToolKeys, timelineSteps]);
   const manualVerificationPaused = Boolean(manualVerificationRequired)
     && browserChatHasPendingHumanInput(steps.flatMap((step) => step.tools || []));
   const pendingManualVerificationToolKey = manualVerificationPaused
@@ -4790,9 +4613,9 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
     pendingToolConfirmation?.subagentId
     && subagents.some((subagent) => subagent.id === pendingToolConfirmation.subagentId),
   );
-  const aiCyclesContainPendingConfirmation = hasPendingConfirmation && pairedAiOutputCycles.some((cycle) => (
+  const aiCyclesContainPendingConfirmation = hasPendingConfirmation && renderAiOutputCycles.some((cycle) => (
     cycle.output.tools.some((tool, index) => {
-      const toolDetail = matchedAiCycleToolDetails.get(aiCycleToolKey(cycle.id, index));
+      const toolDetail = aiCycleToolDetails.get(aiCycleToolKey(cycle.id, index));
       return Boolean(pendingConfirmationForTool({
         pending: pendingToolConfirmation,
         stepIndex: toolDetail?.stepIndex ?? cycle.stepIndex,
@@ -4802,85 +4625,9 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
       }));
     })
   ));
-  const showPendingTimelineFallback = hasPendingConfirmation
+  const showStandaloneConfirmation = hasPendingConfirmation
     && !hasSubagentPendingConfirmation
     && !aiCyclesContainPendingConfirmation;
-  const showStandaloneConfirmation = showPendingTimelineFallback && !unrepresentedTimelineEntries.some(({ step, visibleToolIndexes }) => (
-    (visibleToolIndexes || []).some((toolIndex) => {
-      const tool = step.tools?.[toolIndex];
-      return tool && pendingConfirmationForTool({ pending: pendingToolConfirmation, stepIndex: step.index,
-        toolName: tool.name, toolInput: tool.input, toolOk: tool.ok });
-    })
-  ));
-  const splitTimelineEntries = useMemo(() => unrepresentedTimelineEntries.map(({ step, visibleToolIndexes }) => {
-    const currentToolIndexes: number[] = [];
-    const historicalToolIndexes: number[] = [];
-    for (const toolIndex of visibleToolIndexes || []) {
-      const tool = step.tools?.[toolIndex];
-      if (!tool) continue;
-      const pendingConfirmation = showPendingTimelineFallback && pendingConfirmationForTool({
-        pending: pendingToolConfirmation,
-        stepIndex: step.index,
-        toolName: tool.name,
-        toolInput: tool.input,
-        toolOk: tool.ok,
-      });
-      if ((running && step.status === 'running') || pendingConfirmation || pendingManualVerificationToolKey === `${step.index}:${toolIndex}`) currentToolIndexes.push(toolIndex);
-      else historicalToolIndexes.push(toolIndex);
-    }
-    return { currentToolIndexes, historicalToolIndexes, step };
-  }), [pendingManualVerificationToolKey, pendingToolConfirmation, running, showPendingTimelineFallback, unrepresentedTimelineEntries]);
-  const currentTimelineEntries = useMemo(() => splitTimelineEntries.flatMap((entry): BrowserChatTimelineStepEntry[] => (
-    entry.currentToolIndexes.length
-      ? [{ step: entry.step, visibleToolIndexes: entry.currentToolIndexes }]
-      : []
-  )), [splitTimelineEntries]);
-  const historicalTimelineEntries = useMemo(() => splitTimelineEntries.flatMap((entry): BrowserChatTimelineStepEntry[] => (
-    entry.historicalToolIndexes.length
-      ? [{ step: entry.step, visibleToolIndexes: entry.historicalToolIndexes }]
-      : []
-  )), [splitTimelineEntries]);
-  const syntheticHistoricalOutput = useMemo(() => {
-    const cycles: BrowserChatAiOutputCycle[] = [];
-    const toolDetails: Array<[string, BrowserChatToolDetail]> = [];
-    for (const { step, visibleToolIndexes } of historicalTimelineEntries) {
-      for (const toolIndex of visibleToolIndexes || []) {
-        const tool = step.tools?.[toolIndex];
-        if (!tool) continue;
-        const cycleId = `persisted-step-${message.id}-${step.index}-${toolIndex}`;
-        const output: BrowserChatAiOutputView = {
-          parts: [{ index: 0, kind: 'tool' }],
-          reasoning: [],
-          texts: [],
-          tools: [{
-            id: tool.id || cycleId,
-            input: tool.input,
-            name: tool.name,
-          }],
-        };
-        cycles.push({ id: cycleId, output, stepIndex: step.index });
-        toolDetails.push([
-          aiCycleToolKey(cycleId, 0),
-          { step, stepIndex: step.index, tool, toolIndex },
-        ]);
-      }
-    }
-    return { cycles, toolDetails };
-  }, [historicalTimelineEntries, message.id]);
-  const aiCycleToolDetails = useMemo(() => new Map<string, BrowserChatToolDetail>([
-    ...matchedAiCycleToolDetails,
-    ...syntheticHistoricalOutput.toolDetails,
-  ]), [matchedAiCycleToolDetails, syntheticHistoricalOutput.toolDetails]);
-  const renderedProviderCycles = useMemo(() => pairedAiOutputCycles.filter((cycle) => (
-    !cycle.sourceCycleId
-    || cycle.output.tools.some((_tool, index) => matchedAiCycleToolDetails.has(aiCycleToolKey(cycle.id, index)))
-  )), [matchedAiCycleToolDetails, pairedAiOutputCycles]);
-  const renderAiOutputCycles = useMemo(() => {
-    return sortBrowserChatAiOutputCycles([
-      ...renderedProviderCycles,
-      ...syntheticHistoricalOutput.cycles,
-    ]);
-  }, [renderedProviderCycles, syntheticHistoricalOutput.cycles]);
   const previousAiOutputCycleEntriesRef = useRef<BrowserChatAiCycleRenderEntry<BrowserChatAiOutputCycle>[]>([]);
   const aiOutputCycleEntries = useMemo(() => {
     const next = buildBrowserChatAiCycleRenderEntries(
@@ -4904,7 +4651,7 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
     previousAiOutputCycleEntriesRef.current = shared;
     return shared;
   }, [aiCycleToolDetails, renderAiOutputCycles]);
-  const shouldShowStepTimeline = currentTimelineEntries.length > 0 || waitingForTool;
+  const shouldShowStepTimeline = waitingForTool;
   const hasFinalText = Boolean(finalText.trim());
   const hasStructuredResponse = Boolean(message.parts?.some((part) => (
     part.type === 'text' || part.type === 'data-response'
@@ -4992,31 +4739,6 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
             )}
             </BrowserChatHistoryRow>
           ))}
-          {currentTimelineEntries.length ? (
-            <div className="browser-chat-tool-stack browser-chat-current-tool-stack">
-              {currentTimelineEntries.map(({ step, visibleToolIndexes }) => (
-                <div className={`browser-chat-agent-step${running && step.status === 'running' ? ' is-running' : ''}`} key={step.index}>
-                  <BrowserChatStepToolCards
-                    logs={logs}
-                    onLoadSubagentRecords={loadSubagentRecords}
-                    onResumeHumanVerification={onResumeHumanVerification}
-                    onSelectTool={selectTool}
-                    onResolveToolConfirmation={onResolveToolConfirmation}
-                    pendingToolConfirmation={pendingToolConfirmation}
-                    pendingManualVerificationToolKey={pendingManualVerificationToolKey}
-                    userInputQuestionInAnswer={userInputQuestionInAnswer}
-                    resolvingConfirmationAction={resolvingConfirmationAction}
-                    resolvingConfirmationId={resolvingConfirmationId}
-                    resumingHumanVerification={resumingHumanVerification}
-                    running={running && step.status === 'running'}
-                    structuredSubagents={subagents}
-                    step={step}
-                    visibleToolIndexes={visibleToolIndexes}
-                  />
-                </div>
-              ))}
-            </div>
-          ) : null}
           {showStandaloneConfirmation ? <BrowserChatToolConfirmationActions pending={pendingToolConfirmation}
             resolvingConfirmationAction={resolvingConfirmationAction} resolvingConfirmationId={resolvingConfirmationId}
             onResolveToolConfirmation={onResolveToolConfirmation} /> : null}

@@ -38,7 +38,7 @@ export function mediaModelsForConfig(config: RuntimeModelConfig | null | undefin
 
 const modelSelectionSeparator = '::model::';
 
-export function normalizeModelProvider(value?: unknown, fallback: ModelProvider = 'openrouter'): ModelProvider {
+export function normalizeModelProvider(value?: unknown, fallback: ModelProvider = 'openai'): ModelProvider {
   const provider = String(value || '').trim().toLowerCase();
   return isModelProvider(provider) ? provider : fallback;
 }
@@ -106,8 +106,8 @@ export function resolveRuntimeModelSelection(
   input: { fallbackProvider?: ModelProvider; model?: unknown; provider?: unknown } = {},
 ): RuntimeModelSelection {
   const fallbackProvider = config?.provider
-    ? normalizeModelProvider(config.provider, input.fallbackProvider || 'openrouter')
-    : input.fallbackProvider || 'openrouter';
+    ? normalizeModelProvider(config.provider, input.fallbackProvider || 'openai')
+    : input.fallbackProvider || 'openai';
   const requestedProvider = normalizeModelProvider(input.provider, fallbackProvider);
   const provider = config && !isModelProviderEnabled(config, requestedProvider)
     ? (isModelProviderEnabled(config, fallbackProvider) ? fallbackProvider : enabledModelProviders(config)[0] || fallbackProvider)

@@ -1,7 +1,7 @@
 import { getErrorCode } from "../../../errors.ts";
 import { constants } from 'node:fs';
 import { access, readFile } from 'node:fs/promises';
-import { PDFParse } from 'pdf-parse';
+import { inspectPdfDocument } from '../pdf.ts';
 import type { OfficeArtifactIssue } from './validation.ts';
 import { ERROR_CODES } from '../../../errors.ts';
 
@@ -16,14 +16,7 @@ export type OfficeRendererResult = {
 };
 
 async function pdfSummary(pdfPath: string) {
-  const parser = new PDFParse({ data: await readFile(pdfPath) });
-  try {
-    const info = await parser.getInfo();
-    const text = await parser.getText();
-    return { pages: info.total, textCharacters: text.text.replace(/\s+/g, '').length };
-  } finally {
-    await parser.destroy();
-  }
+  return inspectPdfDocument(await readFile(pdfPath));
 }
 
 /** Validate the PDF produced by the same LibreOffice runtime used by UNO. */

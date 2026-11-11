@@ -5,10 +5,10 @@ export function executionStatusText(value: string) {
     .replace(/Codex\s*(?:会话回合已开始|会话回合已结束)/gi, match => match.includes('开始') ? '本轮处理已开始' : '本轮处理已结束')
     .replace(/Codex\s*(?:正在压缩上下文|已完成上下文压缩|思考记录|已发送模型供应商请求)/gi, match => match.replace(/Codex\s*/i, ''))
     .replace(/Codex App Server exited\s*\(([^)]+)\)/gi, '模型运行进程异常退出（$1）')
-    .replace(/Codex App Server|codex-app-server|Codex runtime|Codex 会话|Codex turn|\bCodex\b/gi, '模型运行时');
+    .replace(/OpenAI Agents SDK|openai-agents|Codex App Server|codex-app-server|Codex runtime|Codex 会话|Codex turn|\bCodex\b/gi, '模型运行时');
 }
 
-const internalKeys = new Set(['engine', 'threadId', 'codexTurnId', 'historyManagedBy', 'retryManagedBy', 'stack', 'storageRoot', 'rolloutPath']);
+const internalKeys = new Set(['engine', 'runId', 'threadId', 'codexTurnId', 'historyManagedBy', 'retryManagedBy', 'stack', 'storageRoot', 'rolloutPath']);
 const payloadKeys = new Set(['input', 'arguments', 'tools', 'messages', 'content', 'blocks', 'params', 'inputSchema']);
 export function publicExecutionDetails(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(publicExecutionDetails);

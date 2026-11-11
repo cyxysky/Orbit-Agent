@@ -13,8 +13,6 @@ test('blank provider base URLs are treated as unset before lazy provider imports
   const previousAnthropicApiKey = process.env.ANTHROPIC_API_KEY;
   const previousOpenAIBaseURL = process.env.OPENAI_BASE_URL;
   const previousOpenAIApiKey = process.env.OPENAI_API_KEY;
-  const previousMiniMaxBaseURL = process.env.MINIMAX_BASE_URL;
-  const previousMiniMaxApiKey = process.env.MINIMAX_API_KEY;
   globalThis.fetch = async () => {
     throw new Error('provider-loaded');
   };
@@ -22,20 +20,16 @@ test('blank provider base URLs are treated as unset before lazy provider imports
   process.env.ANTHROPIC_API_KEY = 'test-key';
   process.env.OPENAI_BASE_URL = '   ';
   process.env.OPENAI_API_KEY = 'test-key';
-  process.env.MINIMAX_BASE_URL = '   ';
-  process.env.MINIMAX_API_KEY = 'test-key';
 
   try {
     for (const settings of [
       { provider: 'anthropic', model: 'claude-sonnet-4-5' },
-      { provider: 'minimax', model: 'minimax-m3' },
       { provider: 'openai', model: 'gpt-5.5' },
     ]) {
       const model = withModelSettings(settings, () => getModel()) as LanguageModelV4;
       await assert.rejects(async () => await model.doGenerate(minimalCall), /provider-loaded/);
     }
     assert.equal(process.env.ANTHROPIC_BASE_URL, undefined);
-    assert.equal(process.env.MINIMAX_BASE_URL, undefined);
     assert.equal(process.env.OPENAI_BASE_URL, undefined);
   } finally {
     globalThis.fetch = previousFetch;
@@ -43,8 +37,6 @@ test('blank provider base URLs are treated as unset before lazy provider imports
     restoreEnvironmentValue('ANTHROPIC_API_KEY', previousAnthropicApiKey);
     restoreEnvironmentValue('OPENAI_BASE_URL', previousOpenAIBaseURL);
     restoreEnvironmentValue('OPENAI_API_KEY', previousOpenAIApiKey);
-    restoreEnvironmentValue('MINIMAX_BASE_URL', previousMiniMaxBaseURL);
-    restoreEnvironmentValue('MINIMAX_API_KEY', previousMiniMaxApiKey);
   }
 });
 
@@ -52,75 +44,6 @@ function restoreEnvironmentValue(name: string, value: string | undefined) {
   if (value === undefined) delete process.env[name];
   else process.env[name] = value;
 }
-
-test('MiniMax uses the OpenAI-compatible endpoint and tool schema', async () => {
-  const previousFetch = globalThis.fetch;
-  const previousMiniMaxBaseURL = process.env.MINIMAX_BASE_URL;
-  const previousMiniMaxApiKey = process.env.MINIMAX_API_KEY;
-  let requestUrl = '';
-  let requestBody: Record<string, unknown> = {};
-
-  globalThis.fetch = async (input, init) => {
-    requestUrl = typeof input === 'string'
-      ? input
-      : input instanceof URL
-        ? input.href
-        : input.url;
-    requestBody = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>;
-    throw new Error('openai-compatible-provider-called');
-  };
-  process.env.MINIMAX_BASE_URL = 'https://api.minimaxi.com/anthropic/v1';
-  process.env.MINIMAX_API_KEY = 'test-key';
-
-  try {
-    const model = withModelSettings(
-      { provider: 'minimax', model: 'minimax-m3' },
-      () => getModel(),
-    ) as LanguageModelV4;
-    const call = {
-      ...minimalCall,
-      tools: [{
-        type: 'function',
-        name: 'file',
-        description: 'Create a document',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            blocks: { type: 'array', items: { type: 'object' } },
-            render: { type: 'boolean' },
-          },
-          required: ['blocks'],
-        },
-      }],
-    } as LanguageModelV4CallOptions;
-
-    await assert.rejects(
-      async () => await model.doGenerate(call),
-      /openai-compatible-provider-called/,
-    );
-    assert.equal(requestUrl, 'https://api.minimaxi.com/v1/chat/completions');
-    assert.equal(requestBody.reasoning_split, true);
-    assert.deepEqual(requestBody.tools, [{
-      type: 'function',
-      function: {
-        name: 'file',
-        description: 'Create a document',
-        parameters: {
-          type: 'object',
-          properties: {
-            blocks: { type: 'array', items: { type: 'object' } },
-            render: { type: 'boolean' },
-          },
-          required: ['blocks'],
-        },
-      },
-    }]);
-  } finally {
-    globalThis.fetch = previousFetch;
-    restoreEnvironmentValue('MINIMAX_BASE_URL', previousMiniMaxBaseURL);
-    restoreEnvironmentValue('MINIMAX_API_KEY', previousMiniMaxApiKey);
-  }
-});
 
 test('custom OpenAI-compatible provider uses its independent Base URL and key', async () => {
   const previousFetch = globalThis.fetch;

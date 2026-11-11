@@ -15,7 +15,7 @@ export async function toolDependencyLayout(root) {
     if (Object.hasOwn(result.dependencies, '@cjfclonedeep/capability-sdk')) throw new Error('A tool cannot install the complete SDK as its dependency.');
     components[tool.id] = Object.keys(result.dependencies);
   }
-  const core = new Set(['@modelcontextprotocol/server', '@ai-sdk/mcp', 'ai', 'ai-sdk-provider-codex-cli', 'react', 'react-dom', 'zod', 'sharp', 'ws', 'acorn', 'postcss', 'typescript', 'undici', 'cross-spawn']);
+  const core = new Set(['@modelcontextprotocol/server', '@ai-sdk/mcp', 'ai', 'react', 'react-dom', 'zod', 'sharp', 'ws', 'acorn', 'postcss', 'typescript', 'undici', 'cross-spawn']);
   const optional = [...new Set(Object.values(components).flat())].filter(name => !core.has(name) && !name.startsWith('@ai-sdk/'));
   return { version: 1, components, optional };
 }

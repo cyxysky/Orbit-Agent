@@ -273,10 +273,11 @@ export function SkillsManager({
                   {
                     key: 'skill',
                     label: t('Skill'),
-                    className: 'management-table-primary-column',
+                    className: 'management-table-primary-column management-table-expandable-column',
                     filter: { getValue: (skill) => [skill.title, skill.description, skill.id], type: 'text' },
                     render: (skill) => {
                       const expanded = expandedSkillIds.includes(skill.id);
+                      const description = skill.description?.trim() || skill.id;
                       return (
                         <button
                           aria-expanded={expanded}
@@ -286,8 +287,8 @@ export function SkillsManager({
                         >
                           <ChevronDown className={expanded ? 'skills-manager-chevron open' : 'skills-manager-chevron'} size={16} />
                           <span>
-                            <strong>{skill.title}</strong>
-                            <small>{skill.description || skill.id}</small>
+                            <strong title={skill.title}>{skill.title}</strong>
+                            {description !== skill.title.trim() ? <small>{description}</small> : null}
                           </span>
                         </button>
                       );
@@ -312,7 +313,7 @@ export function SkillsManager({
                       skill.triggerPhrases.length ? (
                         <div className="skills-manager-table-triggers">
                           {skill.triggerPhrases.slice(0, 2).map((phrase) => <span key={phrase} title={phrase}>{phrase}</span>)}
-                          {skill.triggerPhrases.length > 2 ? <small>+{skill.triggerPhrases.length - 2}</small> : null}
+                          {skill.triggerPhrases.length > 2 ? <small title={skill.triggerPhrases.slice(2).join('、')}>+{skill.triggerPhrases.length - 2}</small> : null}
                         </div>
                       ) : <span className="management-table-muted">{t('暂无触发词')}</span>
                     ),

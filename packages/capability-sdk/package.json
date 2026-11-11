@@ -532,6 +532,10 @@
     "./ui/floating-window": {
       "types": "./dist/ui/floating-window.d.ts",
       "import": "./dist/ui/floating-window.js"
+    },
+    "./adapters/openai-agents": {
+      "types": "./dist/adapters/openai-agents/index.d.ts",
+      "import": "./dist/adapters/openai-agents/index.js"
     }
   },
   "scripts": {
@@ -552,11 +556,11 @@
     "node": ">=22.16"
   },
   "devDependencies": {
+    "@modelcontextprotocol/ext-apps": "2.0.0",
     "@types/node": "^22.16.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "@types/three": "^0.185.0",
-    "@modelcontextprotocol/ext-apps": "2.0.0",
+    "@types/three": "^0.184.1",
     "@types/ws": "^8.18.1",
     "esbuild": "^0.28.0"
   },
@@ -565,12 +569,9 @@
   },
   "dependencies": {
     "@ai-sdk/mcp": "^2.0.30",
-    "@ai-sdk/alibaba": "2.0.30",
-    "@ai-sdk/google": "4.0.40",
     "@ai-sdk/openai": "4.0.37",
     "@ai-sdk/openai-compatible": "3.0.29",
     "@ai-sdk/provider": "4.0.7",
-    "@ai-sdk/xai": "4.0.34",
     "@codemirror/commands": "^6.11.0",
     "@codemirror/lang-json": "^6.0.2",
     "@codemirror/language": "^6.12.4",
@@ -580,6 +581,7 @@
     "@excalidraw/excalidraw": "^0.18.1",
     "@lezer/highlight": "^1.2.3",
     "@modelcontextprotocol/server": "2.0.0",
+    "@napi-rs/canvas": "1.0.7",
     "@remotion/bundler": "4.0.532",
     "@remotion/player": "4.0.532",
     "@remotion/renderer": "4.0.532",
@@ -589,8 +591,8 @@
     "@xzdarcy/react-timeline-editor": "1.0.0",
     "acorn": "^8.16.0",
     "ai": "7.0.59",
-    "ai-sdk-provider-codex-cli": "2.1.2",
     "codemirror": "^6.0.2",
+    "cross-spawn": "^7.0.6",
     "docx": "^9.7.1",
     "echarts": ">=6.0.0 <7",
     "exceljs": "^4.4.0",
@@ -602,7 +604,8 @@
     "node-pty": "^1.1.0",
     "node-unrar-js": "^2.0.2",
     "patchright": "1.63.0",
-    "pdf-parse": "^2.4.5",
+    "patchright-core": "1.63.0",
+    "pdfjs-dist": "^6.2.108",
     "postcss": "8.5.23",
     "pptxgenjs": "^4.0.1",
     "quickjs-emscripten": "0.32.0",
@@ -615,9 +618,7 @@
     "undici": "^7.29.0",
     "ws": "8.21.3",
     "xlsx": "^0.18.5",
-    "zod": "^4.4.3",
-    "cross-spawn": "^7.0.6",
-    "patchright-core": "1.63.0"
+    "zod": "^4.4.3"
   },
   "bin": {
     "capability-install": "install.mjs",
@@ -629,7 +630,13 @@
     "capability-runtime": "scripts/runtime.cjs"
   },
   "peerDependencies": {
+    "@openai/agents-core": "^0.21.0",
     "react": ">=19.0.0 <20",
     "react-dom": ">=19.0.0 <20"
+  },
+  "peerDependenciesMeta": {
+    "@openai/agents-core": {
+      "optional": true
+    }
   }
 }

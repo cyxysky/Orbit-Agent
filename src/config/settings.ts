@@ -34,7 +34,6 @@ export type ModelProviderDefinition = {
   keyLabel: string;
   baseUrlLabel?: string;
   defaultBaseURL?: string;
-  localAuth?: boolean;
 };
 
 export type ModelSettingsLike = {
@@ -97,86 +96,10 @@ export function migrateRuntimeSettingValue(key: string, value: string) {
   return definition?.valueAliases?.[normalized] ?? normalized;
 }
 
-export function normalizeMiniMaxOpenAIBaseURL(baseURL: string | undefined) {
-  const officialAnthropicEndpoint = baseURL?.trim().match(
-    /^(https:\/\/api\.(?:minimax\.io|minimaxi\.com))\/anthropic(?:\/v1)?\/?$/i,
-  );
-  return officialAnthropicEndpoint
-    ? `${officialAnthropicEndpoint[1]}/v1`
-    : baseURL;
-}
-
 export const modelProviderDefinitions: ModelProviderDefinition[] = [
-  { value: 'openai', label: 'OpenAI', defaultModel: 'gpt-5.5', keyLabel: 'OpenAI 访问密钥', baseUrlLabel: 'OpenAI 服务地址' },
-  {
-    value: 'openai-compatible',
-    label: 'OpenAI 兼容接口',
-    defaultModel: 'custom-model',
-    keyLabel: '兼容接口访问密钥',
-    baseUrlLabel: '兼容接口 Base URL',
-  },
-  { value: 'openrouter', label: 'OpenRouter', defaultModel: 'qwen/qwen3.6-27b', keyLabel: 'OpenRouter 访问密钥' },
-  { value: 'ollama', label: 'Ollama', defaultModel: 'llama3.1', keyLabel: 'Ollama 访问密钥（可选）', baseUrlLabel: 'Ollama 服务地址', defaultBaseURL: 'http://localhost:11434/v1' },
-  { value: 'llama-cpp', label: 'llama.cpp', defaultModel: 'local-model', keyLabel: 'llama.cpp 访问密钥（可选）', baseUrlLabel: 'llama.cpp 服务地址', defaultBaseURL: 'http://localhost:8080/v1' },
-  {
-    value: 'lmstudio',
-    label: 'LM Studio',
-    defaultModel: 'qwen3-vl-2b-instruct',
-    keyLabel: 'LM Studio 访问密钥（可选）',
-    baseUrlLabel: 'LM Studio 服务地址',
-    defaultBaseURL: 'http://localhost:1234/v1',
-  },
-  { value: 'google', label: 'Google Gemini API', defaultModel: 'gemini-3-flash-preview', keyLabel: 'Google 访问密钥' },
-  { value: 'codex', label: 'Codex CLI', defaultModel: 'gpt-5.5', keyLabel: 'Codex CLI 使用本地登录，无需 Key', localAuth: true },
-  { value: 'anthropic', label: 'Anthropic', defaultModel: 'claude-sonnet-4-5', keyLabel: 'Anthropic 访问密钥', baseUrlLabel: 'Anthropic 服务地址' },
-  {
-    value: 'minimax',
-    label: 'MiniMax',
-    defaultModel: 'minimax-m3',
-    defaultModels: [
-      'minimax-m3',
-      'minimax-m2.7',
-      'minimax-m2.7-highspeed',
-      'minimax-m2.5',
-      'minimax-m2.5-highspeed',
-      'minimax-m2.1',
-      'minimax-m2.1-highspeed',
-      'minimax-m2',
-    ],
-    keyLabel: 'MiniMax 访问密钥',
-    baseUrlLabel: 'MiniMax 服务地址',
-    defaultBaseURL: 'https://api.minimax.io/v1',
-  },
-  {
-    value: 'deepseek',
-    label: 'DeepSeek',
-    defaultModel: 'deepseek-v4-flash',
-    keyLabel: 'DeepSeek 访问密钥',
-    baseUrlLabel: 'DeepSeek 服务地址',
-    defaultBaseURL: 'https://api.deepseek.com',
-  },
-  {
-    value: 'azure-openai',
-    label: 'Azure OpenAI',
-    defaultModel: 'gpt-5.5',
-    keyLabel: 'Azure OpenAI 访问密钥',
-    baseUrlLabel: 'Azure OpenAI 服务地址',
-    defaultBaseURL: 'http://mirrors.shterm.com:8801/openai',
-  },
-  {
-    value: 'openai-compatible-2',
-    label: 'OpenAI Compatible 2',
-    defaultModel: 'custom-model',
-    keyLabel: 'Compatible API 2 Key',
-    baseUrlLabel: 'Compatible API 2 Base URL',
-  },
-  {
-    value: 'openai-compatible-3',
-    label: 'OpenAI Compatible 3',
-    defaultModel: 'custom-model',
-    keyLabel: 'Compatible API 3 Key',
-    baseUrlLabel: 'Compatible API 3 Base URL',
-  },
+  { value: 'openai', label: 'OpenAI', defaultModel: 'gpt-5.5', keyLabel: 'OpenAI 访问密钥', baseUrlLabel: 'OpenAI 服务地址', defaultBaseURL: 'https://api.openai.com/v1' },
+  { value: 'anthropic', label: 'Anthropic', defaultModel: 'claude-sonnet-4-5', keyLabel: 'Anthropic 访问密钥', baseUrlLabel: 'Anthropic 兼容服务地址', defaultBaseURL: 'https://api.anthropic.com/v1' },
+  { value: 'openai-compatible', label: 'OpenAI 兼容接口', defaultModel: 'custom-model', keyLabel: '兼容接口访问密钥', baseUrlLabel: '兼容接口 Base URL' },
 ];
 
 export const modelProviderValues = modelProviderDefinitions.map((item) => item.value);
@@ -232,7 +155,7 @@ export function removeCustomModelProviders(config: ModelConfigRecord, removedPro
   for (const provider of removedProviders) delete providers[provider];
   const definitions = modelProviderDefinitionsForConfig(providers, config.providerOrder);
   const provider = removed.has(config.provider)
-    ? definitions.find((item) => providers[item.value]?.enabled)?.value || 'openrouter'
+    ? definitions.find((item) => providers[item.value]?.enabled)?.value || 'openai'
     : config.provider;
   const mediaSelections = { ...config.mediaSelections };
   for (const kind of ['image', 'video', 'speech'] as const) {
@@ -343,17 +266,14 @@ const applicationRuntimeSettingDefinitions: RuntimeSettingDefinition[] = [
   { key: 'AI_PERSONAL_MEMORY_PROMPT_MAX_CHARS', label: '个性化记忆注入字符预算', description: '单轮注入提示词的记忆字符预算，只限制本次 AI 上下文，不截断数据库保存的原文。', tab: 'runtime', defaultValue: '12000', control: 'number', min: 1000, max: 120000, step: 1000 },
   { key: 'AI_PERSONAL_MEMORY_EXTRACTION_CONCURRENCY', label: '记忆提取并发数', description: '不同用户可并发提取记忆的全局上限；同一用户始终串行，避免并发写入相互覆盖。', tab: 'runtime', defaultValue: '2', control: 'number', min: 1, max: 8, step: 1 },
   { key: 'AI_PERSONAL_MEMORY_EXTRACTION_QUEUE_LIMIT', label: '记忆提取队列上限', description: '等待提取的对话轮次上限；同一会话轮次会自动去重。', tab: 'runtime', defaultValue: '100', control: 'number', min: 10, max: 1000, step: 10 },
-  { key: 'AI_CONTEXT_COMPRESSION_TRIGGER_RATIO', label: '上下文压缩触发比例', description: 'Codex App Server 自动压缩阈值占模型上下文窗口的比例，范围 0.01–0.99。摘要策略和历史管理由 Codex 执行。', tab: 'runtime', defaultValue: '0.85', control: 'number', min: 0.01, max: 0.99, step: 0.01 },
+  { key: 'AI_RUNTIME_MAX_TURNS', label: '单次任务最大模型轮数', description: '限制一次 Agent 任务中的模型调用轮数，避免无效工具或回复校验反复循环；人工审批恢复沿用同一次任务计数。', tab: 'runtime', defaultValue: '100', control: 'number', min: 1 },
+  { key: 'AI_CONTEXT_COMPRESSION_TRIGGER_RATIO', label: '上下文压缩触发比例', description: '输入上下文达到扣除安全预留后的预算比例时，由 Orbit 生成历史摘要。范围 0.01–0.99。', tab: 'runtime', defaultValue: '0.85', control: 'number', min: 0.01, max: 0.99, step: 0.01 },
+  { key: 'AI_CONTEXT_COMPRESSION_TARGET_RATIO', label: '上下文压缩目标比例', description: '压缩后希望保留的输入预算比例，默认 0.25；原始用户要求、已加载规范及最近必要证据优先保留。', tab: 'runtime', defaultValue: '0.25', control: 'number', min: 0.01, max: 0.99, step: 0.01 },
+  { key: 'AI_CONTEXT_SAFETY_RESERVE_TOKENS', label: '上下文安全预留 Token', description: '从模型上下文窗口中预留的协议及生成空间；必须小于模型窗口。', tab: 'runtime', defaultValue: '4096', control: 'number', min: 1 },
+  { key: 'AI_CONTEXT_KEEP_RECENT_BLOCKS', label: '压缩时保留的最近交换数', description: '在保留预算内优先保留最近的工具交换；最近一次结果始终受到保护。', tab: 'runtime', defaultValue: '4', control: 'number', min: 1 },
   { key: 'AI_CONTEXT_WINDOW_TOKENS', label: '默认上下文窗口', description: '仅在模型未填写最大上下文时使用；已填写的模型配置始终优先。', tab: 'runtime', defaultValue: '256000', control: 'number' },
   { key: 'AI_IMAGE_CONTEXT_ESTIMATE_TOKENS', label: '单张图片估算 Token', description: '估算每张截图占用的上下文 token。', tab: 'runtime', defaultValue: '1200', control: 'number' },
 
-  { key: 'CODEX_PATH', label: 'Codex CLI 路径', description: '自定义 Codex CLI 可执行文件路径。', tab: 'capabilities', group: 'Codex CLI', defaultValue: '', control: 'text' },
-  { key: 'CODEX_CWD', label: 'Codex 工作目录', description: 'Codex CLI 默认工作目录。', tab: 'capabilities', group: 'Codex CLI', defaultValue: '', control: 'text' },
-  { key: 'CODEX_APPROVAL_MODE', label: 'Codex 审批模式', description: 'Codex CLI 的审批策略。', tab: 'capabilities', group: 'Codex CLI', defaultValue: 'on-request', control: 'select', options: [{ label: '按需询问', value: 'on-request' }, { label: '永不询问', value: 'never' }] },
-  { key: 'CODEX_SANDBOX_MODE', label: 'Codex 沙箱模式', description: 'Codex CLI 的文件系统沙箱模式。', tab: 'capabilities', group: 'Codex CLI', defaultValue: 'workspace-write', control: 'select', options: [{ label: '工作区可写', value: 'workspace-write' }, { label: '只读', value: 'read-only' }, { label: '完全访问', value: 'danger-full-access' }] },
-  { key: 'CODEX_VERBOSE', label: 'Codex 详细日志', description: '是否输出更详细的 Codex 日志。', tab: 'capabilities', group: 'Codex CLI', defaultValue: 'false', control: 'boolean', options: boolOptions },
-  { key: 'CODEX_SKIP_GIT_REPO_CHECK', label: '跳过 Git 仓库检查', description: 'Codex CLI 是否跳过 Git 仓库检查。', tab: 'capabilities', group: 'Codex CLI', defaultValue: 'true', control: 'boolean', options: boolOptions },
-  { key: 'CODEX_ALLOW_NPX', label: '允许 Codex 使用 npx', description: 'Codex CLI 是否允许 npx。', tab: 'capabilities', group: 'Codex CLI', defaultValue: 'false', control: 'boolean', options: boolOptions },
 ];
 
 export const runtimeSettingDefinitions: RuntimeSettingDefinition[] = [

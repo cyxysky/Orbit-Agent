@@ -121,6 +121,8 @@ export type AiRequestSnapshot = {
 export type StepToolCall = {
   id?: string;
   name: string;
+  /** Dispatch time remains stable while progress and the result are updated. */
+  startedAt?: string;
   input?: unknown;
   reason?: string;
   invalid?: boolean;
@@ -236,36 +238,7 @@ export type RuntimeSettingRecord = {
   updatedAt: string;
 };
 
-export type ModelProvider =
-  | 'ai-gateway'
-  | 'alibaba'
-  | 'anthropic'
-  | 'azure-openai'
-  | 'bedrock'
-  | 'cerebras'
-  | 'codex'
-  | 'cohere'
-  | 'deepinfra'
-  | 'deepseek'
-  | 'fireworks'
-  | 'google'
-  | 'groq'
-  | 'huggingface'
-  | 'lmstudio'
-  | 'llama-cpp'
-  | 'minimax'
-  | 'mistral'
-  | 'ollama'
-  | 'openai'
-  | 'openai-compatible'
-  | 'openai-compatible-2'
-  | 'openai-compatible-3'
-  | `openai-compatible-${number}`
-  | 'openrouter'
-  | 'perplexity'
-  | 'togetherai'
-  | 'vercel'
-  | 'xai';
+export type ModelProvider = 'openai' | 'anthropic' | 'openai-compatible' | `openai-compatible-${number}`;
 
 export type ModelProviderSettings = {
   selectedModel?: string;

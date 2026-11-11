@@ -2394,6 +2394,7 @@ const en: Record<string, string> = {
   '地址': 'Address',
   '等待处理': 'Waiting for action',
   '等待执行': 'Waiting to run',
+  '未返回结果': 'No result received',
   '等待会话浏览器启动': 'Waiting for the session browser to start',
   '动作 {time}': 'Action {time}',
   '发送一条需要访问网页的消息后，画面会自动出现。': 'The preview will appear after you send a message that needs web access.',

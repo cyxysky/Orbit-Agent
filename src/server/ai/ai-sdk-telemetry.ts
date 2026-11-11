@@ -1,5 +1,6 @@
 import { registerTelemetry, type Telemetry } from 'ai';
 import { OpenTelemetry } from '@ai-sdk/otel';
+import { runtimeSetting } from '@/server/settings/runtime-configuration';
 import {
   incrementMetric,
   recordMetricTiming,
@@ -52,6 +53,34 @@ function addTokenMetric(name: string, value: number | undefined, labels: Record<
   if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
     incrementMetric(name, labels, value);
   }
+}
+
+/** The Agents adapter calls provider models directly, bypassing streamText telemetry. */
+export function recordAgentsModelMetrics(input: {
+  provider: string; model: string; finishReason: string; responseTimeMs: number; firstOutputMs?: number; outputDurationMs: number;
+  usage: { inputTokens: number; outputTokens: number; totalTokens: number; inputTokensDetails?: unknown };
+}) {
+  if (runtimeSetting('AI_TELEMETRY_ENABLED') === 'false') return;
+  const labels = { provider: input.provider, model: input.model };
+  const details = Array.isArray(input.usage.inputTokensDetails) ? input.usage.inputTokensDetails : [input.usage.inputTokensDetails];
+  const sum = (key: string) => {
+    const values = details.flatMap(value => value && typeof value === 'object' && typeof value[key] === 'number' ? [value[key] as number] : []);
+    return values.length ? values.reduce((total, value) => total + value, 0) : undefined;
+  };
+  const cached = sum('cached_tokens'), written = sum('cache_write_tokens');
+  recordMetricTiming('ai_sdk_model_response_ms', input.responseTimeMs, labels);
+  if (input.firstOutputMs !== undefined) recordMetricTiming('ai_sdk_time_to_first_output_ms', input.firstOutputMs, labels);
+  if (input.outputDurationMs > 0) setMetricGauge('ai_sdk_output_tokens_per_second', input.usage.outputTokens * 1000 / input.outputDurationMs, labels);
+  addTokenMetric('ai_sdk_input_tokens_total', input.usage.inputTokens, labels);
+  addTokenMetric('ai_sdk_input_cache_read_tokens_total', cached, labels);
+  addTokenMetric('ai_sdk_input_cache_write_tokens_total', written, labels);
+  if (cached !== undefined) {
+    addTokenMetric('ai_sdk_input_no_cache_tokens_total', Math.max(0, input.usage.inputTokens - cached - (written || 0)), labels);
+    if (input.usage.inputTokens > 0) setMetricGauge('ai_sdk_prompt_cache_hit_ratio', cached / input.usage.inputTokens, labels);
+  }
+  addTokenMetric('ai_sdk_output_tokens_total', input.usage.outputTokens, labels);
+  addTokenMetric('ai_sdk_total_tokens_total', input.usage.totalTokens, labels);
+  incrementMetric('ai_sdk_model_calls_total', { ...labels, finishReason: input.finishReason });
 }
 
 const runtimeTelemetry: Telemetry = {

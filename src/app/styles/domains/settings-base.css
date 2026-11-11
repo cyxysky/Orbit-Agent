@@ -159,6 +159,52 @@
   white-space: nowrap;
 }
 
+.settings-row-copy {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.settings-row-copy > span {
+  font-weight: 400;
+}
+
+/* Dialog fields stack independently of the settings page's two-column layout. */
+.app-modal-body .settings-row[data-setting-control] {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+  padding: 0;
+}
+
+.app-modal-body .settings-row-copy > strong {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.5;
+  overflow: visible;
+  white-space: normal;
+}
+
+.app-modal-body .settings-row-copy > span {
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.app-modal-body .settings-row[data-setting-control] > .settings-row-control {
+  justify-content: stretch;
+}
+
+.app-modal-body .settings-row:not([data-setting-control="boolean"]) > .settings-row-control > * {
+  min-width: 0;
+  width: 100%;
+}
+
+.app-modal-body .settings-row[data-setting-control="boolean"] {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+}
+
 .settings-group-stack {
   display: grid;
   gap: 12px;
@@ -1959,6 +2005,10 @@
 .management-table-primary-copy summary { font-size: 12px; font-weight: 400; line-height: 1.5; color: var(--muted); cursor: pointer; }
 .management-data-table svg.lucide > * { vector-effect: non-scaling-stroke; stroke-width: 1.5px; }
 .management-data-table-grid .management-table-selection-column { width: 44px; min-width: 44px; padding-inline: 12px; text-align: center; }
+.management-table-selection-column .app-data-table-heading { min-width: 0; justify-content: center; }
+.management-table-selection-column .app-data-table-header-label { display: flex; justify-content: center; }
+.management-table-expandable-column .app-data-table-heading { padding-inline-start: 24px; }
+.management-table-actions-column .app-data-table-heading { justify-content: flex-end; }
 .management-table-selection-column input[type="checkbox"] { display: block; width: 16px; height: 16px; margin: auto; accent-color: var(--accent-strong); cursor: pointer; }
 .management-table-selection-column input:disabled { cursor: not-allowed; opacity: 0.4; }
 .management-data-table .domain-list-toolbar-meta .ui-button { white-space: nowrap; }

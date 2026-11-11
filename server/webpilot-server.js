@@ -709,7 +709,7 @@ async function main() {
       proxyUpgrade(request, socket, head, internalPort(process.env.BROWSER_CHAT_PREVIEW_WS_PORT, 18021), target.target);
       return;
     }
-    refreshHub.acceptUpgrade(request, socket, requestUrl);
+    await refreshHub.acceptUpgrade(request, socket, requestUrl);
     })().catch(() => socket.destroy());
   });
 

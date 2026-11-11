@@ -8,7 +8,7 @@
 
 本 README 是完整接入入口。任意 TypeScript Agent 框架可按步骤 1–4 接入，也可选择下方 AI SDK/MCP 路线。示例中的命名文件全部创建在**你的使用方项目**中，不是在本包目录中。
 
-`mediaConfigurationForProviders` ?? Codex CLI ?????????????????????? Codex ??????? Key???????? ID????????????????????? `ai-sdk-provider-codex-cli` ?????????? Codex CLI???????? CLI ??????????????????????????????????CLI???????????????????????????
+生成模型只通过显式配置的 OpenAI 或 OpenAI 兼容图片/语音接口接入。不提供内置模型或 CLI 登录；没有可用模型时不会回退到其他付费服务。
 
 ## 1. 安装与准备
 
@@ -25,7 +25,7 @@ npm install -D typescript tsx @types/node
 
 OCR/转录需要显式实现 `ocr`/`transcribe`，FFmpeg 不提供这两项。生成能力可使用 `/ai-sdk` 的 `createAiSdkMediaGenerationOperations({ configuration, readSource, publishArtifact })`，与检查操作组合；该入口需要 AI SDK 和选定厂商的 provider 包。通过 `/models`、`/model-settings` 配置驱动和模型，先 `listModels`，再将返回的配置 ID 作为 `modelRef`。示例本身没有配置生成模型。
 
-图片、视频、语音生成返回产物元数据而非原始 Base64，不依赖 FFmpeg。视频轮询和总超时有上限；取消结果不确定时不要自动重复付费生成。`url` 用于内嵌展示，`downloadUrl` 用于下载。
+图片与语音生成返回产物元数据而非原始 Base64，不依赖 FFmpeg。总超时有上限；取消结果不确定时不要自动重复付费生成。`url` 用于内嵌展示，`downloadUrl` 用于下载。
 
 ## 2. 创建 Provider
 
@@ -336,8 +336,8 @@ export async function cleanup() {}
 
 产物生成操作只在 data 中返回每个文件一次，不在 content 重复列表。产物包含 artifactId、fileName、mediaType、url、downloadUrl，应用相对 URL 保持原样。/models 提供模型结构和驱动目录，每个配置有 kind、稳定 id、driver、provider model、凭证、baseURL、路径、默认参数和 timeout；defaults 分别选择 image/video/speech。删除模型同时删除对应机密，空 key 保留原值，clearApiKey 显式清除，公开快照不泄露 key。/model-settings 提供表单、默认值、选择和解析契约，UI 由宿主渲染。
 
-支持驱动：OpenAI 图片/语音；OpenAI-compatible 图片（Base64/URL）和语音；MiniMax 原生图片和参考主体；Google Imagen/Gemini 图片、Veo 视频、Gemini TTS；xAI Grok 图片/视频及无需 model ID 的 TTS；Alibaba Wan/DashScope 视频。协议实现负责请求、认证和视频轮询，改 baseURL/path 不会翻译厂商协议。路径相对 baseURL，保留 {model}/{id}/{operation} 占位符。额外参数遵循所选 SDK provider 名称，兼容图片使用原始请求字段，不硬编码模型名。
+支持驱动：OpenAI 与 OpenAI-compatible 的图片、语音接口。兼容图片支持 Base64/URL 响应；地址和路径覆盖只改变路由，不转换其他厂商协议。原生视频生成未提供；本地视频检查、抽帧和合成仍可使用。
 
-MiniMax 使用 aspect_ratio、width/height、subject_reference，不支持 mask；旧兼容配置指向官方 MiniMax /image_generation 时当前实现会识别，自定义网关选择 MiniMax driver。图片编辑接受 sourceRefs 和可选 maskRef，图生视频接受一张参考图。generateSpeech 生成朗读音频，不生成音乐/音效。selectedModels 宿主选择优先于模型提供的 modelRef。取消传播、视频轮询和总超时受限，不自动重试付费生成，本地取消不保证远程任务取消。
+图片编辑接受 sourceRefs 和可选 maskRef；generateSpeech 将文本转为语音，不生成音乐或音效。selectedModels 宿主选择优先于 modelRef。取消与超时会向下传播，不自动重试付费生成。
 
 FFmpeg 使用零输出时长检查流头，取消/超时会终止子进程树并使操作失败，不将不完整 stderr 当作检查成功。

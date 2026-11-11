@@ -103,11 +103,6 @@ export function envSettingCardTitle(setting: ConfiguredSetting) {
     if (/MEMORY_MB|CPU_LIMIT|PIDS_LIMIT|WORKSPACE_MB/.test(key)) return '资源配额';
     return '执行限制';
   }
-  if (group === 'Codex CLI') {
-    if (/PATH$|CWD$/.test(key)) return '程序与目录';
-    if (/APPROVAL|SANDBOX/.test(key)) return '访问权限';
-    return '启动选项';
-  }
   if (group === '本地终端') return /ENABLED|CWD|SHELL/.test(key) ? '终端环境' : '执行与输出';
   if (group === '地图') return /_KEY$|_LANGUAGE$/.test(key) ? '连接与语言' : '请求配额';
   if (group === '脱敏策略') return /THRESHOLD|LABELS/.test(key) ? '识别范围' : '过滤与失败策略';

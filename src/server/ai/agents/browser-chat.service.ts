@@ -2,7 +2,6 @@ import { executionStatusText } from '@/lib/execution-log-presentation';
 import { runtimeSetting, runtimeConfiguration } from '@/server/settings/runtime-configuration';
 import { isRuntimeToolEnabled } from '@/server/runtime/self-bootstrap-policy';
 import { normalizeReasoningEffort, type ReasoningEffortSetting } from '@/lib/reasoning-effort';
-import { recoverCodexBrowserChatOutputCycles } from './browser-chat-codex-output-recovery';
 import { normalizeBrowserChatInteractionMode, type BrowserChatInteractionMode } from '@/lib/browser-chat-interaction-mode';
 import { enqueueMemoryJob } from '../runtime-memory-lifecycle';
 import { browserChatHasPendingHumanInput } from '@/lib/browser-chat-tools';
@@ -2458,10 +2457,7 @@ function recordFromSnapshot(
     reasoningEffort: normalizeReasoningEffort(session.reasoningEffort),
     messages,
     steps: compactBrowserChatStepsForRuntime(steps),
-    outputCycles: trimBrowserChatOutputCycles(recoverCodexBrowserChatOutputCycles(
-      (session.modelContext?.history || []).flatMap(ref => session.modelContext?.records[ref] ? [session.modelContext.records[ref]] : []),
-      steps, session.outputCycles || [],
-    )),
+    outputCycles: trimBrowserChatOutputCycles(session.outputCycles || []),
     subagents: (session.subagents || []).map((record) => browserChatRecoveredSubagentRecord(session.id, record)),
     queuedTurns: session.queuedTurns || [],
     modelContext: normalizeBrowserChatModelContext(session.modelContext),

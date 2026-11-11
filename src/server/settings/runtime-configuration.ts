@@ -45,7 +45,7 @@ export function withRuntimeConfiguration<T>(configuration: RuntimeConfiguration,
 
 /** Convert a previous model entry during the one-time configuration import. */
 export function legacyModelSettings(values: Readonly<Record<string, string | undefined>>) {
-  const requested = values.AI_PROVIDER === 'gemini' ? 'google' : values.AI_PROVIDER;
+  const requested = values.AI_PROVIDER;
   if (!requested) return undefined;
   if (!isModelProvider(requested)) return undefined;
   const provider = requested as ModelProvider;
@@ -80,74 +80,9 @@ export function publishRuntimeConfiguration(items: readonly RuntimeSettingRecord
   return true;
 }
 
-const modelApiKeyEnv: Partial<Record<ModelProvider, string>> = {
-  'ai-gateway': 'AI_GATEWAY_API_KEY',
-  alibaba: 'ALIBABA_API_KEY',
-  anthropic: 'ANTHROPIC_API_KEY',
-  'azure-openai': 'AZURE_OPENAI_API_KEY',
-  bedrock: 'AWS_BEARER_TOKEN_BEDROCK',
-  cerebras: 'CEREBRAS_API_KEY',
-  codex: '',
-  cohere: 'COHERE_API_KEY',
-  deepinfra: 'DEEPINFRA_API_KEY',
-  deepseek: 'DEEPSEEK_API_KEY',
-  fireworks: 'FIREWORKS_API_KEY',
-  google: 'GOOGLE_GENERATIVE_AI_API_KEY',
-  groq: 'GROQ_API_KEY',
-  huggingface: 'HUGGINGFACE_API_KEY',
-  'llama-cpp': 'LLAMA_CPP_API_KEY',
-  lmstudio: 'LMSTUDIO_API_KEY',
-  minimax: 'MINIMAX_API_KEY',
-  mistral: 'MISTRAL_API_KEY',
-  ollama: 'OLLAMA_API_KEY',
-  openai: 'OPENAI_API_KEY',
-  'openai-compatible': 'OPENAI_COMPATIBLE_API_KEY',
-  'openai-compatible-2': 'OPENAI_COMPATIBLE_2_API_KEY',
-  'openai-compatible-3': 'OPENAI_COMPATIBLE_3_API_KEY',
-  openrouter: 'OPENROUTER_API_KEY',
-  perplexity: 'PERPLEXITY_API_KEY',
-  togetherai: 'TOGETHERAI_API_KEY',
-  vercel: 'VERCEL_API_KEY',
-  xai: 'XAI_API_KEY',
-};
-
-const modelBaseUrlEnv: Partial<Record<ModelProvider, string>> = {
-  'ai-gateway': 'AI_GATEWAY_BASE_URL',
-  alibaba: 'ALIBABA_BASE_URL',
-  anthropic: 'ANTHROPIC_BASE_URL',
-  'azure-openai': 'AZURE_OPENAI_BASE_URL',
-  bedrock: 'AWS_REGION',
-  cerebras: 'CEREBRAS_BASE_URL',
-  codex: '',
-  cohere: 'COHERE_BASE_URL',
-  deepinfra: 'DEEPINFRA_BASE_URL',
-  deepseek: 'DEEPSEEK_BASE_URL',
-  fireworks: 'FIREWORKS_BASE_URL',
-  google: '',
-  groq: 'GROQ_BASE_URL',
-  huggingface: 'HUGGINGFACE_BASE_URL',
-  'llama-cpp': 'LLAMA_CPP_BASE_URL',
-  lmstudio: 'LMSTUDIO_BASE_URL',
-  minimax: 'MINIMAX_BASE_URL',
-  mistral: 'MISTRAL_BASE_URL',
-  ollama: 'OLLAMA_BASE_URL',
-  openai: 'OPENAI_BASE_URL',
-  'openai-compatible': 'OPENAI_COMPATIBLE_BASE_URL',
-  'openai-compatible-2': 'OPENAI_COMPATIBLE_2_BASE_URL',
-  'openai-compatible-3': 'OPENAI_COMPATIBLE_3_BASE_URL',
-  openrouter: '',
-  perplexity: 'PERPLEXITY_BASE_URL',
-  togetherai: 'TOGETHERAI_BASE_URL',
-  vercel: 'VERCEL_BASE_URL',
-  xai: 'XAI_BASE_URL',
-};
-
-const modelExtraRequestParametersEnv: Partial<Record<ModelProvider, string>> = {
-  minimax: 'MINIMAX_EXTRA_REQUEST_PARAMETERS',
-  'openai-compatible': 'OPENAI_COMPATIBLE_EXTRA_REQUEST_PARAMETERS',
-  'openai-compatible-2': 'OPENAI_COMPATIBLE_2_EXTRA_REQUEST_PARAMETERS',
-  'openai-compatible-3': 'OPENAI_COMPATIBLE_3_EXTRA_REQUEST_PARAMETERS',
-};
+const modelApiKeyEnv: Partial<Record<ModelProvider, string>> = { openai: 'OPENAI_API_KEY', anthropic: 'ANTHROPIC_API_KEY' };
+const modelBaseUrlEnv: Partial<Record<ModelProvider, string>> = { openai: 'OPENAI_BASE_URL', anthropic: 'ANTHROPIC_BASE_URL' };
+const modelExtraRequestParametersEnv: Partial<Record<ModelProvider, string>> = {};
 
 function openAICompatibleEnvironmentPrefix(provider: ModelProvider) {
   const index = openAICompatibleProviderIndex(provider);

@@ -3,7 +3,6 @@ import { mediaModelDrivers, mediaModelSchema, type MediaModelKind, type MediaMod
 
 export const mediaModelTypeDefinitions = [
   { id: 'image', label: '图片生成' },
-  { id: 'video', label: '视频生成' },
   { id: 'speech', label: '声音生成' },
 ] as const;
 
@@ -45,6 +44,7 @@ export const providerMediaSettingsSchema = z.object({
 export function createMediaTypeSettings(provider: string, kind: MediaModelKind, settings?: MediaTypeSettings): MediaTypeSettings {
   const drivers = mediaModelDrivers.filter((driver) => driver.models[kind]);
   const driver = drivers.find((item) => item.id === provider) || drivers.find((item) => item.id === 'openai-compatible') || drivers[0];
+  if (!driver) throw new Error('No media adapter supports ' + kind);
   return { ...typeSettingsSchema.parse({ driver: driver.id }), ...settings };
 }
 
@@ -54,7 +54,11 @@ export function normalizeMediaTypeSettings(settings: MediaTypeSettings): MediaTy
 }
 
 export function normalizeProviderMediaSettings(settings?: ProviderMediaSettings): ProviderMediaSettings {
-  return Object.fromEntries((['image', 'video', 'speech'] as const).flatMap((kind) => settings?.[kind] ? [[kind, normalizeMediaTypeSettings(settings[kind])]] : []));
+  return Object.fromEntries(mediaModelTypeDefinitions.flatMap(({ id: kind }) => {
+    if (!settings?.[kind]) return [];
+    const result = schemaForKind(kind).safeParse(settings[kind]);
+    return result.success ? [[kind, result.data]] : [];
+  }));
 }
 
 const selectionSchema = z.object({ provider: z.string().min(1), model: z.string().min(1).max(500) }).strict();
@@ -74,26 +78,13 @@ export function scopedMediaModelRef(provider: string, kind: MediaModelKind, mode
   return `${provider}::model::${encodeURIComponent(mediaModelSelectionId(kind, model))}`;
 }
 
-/** Built-in media models are independent of language-provider configuration. */
-export const builtInMediaModels = [{
-  provider: 'codex',
-  description: '内置图片生成，复用本机 Codex 登录，无需配置 Key、地址或模型。',
-  configuration: mediaModelSchema.parse({
-    id: scopedMediaModelRef('codex', 'image', 'default'), kind: 'image',
-    name: 'Codex CLI（内置）', driver: 'codex', model: 'default', enabled: true,
-  }),
-}] as const;
-
 type MediaProvider = { enabled?: boolean; displayName?: string; apiKey?: string; media?: ProviderMediaSettings };
 export function resolveMediaTypeSelection(providers: Record<string, MediaProvider | undefined>, kind: MediaModelKind, selected?: MediaModelSelections, preferredProvider?: string) {
   const selection = selected?.[kind];
   if (selection) {
-    if (builtInMediaModels.some((item) => item.provider === selection.provider && item.configuration.kind === kind && item.configuration.model === selection.model)) return selection;
     const settings = providers[selection.provider];
     return settings?.enabled && settings.media?.[kind]?.models.includes(selection.model) ? selection : undefined;
   }
-  const builtin = builtInMediaModels.find((item) => item.configuration.kind === kind);
-  if (builtin) return { provider: builtin.provider, model: builtin.configuration.model };
   const available = Object.entries(providers).filter(([, settings]) => settings?.enabled && settings.media?.[kind]?.models.length);
   const entry = available.find(([provider]) => provider === preferredProvider) || available[0];
   if (!entry) return undefined;
@@ -103,7 +94,7 @@ export function resolveMediaTypeSelection(providers: Record<string, MediaProvide
 
 /** Expands type settings into adapter models; language-model settings are never read. */
 export function mediaConfigurationForProviders(providers: Record<string, MediaProvider | undefined>, selected?: MediaModelSelections, preferredProvider?: string): MediaModelConfiguration {
-  const models: MediaModelConfiguration['models'] = builtInMediaModels.map((item) => structuredClone(item.configuration));
+  const models: MediaModelConfiguration['models'] = [];
   const defaults: MediaModelConfiguration['defaults'] = {};
   for (const [provider, settings] of Object.entries(providers)) {
     if (!settings?.enabled) continue;

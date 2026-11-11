@@ -2,7 +2,7 @@ import { getErrorCode } from "../../../errors.ts";
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import JSZip from 'jszip';
-import { PDFParse } from 'pdf-parse';
+import { inspectPdfDocument } from '../pdf.ts';
 import sharp from 'sharp';
 import { ERROR_CODES } from '../../../errors.ts';
 
@@ -421,17 +421,13 @@ async function validatePdf(absolutePath: string, issues: OfficeArtifactIssue[]) 
     issues.push({ code: ERROR_CODES.PDF_HEADER_INVALID, message: 'Output is not a readable PDF byte stream.', severity: 'error' });
     return { pages: 0, textCharacters: 0 };
   }
-  const parser = new PDFParse({ data: buffer });
   try {
-    const info = await parser.getInfo();
-    const text = await parser.getText();
-    if (!info.total) issues.push({ code: ERROR_CODES.PDF_HAS_NO_PAGES, message: 'PDF contains no pages.', severity: 'error' });
-    return { pages: info.total, textCharacters: text.text.length };
+    const summary = await inspectPdfDocument(buffer);
+    if (!summary.pages) issues.push({ code: ERROR_CODES.PDF_HAS_NO_PAGES, message: 'PDF contains no pages.', severity: 'error' });
+    return summary;
   } catch (error) {
     issues.push({ code: getErrorCode(error, ERROR_CODES.PDF_PARSE_FAILED), message: `PDF parser could not reopen the output: ${error instanceof Error ? error.message : String(error)}`, severity: 'error' });
     return { pages: 0, textCharacters: 0 };
-  } finally {
-    await parser.destroy();
   }
 }
 

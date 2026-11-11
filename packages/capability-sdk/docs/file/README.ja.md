@@ -1,5 +1,9 @@
 # @cjfclonedeep/capability-sdk/file
 
+## PDF の読み取りと描画
+
+テキスト抽出・プレビュー・成果物検証は PDF.js 6 を共用します。`/file/node` は `withPdfDocument`、`iteratePdfText`、`renderPdfPage`、`inspectPdfDocument` を公開します。文書処理の終了時にロードタスクを解放し、テキストと PNG はページ単位で処理します。描画後はネイティブキャンバスを直ちに解放し、既定の上限は 1600 万画素です。範囲外のページとキャンセルは明示的に失敗し、入力バイト列は転送せずコピーします。`textCharacters` は空白と合成ページ番号を除いた文字数です。worker・フォント・CMap・WASM はローカルから読み込み、単独のファイル MCP にも同じ実装とキャンバス依存を含めます。
+
 ## JavaScript モード: Excel と HTML 文書
 
 このガイドは独立した npm パッケージではなく、`@cjfclonedeep/capability-sdk@0.2.1` のサブパスを説明します。例で使うツールの依存は同梱されています。

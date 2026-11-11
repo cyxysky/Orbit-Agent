@@ -2,6 +2,12 @@
 
 当前工作区优化（尚未发布）：Word、Excel、PPT 和 PDF 的 `plan` 都返回对应引擎的 `sourceGuidance`。新增 `generate.body`，让模型只写内容和排版操作，SDK 自动创建文档并补齐入口、保存和关闭，或补齐 HTML 外壳。模型侧结果摘要保留变量、已安装 API 签名和示例，额外能力才按需查询 `unoApi` / `jsApi`。重新规划已有源码不会返回可覆盖它的初始示例。
 
+## PDF 读取与渲染
+
+文本提取、附件预览和产物校验共用 PDF.js 6，不再安装另一套 PDF 解析引擎。Node 接口 `withPdfDocument`、`iteratePdfText`、`renderPdfPage`、`inspectPdfDocument` 从 `/file/node` 导出。文档结束时释放加载任务，文本逐页读取，PNG 每次只渲染一页并立即释放原生画布；单次渲染默认最多 1600 万像素。页码越界和取消会明确失败，调用方的源字节不会被转移或清空。统计的 `textCharacters` 只计算非空白文本，不附加页码标记。
+
+PDF worker、字体、CMap 和 WASM 从本地依赖加载。独立文件 MCP 组件包含同一套运行模块和画布依赖，不依赖 Orbit 前端或远程 CDN。
+
 ## 内容编写：无需手写入口骨架
 
 `generate` 仅接受 `body` 或 `program`，必须二选一。`spec` 生成入口及其模板编译器已移除，旧调用会收到明确错误；已有草稿的完整源码仍可读取、编辑和渲染。

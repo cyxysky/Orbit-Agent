@@ -13,8 +13,6 @@ import { encryptCredentialSecret, decryptCredentialSecret } from '@/server/crede
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 import { mediaModelsForConfig } from '@/lib/model-selection';
 import { store } from '@/server/db/store';
-import { resolveCodexCliPath } from '@/server/ai/codex-cli';
-import { prepareCodexIdentityHome } from '@/server/ai/codex-identity';
 import { isRuntimeToolEnabled } from '@/server/runtime/self-bootstrap-policy';
 
 export type ManagedToolConfiguration = { enabled: boolean; env: Record<string, string>; config: Record<string, unknown> };
@@ -119,8 +117,6 @@ export async function managedToolConnector(input: { id: string; userId: string; 
       const modelsFile = path.join(directory, 'models.json'); atomicWrite(modelsFile, media);
       additionalEnvironment.CAPABILITY_MEDIA_MODELS_FILE = modelsFile;
       additionalEnvironment.CAPABILITY_VIDEO_RENDERER = 'remotion';
-      additionalEnvironment.CAPABILITY_CODEX_PATH = resolveCodexCliPath(runtimeConfiguration().CODEX_PATH, process.cwd()) || '';
-      if (media.models.some(model => model.enabled && model.driver === 'codex')) additionalEnvironment.CODEX_HOME = await prepareCodexIdentityHome('media', true);
     }
     const workspace = path.join(artifactsRoot(), input.sessionId.replace(/[^a-zA-Z0-9_-]/g, '_'));
     mkdirSync(workspace, { recursive: true });

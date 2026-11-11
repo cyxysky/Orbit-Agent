@@ -4,8 +4,6 @@ import { refreshExtensionToolCatalog } from './extensions';
 import { isAiOperationsAdmin } from '@/server/auth/ai-operations-admin';
 import { isRuntimeToolEnabled } from '@/server/runtime/self-bootstrap-policy';
 import { mediaModelsForConfig } from '@/lib/model-selection';
-import { resolveCodexCliPath } from '@/server/ai/codex-cli';
-import { prepareCodexIdentityHome } from '@/server/ai/codex-identity';
 import { randomUUID } from 'node:crypto';
 import { copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -93,11 +91,6 @@ export async function createConfiguredMediaOperations(input: { context: Capabili
   const configuration = mediaModelsForConfig(await store.getModelConfig());
   const generation = createAiSdkMediaGenerationOperations({
     configuration,
-    codex: {
-      codexPath: resolveCodexCliPath(runtimeSetting('CODEX_PATH'), process.cwd()),
-      env: configuration.models.some(model => model.enabled && model.driver === 'codex')
-        ? { CODEX_HOME: await prepareCodexIdentityHome('media', true) } : undefined,
-    },
     selectedModels: configuration.defaults,
     async readSource(ref, context) {
       context.abortSignal?.throwIfAborted();

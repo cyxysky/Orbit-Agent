@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-require-imports -- CommonJS worker entrypoint. */
 const { parentPort } = require('node:worker_threads');
   const { readFile } = require('node:fs/promises');
   const { createHash } = require('node:crypto');
@@ -13,13 +14,12 @@ const { parentPort } = require('node:worker_threads');
     if (job.sheet || job.range || job.section) throw new Error('Office selections require the UNO document reader.');
     if (job.contentPages?.length && job.kind !== 'pdf') throw new Error('contentPages are supported only for PDF text.');
     if (job.kind === 'pdf') {
-      const { PDFParse } = await import('pdf-parse');
-      const parser = new PDFParse({ data: buffer });
-      try {
-        const result = await parser.getText(job.contentPages?.length ? { partial: job.contentPages } : undefined);
-        if (job.contentPages?.some(page => page > result.total)) throw new Error('Requested PDF page exceeds page count: ' + result.total);
-        return result.text.trim();
-      } finally { await parser.destroy(); }
+      const { withPdfDocument, iteratePdfText } = await import('./pdf-document.mjs');
+      return withPdfDocument(buffer, async document => {
+        const pages = [];
+        for await (const page of iteratePdfText(document, { pages: job.contentPages })) pages.push(page.text);
+        return pages.join('\n\n').trim();
+      });
     }
     if (job.kind === 'archive') {
       const archive = await zipFrom(buffer);

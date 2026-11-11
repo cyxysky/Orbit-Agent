@@ -1,7 +1,7 @@
 import { runtimeConfiguration } from '@/server/settings/runtime-configuration';
 import { runtimeCapabilityConfigStore } from '@/server/settings/capability-config-store';
 import { runtimeSetting } from '@/server/settings/runtime-configuration';
-import { executeAppServerBrowserTurn } from './browser-chat-app-server-runtime';
+import { executeAgentsBrowserTurn } from './browser-chat-agents-runtime';
 import { executeBrowserInteraction } from './runtime-browser-interaction';
 import { type BrowserChatInteractionMode } from '@/lib/browser-chat-interaction-mode';
 import { artifactApiUrl } from '@/lib/artifacts';
@@ -23,7 +23,7 @@ import { sharedKnowledgeDirectory } from '@/server/capabilities/knowledge-storag
 import { createAISDKResponseTool, mountAISDKCapabilities } from '@cjfclonedeep/capability-sdk/ai-sdk';
 import type { AiRequestSnapshot, AiToolContextSnapshot, BrowserOperationRecord, StepExecutionResult, StepToolCall, VisualFrameRecord } from '@/server/ai/schemas/runtime.schema';
 import { getModelSettings } from '@/server/ai/model';
-import { codexRuntimeError } from '@/server/ai/codex-runtime-errors';
+import { runtimeError } from '@/server/ai/runtime-errors';
 import { agentSystemPrompt } from '@/server/ai/prompts/agent-system-prompt';
 import { BrowserSession, type BrowserActionResult } from '@cjfclonedeep/capability-sdk/browser/node';
 import { type BrowserCodeAttachmentBinding, type BrowserCodeCredentialBinding } from '@cjfclonedeep/capability-sdk/browser/node';
@@ -518,6 +518,7 @@ function summarizeToolTraces(traces: ToolTrace[]): StepToolCall[] {
     return {
       id: trace.id,
       name: trace.name,
+      startedAt: trace.startedAt !== undefined ? new Date(trace.startedAt).toISOString() : undefined,
       input,
       reason,
       ok: trace.result?.ok,
@@ -823,8 +824,8 @@ async function executeTracedBrowserAction(input: {
       throw browserChatAbortError(abortSignal);
     }
     trace.executionError = error instanceof Error
-      ? { ...codexRuntimeError(error), name: error.name, message: error.message, stack: error.stack?.slice(0, 12_000) }
-      : { ...codexRuntimeError(error), name: 'Error', message: String(error) };
+      ? { ...runtimeError(error), name: error.name, message: error.message, stack: error.stack?.slice(0, 12_000) }
+      : { ...runtimeError(error), name: 'Error', message: String(error) };
     result = {
       ok: false,
       code: getErrorCode(error, ERROR_CODES.CAPABILITY_EXECUTION_FAILED),
@@ -1403,7 +1404,7 @@ export async function executeInteractiveBrowserTurn(input: {
   disabledTools?: string[];
   memoryTools?: ToolSet;
 }): Promise<InteractiveBrowserTurnResult> {
-  return executeAppServerBrowserTurn(input, {
+  return executeAgentsBrowserTurn(input, {
     prompt: (input, tools) => runtimePrompt(createInteractiveBrowserRuntimeRecord(input), input, tools),
     tools: async (input, options) => {
       const visualContext = new VisualContextManager();

@@ -144,8 +144,8 @@ export function SettingsFields({ form, values, onChange, fieldOptions, disabled,
   const rows = form.fields.filter(field => !fieldOptions?.[field.key]?.hidden && (!field.visibleWhen || String(values[field.visibleWhen.field]) === field.visibleWhen.value)).map(original => {
       const field = { ...original, ...fieldOptions?.[original.key] };
       return (
-        <div className={`settings-row${field.control === 'textarea' || field.control === 'json' ? ' settings-prompt-row' : ''}`} data-setting-key={field.key} key={field.key}>
-          <div><strong>{t(field.label)}</strong>{field.description ? <span>{t(field.description)}</span> : null}</div>
+        <div className={`settings-row${field.control === 'textarea' || field.control === 'json' ? ' settings-prompt-row' : ''}`} data-setting-control={field.control} data-setting-key={field.key} key={field.key}>
+          <div className="settings-row-copy"><strong>{t(field.label)}</strong>{field.description ? <span>{t(field.description)}</span> : null}</div>
           <div className="settings-row-control">
             <SettingsFieldControl field={field} value={values[field.key]} onChange={value => onChange(field.key, value)}
               disabled={disabled || field.disabled} secretPreview={field.secret ? secretPreview : undefined}

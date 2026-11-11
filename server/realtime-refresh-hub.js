@@ -219,49 +219,51 @@ function createRealtimeRefreshHub(options) {
     if (!ticket) return undefined;
     const connection = await databaseConnection();
     const tokenHash = createHash('sha256').update(ticket, 'utf8').digest('hex');
-    return connection.transaction(async (manager) => {
+    const runner = connection.createQueryRunner();
+    try {
       const postgres = connection.options.type === 'postgres';
       const sql = (value) => {
         let index = 0;
         return postgres ? value.replace(/\?/g, () => `$${++index}`) : value;
       };
-      const rows = await manager.query(sql(`
-        SELECT id, user_id, scope, origin, expires_at, consumed_at
-        FROM websocket_ticket WHERE token_hash = ?
-      `), [tokenHash]);
-      const row = rows[0];
-      const current = new Date().toISOString();
-      if (
-        !row
-        || row.consumed_at
-        || row.expires_at <= current
-        || row.scope !== 'realtime-refresh'
-        || (row.origin && row.origin !== normalizedOrigin(origin))
-      ) {
-        return undefined;
-      }
-      const updated = await manager.query(sql(`
-        UPDATE websocket_ticket SET consumed_at = ?
-        WHERE id = ? AND consumed_at IS NULL AND expires_at > ?
-        RETURNING id
-      `), [current, row.id, current]);
-      return updated.length === 1 ? { userId: row.user_id } : undefined;
-    });
+      // Match the issuer's current schema and claim once in a single statement.
+      // Structured records also normalize PostgreSQL's DELETE RETURNING result.
+      const consumed = await runner.query(sql(`
+        DELETE FROM request_record
+        WHERE kind = 'ticket' AND token_hash = ? AND state = 'issued'
+          AND scope = 'realtime-refresh' AND expires_at > ?
+          AND (session_id IS NULL OR session_id = '')
+          AND (origin IS NULL OR origin = '' OR origin = ?)
+        RETURNING user_id
+      `), [tokenHash, new Date().toISOString(), normalizedOrigin(origin)], true);
+      return consumed.records.length === 1 ? { userId: consumed.records[0].user_id } : undefined;
+    } finally {
+      await runner.release();
+    }
   };
 
   const acceptUpgrade = async (request, socket, requestUrl) => {
+    const rejectUpgrade = (status) => {
+      if (!socket.destroyed) socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\nCache-Control: no-store\r\nContent-Length: 0\r\n\r\n`);
+    };
+    const key = String(request.headers['sec-websocket-key'] || '');
+    if (!key) {
+      rejectUpgrade('400 Bad Request');
+      return;
+    }
     let auth;
     try {
       auth = await consumeTicket(requestUrl.searchParams.get('ticket') || '', request.headers.origin);
-    } catch {
-      socket.destroy();
+    } catch (error) {
+      console.error('[realtime-refresh] WebSocket ticket validation failed.', error);
+      rejectUpgrade('503 Service Unavailable');
       return;
     }
-    const key = String(request.headers['sec-websocket-key'] || '');
-    if (!auth || !key) {
-      socket.destroy();
+    if (!auth) {
+      rejectUpgrade('401 Unauthorized');
       return;
     }
+    if (socket.destroyed) return;
     const acceptKey = createHash('sha1')
       .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
       .digest('base64');

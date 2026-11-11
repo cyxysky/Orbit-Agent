@@ -37,8 +37,6 @@ export function compactBrowserChatLogForClient<TLog extends BrowserChatClientLog
         aiInput,
         aiInputTokens: details?.aiInputTokens,
         engine: details.engine,
-        threadId: details.threadId,
-        codexTurnId: details.codexTurnId,
         modelRequestId: details.modelRequestId,
         execution: details?.execution,
       });
@@ -85,8 +83,6 @@ export function compactBrowserChatLogForClient<TLog extends BrowserChatClientLog
       },
       execution: details?.execution,
       engine: details?.engine,
-      threadId: details?.threadId,
-      codexTurnId: details?.codexTurnId,
       modelRequestId: details?.modelRequestId,
       ...(details?.truncated === true ? {
         truncated: true,

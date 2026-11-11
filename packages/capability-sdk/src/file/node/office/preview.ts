@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import JSZip from 'jszip';
 import mammoth from 'mammoth';
-import { PDFParse } from 'pdf-parse';
+import { renderPdfPage, withPdfDocument } from '../pdf.ts';
 import { chromium } from 'patchright';
 import sharp from 'sharp';
 import * as XLSX from 'xlsx';
@@ -82,7 +82,7 @@ function previewDirectory(input: {
 }) {
   if (!input.buffer && !input.cacheKey) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'Attachment preview requires a source buffer or stable cache key.');
   const digest = createHash('sha256')
-    .update('attachment-visual-v3-1400px\0')
+    .update('attachment-visual-v4-pdfjs6-1400px\0')
     .update(input.extension)
     .update(input.cacheKey || input.buffer!)
     .digest('hex');
@@ -136,10 +136,8 @@ async function renderPdfPages(buffer: Buffer, directory: string, requestedPages:
   const cached = await existingCache(directory, requestedPages);
   if (cached && cached.renderer === 'pdf') return { ...cached, renderer };
 
-  const parser = new PDFParse({ data: Buffer.from(buffer) });
-  try {
-    const info = await parser.getInfo();
-    const renderedPages = normalizeFilePreviewPages(requestedPages, info.total);
+  return withPdfDocument(buffer, async document => {
+    const renderedPages = normalizeFilePreviewPages(requestedPages, document.numPages);
     const missingPages = (await Promise.all(renderedPages.map(async (page) => (
       await access(pageImagePath(directory, page), constants.R_OK).then(() => undefined, () => page)
     )))).filter((page): page is number => page !== undefined);
@@ -148,33 +146,24 @@ async function renderPdfPages(buffer: Buffer, directory: string, requestedPages:
       const automaticChecks = await Promise.all(renderedPages.map(async (pageNumber) => ({
         pageNumber, ...await inspectRenderedPage(pageImagePath(directory, pageNumber)),
       })));
-      await writeManifest(directory, { automaticChecks, pageCount: info.total, renderer: 'pdf' });
+      await writeManifest(directory, { automaticChecks, pageCount: document.numPages, renderer: 'pdf' });
       return { ...(await existingCache(directory, renderedPages))!, renderer };
     }
     await mkdir(directory, { recursive: true });
     const automaticChecks: NonNullable<FilePreviewResult['automaticChecks']> = [];
     // Keep one rasterized page and one inspection buffer alive at a time.
-    // Reuse the loaded PDF parser and preserve the existing page cache.
+    // Reuse the loaded document and preserve the existing page cache.
     for (const pageNumber of missingPages) {
-      const screenshots = await parser.getScreenshot({
-        desiredWidth: 1_400,
-        imageBuffer: true,
-        imageDataUrl: false,
-        partial: [pageNumber],
-      });
-      const page = screenshots.pages.find((item) => item.pageNumber === pageNumber);
-      if (!page) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, `PDF renderer did not produce page ${pageNumber}.`);
+      const page = await renderPdfPage(document, pageNumber, { width: 1_400 });
       const target = pageImagePath(directory, pageNumber);
       await writeCacheFile(target, Buffer.from(page.data.buffer, page.data.byteOffset, page.data.byteLength));
       automaticChecks.push({ pageNumber, ...await inspectRenderedPage(target) });
     }
-    await writeManifest(directory, { automaticChecks, pageCount: info.total, renderer: 'pdf' });
+    await writeManifest(directory, { automaticChecks, pageCount: document.numPages, renderer: 'pdf' });
     const complete = await existingCache(directory, renderedPages);
     if (!complete) throw new CodedError(ERROR_CODES.FILE_OPERATION_FAILED, 'PDF renderer did not produce all requested pages.');
     return { ...complete, renderer };
-  } finally {
-    await parser.destroy();
-  }
+  });
 }
 
 function escapedHtml(value: string) {

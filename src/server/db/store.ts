@@ -4,7 +4,6 @@ import {
   isModelProvider,
   modelListForProvider,
   modelProviderDefinitionsForConfig,
-  normalizeMiniMaxOpenAIBaseURL,
   removeCustomModelProviders,
   type OpenAICompatibleModelProvider,
 } from '@/config/settings';
@@ -70,15 +69,13 @@ function normalizeStoredModelConfig(input?: ModelConfigRecord): ModelConfigRecor
   if (!input) return undefined;
   const provider = isModelProvider(input.provider)
     ? input.provider
-    : 'openrouter';
+    : 'openai';
   const providers: Partial<Record<ModelProvider, ModelProviderSettings>> = {};
   for (const definition of modelProviderDefinitionsForConfig(input.providers)) {
     const current = input.providers?.[definition.value];
     const models = modelListForProvider(definition, current);
     const model = defaultModelForProvider(definition, current);
-    const baseURL = definition.value === 'minimax'
-      ? normalizeMiniMaxOpenAIBaseURL(current?.baseURL)
-      : current?.baseURL;
+    const baseURL = current?.baseURL;
     providers[definition.value] = {
       ...defaultModelProviderSettings(definition.value),
       ...current,
@@ -296,9 +293,7 @@ export const store = {
           models,
           modelCapabilities: normalizedModelCapabilities(provider, models, merged.modelCapabilities),
           apiKey: current?.apiKey ?? previous?.apiKey ?? '',
-          baseURL: provider === 'minimax'
-            ? normalizeMiniMaxOpenAIBaseURL(baseURL) || ''
-            : baseURL,
+          baseURL,
           extraRequestParameters: normalizeExtraRequestParameters(current?.extraRequestParameters ?? previous?.extraRequestParameters),
           updatedAt: current ? timestamp : previous?.updatedAt,
         };

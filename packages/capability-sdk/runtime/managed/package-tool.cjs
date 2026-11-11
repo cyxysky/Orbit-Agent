@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-require-imports -- CommonJS packaging entrypoint. */
 const fs = require('node:fs');
 const path = require('node:path');
 const { builtinModules, createRequire, stripTypeScriptTypes } = require('node:module');
@@ -61,7 +62,8 @@ async function packageTool({ sdkRoot, output, tool }) {
     return ordered.find(p => fs.existsSync(p) && fs.statSync(p).isFile());
   }
   function destination(filename) {
-    const relative = path.relative(sdkRoot, filename).replace(/^src[\\/]/, 'dist/').replace(/\.[cm]?tsx?$/, '.js');
+    const local = path.relative(sdkRoot, filename).replace(/^src[\\/]/, 'dist/');
+    const relative = /\.d\.[cm]?ts$/.test(local) ? local : local.replace(/\.[cm]?tsx?$/, '.js');
     const target = path.resolve(sdkOutput, relative);
     if (!inside(sdkOutput, target)) throw new Error('Tool module escapes its SDK package.');
     return target;
@@ -95,11 +97,24 @@ async function packageTool({ sdkRoot, output, tool }) {
     if (!/\.[cm]?[jt]sx?$/.test(filename)) { asset(filename); return; }
     const edits = [];
     const ast = parse(code, { ecmaVersion: 'latest', sourceType: /\.cjs$/.test(filename) ? 'script' : 'module', allowHashBang: true });
+    const requireBindings = new Set(['require']);
+    function findRequireBindings(node) {
+      if (node.type === 'VariableDeclarator' && node.id?.type === 'Identifier'
+        && node.init?.type === 'CallExpression'
+        && (node.init.callee?.name === 'createRequire' || node.init.callee?.property?.name === 'createRequire')) {
+        requireBindings.add(node.id.name);
+      }
+      for (const value of Object.values(node)) {
+        if (Array.isArray(value)) { for (const child of value) if (child?.type) findRequireBindings(child); }
+        else if (value?.type) findRequireBindings(value);
+      }
+    }
+    findRequireBindings(ast);
     function follow(node) {
       let literal;
       if ((node.type === 'ImportDeclaration' || node.type === 'ExportNamedDeclaration' || node.type === 'ExportAllDeclaration') && node.source) literal = node.source;
       if (node.type === 'ImportExpression') literal = node.source;
-      if (node.type === 'CallExpression' && (node.callee?.name === 'require' ||
+      if (node.type === 'CallExpression' && (requireBindings.has(node.callee?.name) ||
         node.callee?.property?.name === 'resolve' && (/require/i.test(node.callee.object?.name || '') || node.callee.object?.callee?.name === 'createRequire'))) literal = node.arguments[0];
       if (literal?.type === 'Literal' && typeof literal.value === 'string') {
         const name = literal.value;

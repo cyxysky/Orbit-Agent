@@ -8,7 +8,7 @@
 
 この README は完全な接続の入口です。任意の TypeScript Agent フレームワークでは手順 1–4、または後述の AI SDK/MCP を使います。例にあるファイルはすべて**利用側のプロジェクト**に作成し、このパッケージ内には作りません。
 
-`mediaConfigurationForProviders` ????????????? Codex CLI ??????????????????????? Codex ??????????API ???URL???? ID ????????????????????????????`ai-sdk-provider-codex-cli` ??????????????? Codex CLI ??????CLI ?????????????????????????????????????????????????????????????????????
+生成モデルは明示的に設定した OpenAI または OpenAI 互換の画像・音声 API を使用します。組み込みモデルや CLI 認証は提供せず、別の有料サービスへの自動フォールバックも行いません。
 
 ## 1. インストールと準備
 
@@ -336,8 +336,8 @@ export async function cleanup() {}
 
 成果物は data に各ファイルを一度だけ返し、content に一覧を重複しません。artifactId、fileName、mediaType、url、downloadUrl を持ち、アプリ相対 URL はそのまま使います。/models はモデル構造とドライバー一覧を提供し、kind、安定 id、driver、provider model、認証、baseURL、パス、既定パラメーター、timeout を持ちます。defaults は image/video/speech を別々に選びます。削除時は秘密情報も削除し、空 key は保存値を維持、clearApiKey で明示削除し、公開スナップショットは key を隠します。/model-settings はフォーム、既定値、選択と解決契約を提供し、UI はホストが描画します。
 
-ドライバーは OpenAI の画像/音声、OpenAI-compatible の Base64/URL 画像と音声、MiniMax の原生画像と被写体参照、Google の Imagen/Gemini 画像・Veo 動画・Gemini TTS、xAI の Grok 画像/動画と model ID 不要 TTS、Alibaba の Wan/DashScope 動画を含みます。要求、認証、動画ポーリングは各実装が行い、baseURL/path の変更では別プロトコルに変換されません。パスは baseURL 相対で {model}/{id}/{operation} を保持します。追加パラメーターは選択 SDK provider の名前に従い、互換画像は生の要求フィールドを使い、モデル名は固定しません。
+ドライバーは OpenAI と OpenAI-compatible の画像・音声 API のみです。互換画像は Base64/URL 応答を処理します。URL とパス変更では別プロトコルを変換しません。動画の生成 API は提供せず、ローカルの検査・フレーム抽出・合成は利用できます。
 
-MiniMax は aspect_ratio、width/height、subject_reference を使い mask は非対応です。旧互換設定が公式 MiniMax /image_generation を指す場合は現行実装が認識し、独自ゲートウェイは MiniMax driver を選びます。画像編集は sourceRefs と任意 maskRef、画像→動画は 1 枚の参照を使います。generateSpeech は読み上げであり音楽/効果音ではありません。ホストの selectedModels が modelRef より優先されます。中断、ポーリング、総タイムアウトを制限し、有料生成を自動再送しません。ローカル中断はリモート停止を保証しません。
+画像編集には sourceRefs と任意の maskRef を指定します。generateSpeech は音声読み上げです。ホストの selectedModels は modelRef より優先され、中断とタイムアウトを伝播し、有料生成を自動再送しません。
 
 FFmpeg は出力時間ゼロでストリームヘッダーを検査します。中断/タイムアウトでは子プロセスツリーを停止し、不完全な stderr を成功として扱いません。

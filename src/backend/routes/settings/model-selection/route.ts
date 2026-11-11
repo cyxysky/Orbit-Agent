@@ -36,7 +36,7 @@ export async function POST(request: Request) {
         const valid = mediaModelsForConfig(saved).models.some((model) => model.id === id && model.enabled && model.kind === media.kind);
         if (!valid) throw new ApiRequestError('所选模型不存在或尚未启用。', { status: 400 });
         await store.saveModelConfig({
-          provider: saved?.provider || 'openrouter',
+          provider: saved?.provider || 'openai',
           providers: saved?.providers || {},
           mediaSelections: { ...saved?.mediaSelections, [media.kind]: { provider: selection.provider, model: media.id } },
         });

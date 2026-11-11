@@ -68,7 +68,7 @@ export async function readModelSettingsState() {
   return {
     saved: Boolean(saved),
     config: {
-      provider: saved?.provider || 'openrouter',
+      provider: saved?.provider || 'openai',
       providers,
       providerOrder: saved?.providerOrder,
       mediaSelections: saved?.mediaSelections,

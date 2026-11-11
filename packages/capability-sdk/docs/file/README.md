@@ -1,5 +1,8 @@
 # @cjfclonedeep/capability-sdk/file
 
+## PDF reading and rendering
+
+Text extraction, previews and artifact validation share PDF.js 6. `/file/node` exports `withPdfDocument`, `iteratePdfText`, `renderPdfPage` and `inspectPdfDocument`. Loading tasks are disposed after each document, text is read one page at a time, and each rendered PNG releases its native canvas immediately. Rendering defaults to a 16-million-pixel limit. Invalid page selections and cancellation fail explicitly; source bytes are copied rather than transferred. `textCharacters` counts non-whitespace text without synthetic page markers. Workers, fonts, CMaps and WASM load locally. The standalone file MCP component carries the same runtime and canvas dependency without requiring the Orbit frontend or a CDN.
 
 ## JavaScript mode: HTML documents and Excel
 
