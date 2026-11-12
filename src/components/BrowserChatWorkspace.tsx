@@ -46,6 +46,7 @@ import { CSS as DndCss } from '@dnd-kit/utilities';
 import { createPortal } from 'react-dom';
 import { DefaultChatTransport } from 'ai';
 import { browserChatStreamFetch } from '@/lib/browser-chat-stream-fetch';
+import { captureScrollAnchor, restoreScrollAnchor, type ScrollAnchor } from '@/lib/scroll-anchor';
 import { Chat, useChat } from '@ai-sdk/react';
 import { Button } from '@heroui/react/button';
 import { Checkbox } from '@heroui/react/checkbox';
@@ -5215,6 +5216,8 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
   }, []);
   const followLatestRef = useRef(true);
   const lastObservedScrollTopRef = useRef(0);
+  const scrollMetricsRef = useRef({ height: 0, viewport: 0 });
+  const readingAnchorRef = useRef<ScrollAnchor>([]);
   const userScrollIntentUntilRef = useRef(0);
   const userScrollDirectionRef = useRef<'up' | 'down' | null>(null);
   const scrollingToLatestRef = useRef(false);
@@ -5228,7 +5231,6 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
     baselineScrollHeight: number;
     firstMessageId: string;
   } | null>(null);
-  const previousRunStateRef = useRef({ sessionBusy, sessionId });
   const previousSessionIdRef = useRef(sessionId);
   const positionedSubmissionRef = useRef<string | undefined>(undefined);
   const closeSubagent = useCallback(() => setSelectedSubagentId(null), []);
@@ -5328,6 +5330,7 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
     scrollToLatestTimerRef.current = 0;
     scrollingToLatestRef.current = false;
     followLatestRef.current = false;
+    if (container) readingAnchorRef.current = captureScrollAnchor(container);
     container.dataset.turnScrollActive = 'true';
     // A native smooth scroll has a fixed destination and is cancelled by row
     // height compensation. Own the animation and remeasure the anchor instead.
@@ -5416,6 +5419,7 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
     const messageList = scrollRef.current;
     const initialPositioning = messageList?.dataset.scrollReady !== 'true';
     if (sessionChanged) {
+      readingAnchorRef.current = [];
       cancelTurnScrollRef.current?.();
       if (scrollToLatestTimerRef.current) window.clearTimeout(scrollToLatestTimerRef.current);
       scrollToLatestTimerRef.current = 0;
@@ -5525,6 +5529,7 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
   const stopFollowingLatest = useCallback(() => {
     const container = getScrollContainer();
     followLatestRef.current = false;
+    if (container) readingAnchorRef.current = captureScrollAnchor(container);
     cancelTurnScrollRef.current?.();
     if (scrollToLatestTimerRef.current) window.clearTimeout(scrollToLatestTimerRef.current);
     scrollToLatestTimerRef.current = 0;
@@ -5544,6 +5549,9 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
     if (!container) return;
     const previousScrollTop = lastObservedScrollTopRef.current;
     const scrollTop = container.scrollTop;
+    const metrics = { height: container.scrollHeight, viewport: container.clientHeight };
+    const layoutChanged = metrics.height !== scrollMetricsRef.current.height || metrics.viewport !== scrollMetricsRef.current.viewport;
+    scrollMetricsRef.current = metrics;
     lastObservedScrollTopRef.current = scrollTop;
     if (scrollTop > 0) earlierLoadArmedRef.current = true;
     if (earlierLoadInFlightRef.current) {
@@ -5561,7 +5569,7 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
     const userScrolledUp = hasUserScrollIntent && userScrollDirectionRef.current === 'up';
     // Scrollbar dragging and touch inertia can outlast the input intent window.
     // A height collapse can also reduce scrollTop, but leaves us at the bottom.
-    if (userScrolledUp || (!scrollingToLatestRef.current && scrolledUp && (hasUserScrollIntent || distanceFromBottom > 16))) {
+    if (userScrolledUp || (!scrollingToLatestRef.current && scrolledUp && (hasUserScrollIntent || !layoutChanged))) {
       stopFollowingLatest();
       return;
     }
@@ -5570,28 +5578,13 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
       setShowScrollToBottom(false);
       return;
     }
-    if (distanceFromBottom <= 16 && (scrollTop > previousScrollTop + 0.5
-      || (performance.now() <= userScrollIntentUntilRef.current && userScrollDirectionRef.current === 'down'))) {
+    if (distanceFromBottom <= 16 && (hasUserScrollIntent || !layoutChanged) && (!hasUserScrollIntent || userScrollDirectionRef.current !== 'up')
+      && (scrollTop > previousScrollTop + 0.5 || userScrollDirectionRef.current === 'down')) {
       followLatestRef.current = true;
     }
+    if (!followLatestRef.current) readingAnchorRef.current = captureScrollAnchor(container);
     setShowScrollToBottom(!followLatestRef.current && distanceFromBottom > 72);
   }, [getScrollContainer, stopFollowingLatest]);
-
-  useLayoutEffect(() => {
-    const container = getScrollContainer();
-    if (!container) return;
-    const pinResponseLayout = () => {
-      if (!followLatestRef.current || earlierLoadInFlightRef.current) return;
-      trackScrollPosition();
-      if (!followLatestRef.current) return;
-      // The SDK dispatches after committing an embedded view's measured height.
-      // Pin in this layout phase, rather than painting once at the old position.
-      container.scrollTo({ behavior: 'instant', top: Math.max(0, container.scrollHeight - container.clientHeight) });
-      lastObservedScrollTopRef.current = container.scrollTop;
-    };
-    container.addEventListener(RESPONSE_LAYOUT_EVENT, pinResponseLayout);
-    return () => container.removeEventListener(RESPONSE_LAYOUT_EVENT, pinResponseLayout);
-  }, [getScrollContainer, trackScrollPosition]);
 
   useLayoutEffect(() => {
     const previousLastMessageId = previousLastMessageIdRef.current;
@@ -5620,10 +5613,7 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
     scrollingToLatestRef.current = true;
     followLatestRef.current = true;
     setShowScrollToBottom(false);
-    container.scrollTo({
-      behavior: 'smooth',
-      top: Math.max(0, container.scrollHeight - container.clientHeight),
-    });
+    container.dispatchEvent(new Event('browser-chat-follow-latest'));
     scrollToLatestTimerRef.current = window.setTimeout(() => {
       scrollToLatestTimerRef.current = 0;
       scrollingToLatestRef.current = false;
@@ -5634,42 +5624,6 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
   }, [getScrollContainer]);
 
   useLayoutEffect(() => {
-    const previous = previousRunStateRef.current;
-    previousRunStateRef.current = { sessionBusy, sessionId };
-    const turnCompleted = previous.sessionId === sessionId && previous.sessionBusy && !sessionBusy;
-    if (!turnCompleted || !followLatestRef.current || earlierLoadInFlightRef.current) return undefined;
-    const container = getScrollContainer();
-    if (!container) return undefined;
-
-    let frame = 0;
-    let cancelled = false;
-    const startedAt = performance.now();
-    const cancelPinning = () => { cancelled = true; };
-    const pinToBottom = () => {
-      if (cancelled || !followLatestRef.current) return;
-      trackScrollPosition();
-      if (!followLatestRef.current) return;
-      container.scrollTo({ behavior: 'instant', top: Math.max(0, container.scrollHeight - container.clientHeight) });
-      lastObservedScrollTopRef.current = container.scrollTop;
-      followLatestRef.current = true;
-      setShowScrollToBottom(false);
-      if (performance.now() - startedAt < 420) frame = requestAnimationFrame(pinToBottom);
-    };
-
-    container.addEventListener('pointerdown', cancelPinning, { passive: true });
-    container.addEventListener('touchstart', cancelPinning, { passive: true });
-    container.addEventListener('wheel', cancelPinning, { passive: true });
-    pinToBottom();
-    return () => {
-      cancelled = true;
-      if (frame) cancelAnimationFrame(frame);
-      container.removeEventListener('pointerdown', cancelPinning);
-      container.removeEventListener('touchstart', cancelPinning);
-      container.removeEventListener('wheel', cancelPinning);
-    };
-  }, [getScrollContainer, sessionBusy, sessionId, trackScrollPosition]);
-
-  useEffect(() => {
     const messageList = scrollRef.current;
     const scrollContainer = getScrollContainer();
     if (!messageList || !scrollContainer) return undefined;
@@ -5678,7 +5632,7 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
     let previousFollowFrame = 0;
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
     const observedChildren = new Set<Element>();
-    const followContent = (now: number) => {
+    const followContent = (now: number, immediate = false) => {
       frame = 0;
       if (!followLatestRef.current || earlierLoadInFlightRef.current) return;
       // Native input can precede its scroll event. Recheck before every frame,
@@ -5691,19 +5645,38 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
       previousFollowFrame = now;
       // One continuous follower, rather than a new native smooth-scroll for
       // each token. Height collapses settle immediately; new lines ease in.
-      const settle = reducedMotion.matches || remaining <= 1 || remaining > scrollContainer.clientHeight;
+      const settle = immediate || reducedMotion.matches || remaining <= 1 || remaining > scrollContainer.clientHeight;
       const top = settle ? target : scrollContainer.scrollTop + Math.max(1, remaining * (1 - Math.exp(-elapsed / 45)));
       scrollContainer.scrollTo({ behavior: 'instant', top });
       lastObservedScrollTopRef.current = scrollContainer.scrollTop;
       if (!settle && target - scrollContainer.scrollTop > 1) frame = requestAnimationFrame(followContent);
     };
     const scheduleScrollToBottom = () => {
-      if (!followLatestRef.current || earlierLoadInFlightRef.current) return;
+      if (earlierLoadInFlightRef.current || cancelTurnScrollRef.current) return;
+      if (!followLatestRef.current) {
+        if (performance.now() <= userScrollIntentUntilRef.current
+          && Math.abs(scrollContainer.scrollTop - lastObservedScrollTopRef.current) > 0.5) {
+          readingAnchorRef.current = captureScrollAnchor(scrollContainer);
+        } else restoreScrollAnchor(scrollContainer, readingAnchorRef.current);
+        lastObservedScrollTopRef.current = scrollContainer.scrollTop;
+        readingAnchorRef.current = captureScrollAnchor(scrollContainer);
+        return;
+      }
+      if (!sessionBusy) {
+        if (frame) cancelAnimationFrame(frame);
+        frame = 0;
+        followContent(performance.now(), true);
+        return;
+      }
       if (frame) return;
       previousFollowFrame = performance.now();
       frame = requestAnimationFrame(followContent);
     };
     const resizeObserver = new ResizeObserver(scheduleScrollToBottom);
+    // All asynchronous views share this one layout owner. A frame's layout
+    // event must not race a second immediate bottom pin or completion timer.
+    scrollContainer.addEventListener(RESPONSE_LAYOUT_EVENT, scheduleScrollToBottom);
+    scrollContainer.addEventListener('browser-chat-follow-latest', scheduleScrollToBottom);
     // Clearing the composer changes the viewport height without necessarily
     // changing any message's height.
     resizeObserver.observe(scrollContainer);
@@ -5735,12 +5708,17 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
           direction = touchY > lastTouchY ? 'up' : touchY < lastTouchY ? 'down' : null;
         }
         lastTouchY = touchY;
+        if (!direction) return;
       } else if (event instanceof KeyboardEvent) {
         const target = event.target;
         if (target instanceof HTMLElement && target.closest('input, textarea, select, [contenteditable="true"]')) return;
         if (['ArrowUp', 'PageUp', 'Home'].includes(event.key) || (event.key === ' ' && event.shiftKey)) direction = 'up';
         else if (['ArrowDown', 'PageDown', 'End', ' '].includes(event.key)) direction = 'down';
         else return;
+      } else if (event instanceof PointerEvent) {
+        const bounds = scrollContainer.getBoundingClientRect();
+        const onScrollbar = event.target === scrollContainer && (event.clientX >= bounds.right - 16 || event.clientX <= bounds.left + 16);
+        if (!onScrollbar) return;
       }
       userScrollIntentUntilRef.current = performance.now() + 600;
       userScrollDirectionRef.current = direction;
@@ -5777,10 +5755,12 @@ const BrowserChatMessageList = memo(function BrowserChatMessageList({
       scrollContainer.removeEventListener('keydown', markUserScrollIntent);
       mutationObserver.disconnect();
       resizeObserver.disconnect();
+      scrollContainer.removeEventListener(RESPONSE_LAYOUT_EVENT, scheduleScrollToBottom);
+      scrollContainer.removeEventListener('browser-chat-follow-latest', scheduleScrollToBottom);
       if (frame) cancelAnimationFrame(frame);
       if (scrollFrame) cancelAnimationFrame(scrollFrame);
     };
-  }, [getScrollContainer, stopFollowingLatest, trackScrollPosition]);
+  }, [getScrollContainer, sessionBusy, stopFollowingLatest, trackScrollPosition]);
 
   const loadEarlier = useCallback(async () => {
     if (cancelTurnScrollRef.current) return;

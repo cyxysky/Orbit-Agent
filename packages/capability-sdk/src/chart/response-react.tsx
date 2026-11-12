@@ -53,7 +53,7 @@ export function createChartResponseRenderers(options: Options = {}) {
   function ChartResponseView({ params, context }: ResponseComponentProps<ChartResponseParams>) {
     const store = useMemo(() => createStore({ params: { chartId: params.chartId }, context }), [params.chartId, context]);
     const { record, error } = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getServerSnapshot);
-    if (!record) return <div role={error ? 'alert' : 'status'}>{context.translate(error || '正在加载图表…')}</div>;
+    if (!record) return <div role={error ? 'alert' : 'status'} data-capability-response-layout={error ? 'error' : 'pending'}>{context.translate(error || '正在加载图表…')}</div>;
     return <ChartView chart={record} translate={context.translate} classNames={options.classNames}
       excalidraw={{ assetPath: options.excalidrawAssetPath, langCode: context.locale === 'zh' ? 'zh-CN' : 'en' }}
       onReload={store.load} onSave={context.readOnly ? undefined : async (next, expectedRevision) =>

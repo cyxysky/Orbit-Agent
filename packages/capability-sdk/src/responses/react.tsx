@@ -96,7 +96,7 @@ export function RegisteredResponse({ block, registry, context }: {
     <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{fallbackText()}</div>
   </div>;
   return <ResponseErrorBoundary key={`${context.identity}:${block.type}`} context={context} params={block.params} renderer={renderer} fallbackText={fallbackText}>
-    <Suspense fallback={<div role="status">{context.translate('正在加载内容…')}</div>}>
+    <Suspense fallback={<div role="status" data-capability-response-layout="pending">{context.translate('正在加载内容…')}</div>}>
       <renderer.component params={block.params} context={context} />
     </Suspense>
   </ResponseErrorBoundary>;

@@ -131,6 +131,12 @@ export const BrowserChatSessionIdContext = createContext<string | undefined>(und
 export const BrowserChatMarkdownArtifactsContext = createContext<readonly BrowserChatArtifactSummary[]>([]);
 export const BrowserChatAutomationRunIdContext = createContext<string | undefined>(undefined);
 const MarkdownStreamingContext = createContext(false);
+const ResponseStreamingContext = createContext(false);
+
+function ResponseMarkdown({ text }: { text: string }) {
+  const streaming = useContext(ResponseStreamingContext);
+  return <BrowserChatMarkdown markdown={text} streaming={streaming} />;
+}
 
 function MarkdownCode({ code, language }: { code: string; language: string }) {
   const streaming = useContext(MarkdownStreamingContext);
@@ -219,15 +225,15 @@ export const BrowserChatOrderedResponse = memo(function BrowserChatOrderedRespon
   const { t, language } = useI18n();
   const responseContext = useMemo(() => createResponseContext({
     sessionId, automationRunId, translate: t, locale: language,
-    renderMarkdown: text => <BrowserChatMarkdown markdown={text} streaming={streaming} />,
-  }), [sessionId, automationRunId, t, language, streaming]);
+    renderMarkdown: text => <ResponseMarkdown text={text} />,
+  }), [sessionId, automationRunId, t, language]);
   const responseParts = useMemo(() => browserChatOrderedResponseParts(parts, fallbackText), [parts, fallbackText]);
   if (!responseParts.length) return null;
-  return <div className="browser-chat-ordered-response">{responseParts.map((part, index) => {
+  return <ResponseStreamingContext.Provider value={streaming}><div className="browser-chat-ordered-response">{responseParts.map((part, index) => {
     if (part.type === 'text') return <BrowserChatMarkdown key={`text:${index}`} markdown={part.text} streaming={streaming} />;
     if (part.type === 'data-response') return <RegisteredResponse
       key={`${automationRunId || sessionId}:${part.id || index}:${part.data.type}`}
       block={part.data} registry={responseRenderers} context={responseContext} />;
     return null;
-  })}</div>;
+  })}</div></ResponseStreamingContext.Provider>;
 });
