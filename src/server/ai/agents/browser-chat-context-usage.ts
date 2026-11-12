@@ -11,6 +11,27 @@ export type BrowserChatContextUsageSnapshot = {
   method?: string;
 };
 
+function contextStatsCandidate(record: Record<string, unknown>, fallbackMaxTokens: number): Record<string, unknown> | undefined {
+  const object = (value: unknown) => value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown> : undefined;
+  const options = object(object(record.aiRequest)?.options);
+  const saved = object(record.aiInputTokens ?? record.modelContextStats ?? options?.modelContextStats);
+  if (typeof saved?.estimatedTotalTokens === 'number' && saved.estimatedTotalTokens > 0) return saved;
+  const request = object(record.aiInput);
+  if (request && Array.isArray(request.messages)) {
+    const system = typeof request.systemPrompt === 'string' && request.systemPrompt
+      ? [{ role: 'system', content: request.systemPrompt }] : [];
+    return estimateRuntimeRequestContext({ messages: [...system, ...request.messages], tools: request.tools }, fallbackMaxTokens);
+  }
+  // A calibrated snapshot retains its original estimate. It remains usable
+  // when an adapter supplied zero instead of the provider's missing usage.
+  if (typeof saved?.rawEstimatedTotalTokens === 'number' && saved.rawEstimatedTotalTokens > 0) {
+    return { ...saved, estimatedTotalTokens: saved.rawEstimatedTotalTokens, actualInputTokens: undefined,
+      estimatedTextTokens: undefined, estimatedToolSchemaTokens: undefined, estimatedImageTokens: undefined,
+      method: 'request-estimate', breakdownAvailable: false };
+  }
+}
+
 /** Estimate against the saved request, including legacy background messages only when that request used one. */
 export function browserChatActiveContextUsage(
   context: BrowserChatModelContext,
@@ -44,14 +65,8 @@ export function browserChatContextUsageFromDebugRecord(
   record: Record<string, unknown>,
   fallbackMaxTokens: number,
 ): BrowserChatContextUsageSnapshot | undefined {
-  let candidate = record.aiInputTokens ?? record.modelContextStats;
-  // Older bridge logs kept the real request, even when no estimate was saved.
-  if (!candidate && record.aiInput && typeof record.aiInput === 'object' && !Array.isArray(record.aiInput)) {
-    const request = record.aiInput as Record<string, unknown>;
-    if (Array.isArray(request.messages)) candidate = estimateRuntimeRequestContext({ messages: request.messages, tools: request.tools }, fallbackMaxTokens);
-  }
-  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return undefined;
-  const stats = candidate as Record<string, unknown>;
+  const stats = contextStatsCandidate(record, fallbackMaxTokens);
+  if (!stats) return undefined;
   const currentTokens = Number(stats.estimatedTotalTokens);
   if (!Number.isFinite(currentTokens) || currentTokens < 0) return undefined;
   const textTokens = Number(stats.estimatedTextTokens);
@@ -72,12 +87,8 @@ export function browserChatContextUsageFromDebugRecord(
 }
 
 export function browserChatRequestContextStatsFromDebugRecord(record: Record<string, unknown>, fallbackMaxTokens: number): RuntimeRequestContextStats | undefined {
-  const saved = record.aiInputTokens ?? record.modelContextStats;
+  const saved = contextStatsCandidate(record, fallbackMaxTokens);
   if (saved && typeof saved === 'object' && 'breakdownAvailable' in saved && 'method' in saved) return saved as RuntimeRequestContextStats;
-  const request = record.aiInput;
-  if (request && typeof request === 'object' && 'messages' in request && Array.isArray(request.messages) && !saved) {
-    return estimateRuntimeRequestContext({ messages: request.messages, tools: 'tools' in request ? request.tools : undefined }, fallbackMaxTokens);
-  }
   const usage = browserChatContextUsageFromDebugRecord(record, fallbackMaxTokens);
   if (!usage) return;
   return { estimatedTotalTokens: usage.currentTokens, estimatedTextTokens: usage.textTokens,

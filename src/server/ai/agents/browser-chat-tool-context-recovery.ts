@@ -6,9 +6,11 @@ type RequestLog = { id?: string; phase: string; time?: string; messageId?: strin
 const record = (value: unknown): Record<string, unknown> | undefined => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 const count = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.round(value) : undefined;
 
-/** Repair the legacy raw-history estimate from actual, adjacent request logs.
- * This is a read projection; the original logs and persisted tool evidence stay intact. */
+/** Resolve tool snapshots against their model requests without modifying stored evidence. */
 export function recoverBrowserChatToolContext(steps: readonly StepExecutionResult[], logs: readonly RequestLog[]): StepExecutionResult[] {
+  const savedSnapshots = new Map(steps.flatMap(step => (step.tools || []).flatMap(tool => (
+    [tool.contextBefore, tool.contextAfter].flatMap(snapshot => snapshot?.requestId ? [[snapshot.requestId, snapshot] as const] : [])
+  ))));
   const payload = (log: RequestLog) => {
     try { const parsed = record(typeof log.details === 'string' ? JSON.parse(log.details) : log.details); return record(parsed?.value) || parsed; }
     catch { return; }
@@ -26,6 +28,12 @@ export function recoverBrowserChatToolContext(steps: readonly StepExecutionResul
       const payload = record(parsed?.value) || parsed;
       let stats = payload ? browserChatRequestContextStatsFromDebugRecord(payload, 256000) : undefined;
       const modelRequestId = typeof payload?.modelRequestId === 'string' ? payload.modelRequestId : undefined;
+      const saved = modelRequestId ? savedSnapshots.get(modelRequestId) : undefined;
+      const savedStats = saved ? browserChatRequestContextStatsFromDebugRecord({ modelContextStats: saved }, 256000) : undefined;
+      // Prefer the estimate recorded at dispatch to reconstructing a serialized
+      // request. Logging may omit repeated fields or replace binary inputs.
+      if (savedStats && (!stats || savedStats.actualInputTokens !== undefined
+        || savedStats.rawEstimatedTotalTokens !== undefined && stats.estimatedTotalTokens !== savedStats.estimatedTotalTokens)) stats = savedStats;
       const actual = modelRequestId ? inputs.get(modelRequestId) : undefined;
       if (stats && actual !== undefined) stats = calibrateRuntimeRequestContext(stats, actual);
       const total = count(stats?.estimatedTotalTokens);
@@ -36,6 +44,8 @@ export function recoverBrowserChatToolContext(steps: readonly StepExecutionResul
         estimatedTotalTokens: total, estimatedTextTokens: count(stats?.estimatedTextTokens),
         estimatedToolSchemaTokens: count(stats?.estimatedToolSchemaTokens), estimatedImageTokens: count(stats?.estimatedImageTokens),
         imageCount: count(stats?.imageCount), method: typeof stats?.method === 'string' ? stats.method : undefined,
+        rawEstimatedTotalTokens: count(stats?.rawEstimatedTotalTokens), actualInputTokens: count(stats?.actualInputTokens),
+        breakdownAvailable: stats?.breakdownAvailable,
       };
       return [{ time, log, snapshot, modelRequestId }];
     } catch { return []; }

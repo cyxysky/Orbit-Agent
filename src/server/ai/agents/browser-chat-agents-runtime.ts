@@ -25,7 +25,7 @@ import { hiddenRuntimeSkillIdsInModelContext } from './hidden-runtime-skills';
 import { createRuntimeContextReadTool, runtimeContextMessageRef, type RuntimeContextManifest } from './runtime-context-assembler';
 import { serializableBrowserChatModelMessages } from './browser-chat-model-context';
 import { completeRuntimeModelToolChain } from './runtime-context-compression';
-import { calibrateRuntimeRequestContext, estimateRuntimeRequestContext, runtimeContextProfile, type RuntimeRequestContextStats } from './runtime-context-budget';
+import { calibrateRuntimeRequestContext, estimateRuntimeRequestContext, runtimeContextProfile, runtimeProviderInputTokens, type RuntimeRequestContextStats } from './runtime-context-budget';
 import { readScreenshotForAi } from './browser-chat-image-input';
 import { RuntimeExecutionJournal } from './runtime-execution-journal';
 import { browserInteractionInstructions } from './runtime-browser-interaction';
@@ -217,7 +217,8 @@ export async function executeAgentsBrowserTurn(input: Input, host: AgentsBrowser
       await input.onContextCheckpoint?.({ records: {}, manifest });
 
     }
-    await debug('ai:runtime:context', '模型请求上下文用量已更新', { modelContextStats: aiRequest.options.modelContextStats });
+    await debug('ai:runtime:context', '模型请求上下文用量已更新', { modelRequestId: aiRequest.id,
+      modelContextStats: aiRequest.options.modelContextStats });
   };
   const mount = await host.tools(input, {
     traces, loadedSkills,
@@ -285,12 +286,12 @@ export async function executeAgentsBrowserTurn(input: Input, host: AgentsBrowser
       const key = aiRequest.id + ':text:' + String(part.id || 'text');
       const text = (textById.get(key) || '') + String(part.delta || '');
       textById.set(key, text);
-      await input.onTextStream?.({ agentStepIndex: itemState({ id: key, type: 'agentMessage' }).index,
+      await input.onTextStream?.({ itemId: key, agentStepIndex: itemState({ id: key, type: 'agentMessage' }).index,
         runtimeStepIndex: stepIndex, stepNumber: modelRequest, delta: '', text: modelVisibleText(text, true) });
     } else if (kind === 'reasoning-delta') {
       const key = aiRequest.id + ':reasoning:' + id, text = (textById.get(key) || '') + String(part.delta || '');
       textById.set(key, text);
-      await input.onReasoningStream?.({ agentStepIndex: itemState({ id: key, type: 'reasoning' }).index,
+      await input.onReasoningStream?.({ itemId: key, agentStepIndex: itemState({ id: key, type: 'reasoning' }).index,
         runtimeStepIndex: stepIndex, index: 0, text: modelVisibleText(text, true), active: true });
     } else if (kind === 'tool-input-start') {
       const name = String(part.toolName || '');
@@ -416,7 +417,8 @@ export async function executeAgentsBrowserTurn(input: Input, host: AgentsBrowser
         await input.onTextStream?.({ agentStepIndex: 0, runtimeStepIndex: stepIndex, stepNumber: modelRequest, delta: '', text: '', responseDraft: null });
         await debug('ai:runtime:request', '正在处理请求', { aiRequest, modelRequestId: aiRequest.id,
           aiInput: { model: settings.model, messages: agentItemsToModelMessages(Array.isArray(providerInput) ? providerInput : []), tools: schemaTools, systemPrompt: request.systemInstructions } });
-        const iterator = modelAdapter.getStreamedResponse({ ...request, input: providerInput, signal: watchdog.abortSignal })[Symbol.asyncIterator]();
+        const iterator = modelAdapter.getStreamedResponse({ ...request, modelSettings: { ...request.modelSettings, preserveRawUsage: true },
+          input: providerInput, signal: watchdog.abortSignal })[Symbol.asyncIterator]();
         try {
           for (;;) {
             const next = await watchdog.run(iterator.next());
@@ -442,19 +444,24 @@ export async function executeAgentsBrowserTurn(input: Input, host: AgentsBrowser
                   if (text) finalText = containsModelToolProtocol(text) ? '' : modelVisibleText(text);
                   await publishOutput({ id: aiRequest.id + ':text:' + (item.id || 'text'), type: 'agentMessage', text, phase: calls.length ? 'commentary' : 'final' }, true);
                 } else if (item.type === 'reasoning') {
-                  await publishOutput({ id: aiRequest.id + ':reasoning:' + (item.id || ''), type: 'reasoning', summary: item.content?.map(part => part.text) || [] }, true);
-                  await input.onReasoningStream?.({ agentStepIndex: 0, runtimeStepIndex: stepIndex, index: 0, text: item.content?.map(part => part.text).join('\n') || '', active: false });
+                  const itemId = aiRequest.id + ':reasoning:' + (item.id || '');
+                  await publishOutput({ id: itemId, type: 'reasoning', summary: item.content?.map(part => part.text) || [] }, true);
+                  await input.onReasoningStream?.({ itemId, agentStepIndex: itemState({ id: itemId, type: 'reasoning' }).index,
+                    runtimeStepIndex: stepIndex, index: 0, text: item.content?.map(part => part.text).join('\n') || '', active: false });
                 } else if (item.type === 'function_call') await publishOutput({ id: item.callId, type: 'dynamicToolCall', tool: item.name, arguments: parseAgentToolArguments(item.arguments) });
               }
-              if (requestStats) await publishContextStats(calibrateRuntimeRequestContext(requestStats, event.response.usage.inputTokens));
+              const actualInputTokens = runtimeProviderInputTokens(event.response);
+              if (requestStats && actualInputTokens !== undefined) await publishContextStats(calibrateRuntimeRequestContext(requestStats, actualInputTokens));
               const outputDurationMs = firstOutputAt ? Date.now() - firstOutputAt : 0;
               recordAgentsModelMetrics({ provider: settings.provider, model: settings.model, finishReason,
                 responseTimeMs: modelRequestElapsedMs, firstOutputMs: firstOutputAt ? firstOutputAt - startedAt : undefined,
                 outputDurationMs, usage: event.response.usage });
+              const measuredOutputTokens = event.response.usage.outputTokens > 0 ? event.response.usage.outputTokens : undefined;
+              const outputTokens = measuredOutputTokens ?? Math.ceil(outputCharacters / 4);
               await input.onTextStream?.({ agentStepIndex: 0, runtimeStepIndex: stepIndex, stepNumber: modelRequest, delta: '', text: '',
-                performance: { outputTokens: event.response.usage.outputTokens, outputDurationMs, estimated: false,
+                performance: { outputTokens, outputDurationMs, estimated: measuredOutputTokens === undefined,
                   timeToFirstOutputMs: firstOutputAt ? firstOutputAt - startedAt : undefined,
-                  outputTokensPerSecond: outputDurationMs > 0 ? event.response.usage.outputTokens * 1000 / outputDurationMs : undefined } });
+                  outputTokensPerSecond: outputDurationMs > 0 ? outputTokens * 1000 / outputDurationMs : undefined } });
               await debug('ai:runtime:response', '模型响应已接收', { modelRequestId: aiRequest.id, aiRequest,
                 aiOutput: { usage: event.response.usage, rawUsage: event.response.rawUsage, timings: { aiRequestElapsedMs: modelRequestElapsedMs } } });
             }

@@ -209,6 +209,8 @@ export class ResponseRegistry {
   modelInstructions() {
     return [
       'Every final answer, including prose-only answers and clarification questions, must be submitted through finalResponse. Ordinary assistant text is progress narration, not a completed response.',
+      'Completion is about delivered results, not intentions. Before finalResponse, compare the active user request with the actual blocks and successful execution receipts. Looking up documentation, reading a Skill, reasoning about a design, or writing an introduction does not create or deliver the requested output.',
+      'Include each promised deliverable in this call: actual visual content for a requested visual, an existing resource block for a generated resource, or an accessible artifact link for a file. Do not submit prose that says "shown below", "generated", "attached", or describes a layout when the corresponding output is absent. Continue the missing work instead. If the user specifies a tool or output format, honor it rather than silently substituting another.',
       'When a successful tool returns content entries with type="response", finish with finalResponse and include their exact block values. Plain text identifiers do not render registered views.',
       'If finalResponse is rejected for invalid arguments, nothing was accepted. Correct the returned block type/params using the validation feedback and resubmit finalResponse. Preserve generated resources and their exact response blocks; do not treat a correctable input error as task completion or regenerate the resource just to repair its display.',
       'Every block has exactly {type, params}. Keep text, title, html and css INSIDE that block\'s params. CSS belongs in the same core.html block as its HTML; never emit a separate CSS block or a {$text: ...} fragment. For ordinary prose, use core.markdown with params.text.',
@@ -236,7 +238,7 @@ export class ResponseRegistry {
           type: 'object', additionalProperties: false, required: ['complete', 'remainingWork'],
           description: 'Declare whether the active user request is complete and list any unfinished work. Hosts may require this declaration before accepting a final response.',
           properties: {
-            complete: { type: 'boolean', description: 'True only after the active user request is fully handled.' },
+            complete: { type: 'boolean', description: 'True only after the active user request is fully handled and its promised deliverables are actually present in the response or backed by successful execution receipts. Planning and documentation reads are not delivery.' },
             remainingWork: { type: 'array', maxItems: 64, items: { type: 'string', minLength: 1, maxLength: 500 } },
           },
         },

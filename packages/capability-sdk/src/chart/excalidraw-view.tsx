@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Excalidraw, MainMenu, exportToBlob, exportToSvg, restoreElements, serializeAsJSON } from '@excalidraw/excalidraw';
 import type { ExcalidrawImperativeAPI, ExcalidrawInitialDataState } from '@excalidraw/excalidraw/types';
 import '@excalidraw/excalidraw/index.css';
@@ -25,11 +25,36 @@ export function ExcalidrawView({ chart, classNames = {}, onSave, onReload, onDow
   const fullscreen = hostFullscreen ?? nativeFullscreen;
   const api = useRef<ExcalidrawImperativeAPI | null>(null);
   const root = useRef<HTMLElement | null>(null);
+  const canvas = useRef<HTMLDivElement | null>(null);
+  const fitFrame = useRef<number | undefined>(undefined);
+  const fittedGeneration = useRef<number | undefined>(undefined);
   const downloadMenu = useRef<HTMLDetailsElement | null>(null);
   // Preserve the base revision and scene while the user edits, even if props refresh.
   if (!editing && !saving && (chart.chartId !== current.chartId || (chart.revision || 0) > (current.revision || 0))) {
     setCurrent(chart); setGeneration((value) => value + 1);
   }
+  const fitToCanvas = useCallback(() => {
+    const editor = api.current;
+    if (editor?.getSceneElements().length) editor.scrollToContent(editor.getSceneElements(), {
+      fitToContent: true, viewportZoomFactor: 0.9, maxZoom: 1, animate: false,
+    });
+  }, []);
+  const scheduleFit = useCallback(() => {
+    if (fitFrame.current !== undefined) cancelAnimationFrame(fitFrame.current);
+    fitFrame.current = requestAnimationFrame(() => { fitFrame.current = undefined; fitToCanvas(); });
+  }, [fitToCanvas]);
+  useEffect(() => {
+    const target = canvas.current;
+    if (!target) return;
+    let width = 0, height = 0;
+    const observer = new ResizeObserver(() => {
+      if (target.clientWidth === width && target.clientHeight === height) return;
+      width = target.clientWidth; height = target.clientHeight;
+      if (!editing) scheduleFit();
+    });
+    observer.observe(target);
+    return () => { observer.disconnect(); if (fitFrame.current !== undefined) cancelAnimationFrame(fitFrame.current); };
+  }, [editing, scheduleFit]);
   useEffect(() => {
     const changed = () => setFullscreen(document.fullscreenElement === root.current);
     const close = (event: PointerEvent) => {
@@ -45,9 +70,12 @@ export function ExcalidrawView({ chart, classNames = {}, onSave, onReload, onDow
       elements: restoreElements(scene.elements as unknown as Parameters<typeof restoreElements>[0], null, { repairBindings: true, refreshDimensions: true }),
       appState: scene.appState,
       files: scene.files as ExcalidrawInitialDataState['files'],
-      scrollToContent: true,
+      scrollToContent: false,
     };
   }, [current]);
+  const titleInCanvas = Boolean(current.title?.trim()) && initialData.elements?.some(element => (
+    element.type === 'text' && !element.isDeleted && element.opacity !== 0 && element.text.trim() === current.title?.trim()
+  ));
   const name = (current.title || current.chartId).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').slice(0, 100);
   function act(task: () => void | Promise<void>) {
     setError('');
@@ -80,9 +108,10 @@ export function ExcalidrawView({ chart, classNames = {}, onSave, onReload, onDow
       .capability-excalidraw .excalidraw .main-menu-trigger ~ .dropdown-menu:not(.dropdown-menu--mobile){width:max-content;min-width:min(240px,calc(100cqw - 32px));max-width:calc(100cqw - 32px)}
       .capability-excalidraw .excalidraw .dropdown-menu-item__shortcut{flex-shrink:0;white-space:nowrap}
     `}</style>
-    <figcaption className="capability-chart-header">
-      <strong className="capability-chart-title">{current.title || t('画布')}</strong>
+    <figcaption className={`capability-chart-header${titleInCanvas ? ' is-actions-only' : ''}`}>
+      {!titleInCanvas && <strong className="capability-chart-title">{current.title || t('画布')}</strong>}
       <div className="capability-chart-actions" role="group" aria-label={t('画布操作')}>
+      <button className="capability-chart-icon-button" type="button" title={t('适应画布')} aria-label={t('适应画布')} onClick={() => act(fitToCanvas)}><ChartIcon name="fit" /></button>
       {editing ? <>
         <button className="capability-chart-icon-button" type="button" disabled={saving} aria-busy={saving} title={saving ? t('保存中…') : t('保存')} aria-label={saving ? t('保存中…') : t('保存')} onClick={() => act(save)}><ChartIcon name="check" /></button>
         <button className="capability-chart-icon-button" type="button" disabled={saving} title={t('取消编辑')} aria-label={t('取消编辑')} onClick={() => { setEditing(false); setCurrent(chart); setGeneration((value) => value + 1); setError(''); }}><ChartIcon name="close" /></button>
@@ -110,8 +139,14 @@ export function ExcalidrawView({ chart, classNames = {}, onSave, onReload, onDow
       })}><ChartIcon name={fullscreen ? 'collapse' : 'expand'} /></button>
       </div>
     </figcaption>
-    <div className={`${classNames.canvas || 'capability-chart-canvas'} capability-chart-viewport capability-excalidraw-canvas`} style={{ height: current.height }}>
+    <div ref={canvas} className={`${classNames.canvas || 'capability-chart-canvas'} capability-chart-viewport capability-excalidraw-canvas`} style={{ height: current.height }}>
       <Excalidraw key={`${current.chartId}:${generation}`} initialData={initialData} excalidrawAPI={(value) => { api.current = value; }}
+        onChange={(elements) => {
+          if (!editing && elements.length && fittedGeneration.current !== generation) {
+            fittedGeneration.current = generation;
+            scheduleFit();
+          }
+        }}
         viewModeEnabled={!editing || saving} name={name} langCode={excalidraw?.langCode || 'en'}
         theme={excalidraw?.theme} handleKeyboardGlobally={false} autoFocus={false}>
         <MainMenu>

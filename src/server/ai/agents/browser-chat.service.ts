@@ -149,8 +149,8 @@ import {
 } from '@/server/ai/agents/browser-chat-client-window';
 import {
   browserChatAiOutputCycleFromDebugEvent,
+  browserChatAiOutputCycleFromStream,
   mergeBrowserChatAiOutputCycles,
-  mergeBrowserChatStreamPart,
   sortBrowserChatAiOutputCycles,
   stringFromUnknown as textFromUnknown,
 } from '@/lib/browser-chat-output-cycles';
@@ -4704,21 +4704,19 @@ function upsertBrowserChatOutputCycle(session: BrowserChatSessionRecord, cycle: 
       rawResult: browserChatUpdatedSubagentRawResult(toolCall.rawResult, result), error: undefined };
   }) } };
   const outputCycles = session.outputCycles || [];
-  const lastSequence = outputCycles.reduce((highest, item) => (
+  const lastSequence = outputCycles.filter(item => item.messageId === cycle.messageId && item.stepIndex === cycle.stepIndex
+    && item.subagentId === cycle.subagentId && item.batchId === cycle.batchId).reduce((highest, item) => (
     typeof item.sequence === 'number' && Number.isFinite(item.sequence)
       ? Math.max(highest, item.sequence)
       : highest
   ), 0);
-  const existingIndex = outputCycles.findIndex((item) => item.id === cycle.id
-    || (cycle.id.startsWith('cycle_codex_') && item.messageId === cycle.messageId
-      && item.stepIndex === cycle.stepIndex && item.agentStepIndex === cycle.agentStepIndex
-      && item.subagentId === cycle.subagentId && item.batchId === cycle.batchId));
+  const existingIndex = outputCycles.findIndex((item) => item.id === cycle.id);
   const existing = existingIndex >= 0 ? outputCycles[existingIndex] : undefined;
   const updated = {
     ...existing,
     ...cycle,
     revision: (existing?.revision || 0) + 1,
-    sequence: cycle.sequence ?? existing?.sequence ?? lastSequence + 1,
+    sequence: cycle.sequence ?? cycle.agentStepIndex ?? existing?.sequence ?? lastSequence + 1,
     createdAt: cycle.createdAt || existing?.createdAt || now(),
   };
   if (existingIndex < 0) session.outputCycles = trimBrowserChatOutputCycles([...outputCycles, updated]);
@@ -4728,14 +4726,6 @@ function upsertBrowserChatOutputCycle(session: BrowserChatSessionRecord, cycle: 
     session.outputCycles = trimBrowserChatOutputCycles(next);
   }
   session.updatedAt = now();
-}
-
-function browserChatStreamingOutputCycleId(
-  messageId: string,
-  runtimeStepIndex: number,
-  agentStepIndex: number,
-) {
-  return `cycle_stream_${messageId}_${runtimeStepIndex}_${agentStepIndex}`;
 }
 
 function upsertBrowserChatSubagent(session: BrowserChatSessionRecord, record: BrowserChatSubagentRecord) {
@@ -6188,13 +6178,29 @@ async function executeBrowserChatSubagentBatch(input: {
           (interaction) => recordBrowserChatSubagentConfirmation(session.id, task.id, interaction),
           task.id,
         ),
-        onTextStream: ({ text, responseDraft }) => {
+        onReasoningStream: ({ itemId, agentStepIndex, runtimeStepIndex, index, text, active }) => {
+          if (!ownsTask() || !text) return;
+          childOutputCycles = trimBrowserChatOutputCycles(mergeBrowserChatAiOutputCycles(childOutputCycles, [
+            browserChatAiOutputCycleFromStream({ itemId, messageId: task.id, stepIndex: runtimeStepIndex,
+              agentStepIndex, createdAt: now(), subagentId: task.id, batchId,
+              part: { kind: 'reasoning', index, text, active } }, childOutputCycles),
+          ]));
+          updateBrowserChatStoredSubagent(session.id, task.id, { outputCycles: [...childOutputCycles] });
+          persistAndNotify(session.id, { defer: true });
+        },
+        onTextStream: ({ itemId, agentStepIndex, runtimeStepIndex, text, responseDraft }) => {
           if (!ownsTask()) return;
           const content = text || (responseDraft ? browserChatFinalBlocksToText(responseDraft.blocks) : '');
           if (!content) return;
+          if (text && itemId) childOutputCycles = trimBrowserChatOutputCycles(mergeBrowserChatAiOutputCycles(childOutputCycles, [
+            browserChatAiOutputCycleFromStream({ itemId, messageId: task.id, stepIndex: runtimeStepIndex,
+              agentStepIndex, createdAt: now(), subagentId: task.id, batchId,
+              part: { kind: 'text', index: 0, text } }, childOutputCycles),
+          ]));
           streamedSubagentText = content;
           updateBrowserChatStoredSubagent(session.id, task.id, {
             content,
+            outputCycles: [...childOutputCycles],
             messages: liveSubagentMessages(),
           });
           persistAndNotify(session.id, { defer: true });
@@ -6475,13 +6481,33 @@ async function resumeBlockedBrowserChatSubagent(input: {
         (interaction) => recordBrowserChatSubagentConfirmation(session.id, binding.id, interaction),
         binding.id,
       ),
-      onTextStream: ({ text, responseDraft }) => {
+      onReasoningStream: ({ itemId, agentStepIndex, runtimeStepIndex, index, text, active }) => {
+        if (!ownsTask() || !text) return;
+        childOutputCycles = trimBrowserChatOutputCycles(mergeBrowserChatAiOutputCycles(childOutputCycles, [
+          browserChatAiOutputCycleFromStream({ itemId, messageId: binding.id, stepIndex: runtimeStepIndex,
+            agentStepIndex, createdAt: now(), subagentId: binding.id,
+            batchId: subagentResults.get(session.id)?.get(binding.id)?.batchId,
+            part: { kind: 'reasoning', index, text, active } }, childOutputCycles),
+        ]));
+        binding.outputCycles = [...childOutputCycles];
+        updateBrowserChatStoredSubagent(session.id, binding.id, { outputCycles: [...childOutputCycles] });
+        persistAndNotify(session.id, { defer: true });
+      },
+      onTextStream: ({ itemId, agentStepIndex, runtimeStepIndex, text, responseDraft }) => {
         if (!ownsTask()) return;
         const content = text || (responseDraft ? browserChatFinalBlocksToText(responseDraft.blocks) : '');
         if (!content) return;
+        if (text && itemId) childOutputCycles = trimBrowserChatOutputCycles(mergeBrowserChatAiOutputCycles(childOutputCycles, [
+          browserChatAiOutputCycleFromStream({ itemId, messageId: binding.id, stepIndex: runtimeStepIndex,
+            agentStepIndex, createdAt: now(), subagentId: binding.id,
+            batchId: subagentResults.get(session.id)?.get(binding.id)?.batchId,
+            part: { kind: 'text', index: 0, text } }, childOutputCycles),
+        ]));
+        binding.outputCycles = [...childOutputCycles];
         streamedSubagentText = content;
         updateBrowserChatStoredSubagent(session.id, binding.id, {
           content,
+          outputCycles: [...childOutputCycles],
           messages: liveSubagentMessages(binding.steps),
         });
         persistAndNotify(session.id, { defer: true });
@@ -6731,23 +6757,20 @@ async function runBrowserChatMessage(
         readFile: (input, context) => readFileForSession(session, input, historicalMessages, context?.abortSignal),
         readFileVisuals: (input) => readFileVisualsForSession(session, input),
         attachmentBindings: browserCodeAttachmentBindingsForSession(session, historicalMessages),
-        onReasoningStream: ({ agentStepIndex, runtimeStepIndex, index, text: reasoningText, active }) => {
+        onReasoningStream: ({ itemId, agentStepIndex, runtimeStepIndex, index, text: reasoningText, active }) => {
           if (!isActiveBrowserChatTurn(session, assistantMessageId, abortController)) return;
           if (session.messages.find(message => message.id === assistantMessageId)?.status === 'failed') return;
-          const cycleId = browserChatStreamingOutputCycleId(assistantMessageId, runtimeStepIndex, agentStepIndex);
-          const previous = session.outputCycles?.find(cycle => cycle.id === cycleId);
-          upsertBrowserChatOutputCycle(session, {
-            id: cycleId, messageId: assistantMessageId, stepIndex: runtimeStepIndex, agentStepIndex,
-            output: mergeBrowserChatStreamPart(previous?.output, { kind: 'reasoning', index, text: reasoningText }),
-            streamingReasoningIndex: active ? index : undefined,
-          });
+          if (!reasoningText) return;
+          upsertBrowserChatOutputCycle(session, browserChatAiOutputCycleFromStream({ itemId, messageId: assistantMessageId,
+            stepIndex: runtimeStepIndex, agentStepIndex, createdAt: now(),
+            part: { kind: 'reasoning', index, text: reasoningText, active } }, session.outputCycles));
           updateAssistantMessage(session, assistantMessageId, message => ({
             ...message, parts: browserChatStreamingParts(message), updatedAt: now(),
           }));
           scheduleBrowserChatTextStreamPublish(session.id, assistantMessageId);
           persistAndNotify(session.id, { defer: true, mergePersisted: false });
         },
-        onTextStream: ({ agentStepIndex, responseDraft, runtimeStepIndex, text: streamedText, performance }) => {
+        onTextStream: ({ itemId, agentStepIndex, responseDraft, runtimeStepIndex, text: streamedText, performance }) => {
           if (!isActiveBrowserChatTurn(session, assistantMessageId, abortController)) return;
           if (session.messages.find(message => message.id === assistantMessageId)?.status === 'failed') return;
           if (!streamedText && responseDraft === undefined && !performance) return;
@@ -6755,16 +6778,10 @@ async function runBrowserChatMessage(
             message.id === assistantMessageId && message.responseDraft
           ))) return;
           const timestamp = now();
-          if (streamedText) {
-            const cycleId = browserChatStreamingOutputCycleId(assistantMessageId, runtimeStepIndex, agentStepIndex);
-            const previous = session.outputCycles?.find(cycle => cycle.id === cycleId);
-            upsertBrowserChatOutputCycle(session, {
-              id: cycleId,
-              messageId: assistantMessageId,
-              output: mergeBrowserChatStreamPart(previous?.output, { kind: 'text', index: 0, text: streamedText }),
-              stepIndex: runtimeStepIndex,
-              agentStepIndex,
-            });
+          if (streamedText && itemId) {
+            upsertBrowserChatOutputCycle(session, browserChatAiOutputCycleFromStream({ itemId, messageId: assistantMessageId,
+              stepIndex: runtimeStepIndex, agentStepIndex, createdAt: timestamp,
+              part: { kind: 'text', index: 0, text: streamedText } }, session.outputCycles));
           }
           updateAssistantMessage(session, assistantMessageId, (message) => {
             const updated: BrowserChatMessage = {
@@ -6936,15 +6953,7 @@ async function runBrowserChatMessage(
             stepIndex: event.stepIndex,
           });
           if (outputCycle) {
-            const streamingCycle = (session.outputCycles || []).find((cycle) => (
-              cycle.messageId === assistantMessageId
-              && cycle.stepIndex === outputCycle.stepIndex
-              && cycle.agentStepIndex === outputCycle.agentStepIndex
-              && cycle.id.startsWith('cycle_stream_')
-            ));
-            upsertBrowserChatOutputCycle(session, streamingCycle
-              ? { ...outputCycle, id: streamingCycle.id, streamingReasoningIndex: undefined }
-              : outputCycle);
+            upsertBrowserChatOutputCycle(session, outputCycle);
           }
           const persistImmediately = event.phase === 'ai:runtime:attempt-failed'
             || event.phase === 'ai:runtime:error'

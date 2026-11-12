@@ -2,6 +2,7 @@ import type { CSSProperties } from 'react';
 
 const paths = {
   expand: 'M8 3H3v5M16 3h5v5M21 16v5h-5M3 16v5h5',
+  fit: 'M8 3H3v5M16 3h5v5M21 16v5h-5M3 16v5h5M8 8h8v8H8z',
   collapse: 'M3 8h5V3M16 3v5h5M21 16h-5v5M8 21v-5H3',
   edit: 'm15 5 4 4M4 20l4-1L20 7a2.8 2.8 0 0 0-4-4L4 15l-1 6Z',
   download: 'M12 3v12m-4-4 4 4 4-4M4 16v4h16v-4',

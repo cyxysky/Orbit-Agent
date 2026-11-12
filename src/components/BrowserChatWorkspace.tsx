@@ -2884,7 +2884,7 @@ function BrowserChatToolContextTokenInfo({ tool }: { tool: BrowserChatToolCall }
   const tooltipRef = useRef<HTMLSpanElement | null>(null);
   const [tooltipOpen, setTooltipOpen] = useState(false);
   const [tooltipPosition, setTooltipPosition] = useState({ left: -10_000, top: -10_000 });
-  const { after, before, delta } = browserChatToolContextTokenMetrics(tool);
+  const { after, before, delta, beforeEstimated, afterEstimated } = browserChatToolContextTokenMetrics(tool);
   const { aiRequestElapsedMs, toolElapsedMs } = browserChatToolTimingMetrics(tool);
   const formatTokens = (value: number) => value.toLocaleString('zh-CN');
   const formatElapsed = (value: number) => {
@@ -2897,11 +2897,11 @@ function BrowserChatToolContextTokenInfo({ tool }: { tool: BrowserChatToolCall }
   const deltaText = delta === undefined
     ? undefined
     : delta >= 0
-      ? t('请求间上下文增加 {count} Token', { count: formatTokens(delta) })
-      : t('请求间上下文减少 {count} Token', { count: formatTokens(Math.abs(delta)) });
+      ? t('请求间上下文增加 {count} Token', { count: `${beforeEstimated || afterEstimated ? '≈ ' : ''}${formatTokens(delta)}` })
+      : t('请求间上下文减少 {count} Token', { count: `${beforeEstimated || afterEstimated ? '≈ ' : ''}${formatTokens(Math.abs(delta))}` });
   const beforeText = before === undefined
     ? undefined
-    : t('调用前：{count} Token', { count: formatTokens(before) });
+    : t('调用前：{count} Token', { count: `${beforeEstimated ? '≈ ' : ''}${formatTokens(before)}` });
   const afterText = after === undefined
     ? browserChatToolHasLegacyContextAfter(tool)
       ? t('暂无可核对的调用后统计')
@@ -2909,7 +2909,7 @@ function BrowserChatToolContextTokenInfo({ tool }: { tool: BrowserChatToolCall }
         : tool.name === 'finalResponse' && tool.ok === true
           ? t('本次调用后没有新的模型请求')
           : t('等待下一次模型请求统计')
-    : t('调用后：{count} Token', { count: formatTokens(after) });
+    : t('调用后：{count} Token', { count: `${afterEstimated ? '≈ ' : ''}${formatTokens(after)}` });
   const toolElapsedText = toolElapsedMs === undefined
     ? undefined
     : t('工具调用耗时：{duration}', { duration: formatElapsed(toolElapsedMs) });
@@ -4551,7 +4551,7 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
     ? browserChatTerminalAnswerCycleIndex(aiOutputCycles)
     : -1, [aiOutputCycles, message.status]);
   const processAiOutputCycles = useMemo(() => {
-    if (!normalizedFinalText) return aiOutputCycles;
+    if (running || !normalizedFinalText) return aiOutputCycles;
     return aiOutputCycles.map((cycle, cycleIndex) => {
       const texts = cycle.output.texts.map((text) => (
         cycleIndex === terminalAnswerCycleIndex
@@ -4571,7 +4571,7 @@ const BrowserChatAssistantTimeline = memo(function BrowserChatAssistantTimeline(
         },
       };
     });
-  }, [aiOutputCycles, normalizedFinalText, terminalAnswerCycleIndex]);
+  }, [aiOutputCycles, normalizedFinalText, running, terminalAnswerCycleIndex]);
   const pairedAiOutputCycles = useSharedBrowserChatValue(useMemo(() => processAiOutputCycles.flatMap((cycle) => {
     const hasVisibleNarrative = cycle.output.parts.some((part) => {
       if (part.kind === 'text') return Boolean(cycle.output.texts[part.index]?.trim());

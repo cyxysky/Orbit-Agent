@@ -1,6 +1,12 @@
 import { normalizeExcalidrawOption } from './excalidraw-core.ts';
 export * from './excalidraw-core.ts';
 export const chartEngines = ['echarts', 'three', 'excalidraw'] as const;
+export const standardChartSeries = Object.freeze([
+  'line', 'bar', 'pie', 'scatter', 'effectScatter', 'radar', 'treemap', 'sunburst',
+  'boxplot', 'candlestick', 'heatmap', 'map', 'parallel', 'lines', 'sankey',
+  'funnel', 'gauge', 'pictorialBar', 'themeRiver', 'chord',
+] as const);
+const standardChartSeriesSet = new Set<string>(standardChartSeries);
 export type ChartEngine = typeof chartEngines[number];
 import { normalizeThreeChartOption } from './three-core.ts';
 import { CodedError, ERROR_CODES } from '../errors.ts';
@@ -103,17 +109,37 @@ function checkChartFormatters(value: unknown, omit: boolean, path = 'option', co
   }
 }
 
+function validateStandardChartTypes(option: Record<string, unknown>, path = 'option') {
+  if (option.graphic !== undefined) throw new CodedError(ERROR_CODES.CHART_OPERATION_FAILED,
+    `${path}.graphic is unavailable for statistical charts. Use engine="excalidraw" with option.elements for diagrams and free-form drawing.`);
+  const series = Array.isArray(option.series) ? option.series : option.series === undefined ? [] : [option.series];
+  for (const [index, item] of series.entries()) {
+    const type = recordFromUnknown(item)?.type;
+    if (typeof type === 'string' && !standardChartSeriesSet.has(type)) throw new CodedError(ERROR_CODES.CHART_OPERATION_FAILED,
+      `${path}.series[${index}].type ${JSON.stringify(type)} is not a supported statistical chart type. Use engine="excalidraw" for flowcharts, architecture and custom diagrams. Supported types: ${standardChartSeries.join(', ')}.`);
+  }
+  const base = recordFromUnknown(option.baseOption);
+  if (base) validateStandardChartTypes(base, `${path}.baseOption`);
+  if (Array.isArray(option.media)) option.media.forEach((entry, index) => {
+    const variant = recordFromUnknown(recordFromUnknown(entry)?.option);
+    if (variant) validateStandardChartTypes(variant, `${path}.media[${index}].option`);
+  });
+  if (Array.isArray(option.options)) option.options.forEach((entry, index) => {
+    const variant = recordFromUnknown(entry);
+    if (variant) validateStandardChartTypes(variant, `${path}.options[${index}]`);
+  });
+}
+
 export function normalizeChartOption(value: unknown, options: { invalidFormatters?: 'reject' | 'omit' } = {}) {
   const option = recordFromUnknown(value);
   if (!option) throw new CodedError(ERROR_CODES.CHART_OPERATION_FAILED, 'action=create requires option as an ECharts option object.');
-  const series = option.series;
+  validateStandardChartTypes(option);
+  const baseOption = recordFromUnknown(option.baseOption);
+  if (option.baseOption !== undefined && !baseOption) throw new CodedError(ERROR_CODES.CHART_OPERATION_FAILED, 'option.baseOption must be an ECharts option object.');
+  const content = baseOption || option;
+  const series = content.series;
   const hasSeries = Array.isArray(series) ? series.length > 0 : Boolean(recordFromUnknown(series));
-  const hasGraphic = Array.isArray(option.graphic) ? option.graphic.length > 0 : Boolean(recordFromUnknown(option.graphic));
-  if (!hasSeries && !hasGraphic) throw new CodedError(ERROR_CODES.CHART_OPERATION_FAILED, 'option must contain at least one series item or one graphic element.');
-  const graphic = recordFromUnknown(option.graphic);
-  if (graphic && typeof graphic.type !== 'string' && !Array.isArray(graphic.elements)) {
-    throw new CodedError(ERROR_CODES.CHART_OPERATION_FAILED, 'option.graphic must be an element, an element array, or an object with an elements array.');
-  }
+  if (!hasSeries) throw new CodedError(ERROR_CODES.CHART_OPERATION_FAILED, 'Statistical charts require at least one supported series. Use engine="excalidraw" for diagrams.');
   const seriesItems = Array.isArray(series) ? series : series === undefined ? [] : [series];
   for (const [index, item] of seriesItems.entries()) {
     const seriesItem = recordFromUnknown(item);
@@ -124,9 +150,6 @@ export function normalizeChartOption(value: unknown, options: { invalidFormatter
       throw new CodedError(ERROR_CODES.CHART_OPERATION_FAILED, `option.series[${index}].data must be an array when provided.`);
     }
     const type = String(seriesItem.type).trim();
-    if (type === 'custom') {
-      throw new CodedError(ERROR_CODES.CHART_OPERATION_FAILED, `option.series[${index}] uses custom without a JSON-safe renderItem. Use option.graphic for static custom visuals.`);
-    }
     if (type === 'lines') {
       const coordinateSystem = typeof seriesItem.coordinateSystem === 'string' && seriesItem.coordinateSystem.trim()
         ? seriesItem.coordinateSystem.trim()
@@ -135,7 +158,7 @@ export function normalizeChartOption(value: unknown, options: { invalidFormatter
       if (!requiredComponents) {
         throw new CodedError(ERROR_CODES.CHART_OPERATION_FAILED, `option.series[${index}].coordinateSystem ${JSON.stringify(coordinateSystem)} is not supported by the bundled ECharts lines series.`);
       }
-      const missingComponents = requiredComponents.filter((component) => !hasOptionComponent(option, component));
+      const missingComponents = requiredComponents.filter((component) => !hasOptionComponent(content, component));
       if (missingComponents.length) {
         throw new CodedError(ERROR_CODES.CHART_OPERATION_FAILED, `option.series[${index}] lines coordinateSystem ${JSON.stringify(coordinateSystem)} requires option.${missingComponents.join(' and option.')}.`);
       }

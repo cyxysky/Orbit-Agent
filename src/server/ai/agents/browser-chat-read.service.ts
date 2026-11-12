@@ -426,7 +426,8 @@ export async function readBrowserChatSessionLogs(
     browserChatRecoveredToolSteps(messageId || '', recoveryLogs),
   );
   const needsContextRecovery = steps.some((step) => step.tools?.some((tool) => tool.name !== 'contextCompression'
-    && tool.contextBefore?.requestId && !tool.contextAfter?.requestId));
+    && tool.contextBefore?.requestId && (!tool.contextAfter?.requestId
+      || !tool.contextBefore.estimatedTotalTokens || tool.contextAfter.estimatedTotalTokens === 0)));
   const contextLogs = needsContextRecovery && messageId && !input.cursor
     ? (await readBrowserChatLogsPage<BrowserChatLogRecord>(sessionId, { limit: 500, messageId })).items
     : page.items;

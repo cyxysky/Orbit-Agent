@@ -345,6 +345,7 @@ const en: Record<string, string> = {
   '文件未能移入回收站。': 'The file could not be moved to the recycle bin.',
   '该下载已结束。': 'This download has ended.',
   '图表': 'Chart',
+  '适应画布': 'Fit to canvas',
   '图表操作': 'Chart actions',
   '2D 视图': '2D view',
   '3D 视图': '3D view',

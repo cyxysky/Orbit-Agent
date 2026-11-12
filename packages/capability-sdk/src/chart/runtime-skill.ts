@@ -1,6 +1,7 @@
 import type { CapabilitySkill } from '../index.ts';
 import { markdownBlock } from '../responses/index.ts';
 import { chartResponseBlock } from './response.ts';
+import { standardChartSeries } from './core.ts';
 
 /** Complete model-facing operating manual for the Chart Capability workflow. */
 export const chartRuntimeSkillId = 'system-chart-runtime';
@@ -23,46 +24,43 @@ This Skill is authoritative for the chart model tool and is supplied by the char
 1. When a visual chart materially improves the answer, explicitly read this Skill and wait for that read to succeed before calling chart.
 2. Before creating a chart, call chart with action \`api\` and no query to read the compact API module index.
 3. Call action \`api\` again with the exact module id needed for the requested chart. Read more than one module when the design combines series, coordinates, datasets, maps, or interactions.
-4. Call action \`create\` with one complete JSON-serializable \`option\`. For 2D, engine defaults to \`echarts\` and loads the full ECharts package. For native 3D, read module \`three\`, set engine to \`three\`, and follow its separate data schema. For editable diagrams, read module \`excalidraw\`, set engine to \`excalidraw\`, and supply elements plus optional appState. Omit files when there are no images; image resources use an object keyed by fileId, never a string or array.
+4. Choose the engine by the requested output. Flowcharts, architecture, organization diagrams, wireframes and free-form visuals MUST use \`engine:"excalidraw"\`: read module \`excalidraw\`, then supply elements plus optional appState. Statistical charts use the fixed ECharts series types listed below. Native 3D statistics use module \`three\` and \`engine:"three"\`. Call \`create\` with the complete option for that engine. Omit files when there are no images; image resources use an object keyed by fileId.
 5. After a successful create, finish with \`finalResponse\` and copy the exact content[].block into its blocks array at the intended position. Do not finish with plain Markdown containing a chart identifier. Use the registered types and params from the finalResponse tool schema.
 6. Never invent an identifier and never reference one after a failed call. Charts render through registered response blocks with type and params. Include each chartId once; do not also append it to a Markdown block.
 
 Markdown never renders charts. Identifiers such as \`chart_000001\`, including standalone lines and code examples, remain ordinary text.
+An \`api\` call only reads documentation; it never creates a chart. Do not describe
+a chart as generated or present until \`create\` succeeds and its response block
+is delivered. Include the actual series/elements in the submitted option;
+titles, descriptions and a planned layout alone do not draw anything.
 
 ## Layout and labels
 
 The host displays the saved chart title; when an ECharts title repeats it, the
 host keeps only the title drawn inside the chart. Keep the export's title intact.
 Set title/subtitle text widths and overflow wrapping for long copy, and reserve
-enough space before the plot. Use media queries for narrower containers instead
-of assuming a desktop width. Supply a wide/default media rule that restores every
-field overridden by a narrow rule; ECharts does not automatically restore base
-values when a query stops matching. Use ignore=true to hide a graphic group and
-its descendants; invisible on a group does not hide its children.
+enough space before the plot. Use media queries for narrower containers. Supply
+a wide/default rule restoring the fields overridden by narrow rules.
 
-For flow diagrams, size stages for readable text and reserve room for all branch
-annotations. Prefer graph for data-driven links, or graphic groups with native
-rect/ellipse/text elements for static diagrams that need even borders and exact
-stage dimensions. Do not stretch scatter markers into diagram boxes. When using
-scatter as a label anchor, use a small transparent circle with an explicit label
-color; symbol="none" or symbolSize=0 suppresses its label. Valid built-in symbols
-include circle, rect, roundRect, triangle, diamond, pin and arrow; ellipse is not
-a built-in symbol (use circle with a [width, height] size). Very wide roundRect
-symbols stretch their corners; use rect when square stage boundaries are intended.
-Check that annotations, the longest stage name and the title fit at both narrow
-and wide widths before reporting a diagram complete.
+For Excalidraw diagrams, use native rectangles/diamonds/text/arrows and explicit
+coordinates. Group each node with its labels, and bind connectors to nodes so
+moving a node preserves its connections. Leave room between nodes and labels;
+use actual newline characters, encoded once as \`\\n\` in JSON. Use roughness:0 for
+precise product diagrams. Keep the complete scene readable when fitted and allow
+native zoom/pan for detail. Never emulate flowcharts with ECharts graphic,
+graph, tree, scatter markers, coordinate paths or custom series.
 
 ## Supported ECharts surface
 
-The complete ECharts 6.1 package is loaded. Standard built-in series include \`line\`, \`bar\`, \`pie\`, \`scatter\`, \`effectScatter\`, \`radar\`, \`tree\`, \`treemap\`, \`sunburst\`, \`boxplot\`, \`candlestick\`, \`heatmap\`, \`map\`, \`parallel\`, \`lines\`, \`graph\`, \`sankey\`, \`funnel\`, \`gauge\`, \`pictorialBar\`, \`themeRiver\`, \`chord\`, and \`custom\`. Mixed charts use multiple series items in one option.
+ECharts accepts these fixed statistical series types: ${standardChartSeries.join(', ')}. Mixed charts may combine supported types. ECharts \`graphic\`, \`graph\`, \`tree\` and \`custom\` are unavailable, including in baseOption, media and timeline variants. Use Excalidraw for custom diagrams instead.
 
-All standard coordinate systems and JSON option components are available, including grid/cartesian, polar, radar, geo, parallel, singleAxis, calendar, matrix, dataset, transforms, visualMap, dataZoom, timeline, brush, title, legend, tooltip, toolbox, graphic, interaction states, transitions, and animations.
+Supported series can use grid/cartesian, polar, radar, geo, parallel, singleAxis, calendar, matrix, dataset, built-in transforms, visualMap, dataZoom, timeline, brush, title, legend, tooltip, toolbox and animation options.
 
 Every \`lines\` series must declare its coordinate system and include the matching top-level components: \`cartesian2d\` requires \`xAxis\` and \`yAxis\`; \`geo\` requires \`geo\`; \`polar\` requires \`polar\`, \`radiusAxis\`, and \`angleAxis\`; \`calendar\` requires \`calendar\`; and \`matrix\` requires \`matrix\`. Omitting \`coordinateSystem\` makes ECharts assume \`geo\`, so never omit it.
 
 Map charts may pass \`maps\`; each map is registered before \`setOption\`. The \`geoJson\` value may be a GeoJSON object or SVG XML string.
 
-Tool arguments are JSON. ECharts features that specifically require executable JavaScript callbacks—such as function formatters, arbitrary \`custom.renderItem\`, external event handlers, or third-party series registration—cannot be embedded in the persisted option. Use string templates and built-in JSON options when available. This is an executable-callback boundary, not a chart-type whitelist.
+Tool arguments are JSON. Executable callbacks, external event handlers and third-party series registration are unavailable. Use the supported statistical types and string templates.
 
 Use only string templates for \`formatter\`; never put \`"function(params){...}"\` or \`"(params) => ..."\` strings into it. ECharts treats formatter strings as text templates, not JavaScript. Omit \`valueFormatter\`: ECharts accepts only a JavaScript function for this field, not a string template, so the persisted JSON chart cannot use it. Chart create/update rejects invalid formatters with their exact option path. For tooltips prefer \`{ trigger: "axis" }\` (default formatting) or a \`formatter\` template such as \`"{b}: {c}"\`; indexed templates such as \`"{b0}<br/>{a0}: {c0}<br/>{a1}: {c1}"\` support fixed multiple series. A waterfall's invisible spacer series should use \`tooltip: { show: false }\` so its offset is not reported as business data.
 
@@ -88,7 +86,7 @@ type ChartApiInput = {
 type ChartCreateInput = {
   action: "create";
   reason: string;
-  engine?: "echarts" | "three";
+  engine?: "echarts" | "three" | "excalidraw";
   option: Record<string, unknown>; // Complete option for the selected engine.
   title?: string;
   description?: string;

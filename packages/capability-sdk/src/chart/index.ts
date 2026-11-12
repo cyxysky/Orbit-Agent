@@ -13,6 +13,7 @@ import {
 import {
   maxChartBytes,
   chartEngines,
+  standardChartSeries,
   normalizeEngineOption,
   type ChartEngine,
   normalizeChartMaps,
@@ -54,7 +55,7 @@ export interface ChartArtifactStore {
 
 const chartToolInputParser = z.object({
   action: z.enum(['api', 'create', 'read', 'update']).describe('Read API guidance, create a chart, read its latest saved data, or update it using expectedRevision.'),
-  engine: z.enum(chartEngines).optional().describe('Defaults to echarts. Read module three for 3D or excalidraw for editable diagrams.'),
+  engine: z.enum(chartEngines).optional().describe('Use echarts only for supported statistical chart types; use excalidraw for flowcharts, architecture, wireframes and custom diagrams. Read the corresponding API module before creation.'),
   chartId: z.string().regex(/^chart_\d{6}$/).optional(),
   expectedRevision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER - 1).optional().describe('For update: revision returned by the latest read; prevents overwriting manual edits.'),
   reason: z.string().trim().min(1).max(300).describe('Concise reason for this tool call.'),
@@ -65,7 +66,7 @@ const chartToolInputParser = z.object({
   description: z.string().trim().min(1).max(1_000).optional().describe('Accessible plain-language chart summary.'),
   height: z.number().int().min(240).max(720).optional().describe('Rendered height in pixels. Defaults to 380.'),
   renderer: z.enum(['canvas', 'svg']).optional().describe('ECharts renderer. Defaults to canvas.'),
-  option: z.record(z.string(), z.unknown()).optional().describe('For create/update: complete JSON option for the chosen engine. ECharts formatter must be a string template, never a function-source string; omit it for default tooltips. Read module three for 3D, or excalidraw for diagrams. Excalidraw: elements is an array; appState is an object; omit files unless using image elements. files is a resource object keyed by fileId, never a string or array.'),
+  option: z.record(z.string(), z.unknown()).optional().describe(`For create/update: complete JSON option for the chosen engine. ECharts series types: ${standardChartSeries.join(', ')}. ECharts graphic, graph, tree and custom drawing are unavailable; use excalidraw for diagrams. Formatter must be a string template. Excalidraw: elements is an array; appState is an object; omit files unless using images. files is an object keyed by fileId.`),
   maps: z.array(z.object({
     name: z.string().trim().min(1).max(160),
     geoJson: z.union([z.record(z.string(), z.unknown()), z.string().min(1)]),
@@ -126,7 +127,6 @@ const seriesApiModules: EChartsApiModule[] = [
   seriesApiModule('scatter', '散点图', '二维散点、气泡、抖动散点和多维视觉编码。', { xAxis: {}, yAxis: {}, series: [{ type: 'scatter', symbolSize: 14, data: [[10, 20], [15, 28], [22, 19]] }] }, ['symbolSize 可以是数值；函数式 symbolSize 不可通过 JSON 传递。'], ['visualMap']),
   seriesApiModule('effectScatter', '涟漪散点图', '带涟漪动画的重点散点，可用于直角、极坐标或地理坐标。', { xAxis: {}, yAxis: {}, series: [{ type: 'effectScatter', rippleEffect: { scale: 4 }, data: [[10, 20], [15, 28]] }] }, [], ['visualMap', 'geo']),
   seriesApiModule('radar', '雷达图', '多指标能力、评分或对比雷达图。', { radar: { indicator: [{ name: '质量', max: 100 }, { name: '速度', max: 100 }, { name: '服务', max: 100 }] }, series: [{ type: 'radar', data: [{ name: '方案 A', value: [88, 76, 91] }] }] }, ['radar.indicator 定义每个维度。'], ['radar']),
-  seriesApiModule('tree', '树图', '正交、径向、折叠与可漫游的层级树。', { series: [{ type: 'tree', orient: 'LR', data: [{ name: '根节点', children: [{ name: '子节点 A' }, { name: '子节点 B' }] }] }] }, ['数据使用递归 children；layout 可为 orthogonal 或 radial。']),
   seriesApiModule('treemap', '矩形树图', '按面积和颜色展示层级数据。', { series: [{ type: 'treemap', data: [{ name: '产品', value: 100, children: [{ name: '硬件', value: 42 }, { name: '软件', value: 58 }] }] }] }, ['节点使用 value 与递归 children；levels 定义逐层样式。']),
   seriesApiModule('sunburst', '旭日图', '用同心圆展示多层占比和层级关系。', { series: [{ type: 'sunburst', radius: ['10%', '90%'], data: [{ name: '产品', children: [{ name: '硬件', value: 42 }, { name: '软件', value: 58 }] }] }] }, ['节点使用 value 与递归 children。']),
   seriesApiModule('boxplot', '箱线图', '展示分布、四分位数和异常值。', { xAxis: { type: 'category', data: ['A', 'B'] }, yAxis: {}, series: [{ type: 'boxplot', data: [[5, 20, 30, 42, 55], [8, 18, 29, 38, 49]] }] }, ['单项顺序通常是 [min, Q1, median, Q3, max]。'], ['xAxis', 'yAxis']),
@@ -135,14 +135,12 @@ const seriesApiModules: EChartsApiModule[] = [
   seriesApiModule('map', '地图', 'GeoJSON/SVG 区域分布图与多地图组合。', { maps: [{ name: 'region', geoJson: { type: 'FeatureCollection', features: [] } }], option: { visualMap: { min: 0, max: 100 }, series: [{ type: 'map', map: 'region', data: [{ name: 'A 区', value: 82 }] }] } }, ['action=create 的 maps 注册地图；series.map 必须与 maps[].name 一致。'], ['geo', 'visualMap']),
   seriesApiModule('parallel', '平行坐标图', '比较多维记录与聚类分布。', { parallelAxis: [{ dim: 0, name: '价格' }, { dim: 1, name: '销量' }, { dim: 2, name: '评分' }], series: [{ type: 'parallel', data: [[19, 84, 4.6], [25, 61, 4.2]] }] }, ['parallelAxis.dim 对应数据数组维度。'], ['parallel', 'parallelAxis']),
   seriesApiModule('lines', '路径与迁徙线', '直角或地理坐标上的路线、流向和轨迹。', { xAxis: {}, yAxis: {}, series: [{ type: 'lines', coordinateSystem: 'cartesian2d', data: [{ coords: [[0, 0], [8, 12], [16, 7]] }] }] }, ['必须显式声明 coordinateSystem 并配置对应坐标组件；cartesian2d 需要 xAxis/yAxis，geo 需要 geo。'], ['geo']),
-  seriesApiModule('graph', '关系图', '力导向、环形或固定布局的节点关系网络。', { series: [{ type: 'graph', layout: 'force', roam: true, data: [{ name: 'A' }, { name: 'B' }], links: [{ source: 'A', target: 'B' }] }] }, ['data/nodes 定义节点，links/edges 定义关系；layout 可为 none、circular、force。']),
   seriesApiModule('sankey', '桑基图', '展示节点之间的数量流动。', { series: [{ type: 'sankey', data: [{ name: '访问' }, { name: '注册' }, { name: '购买' }], links: [{ source: '访问', target: '注册', value: 60 }, { source: '注册', target: '购买', value: 25 }] }] }, ['连接使用 source、target、value。']),
   seriesApiModule('funnel', '漏斗图', '展示流程转化、排序和阶段差异。', { series: [{ type: 'funnel', sort: 'descending', data: [{ name: '访问', value: 100 }, { name: '注册', value: 58 }, { name: '购买', value: 24 }] }] }, ['sort、gap、minSize、maxSize 控制布局。']),
   seriesApiModule('gauge', '仪表盘', '单值、多指针、进度环与分段仪表。', { series: [{ type: 'gauge', progress: { show: true }, detail: { formatter: '{value}%' }, data: [{ name: '完成率', value: 72 }] }] }, ['axisLine、progress、pointer、detail 控制外观。']),
   seriesApiModule('pictorialBar', '象形柱图', '用符号重复、裁剪或堆叠表达数量。', { xAxis: { data: ['A', 'B', 'C'] }, yAxis: {}, series: [{ type: 'pictorialBar', symbol: 'roundRect', symbolRepeat: true, symbolSize: [14, 8], data: [12, 18, 9] }] }, ['symbol、symbolRepeat、symbolClip 控制象形效果。'], ['xAxis', 'yAxis']),
   seriesApiModule('themeRiver', '主题河流图', '展示多个主题随时间变化的流量。', { singleAxis: { type: 'time' }, series: [{ type: 'themeRiver', data: [['2026/01/01', 10, 'A'], ['2026/02/01', 18, 'A'], ['2026/01/01', 7, 'B'], ['2026/02/01', 12, 'B']] }] }, ['单项数据为 [time, value, name]。'], ['singleAxis']),
   seriesApiModule('chord', '弦图', 'ECharts 6.1 内置的关系与流量弦图。', { series: [{ type: 'chord', data: [{ name: 'A' }, { name: 'B' }, { name: 'C' }], links: [{ source: 'A', target: 'B', value: 8 }, { source: 'B', target: 'C', value: 5 }] }] }, ['使用节点 data 与 links 表达连接。']),
-  seriesApiModule('custom', '自定义系列', 'ECharts 自定义渲染系列。', { graphic: [{ type: 'rect', left: 'center', top: 'middle', shape: { width: 180, height: 70 }, style: { fill: '#2563eb' } }] }, ['custom.renderItem 是 JavaScript 函数，不能通过 JSON 工具参数安全传递；静态自定义图形使用 graphic。'], ['graphic']),
 ];
 
 const apiModules: EChartsApiModule[] = [
@@ -188,7 +186,7 @@ const apiModules: EChartsApiModule[] = [
     notes: [
       'action=create 接收完整 ECharts option，并原样交给 setOption。',
       '所有值必须可 JSON 序列化；不能传 JavaScript 函数、回调或 DOM 对象。',
-      'series 可以混合任意多个 ECharts 内置系列，不需要声明一个顶层图表类型。',
+      `series 只能组合这些固定统计类型：${standardChartSeries.join(', ')}。流程图与自定义排版使用 engine:"excalidraw"。`,
     ],
     examples: [{ backgroundColor: 'transparent', color: ['#2563eb', '#0d9488', '#f59e0b'], animationDuration: 700, aria: { enabled: true } }],
   },
@@ -223,17 +221,17 @@ const apiModules: EChartsApiModule[] = [
   {
     id: 'series.hierarchy',
     title: '层级关系系列',
-    summary: 'tree、treemap、sunburst，支持折叠树、矩形树图与旭日图。',
-    optionPaths: ['series-tree', 'series-treemap', 'series-sunburst'],
-    notes: ['数据通常使用递归 children；treemap/sunburst 节点通常还需要 value。', 'tree 可通过 orient、layout、initialTreeDepth 调整方向和展开层级。'],
+    summary: 'treemap、sunburst，展示层级数据的数量与占比。',
+    optionPaths: ['series-treemap', 'series-sunburst'],
+    notes: ['数据使用递归 children 和 value。组织结构图、流程树与自由排版图使用 Excalidraw。'],
     examples: [{ series: [{ type: 'sunburst', radius: ['12%', '88%'], data: [{ name: '产品', children: [{ name: '硬件', value: 42 }, { name: '软件', value: 58 }] }] }] }],
   },
   {
     id: 'series.network-flow',
     title: '网络与流向系列',
-    summary: 'graph、lines、sankey、chord，用于关系网、路线、流向与弦图。',
-    optionPaths: ['series-graph', 'series-lines', 'series-sankey', 'series-chord'],
-    notes: ['graph 使用 data/nodes 与 links/edges；layout 可为 none、circular 或 force。', 'lines 的 data 可由 coords 数组描述路径，也可配合 geo 绘制地图迁徙线。', 'sankey 与 chord 都使用节点和连接数据；chord 是 ECharts 6.1 内置系列。'],
+    summary: 'lines、sankey、chord，展示路线与数量流动。',
+    optionPaths: ['series-lines', 'series-sankey', 'series-chord'],
+    notes: ['lines 的 data 可由 coords 数组描述路径，也可配合 geo 绘制地图迁徙线。', 'sankey 与 chord 使用节点和有数量的连接数据。流程、架构与关系示意图使用 Excalidraw。'],
     examples: [{ series: [{ type: 'sankey', data: [{ name: '访问' }, { name: '注册' }, { name: '购买' }], links: [{ source: '访问', target: '注册', value: 60 }, { source: '注册', target: '购买', value: 25 }] }] }],
   },
   {
@@ -261,14 +259,6 @@ const apiModules: EChartsApiModule[] = [
     examples: [{ maps: [{ name: 'region', geoJson: { type: 'FeatureCollection', features: [] } }], option: { visualMap: { min: 0, max: 100 }, series: [{ type: 'map', map: 'region', data: [{ name: 'A', value: 80 }] }] } }],
   },
   {
-    id: 'series.custom-and-graphic',
-    title: '自定义系列',
-    summary: 'custom 系列与 graphic 图形组件的边界。',
-    optionPaths: ['series-custom', 'graphic'],
-    notes: ['内置 custom 系列已随完整 echarts 包加载，但 renderItem 是 JavaScript 函数，不能通过 JSON 工具参数安全传递。', '仅需静态图形时优先使用 graphic；需要回调驱动的 renderItem 或外部 @echarts-x 系列时，当前持久化 JSON 渲染通道不适用。', '除上述可执行回调边界外，工具不会对白名单图表类型做限制。'],
-    examples: [{ graphic: [{ type: 'rect', left: 'center', top: 'middle', shape: { width: 180, height: 70 }, style: { fill: '#2563eb' } }] }],
-  },
-  {
     id: 'coordinate.systems',
     title: '坐标系',
     summary: 'grid、polar、radar、geo、parallel、singleAxis、calendar 与 matrix 坐标系。',
@@ -287,9 +277,9 @@ const apiModules: EChartsApiModule[] = [
   {
     id: 'component.presentation',
     title: '标题、图例、提示与工具栏',
-    summary: 'title、legend、tooltip、axisPointer、toolbox 与 graphic。',
-    optionPaths: ['title', 'legend', 'tooltip', 'axisPointer', 'toolbox', 'graphic'],
-    notes: ['tooltip.formatter 支持 "{b}: {c}" 等字符串模板，省略时显示默认提示；多系列固定模板可使用 "{b0}<br/>{a0}: {c0}<br/>{a1}: {c1}"。', 'formatter 只能传入字符串模板，不能传入函数或 "function(...) {...}"、"(...) => ..." 这样的函数字符串。valueFormatter 只接受 JavaScript 函数，不支持字符串模板；持久化 JSON 图表必须省略此字段，改用 formatter 或默认提示。create/update 会拒绝无效值并指出字段路径。瀑布图的透明辅助系列应设 tooltip: { show: false }。', 'toolbox 可配置 saveAsImage、dataView、dataZoom、magicType 与 restore。', 'graphic 支持 group、image、text、rect、circle、ring、sector、arc、polygon、polyline、line、bezierCurve 等图形。'],
+    summary: 'title、legend、tooltip、axisPointer 与 toolbox。',
+    optionPaths: ['title', 'legend', 'tooltip', 'axisPointer', 'toolbox'],
+    notes: ['tooltip.formatter 支持 "{b}: {c}" 等字符串模板，省略时显示默认提示；多系列固定模板可使用 "{b0}<br/>{a0}: {c0}<br/>{a1}: {c1}"。', 'formatter 只能传入字符串模板，不能传入函数或 "function(...) {...}"、"(...) => ..." 这样的函数字符串。valueFormatter 只接受 JavaScript 函数，不支持字符串模板；持久化 JSON 图表必须省略此字段，改用 formatter 或默认提示。create/update 会拒绝无效值并指出字段路径。瀑布图的透明辅助系列应设 tooltip: { show: false }。', 'toolbox 可配置 saveAsImage、dataView、dataZoom、magicType 与 restore。'],
     examples: [{ title: { text: '季度趋势', left: 'center' }, tooltip: { trigger: 'axis' }, legend: { top: 30 }, toolbox: { feature: { saveAsImage: {}, restore: {} } } }],
   },
   {
@@ -443,7 +433,7 @@ export function createChartTool(
 ) {
   return defineCapabilityTool<ChartToolInput, Record<string, unknown> | { chartId: string }>({
     name: chartCapabilityToolNames.chart,
-    description: 'Create, read and update persistent ECharts, Three.js or Excalidraw charts. Read the API index and relevant modules (three for 3D, excalidraw for diagrams) before create. Users can edit data, go fullscreen and download charts. Read the latest chart before update and pass expectedRevision to preserve manual changes.',
+    description: 'Create, read and update persistent visualizations. Use Excalidraw for flowcharts, architecture, wireframes and custom diagrams; it supports zoom, pan and node editing. Use ECharts only for the supported fixed statistical series types, or Three.js for supported 3D statistics. Read the API index and the matching module before creation. Read the latest chart before update and pass expectedRevision to preserve manual changes.',
     input: chartToolInput,
     inputExamples: [
       { action: 'api', reason: '查看 ECharts API 模块索引' },

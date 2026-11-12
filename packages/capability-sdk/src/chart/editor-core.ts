@@ -6,6 +6,10 @@ export type DataTable = { id: string; label: string; path: Array<string | number
 export type DataColumn = { key: string | number | null; label: string };
 
 export function chartDataTables(option: Record<string, unknown>, t: ChartTranslate = defaultChartTranslate): DataTable[] {
+  if (option.baseOption && typeof option.baseOption === 'object' && !Array.isArray(option.baseOption)) {
+    return chartDataTables(option.baseOption as Record<string, unknown>, t)
+      .map(table => ({ ...table, path: ['baseOption', ...table.path], id: JSON.stringify(['baseOption', ...table.path]) }));
+  }
   const tables: DataTable[] = [];
   function add(value: unknown, path: Array<string | number>, label: string, extra: Pick<DataTable, 'rowLabels' | 'columnLabels'> = {}) {
     if (Array.isArray(value)) tables.push({ id: JSON.stringify(path), path, label, rows: value, ...extra });
@@ -25,7 +29,10 @@ export function chartDataTables(option: Record<string, unknown>, t: ChartTransla
         const rowLabels = section === 'series' && field === 'data' && Array.isArray(axis?.data) && Array.isArray(record.data) && axis.data.length === record.data.length
           ? axis.data.map((value) => String(value && typeof value === 'object' && 'value' in value ? value.value : value)) : undefined;
         const axes = option.axes as Record<string, { name?: string }> | undefined;
-        const columnLabels = section === 'series' && String(record.type).endsWith('3D') ? ['x', 'y', 'z'].map((key) => axes?.[key]?.name || key.toUpperCase()) : undefined;
+        const columnLabels = section === 'series' && String(record.type).endsWith('3D')
+          ? ['x', 'y', 'z'].map((key) => axes?.[key]?.name || key.toUpperCase())
+          : section === 'dataset' && Array.isArray(record.dimensions)
+            ? record.dimensions.map(value => typeof value === 'string' ? value : String((value as { name?: unknown })?.name || '')) : undefined;
         add(record[field], [...base, field], label, { rowLabels, columnLabels });
       }
     });
@@ -46,7 +53,7 @@ export function tableColumns(table: DataTable, t: ChartTranslate = defaultChartT
   if (first && typeof first === 'object') {
     return [...new Set(table.rows.flatMap((row) => row && typeof row === 'object' && !Array.isArray(row) ? Object.keys(row) : []))].slice(0, 32).map((key) => ({ key, label: key === 'name' ? t('名称') : key === 'value' ? t('数值') : key }));
   }
-  return [{ key: null, label: t(table.path[0] === 'series' ? '数值' : '名称') }];
+  return [{ key: null, label: t(table.path.includes('series') ? '数值' : '名称') }];
 }
 
 export function cellValue(row: unknown, key: DataColumn['key']) {

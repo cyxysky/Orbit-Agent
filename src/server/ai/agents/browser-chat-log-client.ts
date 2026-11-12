@@ -33,9 +33,10 @@ export function compactBrowserChatLogForClient<TLog extends BrowserChatClientLog
       const details = parsedDetails(log.details);
       if (!details || details.aiInput === undefined) return log;
       const aiInput = details.aiInput;
+      const requestOptions = asRecord(asRecord(details.aiRequest)?.options);
       const compactedDetails = JSON.stringify({
         aiInput,
-        aiInputTokens: details?.aiInputTokens,
+        aiInputTokens: details.aiInputTokens ?? requestOptions?.modelContextStats,
         engine: details.engine,
         modelRequestId: details.modelRequestId,
         execution: details?.execution,
@@ -80,6 +81,7 @@ export function compactBrowserChatLogForClient<TLog extends BrowserChatClientLog
         timings: aiOutput.timings,
         performance: aiOutput.performance,
         usage: aiOutput.usage,
+        rawUsage: aiOutput.rawUsage,
       },
       execution: details?.execution,
       engine: details?.engine,

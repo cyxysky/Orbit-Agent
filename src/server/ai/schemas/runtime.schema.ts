@@ -93,6 +93,9 @@ export type AiToolContextSnapshot = {
   estimatedTextTokens?: number;
   estimatedImageTokens?: number;
   estimatedToolSchemaTokens?: number;
+  rawEstimatedTotalTokens?: number;
+  actualInputTokens?: number;
+  breakdownAvailable?: boolean;
   imageCount?: number;
   method?: string;
 };

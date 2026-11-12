@@ -63,6 +63,7 @@ export type BrowserChatReadFileInput = FileReadInput;
 export type BrowserChatReadSkill = (skillId: string) => Promise<BrowserActionResult>;
 
 export type BrowserChatTextStreamUpdate = {
+  itemId?: string;
   agentStepIndex: number;
   delta: string;
   responseDraft?: { id: string; blocks: BrowserChatFinalBlock[] } | null;
@@ -73,6 +74,7 @@ export type BrowserChatTextStreamUpdate = {
 };
 
 export type BrowserChatReasoningStreamUpdate = ReasoningStreamUpdate & {
+  itemId: string;
   agentStepIndex: number;
   runtimeStepIndex: number;
 };

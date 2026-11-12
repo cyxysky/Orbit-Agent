@@ -61,7 +61,9 @@ function DataChartRenderer({ chart, classNames = {}, onSave, onReload, onDownloa
   const converted = useMemo(() => current.engine === 'three' ? undefined : echartsToThree(current.option, t), [current, t]);
   const isThree = current.engine === 'three' || (threeView && Boolean(converted));
   const displayOption = threeView && converted ? converted : current.option;
-  const embeddedTitles = Array.isArray(current.option.title) ? current.option.title : [current.option.title];
+  const baseOption = current.option.baseOption && typeof current.option.baseOption === 'object' && !Array.isArray(current.option.baseOption)
+    ? current.option.baseOption as Record<string, unknown> : current.option;
+  const embeddedTitles = Array.isArray(baseOption.title) ? baseOption.title : [baseOption.title];
   const titleInChart = !isThree && Boolean(current.title?.trim()) && embeddedTitles.some(value => {
     if (!value || typeof value !== 'object') return false;
     const title = value as Record<string, unknown>;

@@ -25,6 +25,27 @@ export function mergeBrowserChatStreamPart(
   return { ...output, [key]: values, parts: exists ? output.parts : [...output.parts, { kind: part.kind, index: part.index }] };
 }
 
+function outputCycleId(messageId: string | undefined, stepIndex: number | undefined, itemId: string) {
+  return `cycle_${messageId}_${stepIndex}_${itemId}`;
+}
+
+/** Streaming and completed snapshots keep the provider item's identity/order. */
+export function browserChatAiOutputCycleFromStream(input: {
+  itemId: string; messageId: string; stepIndex: number; agentStepIndex: number; createdAt: string;
+  part: { kind: 'reasoning' | 'text'; index: number; text: string; active?: boolean };
+  subagentId?: string; batchId?: string;
+}, cycles: readonly BrowserChatAiOutputCycle[] = []): BrowserChatAiOutputCycle {
+  const id = outputCycleId(input.messageId, input.stepIndex, input.itemId);
+  const previous = cycles.find(cycle => cycle.id === id);
+  return {
+    id, messageId: input.messageId, stepIndex: input.stepIndex, agentStepIndex: input.agentStepIndex,
+    sequence: input.agentStepIndex, createdAt: previous?.createdAt || input.createdAt,
+    subagentId: input.subagentId, batchId: input.batchId,
+    output: mergeBrowserChatStreamPart(previous?.output, input.part),
+    streamingReasoningIndex: input.part.kind === 'reasoning' && input.part.active ? input.part.index : undefined,
+  };
+}
+
 export function stringFromUnknown(value: unknown): string {
   if (typeof value === 'string') return stripAnsiControlCodes(value).trim();
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
@@ -260,7 +281,8 @@ export function mergeBrowserChatAiOutputCycles<TCycle extends BrowserChatAiOutpu
       ...previous,
       ...Object.fromEntries(Object.entries(cycle).filter(([, value]) => value !== undefined)),
       createdAt: previous.createdAt ?? cycle.createdAt,
-      sequence: previous.sequence ?? cycle.sequence,
+      sequence: cycle.sequence ?? previous.sequence,
+      streamingReasoningIndex: cycle.streamingReasoningIndex,
       output: {
         ...cycle.output,
         tools: cycle.output.tools.map((tool) => {
@@ -373,7 +395,7 @@ export function browserChatAiOutputCycleFromDebugEvent(input: {
   if (!hasAiOutputView(compacted)) return undefined;
   return {
     id: typeof aiOutput.itemId === 'string'
-      ? `cycle_${input.messageId}_${input.stepIndex}_${aiOutput.itemId}` : input.id,
+      ? outputCycleId(input.messageId, input.stepIndex, aiOutput.itemId) : input.id,
     messageId: input.messageId,
     output: compacted,
     performance: browserChatOutputPerformanceFromUnknown(aiOutput.performance),

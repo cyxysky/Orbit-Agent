@@ -118,6 +118,9 @@ export function estimateRuntimeRequestContext(input: { messages: unknown; tools?
 export function calibrateRuntimeRequestContext(stats: RuntimeRequestContextStats, inputTokens: number): RuntimeRequestContextStats {
   if (!Number.isFinite(inputTokens) || inputTokens < 0) return stats;
   const total = Math.round(inputTokens);
+  // Adapters default missing usage to zero. A nonempty prompt cannot consume
+  // zero input tokens; keep its estimate until a real count is available.
+  if (total === 0 && stats.estimatedTotalTokens > 0) return stats;
   if (!stats.breakdownAvailable) return { ...stats, estimatedTotalTokens: total, actualInputTokens: total, method: 'codex-input' };
   const scale = stats.estimatedTotalTokens > 0 ? total / stats.estimatedTotalTokens : 0;
   const images = Math.min(total, Math.round((stats.estimatedImageTokens || 0) * scale));
@@ -133,16 +136,17 @@ export function scaleRuntimeRequestContextEstimate(stats: RuntimeRequestContextS
     actualInputTokens: undefined, method: 'request-estimate' };
 }
 
-/** Older log serializers marked repeated references as circular; the first copy remains valid. */
+/** Read provider counts without mistaking an adapter's missing-usage zero for a measurement. */
 export function runtimeProviderInputTokens(value: unknown): number | undefined {
   const object = (candidate: unknown): Record<string, unknown> => candidate && typeof candidate === 'object'
     && !Array.isArray(candidate) ? candidate as Record<string, unknown> : {};
   const output = object(value);
   const response = object(output.response);
-  for (const candidate of [output.usage, response.usage, object(response.body).usage]) {
+  for (const candidate of [output.rawUsage, response.rawUsage, output.usage, response.usage, object(response.body).usage]) {
     const usage = object(candidate);
-    const total = usage.inputTokens ?? usage.input_tokens;
-    if (typeof total === 'number' && Number.isFinite(total) && total >= 0) return Math.round(total);
+    const input = usage.inputTokens ?? usage.input_tokens ?? usage.prompt_tokens;
+    const total = typeof input === 'object' ? object(input).total : input;
+    if (typeof total === 'number' && Number.isFinite(total) && total > 0) return Math.round(total);
   }
 }
 
