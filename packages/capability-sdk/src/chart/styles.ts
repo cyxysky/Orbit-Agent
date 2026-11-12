@@ -8,6 +8,7 @@ export const chartStyles = `
 .capability-chart-icon{display:block;width:17px;height:17px;min-width:17px;flex:none;pointer-events:none}
 .capability-chart-icon-slot{display:inline-flex;align-items:center;justify-content:center;flex:none;line-height:0;pointer-events:none}
 .capability-chart-interactive .capability-chart-header{display:flex;align-items:center;gap:12px;flex-shrink:0;margin:0;padding:14px 16px 10px;color:#253149;font:500 14px/1.5 system-ui,sans-serif}
+.capability-chart-interactive .capability-chart-header.is-actions-only{justify-content:flex-end}
 .capability-chart-title{flex:1;min-width:0;font-size:14px;font-weight:600;overflow-wrap:anywhere}
 .capability-chart-actions{display:flex;align-items:center;gap:2px;padding:3px;border-radius:9px;background:#f5f7fa;flex:none}
 .capability-chart-icon-button{width:30px;height:30px;flex:none;padding:6px}

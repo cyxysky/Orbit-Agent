@@ -29,6 +29,29 @@ This Skill is authoritative for the chart model tool and is supplied by the char
 
 Markdown never renders charts. Identifiers such as \`chart_000001\`, including standalone lines and code examples, remain ordinary text.
 
+## Layout and labels
+
+The host displays the saved chart title; when an ECharts title repeats it, the
+host keeps only the title drawn inside the chart. Keep the export's title intact.
+Set title/subtitle text widths and overflow wrapping for long copy, and reserve
+enough space before the plot. Use media queries for narrower containers instead
+of assuming a desktop width. Supply a wide/default media rule that restores every
+field overridden by a narrow rule; ECharts does not automatically restore base
+values when a query stops matching. Use ignore=true to hide a graphic group and
+its descendants; invisible on a group does not hide its children.
+
+For flow diagrams, size stages for readable text and reserve room for all branch
+annotations. Prefer graph for data-driven links, or graphic groups with native
+rect/ellipse/text elements for static diagrams that need even borders and exact
+stage dimensions. Do not stretch scatter markers into diagram boxes. When using
+scatter as a label anchor, use a small transparent circle with an explicit label
+color; symbol="none" or symbolSize=0 suppresses its label. Valid built-in symbols
+include circle, rect, roundRect, triangle, diamond, pin and arrow; ellipse is not
+a built-in symbol (use circle with a [width, height] size). Very wide roundRect
+symbols stretch their corners; use rect when square stage boundaries are intended.
+Check that annotations, the longest stage name and the title fit at both narrow
+and wide widths before reporting a diagram complete.
+
 ## Supported ECharts surface
 
 The complete ECharts 6.1 package is loaded. Standard built-in series include \`line\`, \`bar\`, \`pie\`, \`scatter\`, \`effectScatter\`, \`radar\`, \`tree\`, \`treemap\`, \`sunburst\`, \`boxplot\`, \`candlestick\`, \`heatmap\`, \`map\`, \`parallel\`, \`lines\`, \`graph\`, \`sankey\`, \`funnel\`, \`gauge\`, \`pictorialBar\`, \`themeRiver\`, \`chord\`, and \`custom\`. Mixed charts use multiple series items in one option.

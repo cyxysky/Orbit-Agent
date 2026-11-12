@@ -61,6 +61,12 @@ function DataChartRenderer({ chart, classNames = {}, onSave, onReload, onDownloa
   const converted = useMemo(() => current.engine === 'three' ? undefined : echartsToThree(current.option, t), [current, t]);
   const isThree = current.engine === 'three' || (threeView && Boolean(converted));
   const displayOption = threeView && converted ? converted : current.option;
+  const embeddedTitles = Array.isArray(current.option.title) ? current.option.title : [current.option.title];
+  const titleInChart = !isThree && Boolean(current.title?.trim()) && embeddedTitles.some(value => {
+    if (!value || typeof value !== 'object') return false;
+    const title = value as Record<string, unknown>;
+    return title.show !== false && typeof title.text === 'string' && title.text.trim() === current.title?.trim();
+  });
   const dataTables = useMemo(() => chartDataTables(current.option, t), [current, t]);
   const renderer = current.renderer || 'canvas';
   const threeOption = isThree ? displayOption : undefined;
@@ -163,8 +169,8 @@ function DataChartRenderer({ chart, classNames = {}, onSave, onReload, onDownloa
   const filename = (current.title || current.chartId).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').slice(0, 100);
   return <figure ref={rootRef} className={`${classNames.root || 'capability-chart'} capability-chart-interactive${error ? ` ${classNames.error || 'has-error'}` : ''}`} aria-label={current.description || current.title || current.chartId} data-chart-id={current.chartId} data-chart-engine={isThree ? 'three' : 'echarts'} data-fullscreen={fullscreen || undefined}>
     <style>{chartStyles}</style>
-    <figcaption className="capability-chart-header">
-      <strong className="capability-chart-title">{current.title || t('图表')}</strong>
+    <figcaption className={`capability-chart-header${titleInChart ? ' is-actions-only' : ''}`}>
+      {!titleInChart && <strong className="capability-chart-title">{current.title || t('图表')}</strong>}
       <div className="capability-chart-actions" role="group" aria-label={t("图表操作")}>
       {converted && <><button type="button" className="capability-chart-view-button" aria-pressed={threeView} onClick={() => setThreeView(!threeView)}>{t(threeView ? '2D 视图' : '3D 视图')}</button><span className="capability-chart-action-divider" /></>}
       <button type="button" className="capability-chart-icon-button" aria-label={t("编辑数据")} title={t("编辑数据")} disabled={saving} aria-haspopup="dialog" onClick={() => { if (downloadRef.current) downloadRef.current.open = false; editSnapshotRef.current = current; setEditing(true); setNotice(''); }}><ChartIcon name="edit" /></button>
