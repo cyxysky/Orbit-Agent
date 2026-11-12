@@ -9,6 +9,21 @@ export type ResponseCompletion = {
 };
 export type StructuredResponse = { status: 'passed' | 'failed' | 'blocked'; blocks: ResponseBlock[]; completion?: ResponseCompletion };
 export type ResponseResource = { topic: string; id: string };
+export type ResponseInputFeedback = {
+  message: string;
+  availableTypes: string[];
+  blocks: Array<{ path: string; type?: string; requiredParams: string[]; allowedParams: string[];
+    missingParams: string[]; unexpectedParams: string[]; matchingTypes: string[]; examples: ResponseBlock[] }>;
+};
+
+export class ResponseInputValidationError extends CodedError {
+  constructor(error: unknown, readonly inputFeedback: ResponseInputFeedback) {
+    const hints = inputFeedback.blocks.map(block => `${block.path} (${block.type || 'missing type'}): required params [${block.requiredParams.join(', ')}]; unexpected params [${block.unexpectedParams.join(', ')}]${block.matchingTypes.length ? `; params match [${block.matchingTypes.join(', ')}]` : ''}.`);
+    super(ERROR_CODES.VALIDATION_FAILED, ['Invalid response input.', ...hints, inputFeedback.message,
+      (error instanceof Error ? error.message : String(error)).slice(0, 2500)].join('\n'), { cause: error });
+    this.name = 'ResponseInputValidationError';
+  }
+}
 
 /** Pure contracts: safe to import in a browser, with no runtime or React dependency. */
 export interface ResponseDefinition<T = Record<string, unknown>> {
@@ -153,9 +168,41 @@ export class ResponseRegistry {
     catch (error) {
       let repaired: string | undefined;
       try { repaired = this.repairInput(JSON.stringify(value)); } catch { /* Preserve the original validation error. */ }
-      if (!repaired) throw error;
+      if (!repaired) throw new ResponseInputValidationError(error, this.inputFeedback(value));
       return this.parseResponse(JSON.parse(repaired));
     }
+  }
+
+  /** Describe only registered types. Matching schemas are suggestions, never a
+   * reason to change an explicit type: resource families may share params. */
+  inputFeedback(value: unknown): ResponseInputFeedback {
+    const response = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+    const blocks: ResponseInputFeedback['blocks'] = [];
+    for (const [index, raw] of (Array.isArray(response.blocks) ? response.blocks : []).entries()) {
+      try { this.parse(raw); continue; } catch { /* Explain rejected blocks only. */ }
+      if (blocks.length >= 4) break;
+      const block = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+      const type = typeof block.type === 'string' ? block.type : undefined;
+      const definition = type ? this.get(type) : undefined;
+      const schema = definition?.params.jsonSchema;
+      const properties = schema?.properties && typeof schema.properties === 'object' ? Object.keys(schema.properties) : [];
+      const required = Array.isArray(schema?.required) ? schema.required.filter((key): key is string => typeof key === 'string') : [];
+      const params = block.params && typeof block.params === 'object' && !Array.isArray(block.params) ? block.params as Record<string, unknown> : {};
+      const matching = this.definitions().filter(candidate => {
+        if (candidate.type === type) return false;
+        try { candidate.params.parse(block.params); return true; } catch { return false; }
+      });
+      // Examples use catalog samples, not arbitrary model input which may be
+      // huge or contain secrets. The original arguments stay in the tool call.
+      const examples = (matching.length ? matching : definition ? [definition] : []).slice(0, 4).flatMap(candidate =>
+        candidate.examples?.[0] ? [{ type: candidate.type, params: candidate.examples[0] }] : []).filter(example => JSON.stringify(example).length <= 3000);
+      blocks.push({ path: `blocks[${index}]`, type, requiredParams: required, allowedParams: properties,
+        missingParams: required.filter(key => !Object.hasOwn(params, key)),
+        unexpectedParams: schema?.additionalProperties === false ? Object.keys(params).filter(key => !properties.includes(key)) : [],
+        matchingTypes: matching.map(candidate => candidate.type), examples });
+    }
+    return { message: 'The response was not accepted. Keep the authored content and completion declaration; correct the block type/params and call finalResponse again. For generated resources, copy the exact response block returned by the successful tool. Several types may share a params schema: do not guess between them or regenerate a resource merely to repair its response block.',
+      availableTypes: this.definitions().map(definition => definition.type), blocks };
   }
 
   /** Keep model instructions and examples aligned with the same registered schemas. */
@@ -163,6 +210,7 @@ export class ResponseRegistry {
     return [
       'Every final answer, including prose-only answers and clarification questions, must be submitted through finalResponse. Ordinary assistant text is progress narration, not a completed response.',
       'When a successful tool returns content entries with type="response", finish with finalResponse and include their exact block values. Plain text identifiers do not render registered views.',
+      'If finalResponse is rejected for invalid arguments, nothing was accepted. Correct the returned block type/params using the validation feedback and resubmit finalResponse. Preserve generated resources and their exact response blocks; do not treat a correctable input error as task completion or regenerate the resource just to repair its display.',
       'Every block has exactly {type, params}. Keep text, title, html and css INSIDE that block\'s params. CSS belongs in the same core.html block as its HTML; never emit a separate CSS block or a {$text: ...} fragment. For ordinary prose, use core.markdown with params.text.',
       'Registered block types for this run:',
       ...this.definitions().map(definition => {

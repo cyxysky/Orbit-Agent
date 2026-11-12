@@ -11,7 +11,7 @@ import { markdownBlock } from '@cjfclonedeep/capability-sdk/responses';
 import { ResponseSession, type StructuredResponse } from '@cjfclonedeep/capability-sdk';
 import { getModel, getModelSettings } from '@/server/ai/model';
 import { aiReasoningEffort, aiRuntimeRequestTimeoutMs, aiRuntimeStreamTimeouts, createAiRequestWatchdog } from '@/server/ai/ai-sdk-runtime';
-import { runtimeError } from '@/server/ai/runtime-errors';
+import { runtimeError, runtimeToolFailure } from '@/server/ai/runtime-errors';
 import { recordAgentsModelMetrics } from '@/server/ai/ai-sdk-telemetry';
 import { responseRegistry } from '@/lib/response-registry';
 import { browserChatHasPendingHumanInput, browserChatRequestedUserInput } from '@/lib/browser-chat-tools';
@@ -329,7 +329,7 @@ export async function executeAgentsBrowserTurn(input: Input, host: AgentsBrowser
       await archive([decision]);
       await journal.plan([decision], [{ toolCallId: callId, toolName: name, input: args }]);
     }
-    let value: unknown, failed = false;
+    let value: unknown, failed = false, invocationStarted = false;
     try {
       await agentSession.finish();
       if (!definitions[name] || disabled.has(name) || !isRuntimeToolEnabled(name, runtimeConfiguration()) || accepted || pauseRequested) {
@@ -338,13 +338,15 @@ export async function executeAgentsBrowserTurn(input: Input, host: AgentsBrowser
         await call.validate?.();
         assertActive();
         await journal.begin(callId);
+        invocationStarted = true;
         value = await call.invoke();
       }
     } catch (error) {
       if (signal.aborted) throw error;
       failed = true;
-      value = { ok: false, outcome: journal.state.pending?.startedCallIds?.includes(callId) ? 'unknown' : 'not-executed',
-        actual: error instanceof Error ? error.message : String(error), error: runtimeError(error), safeToRetry: false };
+      const failure = runtimeToolFailure(error, invocationStarted || Boolean(journal.state.pending?.startedCallIds?.includes(callId)));
+      if ('retryRequiresInputChange' in failure && failure.retryRequiresInputChange) trace.invalid = true;
+      value = failure;
     }
     const receipt: ModelMessage = { role: 'tool', content: [{ type: 'tool-result', toolCallId: callId, toolName: name,
       output: { type: failed ? 'error-json' : 'json', value: safeJson(value) } }] };

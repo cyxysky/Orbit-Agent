@@ -350,6 +350,30 @@ export class CodedError extends Error {
   override toString() { return `[${this.code}] ${this.name}: ${this.message}`; }
 }
 
+/** Only schema rejection before invocation is safe to retry with corrected input.
+ * An executor throwing validation_failed after it starts does not have this guarantee. */
+export class ToolInputValidationError extends CodedError {
+  readonly stage = 'input-validation';
+  readonly recovery: { action: 'correct-input'; message: string; feedback?: unknown };
+
+  constructor(readonly toolName: string, error: unknown) {
+    super(ERROR_CODES.VALIDATION_FAILED, `Invalid arguments for ${toolName}: ${errorMessage(error)}`, { cause: error });
+    this.name = 'ToolInputValidationError';
+    const feedback = error && typeof error === 'object' && 'inputFeedback' in error ? error.inputFeedback : undefined;
+    this.recovery = { action: 'correct-input',
+      message: 'No tool action was executed. Correct the arguments using this feedback and the current tool schema, then submit a new tool call. Do not repeat the same invalid arguments or report task completion from this rejected call.',
+      ...(feedback !== undefined ? { feedback } : {}),
+    };
+  }
+
+  toResult() {
+    return { ok: false as const, outcome: 'not-executed' as const, code: this.code,
+      failureCategory: ERROR_CODES.INVALID_INPUT, actual: this.message, safeToRetry: true,
+      retryRequiresInputChange: true, recovery: this.recovery,
+      error: { name: this.name, code: this.code, message: this.message } };
+  }
+}
+
 export class CodedAggregateError extends AggregateError {
   readonly code: ErrorCode;
 

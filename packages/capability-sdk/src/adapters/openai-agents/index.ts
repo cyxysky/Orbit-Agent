@@ -1,6 +1,6 @@
 import { tool, type FunctionTool, type ToolInputParameters } from '@openai/agents-core';
 import { asSchema, type ToolSet } from 'ai';
-import { CodedError, ERROR_CODES } from '../../errors.ts';
+import { CodedError, ERROR_CODES, ToolInputValidationError } from '../../errors.ts';
 
 export type AgentsToolInvocation = {
   name: string;
@@ -45,7 +45,7 @@ export async function adaptAISDKToolsForAgents(definitions: ToolSet, options: {
         const validate = async () => {
           if (validated) return;
           const parsed = await schema.validate?.(input);
-          if (parsed && !parsed.success) throw parsed.error;
+          if (parsed && !parsed.success) throw new ToolInputValidationError(name, parsed.error);
           validatedInput = parsed?.success ? parsed.value : input;
           validated = true;
         };
@@ -56,7 +56,15 @@ export async function adaptAISDKToolsForAgents(definitions: ToolSet, options: {
             toolCallId: callId, messages: [], abortSignal: signal, context: undefined,
           });
         };
-        return options.execute ? options.execute({ name, input, callId, signal, validate, invoke }) : invoke();
+        if (options.execute) return options.execute({ name, input, callId, signal, validate, invoke });
+        try { await validate(); }
+        catch (error) {
+          if (signal?.aborted) throw signal.reason;
+          if (error instanceof ToolInputValidationError) return error.toResult();
+          throw error;
+        }
+        // Execution failures must not be relabeled as safe schema retries.
+        return invoke();
       },
     });
   }));

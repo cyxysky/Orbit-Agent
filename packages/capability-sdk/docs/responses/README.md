@@ -113,6 +113,25 @@ contains a union of exact `type` constants and each package's parameter schema.
 Local JSON Schema references are relocated when combining recursive schemas.
 The JSON Schema and runtime parser originate from the same package definition.
 
+### Recovering rejected arguments
+
+`ResponseRegistry.parseInput` keeps strict type/params validation and attempts only
+the registry's existing lossless repairs. A remaining rejection throws
+`ResponseInputValidationError` with `validation_failed` and `inputFeedback`:
+registered types, rejected block paths, required/unknown params and bounded valid
+catalog examples. Matching parameter schemas are suggestions only. When chart
+and canvas types share a resource-ID schema, the registry never guesses the type
+or changes an explicit type; copy the successful generation tool's response block.
+
+The Agents adapter wraps schema rejection before invocation in
+`ToolInputValidationError`. Its structured result has `outcome: "not-executed"`,
+`safeToRetry: true`, `retryRequiresInputChange: true` and a `correct-input` recovery
+instruction. Submit a new call with corrected arguments; do not blindly replay
+the rejected arguments. A final response rejected this way is not accepted and
+does not stop the Agent loop. This applies to all schema-validated CAP tools.
+Exceptions after execution intent begins retain an unknown outcome and are not
+automatically safe to retry, even if their error code is `validation_failed`.
+
 Successful capability tools return a ready-to-use block:
 
 ```json

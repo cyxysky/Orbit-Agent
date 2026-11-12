@@ -1,4 +1,14 @@
-import { getErrorCode, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+import { getErrorCode, ERROR_CODES, ToolInputValidationError } from '@cjfclonedeep/capability-sdk';
+
+/** Execution intent is durable before invocation; only pre-invocation schema
+ * rejection can promise that correcting arguments will not replay a side effect. */
+export function runtimeToolFailure(error: unknown, invocationStarted: boolean) {
+  const inputRejected = !invocationStarted && error instanceof ToolInputValidationError;
+  if (inputRejected) return error.toResult();
+  return { ok: false as const,
+    outcome: invocationStarted ? 'unknown' as const : 'not-executed' as const,
+    actual: error instanceof Error ? error.message : String(error), safeToRetry: false, error: runtimeError(error) };
+}
 
 /** Preserve exception evidence before JSON serialization drops Error properties. */
 export function runtimeError(error: unknown, depth = 0): Record<string, unknown> {
