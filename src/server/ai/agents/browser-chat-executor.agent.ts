@@ -7,7 +7,7 @@ import { type BrowserChatInteractionMode } from '@/lib/browser-chat-interaction-
 import { artifactApiUrl } from '@/lib/artifacts';
 import { browserChatCapabilityResult } from '@/lib/browser-chat-capability-result';
 import { isRuntimeToolEnabled } from '@/server/runtime/self-bootstrap-policy';
-import { coreResponses } from '@cjfclonedeep/capability-sdk/responses';
+import { responseRegistry } from '@/lib/response-registry';
 import { type StructuredResponse } from '@cjfclonedeep/capability-sdk';
 import { contextReadToolName, type RuntimeContextManifest } from './runtime-context-assembler';
 import { type RuntimeKnowledgeBlock } from './runtime-knowledge-context';
@@ -1084,12 +1084,15 @@ async function makeBrowserTools(
         )).map((provider) => provider.manifest.id),
       ])
     : undefined;
+  const providers = [...managedProviders, ...infrastructureProviders];
+  const providerResponseTypes = new Set(providers.flatMap(provider => provider.manifest.responses?.map(response => response.type) || []));
   const capabilityRuntime = await mountAISDKCapabilities({
-    responses: coreResponses,
-    providers: [
-      ...managedProviders,
-      ...infrastructureProviders,
-    ],
+    // MCP wrappers expose tools without the original package's manifest. Supply
+    // the installed output contracts too; CAP filters them by the tools that
+    // actually mounted, so disabled/uninstalled tools cannot advertise views.
+    // Native providers remain authoritative for their own response definitions.
+    responses: responseRegistry.definitions().filter(response => !providerResponseTypes.has(response.type)),
+    providers,
     context: {
       runId: referenceOptions?.runId || '',
       sessionId: referenceOptions?.sessionId,

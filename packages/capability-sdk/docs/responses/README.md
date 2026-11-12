@@ -113,6 +113,14 @@ contains a union of exact `type` constants and each package's parameter schema.
 Local JSON Schema references are relocated when combining recursive schemas.
 The JSON Schema and runtime parser originate from the same package definition.
 
+MCP tool discovery alone does not transfer a package's `manifest.responses`.
+When the host wraps a remote tool as a local provider, it must supply the output
+definitions installed with its renderers and handlers as `responses`, excluding
+types already owned by native provider manifests. Mounting filters that catalog
+against the tools that actually resolved. Otherwise a generation tool can return
+a valid response block while `finalResponse` has no schema for its type. Adding
+more prompt instructions cannot repair that missing contract.
+
 ### Recovering rejected arguments
 
 `ResponseRegistry.parseInput` keeps strict type/params validation and attempts only
