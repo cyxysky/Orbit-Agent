@@ -53,7 +53,7 @@ export function ToolCapabilitySettings({ items, onChange, onConfigure, disabled 
         const descriptionId = `${id}-${tool.name}-description`;
         return <article className={`settings-row tool-capability-row${enabled ? '' : ' is-disabled'}`} key={tool.name} data-setting-key={tool.envKey}>
           <div>
-            <strong className="tool-capability-title"><Icon aria-hidden="true" size={17} />{t(tool.label)}{component ? <small className="tool-capability-status">{t(component.state === 'ready' ? '已安装' : component.state === 'installing' ? '安装中' : component.state === 'failed' ? '安装失败' : '未安装')}</small> : null}</strong>
+            <strong className="tool-capability-title"><Icon aria-hidden="true" size={17} />{t(tool.label)}{component ? <small className="tool-capability-status">{t(component.state === 'ready' ? '已安装' : component.state === 'installing' ? '安装中' : component.state === 'failed' ? '安装失败' : component.state === 'cancelled' ? '已取消' : '未安装')}</small> : null}</strong>
             <span id={descriptionId}>{t(tool.description)}</span>
           </div>
           <div className="tool-capability-actions">

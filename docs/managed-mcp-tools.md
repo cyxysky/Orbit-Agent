@@ -22,6 +22,26 @@ Orbit 的服务端包保留 Web 界面、身份校验、对话调度、数据库
 
 全局工具开关、用户权限和部署权限继续生效。安装终端或电脑工具不会授予宿主执行权限；代码沙箱仍需部署允许的隔离执行后端。
 
+## 安装任务与 AI 协助
+
+「安装与运行」显示持久化任务 ID 对应的阶段、耗时、实时日志和实际下载字节数。支持检查 npm、目录写权限和运行平台，取消当前任务以及失败后重试。日志按 UTF-8 解码并脱敏，保留最近 24,000 字符；没有实际总字节数时显示不定进度，不推算下载百分比。超过一分钟没有新输出时提示检查日志。心跳和最后输出时间分别记录，进程退出时安装会转为失败。
+
+前端通过 `/api/settings/tools?stream=1&id=<单个工具ID>` 读取 NDJSON 更新，连接中断后自动重连，并保留低频列表刷新以发现 AI 发起的任务。响应关闭代理缓冲，慢客户端按背压读取最新状态。关闭弹窗不会取消后台任务，重新打开可继续查看。取消请求必须携带当前 `jobId`，旧任务不能误取消新任务。失败和取消会保留暂存依赖及下载缓存，重试使用相同工具暂存目录和 npm 缓存；卸载同时清理该工具暂存目录。
+
+AI 使用已有 `selfBootstrap` 的 `domain=tools`，不依赖浏览器、终端或知识库工具。调用要求管理员身份，部署开启 `ORBIT_SELF_BOOTSTRAP_ENABLED=true`，并启用自举工具。请求和设置页共用 SDK 安装器及配置服务：
+
+```json
+{"domain":"tools","request":{"action":"list"}}
+{"domain":"tools","request":{"action":"check","id":"browser"}}
+{"domain":"tools","request":{"action":"install","id":"browser"}}
+{"domain":"tools","request":{"action":"wait","id":"browser","jobId":"<安装返回的UUID>","timeoutMs":15000}}
+{"domain":"tools","request":{"action":"status","id":"browser"}}
+{"domain":"tools","request":{"action":"cancel","id":"browser","jobId":"<当前UUID>"}}
+{"domain":"tools","request":{"action":"retry","id":"browser"}}
+```
+
+`install` 返回后台任务，不代表安装成功；仅在 `state=ready` 且 MCP 初始化及工具列表校验通过后可报告完成。安装不会自动启用工具，新安装/启用的工具在下一次 Agent 执行时挂载。管理接口仅接受工具目录中的单个 ID；不能通过它传入任意命令、下载地址或宿主路径。该入口管理 Orbit 自带的可选组件；第三方 MCP 仍在对应服务的齿轮弹窗中配置。
+
 ## MCP 加载方式
 
 每个组件只包含所选 SDK provider 的模块图和必要依赖。安装过程会执行 npm 安装、准备该工具所需运行环境，并通过真实 MCP 初始化及 `tools/list` 校验入口。校验成功才发布为可用版本。

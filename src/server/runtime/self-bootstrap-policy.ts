@@ -25,7 +25,7 @@ export function requireHostExecution(operation: string) {
 export function selfBootstrapInstructions() {
   return [
     selfBootstrapEnabled()
-      ? 'Executable extension self-bootstrap is enabled. Use selfBootstrap to write, validate, probe, activate, disable and roll back isolated extensions. It is independent of terminal/browser/knowledge switches. New activations appear in the next mounted Agent execution; running executions retain their immutable version. Configuration registration only creates data fields and is not a substitute for executable behavior. Do not claim functional acceptance from syntax validation alone.'
+      ? 'Self-bootstrap is enabled. Use selfBootstrap domain=tools to check, install, inspect, wait for, retry and cancel individual managed tool installation jobs. Use domain=extensions to write, validate, probe, activate, disable and roll back isolated extensions. It is independent of terminal/browser/knowledge switches. New installations and activations appear in the next mounted Agent execution; running executions retain their immutable tool list. Configuration registration only creates data fields and is not a substitute for executable behavior. Do not claim functional acceptance from syntax validation alone.'
       : 'Executable extension self-bootstrap is disabled by the deployment owner.',
     hostExecutionEnabled()
       ? `Separate host execution permission is enabled. Orbit project directory is ${process.env.WEBPILOT_APP_DIR || process.cwd()}. Use enabled host tools only for user-requested work. Changes to core source require the normal source/update workflow; do not patch installed bundles as an extension. Service lifecycle changes require explicit user instructions.`

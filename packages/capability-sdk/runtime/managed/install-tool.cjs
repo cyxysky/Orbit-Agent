@@ -6,7 +6,7 @@ const { spawn } = require('node:child_process');
 const { createRequire } = require('node:module');
 const { packageTool } = require('./package-tool.cjs');
 const catalog = require('./tools.json').tools;
-const { createInstallProgress, advanceInstallProgress } = require('./install-progress.cjs');
+const { createInstallJournal } = require('./install-journal.cjs');
 
 async function removeWithin(root, target) {
   const actualRoot = await fsp.realpath(root);
@@ -24,86 +24,128 @@ function npmCli() {
     .find(file => file && path.basename(file) === 'npm-cli.js' && fs.existsSync(file));
 }
 async function execute(command, args, options = {}) {
+  const { signal, journal, ...spawnOptions } = options;
+  signal?.throwIfAborted();
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], ...options });
+    const child = spawn(command, args, { windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'], ...spawnOptions });
     let output = '';
-    const read = chunk => { output = (output + chunk.toString()).slice(-12000); process.stderr.write(chunk); };
-    child.stdout.on('data', read); child.stderr.on('data', read);
-    child.once('error', reject);
-    child.once('exit', code => code === 0 ? resolve(output) : reject(new Error('Tool installation command failed (' + code + '): ' + output)));
+    const terminate = force => {
+      if (!child.pid) return;
+      if (process.platform === 'win32') {
+        const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+        killer.once('error', () => child.kill());
+      } else { try { process.kill(-child.pid, force ? 'SIGKILL' : 'SIGTERM'); } catch { child.kill(); } }
+    };
+    let reason, forceTimer;
+    const stop = error => { if (reason) return; reason = error; terminate(false); forceTimer = setTimeout(() => terminate(true), 5000); };
+    const abort = () => stop(signal.reason || new Error('Installation cancelled.'));
+    const timer = setTimeout(() => stop(new Error('Installation command timed out after 30 minutes.')), 30 * 60_000);
+    const line = text => {
+      if (text.startsWith('@@capability-progress@@')) {
+        try { journal?.progress(JSON.parse(text.slice(23))); return; } catch { /* preserve invalid output */ }
+      }
+      journal?.output(text + '\n');
+      output = (output + text + '\n').slice(-12000);
+    };
+    for (const stream of [child.stdout, child.stderr]) {
+      stream.setEncoding('utf8');
+      let pending = '';
+      stream.on('data', chunk => {
+        pending += chunk;
+        const lines = pending.split(/[\r\n]/); pending = lines.pop();
+        for (const text of lines) if (text) line(text);
+        if (pending.length > 64000) { line(pending); pending = ''; }
+      });
+      stream.on('end', () => { if (pending) line(pending); });
+    }
+    const cleanup = () => { clearTimeout(timer); clearTimeout(forceTimer); signal?.removeEventListener('abort', abort); };
+    signal?.addEventListener('abort', abort, { once: true });
+    child.once('error', error => { cleanup(); reject(error); });
+    child.once('close', code => { cleanup(); reason ? reject(reason) : code === 0 ? resolve(output) : reject(new Error('Tool installation command failed (' + code + '): ' + output)); });
+    if (signal?.aborted) abort();
   });
 }
-async function installTool({ root, id, sdkRoot, env = {}, config = {}, version = '0.3.0', registry = 'https://registry.npmjs.org' }) {
+async function installTool({ root, id, sdkRoot, env = {}, config = {}, jobId = randomUUID(), version = '0.3.0', registry = 'https://registry.npmjs.org' }) {
   const tool = catalog.find(item => item.id === id);
   if (!tool) throw new Error('Choose one known tool id. Installing all tools is not supported.');
+  // Tool credentials may reach its verification process; loader controls and
+  // install destinations always belong to the trusted deployment environment.
+  env = Object.fromEntries(Object.entries(env).filter(([key]) => !/^(?:NODE_|PYTHON|LD_|DYLD_|CAPABILITY_|ELECTRON_|npm_|BASH_ENV$|ENV$|PATH$|PATHEXT$|COMSPEC$)/i.test(key)));
   root = path.resolve(root);
   const stateDirectory = path.join(root, '.state');
   await fsp.mkdir(stateDirectory, { recursive: true });
-  const statusFile = path.join(stateDirectory, id + '.json');
   const lock = path.join(stateDirectory, id + '.lock');
-  const token = randomUUID();
-  const stage = path.join(root, '.staging', id + '-' + token);
-  let progress = createInstallProgress(tool);
-  const state = (phase, message, extra = {}) => {
-    const updatedAt = new Date().toISOString();
-    progress = advanceInstallProgress(progress, phase, updatedAt);
-    const value = { id, state: 'installing', phase, message, progress, pid: process.pid, token, updatedAt, ...extra };
-    const temporary = statusFile + '.' + token + '.tmp';
-    fs.writeFileSync(temporary, JSON.stringify(value), { mode: 0o600 });
-    fs.renameSync(temporary, statusFile);
-  };
+  const token = jobId;
+  const stage = path.join(root, '.staging', id);
+  const controller = new AbortController();
+  let journal;
+  const state = (...args) => journal.state(...args);
   try {
     const fd = fs.openSync(lock, 'wx', 0o600);
     fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, token })); fs.closeSync(fd);
   } catch (error) {
     if (error.code !== 'EEXIST') throw error;
     const owner = JSON.parse(fs.readFileSync(lock, 'utf8'));
+    if (owner.token === token) fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, token }), { mode: 0o600 });
+    else {
     try { process.kill(owner.pid, 0); throw new Error('This tool already has an installation in progress.'); }
     catch (alive) { if (alive.code !== 'ESRCH') throw alive; }
     fs.unlinkSync(lock);
-    return installTool({ root, id, sdkRoot, env, config, version, registry });
+    return installTool({ root, id, sdkRoot, env, config, version, registry, jobId });
+    }
   }
+  journal = createInstallJournal({ root, tool, jobId, signal: controller, secrets: [...Object.values(env), registry] });
+  const run = (command, args, options = {}) => execute(command, args, { ...options, signal: controller.signal, journal });
   try {
     await fsp.mkdir(stage, { recursive: true });
+    if (!(await fsp.realpath(stage)).startsWith((await fsp.realpath(root)) + path.sep)) throw new Error('Tool staging escapes its workspace.');
     state('source', '正在准备此工具的 SDK 源码');
     const cli = npmCli();
     if (!cli) throw new Error('The Node.js npm CLI is required to install a tool.');
     if (!sdkRoot || !fs.existsSync(path.join(sdkRoot, 'scripts', 'mcp-providers.mjs'))) {
       state('source', '正在获取 SDK 下载信息');
-      const source = path.join(stage, '.source');
-      await fsp.mkdir(source, { recursive: true });
-      const response = await fetch(registry.replace(/\/$/, '') + '/@cjfclonedeep%2fcapability-sdk/' + encodeURIComponent(version), { signal: AbortSignal.timeout(30000) });
+      const cached = path.join(stage, '.source');
+      if (fs.existsSync(path.join(cached, 'scripts/mcp-providers.mjs'))) sdkRoot = cached;
+    }
+    if (!sdkRoot || !fs.existsSync(path.join(sdkRoot, 'scripts', 'mcp-providers.mjs'))) {
+      const { fetch: proxyFetch, EnvHttpProxyAgent } = require('undici');
+      const dispatcher = new EnvHttpProxyAgent();
+      try {
+      const response = await proxyFetch(registry.replace(/\/$/, '') + '/@cjfclonedeep%2fcapability-sdk/' + encodeURIComponent(version), { dispatcher, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(30000)]) });
       if (!response.ok) throw new Error('SDK release metadata is unavailable: HTTP ' + response.status);
       const metadata = await response.json();
       if (!metadata.dist?.tarball || !metadata.dist?.integrity) throw new Error('SDK release has no integrity-protected archive.');
       state('source', '正在下载 SDK 源码');
-      const archive = await fetch(metadata.dist.tarball, { signal: AbortSignal.timeout(180000) });
+      const archive = await proxyFetch(metadata.dist.tarball, { dispatcher, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(180000)]) });
       if (!archive.ok) throw new Error('SDK download failed: HTTP ' + archive.status);
       const chunks = []; let length = 0;
       for await (const chunk of archive.body) {
         length += chunk.length;
         if (length > 256 * 1024 * 1024) throw new Error('SDK archive exceeds its size limit.');
         chunks.push(chunk);
+        journal.progress({ message: '正在下载 SDK 源码', download: { receivedBytes: length, totalBytes: Number(archive.headers.get('content-length')) || 0 } });
       }
       const bytes = Buffer.concat(chunks);
       const integrity = metadata.dist.integrity.split(' ').find(value => value.startsWith('sha512-'));
       if (!integrity || createHash('sha512').update(bytes).digest('base64') !== integrity.slice(7)) throw new Error('SDK release integrity verification failed.');
       state('source', '正在解压并校验 SDK 源码');
       const tar = createRequire(cli)('tar');
+      const source = path.join(stage, '.source'); await fsp.mkdir(source, { recursive: true });
       const unpack = tar.x({ cwd: source, strip: 1, strict: true, preservePaths: false,
         filter: (_name, entry) => !['SymbolicLink', 'Link', 'CharacterDevice', 'BlockDevice', 'FIFO'].includes(entry.type) });
       await new Promise((resolve, reject) => { unpack.once('error', reject); unpack.once('close', resolve); unpack.end(bytes); });
       sdkRoot = source;
+      } finally { await dispatcher.close(); }
     }
     state('graph', '正在收集此工具的模块和依赖');
     const packaged = await packageTool({ sdkRoot, output: stage, tool });
-    const sharedRuntime = path.resolve(env.CAPABILITY_RUNTIME_HOME || path.join(root, 'runtime', process.platform + '-' + process.arch));
+    const sharedRuntime = path.join(root, 'runtime', process.platform + '-' + process.arch);
     const runtimeBefore = require('./layout.cjs').readManagedRuntime({ CAPABILITY_RUNTIME_HOME: sharedRuntime });
     // The installer and catalog from this release govern runtime provisioning.
     for (const file of ['runtime.cjs']) fs.copyFileSync(path.resolve(__dirname, '../../scripts', file), path.join(stage, 'sdk/scripts', file));
     for (const file of ['layout.cjs', 'spec.json', 'linux-system.cjs']) if (fs.existsSync(path.join(__dirname, file))) fs.copyFileSync(path.join(__dirname, file), path.join(stage, 'sdk/runtime/managed', file));
     state('dependencies', '正在安装 ' + tool.title + ' 的独立依赖', { packages: Object.keys(packaged.dependencies) });
-    await execute(process.execPath, [cli, 'install', '--prefix', stage, '--omit=dev', '--no-audit', '--no-fund', '--registry', registry], {
+    await run(process.execPath, [cli, 'install', '--prefix', stage, '--omit=dev', '--no-audit', '--no-fund', '--prefer-offline', '--loglevel=http', '--registry', registry], {
       cwd: stage, env: { ...process.env, ...Object.fromEntries(Object.entries(env).filter(([key]) => /^(?:FFMPEG_BINARIES_URL|FFMPEG_BINARY_RELEASE|HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY)$/i.test(key))),
         ...(runtimeBefore?.ffmpeg ? { FFMPEG_BIN: runtimeBefore.ffmpeg } : {}),
         CAPABILITY_SKIP_RUNTIME_INSTALL: '1', ELECTRON_SKIP_BINARY_DOWNLOAD: '1', PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1' },
@@ -124,8 +166,8 @@ async function installTool({ root, id, sdkRoot, env = {}, config = {}, version =
     await prune(path.join(stage, 'node_modules'));
     if (tool.runtime) {
       state('runtime', '正在准备 ' + tool.title + ' 所需的运行环境');
-      await execute(process.execPath, [path.join(stage, 'sdk/scripts/runtime.cjs'), 'install', tool.runtime], {
-        cwd: stage, env: { ...process.env, ...env, CAPABILITY_SKIP_RUNTIME_INSTALL: '0', CAPABILITY_RUNTIME_HOME: sharedRuntime },
+      await run(process.execPath, [path.join(stage, 'sdk/scripts/runtime.cjs'), 'install', tool.runtime], {
+        cwd: stage, env: { ...process.env, ...env, CAPABILITY_INSTALL_PROGRESS: '1', CAPABILITY_SKIP_RUNTIME_INSTALL: '0', CAPABILITY_RUNTIME_HOME: sharedRuntime },
       });
     }
     const runtimeAfter = require('./layout.cjs').readManagedRuntime({ CAPABILITY_RUNTIME_HOME: sharedRuntime });
@@ -151,7 +193,8 @@ async function installTool({ root, id, sdkRoot, env = {}, config = {}, version =
     try {
       client = await createMCPClient({ transport, clientName: 'capability-installer', maxRetries: 0,
         initializationOptions: { timeout: 30000 } });
-      tools = (await client.listTools({ options: { signal: AbortSignal.timeout(30000) } })).tools;
+      controller.signal.throwIfAborted();
+      tools = (await client.listTools({ options: { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(30000)]) } })).tools;
       if (!tools.length) throw new Error('The MCP component did not expose any tools.');
     } finally { if (client) await client.close(); else await transport.close(); }
     // Installation paths never contain npm file: links into the staging directory.
@@ -169,19 +212,24 @@ async function installTool({ root, id, sdkRoot, env = {}, config = {}, version =
         await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
       }
     }
-    state('ready', '工具已安装', { state: 'ready', release, version: packaged.version, packages: Object.keys(packaged.dependencies) });
+    state('ready', '工具已安装', { state: 'ready', release, version: packaged.version, packages: Object.keys(packaged.dependencies), finishedAt: new Date().toISOString() });
     return installed;
   } catch (error) {
-    state('failed', '工具安装失败，可以重试', { state: 'failed', error: String(error.message || error).slice(-4000) });
+    const phase = controller.signal.aborted ? 'cancelled' : 'failed';
+    state(phase, phase === 'cancelled' ? '安装已取消，缓存已保留' : '工具安装失败，可以重试', { state: phase, error: String(error.message || error).slice(-4000), finishedAt: new Date().toISOString() });
     throw error;
   } finally {
+    journal.close();
     const owner = JSON.parse(fs.readFileSync(lock, 'utf8'));
     if (owner.token === token) await fsp.unlink(lock);
-    if (fs.existsSync(stage)) await removeWithin(root, stage);
+    // Keep source, npm dependencies and download caches for the next attempt.
+    // Configuration files can contain secrets and are never retained.
+    if (fs.existsSync(stage)) await removeWithin(root, path.join(stage, '.verification'));
   }
 }
 module.exports = { installTool, npmCli };
 if (require.main === module) {
   const input = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+  fs.unlinkSync(process.argv[2]);
   installTool(input).catch(error => { console.error(error.message); process.exitCode = 1; });
 }

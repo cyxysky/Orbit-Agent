@@ -14,6 +14,7 @@ import { ExternalIntegrationSettings } from '@/components/ExternalIntegrationSet
 import { WorkspaceContentSkeleton } from '@/components/WorkspaceContentSkeleton';
 import { useI18n } from '@/i18n/I18nProvider';
 import { readApiJson } from '@/lib/api-client';
+import { readNdjsonStream } from '@/lib/read-ndjson-stream';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
 import { TOOL_CAPABILITY_SETTINGS_CHANGED_EVENT, toolCapabilitySettings } from '@/lib/tool-capability-settings';
 import type { ManagedToolStatus } from '@cjfclonedeep/capability-sdk/managed/node';
@@ -48,6 +49,8 @@ export function ManagedToolSettings({ items, onChange, onSave, renderConfigurati
   const [rows, setRows] = useState<EnvironmentRow[]>([]);
   const [config, setConfig] = useState('{}');
   const [formError, setFormError] = useState('');
+  const [streamError, setStreamError] = useState('');
+  const [checks, setChecks] = useState<Array<{ name: string; ok: boolean; detail: string }>>([]);
   const installing = tools.some(tool => tool.state === 'installing');
   const editing = tools.find(tool => tool.id === editingId);
   const definition = toolCapabilitySettings.find(tool => tool.name === editingId);
@@ -63,19 +66,52 @@ export function ManagedToolSettings({ items, onChange, onSave, renderConfigurati
     return () => controller.abort();
   }, [load]);
   useEffect(() => {
-    if (!installing) return;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
-    const poll = () => { timer = setTimeout(() => void load(controller.signal).catch(() => undefined).finally(() => { if (!controller.signal.aborted) poll(); }), 1500); };
+    const poll = () => { timer = setTimeout(() => {
+      if (document.visibilityState === 'hidden') { poll(); return; }
+      void load(controller.signal).catch(value => { if (!controller.signal.aborted) setError(String(value.message || value)); })
+        .finally(() => { if (!controller.signal.aborted) poll(); });
+    }, installing ? 3000 : 10000); };
     poll();
     return () => { controller.abort(); clearTimeout(timer); };
   }, [installing, load]);
+  const editingState = editing?.state;
+  const editingJobId = editing?.jobId;
+  useEffect(() => {
+    setStreamError('');
+    if (!editingId || editingState !== 'installing') return;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    let attempts = 0;
+    const connect = async () => {
+      try {
+        const response = await fetch(endpoint + '?stream=1&id=' + encodeURIComponent(editingId), { signal: controller.signal, cache: 'no-store', headers });
+        if (!response.ok) { await readApiJson(response, t('读取安装进度失败')); return; }
+        await readNdjsonStream<{ tool?: ManagedToolStatus; error?: string }>(response, update => {
+          if (update.error) throw new Error(update.error);
+          if (!update.tool || controller.signal.aborted) return;
+          const tool = update.tool;
+          setTools(current => current.map(item => item.id === tool.id ? { ...item, ...tool } : item));
+          attempts = 0; setStreamError('');
+        }, controller.signal);
+      } catch (value) {
+        if (!controller.signal.aborted) setStreamError(t('实时进度连接中断，正在重连') + ' · ' + (value instanceof Error ? value.message : String(value)));
+      } finally {
+        if (!controller.signal.aborted) timer = setTimeout(() => void connect(), Math.min(8000, 1000 * 2 ** attempts++));
+      }
+    };
+    void connect();
+    return () => { controller.abort(); clearTimeout(timer); };
+  }, [editingId, editingState, editingJobId, endpoint, headers, t]);
   useEffect(() => { if (openTool && !loading) configure(openTool); }, [openTool, loading]);
   async function mutate(tool: Tool, action: string, extra: Record<string, unknown> = {}) {
     setBusy(current => new Set(current).add(tool.id));
     try {
-      await readApiJson(await fetch(endpoint, { method: 'POST', headers: { ...headers, 'content-type': 'application/json' },
+      const result = await readApiJson<{ checks?: Array<{ name: string; ok: boolean; detail: string }>; tool?: ManagedToolStatus }>(await fetch(endpoint, { method: 'POST', headers: { ...headers, 'content-type': 'application/json' },
         body: JSON.stringify({ id: tool.id, action, ...extra }) }), t('更新工具组件失败'));
+      if (result.tool) setTools(current => current.map(item => item.id === tool.id ? { ...item, ...result.tool } : item));
+      if (result.checks) setChecks(result.checks);
       await load();
       window.dispatchEvent(new Event(TOOL_CAPABILITY_SETTINGS_CHANGED_EVENT));
     } finally { setBusy(current => { const next = new Set(current); next.delete(tool.id); return next; }); }
@@ -83,6 +119,7 @@ export function ManagedToolSettings({ items, onChange, onSave, renderConfigurati
   function configure(id: string) {
     const tool = tools.find(item => item.id === id);
     setEditingId(id); setTab(tool && tool.state !== 'ready' ? 'runtime' : 'configuration'); setQuery(''); setFormError(''); setConfigurationBusy(false);
+    setChecks([]); setStreamError('');
     setRows((tool?.configuration.envKeys || []).map(key => ({ id: crypto.randomUUID(), key, original: key, value: '' })));
     setConfig(JSON.stringify(tool?.configuration.config || {}, null, 2));
   }
@@ -138,16 +175,19 @@ export function ManagedToolSettings({ items, onChange, onSave, renderConfigurati
           {renderConfiguration(editingId, query, setConfigurationBusy)}
         </div> : null}
         {tab === 'runtime' && editing ? <section className={styles.configuration}>
-          <div className={styles.sectionHeading}><h3>{t(editing.title)}</h3><span className={styles.state}>{t(editing.state === 'ready' ? '已安装' : editing.state === 'installing' ? '安装中' : editing.state === 'failed' ? '安装失败' : '未安装')}</span></div>
+          <div className={styles.sectionHeading}><h3>{t(editing.title)}</h3><span className={styles.state}>{t(editing.state === 'ready' ? '已安装' : editing.state === 'installing' ? '安装中' : editing.state === 'failed' ? '安装失败' : editing.state === 'cancelled' ? '已取消' : '未安装')}</span></div>
           <p className={styles.hint}>{t('仅安装当前工具及其必要依赖。对话和输出文件独立保留。')}</p>
-          {editing.progress ? <ToolInstallationProgress progress={editing.progress} message={editing.message} />
+          {editing.progress ? <ToolInstallationProgress tool={editing} />
             : editing.state === 'installing' ? <p role="status"><Loader2 className="spin" size={14} /> {t(editing.message)}</p> : null}
           {editing.error && editing.state === 'failed' ? <details><summary>{t('查看错误详情')}</summary><pre className={styles.installError}>{editing.error}</pre></details> : null}
+          {streamError ? <p className={styles.error} role="status">{streamError}</p> : null}
+          {checks.length ? <ul className={styles.runtimeChecks}>{checks.map(check => <li key={check.name} data-ok={check.ok}><strong>{check.name}</strong><span>{check.ok ? t('通过') : t('未通过')} · {check.detail}</span></li>)}</ul> : null}
           <div className={styles.runtimeActions}>
+            <Button variant="secondary" isDisabled={locked || editing.state === 'installing'} onPress={() => void mutate(editing, 'check').catch(value => setFormError(String(value.message || value)))}>{t('检查环境')}</Button>
             {editing.state === 'ready' ? <>
               {editing.running ? <Button variant="secondary" isDisabled={locked} onPress={() => void mutate(editing, 'stop').catch(value => setFormError(String(value.message || value)))}><Square size={14} />{t('停止')}</Button> : null}
               <Button variant="danger-soft" isDisabled={locked} onPress={() => { setRemoveError(''); setRemoving(editing); }}><Trash2 size={15} />{t('卸载')}</Button>
-            </> : <Button isDisabled={locked || editing.state === 'installing'} onPress={() => void install()}>{editing.state === 'installing' ? <Loader2 className="spin" size={15} /> : <Download size={15} />}{t(editing.state === 'failed' ? '重试安装' : '安装')}</Button>}
+            </> : null}
           </div>
         </section> : null}
         {tab === 'advanced' && editing ? <fieldset disabled={locked || editing.state === 'installing'} className={styles.configuration}>
@@ -165,7 +205,14 @@ export function ManagedToolSettings({ items, onChange, onSave, renderConfigurati
         </fieldset> : null}
         {formError ? <p role="alert" className={styles.error}>{formError}</p> : null}
       </div>
-      {!configurationBusy ? <footer className="ui-modal-footer"><Button variant="secondary" isDisabled={locked} onPress={close}>{t('取消')}</Button><Button isDisabled={locked || editing?.state === 'installing'} onPress={() => void save()}>{locked ? <Loader2 className="spin" size={15} /> : null}{t('保存并关闭')}</Button></footer> : null}
+      {!configurationBusy ? <footer className="ui-modal-footer">
+        <Button variant="secondary" isDisabled={locked} onPress={close}>{t(tab === 'runtime' ? '关闭' : '取消')}</Button>
+        {tab === 'runtime' && editing && editing.state !== 'ready'
+          ? editing.state === 'installing'
+            ? <Button variant="secondary" isDisabled={locked || editing.cancelRequested || !editing.jobId} onPress={() => void mutate(editing, 'cancel', { jobId: editing.jobId }).catch(value => setFormError(String(value.message || value)))}>{t(editing.cancelRequested ? '正在取消' : '取消安装')}</Button>
+            : <Button isDisabled={locked} onPress={() => void install()}><Download size={15} />{t(['failed', 'cancelled'].includes(editing.state) ? '重试安装' : '安装')}</Button>
+          : <Button isDisabled={locked || editing?.state === 'installing'} onPress={() => void save()}>{locked ? <Loader2 className="spin" size={15} /> : null}{t('保存并关闭')}</Button>}
+      </footer> : null}
     </AppModal> : null}
     {removing ? <ConfirmDeleteModal id="uninstall-managed-tool" title={t('卸载工具')} itemTitle={t(removing.title)}
       description={t('卸载此工具的程序和依赖。对话、文件和其他工具使用的共享运行环境会保留。')}

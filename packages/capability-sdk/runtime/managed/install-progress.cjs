@@ -9,13 +9,13 @@ function createInstallProgress(tool, at = new Date().toISOString()) {
 }
 
 function advanceInstallProgress(progress, phase, at = new Date().toISOString()) {
-  const currentStep = phase === 'starting' ? 'source' : phase === 'failed' ? progress.currentStep : phase;
+  const currentStep = phase === 'starting' ? 'source' : ['failed', 'cancelled'].includes(phase) ? progress.currentStep : phase;
   const index = progress.steps.findIndex(step => step.id === currentStep);
   return { ...progress, currentStep: phase === 'ready' ? undefined : currentStep, steps: progress.steps.map((step, i) => {
     const status = phase === 'ready' || (index >= 0 && i < index) ? 'completed'
-      : i === index ? phase === 'failed' ? 'failed' : 'running' : step.status;
+      : i === index ? ['failed', 'cancelled'].includes(phase) ? phase : 'running' : step.status;
     return { ...step, status, ...(status === 'running' && !step.startedAt ? { startedAt: at } : {}),
-      ...((status === 'completed' || status === 'failed') && !step.finishedAt ? { finishedAt: at } : {}) };
+      ...((status === 'completed' || status === 'failed' || status === 'cancelled') && !step.finishedAt ? { finishedAt: at } : {}) };
   }) };
 }
 

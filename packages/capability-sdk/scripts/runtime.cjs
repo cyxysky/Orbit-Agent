@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { createHash } = require('node:crypto');
-const { Readable } = require('node:stream');
+const { Readable, Transform } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
 const { runtimeDirectory, readManagedRuntime, readManagedSensitiveDataRuntime } = require('../runtime/managed/layout.cjs');
 const spec = require('../runtime/managed/spec.json');
@@ -15,6 +15,11 @@ const runtimeFields = { browser: ['chromium'], file: ['python', 'libreoffice', '
 const packageRoot = path.resolve(__dirname, '..');
 const requirements = path.join(packageRoot, 'runtime', 'sensitive-data', 'python', 'requirements.txt');
 let installationStatus;
+const shutdown = new AbortController();
+if (require.main === module) for (const event of ['SIGTERM', 'SIGINT']) process.once(event, () => shutdown.abort(new Error('Runtime installation cancelled.')));
+function reportProgress(message, download) {
+  if (process.env.CAPABILITY_INSTALL_PROGRESS === '1') process.stderr.write('@@capability-progress@@' + JSON.stringify({ message, download }) + '\n');
+}
 function writeInstallStatus(patch) {
   installationStatus = { ...installationStatus, ...patch, pid: process.pid, updatedAt: new Date().toISOString() };
   const directory = runtimeDirectory();
@@ -25,6 +30,7 @@ function writeInstallStatus(patch) {
 }
 const log = message => {
   process.stderr.write(`[capability-sdk] ${message}\n`);
+  reportProgress(message);
   if (installationStatus?.state === 'installing') writeInstallStatus({ message });
 };
 
@@ -49,27 +55,32 @@ function platformPlan(platform = process.platform, arch = process.arch, osReleas
 }
 
 function run(command, args, { env = process.env, cwd, capture = false, captureStderr = false, timeout = 30 * 60_000, accepted = [0] } = {}) {
+  shutdown.signal.throwIfAborted();
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { env, cwd, windowsHide: true, shell: false, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '', errors = '', timedOut = false;
     child.stdout.on('data', chunk => { output = (output + chunk).slice(-2 * 1024 * 1024); if (!capture) process.stderr.write(chunk); });
     child.stderr.on('data', chunk => { errors = (errors + chunk).slice(-32000); if (!capture) process.stderr.write(chunk); });
-    const timer = setTimeout(() => {
-      timedOut = true;
+    const terminate = () => {
       if (child.pid && process.platform === 'win32') {
         const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
         killer.once('error', () => child.kill());
       } else {
         try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); }
       }
-    }, timeout);
-    child.once('error', error => { clearTimeout(timer); reject(error); });
+    };
+    const timer = setTimeout(() => { timedOut = true; terminate(); }, timeout);
+    shutdown.signal.addEventListener('abort', terminate, { once: true });
+    const cleanup = () => { clearTimeout(timer); shutdown.signal.removeEventListener('abort', terminate); };
+    child.once('error', error => { cleanup(); reject(error); });
     child.once('close', code => {
-      clearTimeout(timer);
-      if (timedOut) reject(new Error(`${path.basename(command)} timed out after ${timeout}ms.`));
+      cleanup();
+      if (shutdown.signal.aborted) reject(shutdown.signal.reason);
+      else if (timedOut) reject(new Error(`${path.basename(command)} timed out after ${timeout}ms.`));
       else if (accepted.includes(code)) resolve((captureStderr ? output + '\n' + errors : output).trim());
       else reject(new Error(`${path.basename(command)} exited with ${code}: ${errors || output}`));
     });
+    if (shutdown.signal.aborted) terminate();
   });
 }
 
@@ -83,6 +94,7 @@ async function download(url, checksum, destination) {
   for (let attempt = 0; ; attempt += 1) {
     try { return await downloadOnce(url, checksum, destination); }
     catch (error) {
+      shutdown.signal.throwIfAborted();
       if (attempt >= 3) throw error;
       log(`Download interrupted (${error.cause?.code || error.message}); resuming attempt ${attempt + 2}/4.`);
       await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
@@ -107,17 +119,26 @@ async function downloadOnce(url, checksum, destination) {
     let offset = fs.existsSync(temporary) ? fs.statSync(temporary).size : 0;
     let currentUrl = url;
     while (true) {
-      const response = await downloadFetch(currentUrl, { dispatcher, headers: { Range: `bytes=${offset}-${offset + 4 * 1024 * 1024 - 1}` }, signal: AbortSignal.timeout(120000) });
+      const response = await downloadFetch(currentUrl, { dispatcher, headers: { Range: `bytes=${offset}-${offset + 4 * 1024 * 1024 - 1}` }, signal: AbortSignal.any([shutdown.signal, AbortSignal.timeout(120000)]) });
       if (!response.ok || !response.body || !response.url.startsWith('https://')) throw new Error(`Download failed: ${response.status} ${url}`);
       currentUrl = response.url;
       const range = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(response.headers.get('content-range') || '');
       if (response.status === 206 && (!range || Number(range[1]) !== offset)) throw new Error('Download server returned an unexpected byte range.');
-      await pipeline(Readable.fromWeb(response.body), fs.createWriteStream(temporary, { flags: response.status === 206 ? 'a' : 'w' }));
+      let received = response.status === 206 ? offset : 0, reported = 0;
+      const total = range ? Number(range[3]) : Number(response.headers.get('content-length')) || 0;
+      const monitor = new Transform({ transform(chunk, _encoding, done) {
+        received += chunk.length;
+        if (Date.now() - reported >= 250) { reportProgress(`Downloading ${path.basename(destination)}`, { receivedBytes: received, totalBytes: total }); reported = Date.now(); }
+        done(null, chunk);
+      } });
+      await pipeline(Readable.fromWeb(response.body), monitor, fs.createWriteStream(temporary, { flags: response.status === 206 ? 'a' : 'w' }), { signal: shutdown.signal });
+      reportProgress(`Downloaded ${path.basename(destination)}`, { receivedBytes: received, totalBytes: total });
       const length = fs.statSync(temporary).size;
       if (response.status !== 206) break;
       if (length <= offset || length !== Number(range[2]) + 1) throw new Error('Download ended before the requested range completed; retry installation to resume.');
       offset = length;
       log(`${path.basename(destination)}: ${Math.round(length / 1024 / 1024)} / ${Math.round(Number(range[3]) / 1024 / 1024)} MiB`);
+      reportProgress(`Downloading ${path.basename(destination)}`, { receivedBytes: length, totalBytes: Number(range[3]) });
       if (length === Number(range[3])) break;
     }
     if (await hashFile(temporary) !== checksum) { await fsp.unlink(temporary); throw new Error(`SHA-256 mismatch: ${url}`); }
@@ -342,9 +363,11 @@ async function verify(runtime, { loadModels = false, sensitiveOnly = false, fiel
 async function acquireLock(directory) {
   const deadline = Date.now() + 2 * 60 * 60_000;
   while (true) {
+    shutdown.signal.throwIfAborted();
     try { await fsp.mkdir(directory); await fsp.writeFile(path.join(directory, 'owner.json'), JSON.stringify({ pid: process.pid, host: os.hostname() })); return; }
     catch (error) {
       if (error.code !== 'EEXIST') throw error;
+      reportProgress('等待其他工具释放共享运行环境安装锁');
       try {
         const owner = JSON.parse(await fsp.readFile(path.join(directory, 'owner.json'), 'utf8'));
         if (owner.host === os.hostname()) {
@@ -367,6 +390,7 @@ async function install(component = 'all') {
   const lock = path.join(cache, '.install-lock');
   await acquireLock(lock);
   try {
+    shutdown.signal.throwIfAborted();
     const existing = readManagedRuntime();
     if (existing && !(await verify(existing, { fields })).length) { log(component + ' runtime is already ready.'); return existing; }
     const runtime = { ...existing, format: 2, status: 'ready', platform: process.platform, arch: process.arch,
@@ -401,6 +425,7 @@ async function install(component = 'all') {
     }
     const failures = await verify(runtime, { fields });
     if (failures.length) throw new Error(`Runtime validation failed: ${failures.join('; ')}`);
+    shutdown.signal.throwIfAborted();
     const temporary = path.join(cache, `runtime-${process.pid}.json`);
     await fsp.writeFile(temporary, JSON.stringify(runtimeManifest(runtime, cache), null, 2) + '\n');
     await fsp.rename(temporary, path.join(cache, 'runtime.json'));

@@ -16,7 +16,7 @@
 .hint { margin: 8px 0 12px; }
 .environment { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(120px, 1.4fr) auto; align-items: center; gap: 10px; margin-top: 10px; }
 .json { width: 100%; font-family: var(--font-mono, monospace); font-size: 12px; font-weight: 400; }
-.runtimeActions { display: flex; gap: 12px; }
+.runtimeActions { display: flex; flex-wrap: wrap; gap: 12px; }
 .installError { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; }
 .installProgress { display: grid; gap: 16px; min-width: 0; }
 .installSteps { display: grid; gap: 12px; list-style: none; margin: 0; padding: 0; }
@@ -29,6 +29,21 @@
 .installStep[data-state='completed'] .installStepIcon { background: var(--panel-soft); }
 .installStep[aria-current='step'] .installStepIcon { border-color: var(--border-strong); }
 .installMessage { color: var(--muted); font-size: 12px; line-height: 1.6; margin: 0; overflow-wrap: anywhere; }
+.installMetadata { display: flex; align-items: baseline; gap: 12px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.installMetadata > span { flex-shrink: 0; }
+.installLogSection { display: grid; gap: 10px; min-width: 0; }
+.installLogSection button { color: var(--foreground); font-size: 12px; text-decoration: underline; text-underline-offset: 3px; }
+.installLog { margin: 0; padding: 12px 14px; max-height: 240px; min-height: 100px; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--border); border-radius: 12px; background: var(--panel-soft); color: var(--foreground); font-family: var(--font-mono, monospace); font-size: 12px; font-weight: 400; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; scrollbar-color: var(--muted) transparent; }
+.installLog:focus-visible, .installLogSection button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.installLog::selection { background: var(--selection-bg); color: var(--selection-foreground); }
+.installDownload { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.installDownload progress { appearance: none; flex: 1; min-width: 120px; height: 6px; border: 0; border-radius: 3px; background: var(--panel-soft); overflow: hidden; }
+.installDownload progress::-webkit-progress-bar { background: var(--panel-soft); }
+.installDownload progress::-webkit-progress-value { background: var(--foreground); border-radius: 3px; }
+.installDownload progress::-moz-progress-bar { background: var(--foreground); border-radius: 3px; }
+.runtimeChecks { display: grid; gap: 8px; list-style: none; margin: 0; padding: 0; font-size: 12px; }
+.runtimeChecks li { display: flex; flex-wrap: wrap; gap: 10px; color: var(--muted); overflow-wrap: anywhere; }
+.runtimeChecks li[data-ok='false'] { color: var(--danger); }
 @media (max-width: 640px) {
   .environment { grid-template-columns: minmax(0, 1fr) auto; }
   .environment > :first-child { grid-column: 1 / -1; }
