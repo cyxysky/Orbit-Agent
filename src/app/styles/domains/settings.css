@@ -90,6 +90,7 @@
 }
 
 .settings-toggle {
+  --toggle-width: 52px;
   --toggle-thumb-size: 22px;
   --toggle-thumb-travel: 22px;
   --toggle-thumb-bg: #ffffff;
@@ -104,11 +105,13 @@
   display: inline-flex;
   flex: 0 0 auto;
   height: 30px;
+  max-width: var(--toggle-width);
+  min-width: var(--toggle-width);
   justify-content: flex-start;
   overflow: hidden;
   padding: 0;
   position: relative;
-  width: 52px;
+  width: var(--toggle-width);
   transition:
     background-color var(--motion-normal) ease,
     border-color var(--motion-normal) ease,
@@ -152,11 +155,11 @@
 }
 
 .settings-toggle--status {
+  --toggle-width: 42px;
   --toggle-thumb-size: 18px;
   --toggle-thumb-travel: 18px;
   --toggle-thumb-inset: 2px;
   height: 24px;
-  width: 42px;
 }
 
 .settings-toggle--status.is-loading:disabled {

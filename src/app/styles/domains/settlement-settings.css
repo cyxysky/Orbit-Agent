@@ -249,8 +249,6 @@
 .tool-configuration-group > summary > svg { transform: rotate(-90deg); flex-shrink: 0; }
 .tool-configuration-group[open] > summary > svg { transform: rotate(0); }
 .tool-configuration-group > summary > small { margin-left: auto; color: var(--muted); font-size: 12px; font-weight: 400; font-variant-numeric: tabular-nums; }
-.tool-configuration-group > div { padding-block: 4px 12px; }
+.tool-configuration-group > div { display: grid; gap: 24px; padding-block: 4px 20px; }
 .tool-configuration-group .settings-row { min-width: 0; }
 .tool-configuration-empty { padding-block: 16px; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
-.tool-integration-editor { min-width: 0; }
-.tool-configuration-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border); }

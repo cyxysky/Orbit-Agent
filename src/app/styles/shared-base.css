@@ -1342,7 +1342,7 @@ body.is-dragging-embedded-tab * {
 }
 
 
-.browser-chat-layout.sidebar-collapsed .browser-chat-sidebar :where(.browser-chat-brand .ui-icon-button, .browser-chat-theme-toggle, .browser-chat-subnav button) > svg:not(.spin) {
+.browser-chat-layout.sidebar-collapsed .browser-chat-sidebar :where(.browser-chat-brand .ui-icon-button, .browser-chat-subnav button) > svg:not(.spin) {
   flex: 0 0 17px;
   height: 17px;
   stroke-width: 1.9;

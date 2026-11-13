@@ -72,7 +72,11 @@ export async function verifyCurrentUnoRenderedArtifact(input: {
           artifactId: normalized,
           renderedDigest,
           currentSourceDigest: currentDigest,
-          error: 'This artifact does not represent the current source draft and cannot be used as evidence for it.',
+          expectedArtifactId: draft.renderedArtifactId,
+          reason: currentDigest !== renderedDigest ? 'source-changed' : 'artifact-id-mismatch',
+          error: currentDigest !== renderedDigest
+            ? 'The source changed after this artifact was rendered. Render the current draft before inspecting it.'
+            : 'The artifact ID does not match the current rendered artifact. Use expectedArtifactId; rerendering unchanged source does not repair an artifact reference.',
         }),
       };
     }

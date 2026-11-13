@@ -411,56 +411,6 @@ function AiOperationsDashboard({
             </section>
           </DeferredContent>
 
-          <DeferredContent className="ai-operations-lower-grid" estimatedHeight={480} label={t('正在读取统计数据…')}>
-            <section className="ai-operations-panel ai-operations-incidents-panel">
-              <header className="ai-operations-panel-header">
-                <div>
-                  <h2>{t('异常任务')}</h2>
-                  <p>{t('最近失败、阻塞或中断的任务')}</p>
-                </div>
-                <span>{data.incidents.length}</span>
-              </header>
-              {data.incidents.length ? (
-                <DataTable<AiOperationsDashboardData['incidents'][number]>
-                  pagination filterable
-                  columns={[
-                    {
-                      accessor: (item) => item.title,
-                      cell: (item) => <DataTableText primary={item.title} href={item.href} secondary={item.reason} />,
-                      header: t('任务'),
-                      id: 'task',
-                    },
-                    { accessor: (item) => item.userId, cell: (item) => item.userId, header: t('用户'), id: 'user' },
-                    { accessor: (item) => item.status, filterAccessor: item => `${item.status} ${t(statusLabel(item.status))}`, cell: (item) => <DataTableStatus status={item.status}>{t(statusLabel(item.status))}</DataTableStatus>, header: t('状态'), id: 'status' },
-                    { accessor: (item) => item.target, cell: (item) => item.target, header: t('目标'), id: 'target' },
-                    { accessor: (item) => item.time, filterAccessor: item => `${item.time} ${dateTime(item.time)}`, cell: (item) => dateTime(item.time), header: t('时间'), id: 'time' },
-                  ]}
-                  data={data.incidents}
-                  emptyText={t('当前范围内没有异常任务')}
-                  getRowId={(item) => item.id}
-                  minWidth={650}
-                />
-              ) : <EmptyState>{t('当前范围内没有异常任务')}</EmptyState>}
-            </section>
-
-            <section className="ai-operations-panel ai-operations-systems-panel">
-              <header className="ai-operations-panel-header">
-                <div><h2>{t('目标系统')}</h2><p>{t('按浏览器目标域名统计任务量和成功率')}</p></div>
-              </header>
-              {data.systems.length ? (
-                <DataTable<AiOperationsDashboardData['systems'][number]>
-                  pagination filterable compact
-                  columns={[
-                    { id: 'target', header: t('目标'), accessor: item => item.target, cell: item => item.target },
-                    { id: 'tasks', header: t('任务'), accessor: item => item.totalTasks, cell: item => item.totalTasks },
-                    { id: 'success', header: t('成功率'), accessor: item => item.successRate, cell: item => percent(item.successRate) },
-                  ]}
-                  data={data.systems} emptyText={t('暂无目标系统使用数据')} getRowId={item => item.target} minWidth={360}
-                />
-              ) : <EmptyState>{t('暂无目标系统使用数据')}</EmptyState>}
-            </section>
-          </DeferredContent>
-
           <DeferredContent className="ai-operations-table-grid" estimatedHeight={480} label={t('正在读取统计数据…')}>
             <section className="ai-operations-table-section">
               <header className="ai-operations-panel-header"><div><h2>{t('用户使用情况')}</h2><p>{t('按用户统计任务量和执行结果')}</p></div></header>
@@ -510,6 +460,56 @@ function AiOperationsDashboard({
                   minWidth={680}
                 />
               ) : <EmptyState>{t('暂无模型使用数据')}</EmptyState>}
+            </section>
+          </DeferredContent>
+
+          <DeferredContent className="ai-operations-lower-grid" estimatedHeight={480} label={t('正在读取统计数据…')}>
+            <section className="ai-operations-panel ai-operations-incidents-panel">
+              <header className="ai-operations-panel-header">
+                <div>
+                  <h2>{t('异常任务')}</h2>
+                  <p>{t('最近失败、阻塞或中断的任务')}</p>
+                </div>
+                <span>{data.incidents.length}</span>
+              </header>
+              {data.incidents.length ? (
+                <DataTable<AiOperationsDashboardData['incidents'][number]>
+                  pagination filterable
+                  columns={[
+                    {
+                      accessor: (item) => item.title,
+                      cell: (item) => <DataTableText primary={item.title} href={item.href} secondary={item.reason} />,
+                      header: t('任务'),
+                      id: 'task',
+                    },
+                    { accessor: (item) => item.userId, cell: (item) => item.userId, header: t('用户'), id: 'user' },
+                    { accessor: (item) => item.status, filterAccessor: item => `${item.status} ${t(statusLabel(item.status))}`, cell: (item) => <DataTableStatus status={item.status}>{t(statusLabel(item.status))}</DataTableStatus>, header: t('状态'), id: 'status' },
+                    { accessor: (item) => item.target, cell: (item) => item.target, header: t('目标'), id: 'target' },
+                    { accessor: (item) => item.time, filterAccessor: item => `${item.time} ${dateTime(item.time)}`, cell: (item) => dateTime(item.time), header: t('时间'), id: 'time' },
+                  ]}
+                  data={data.incidents}
+                  emptyText={t('当前范围内没有异常任务')}
+                  getRowId={(item) => item.id}
+                  minWidth={650}
+                />
+              ) : <EmptyState>{t('当前范围内没有异常任务')}</EmptyState>}
+            </section>
+
+            <section className="ai-operations-panel ai-operations-systems-panel">
+              <header className="ai-operations-panel-header">
+                <div><h2>{t('目标系统')}</h2><p>{t('按浏览器目标域名统计任务量和成功率')}</p></div>
+              </header>
+              {data.systems.length ? (
+                <DataTable<AiOperationsDashboardData['systems'][number]>
+                  pagination filterable compact
+                  columns={[
+                    { id: 'target', header: t('目标'), accessor: item => item.target, cell: item => item.target },
+                    { id: 'tasks', header: t('任务'), accessor: item => item.totalTasks, cell: item => item.totalTasks },
+                    { id: 'success', header: t('成功率'), accessor: item => item.successRate, cell: item => percent(item.successRate) },
+                  ]}
+                  data={data.systems} emptyText={t('暂无目标系统使用数据')} getRowId={item => item.target} minWidth={360}
+                />
+              ) : <EmptyState>{t('暂无目标系统使用数据')}</EmptyState>}
             </section>
           </DeferredContent>
           </>}

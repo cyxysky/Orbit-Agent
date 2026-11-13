@@ -2411,11 +2411,12 @@ export function EnvironmentSettings({
     return <>{settings.map(({ item, index, definition }) => (
       <div
         className={`settings-row settings-env-row${definition?.control === 'textarea' ? ' prompt-row' : ''}${highlightedSettingKey === item.key ? ' is-highlighted' : ''}`}
+        data-setting-control={definition?.control}
         data-setting-key={item.key}
         key={item.key}
         tabIndex={-1}
       >
-        <div className="env-name">
+        <div className="env-name settings-row-copy">
           <span className="settings-field-title-line">
             <strong>{definition?.label ? t(definition.label) : item.key}</strong>
             <small className={`settings-apply-badge is-${definition?.applyMode || 'runtime'}`}>{t(definition?.applyMode === 'recreate' ? '自动更新实例' : '即时生效')}</small>
@@ -2597,10 +2598,6 @@ export function EnvironmentSettings({
     ? requestedSettingsSection!
     : settingsSecondaryItems[0]?.id || '';
   const activeEnvGroup = visibleEnvGroups.find((group) => group.title === activeSettingsSection);
-  const activeIntegrationSettings = visibleEnvItems.filter((setting) => envSettingSectionId(setting) === activeSettingsSection);
-  const communicationSendSetting = items
-    .map((item, index) => ({ item, index }))
-    .find(({ item }) => item.key === 'AGENT_COMMUNICATION_ALLOW_SEND');
   const dataWriteSetting = items
     .map((item, index) => ({ item, index }))
     .find(({ item }) => item.key === 'AGENT_DATA_ALLOW_WRITES');
@@ -2663,7 +2660,7 @@ export function EnvironmentSettings({
     </div>;
   }
 
-  function renderToolConfiguration(tool: string, query: string, onBusyChange: (busy: boolean) => void) {
+  function renderToolConfiguration(tool: string, query: string, onBusyChange: (busy: boolean) => void, section: string) {
     const target = toolConfigurationTargets[tool];
     const normalized = query.trim().toLocaleLowerCase();
     const relevant = allEnvSettings.filter(setting => setting.definition?.hidden !== true
@@ -2673,13 +2670,12 @@ export function EnvironmentSettings({
       && !['AGENT_TERMINAL_ENABLED', 'AGENT_COMPUTER_ENABLED', 'AGENT_CODE_SANDBOX_ENABLED'].includes(setting.item.key)
       && (!normalized || (setting.item.key + ' ' + (setting.definition?.label || '') + ' ' + (setting.definition?.description || '')).toLocaleLowerCase().includes(normalized)));
     const category = tool === 'communication' ? 'communication' : tool === 'data' ? 'data' : undefined;
+    if (category === 'communication' && section === 'channels') {
+      return <ExternalIntegrationSettings category={category} onBusyChange={onBusyChange} />;
+    }
     return <>
-      {category ? <ExternalIntegrationSettings category={category} embedded onBusyChange={onBusyChange}
-        permission={category === 'communication' ? {
-          enabled: communicationSendSetting?.item.value === 'true', label: '允许 Agent 请求发送消息',
-          description: '更改会自动保存；每次正式发送仍会暂停并等待你的确认。',
-          onChange(enabled) { if (communicationSendSetting) update(communicationSendSetting.index, { value: String(enabled) }); },
-        } : {
+      {category === 'data' ? <ExternalIntegrationSettings category={category} onBusyChange={onBusyChange}
+        permission={{
           enabled: dataWriteSetting?.item.value === 'true', label: '允许 Agent 执行数据写入',
           description: '默认只允许查询；更改会自动保存，每次写操作仍需要确认。',
           onChange(enabled) { if (dataWriteSetting) update(dataWriteSetting.index, { value: String(enabled) }); },
@@ -2688,7 +2684,7 @@ export function EnvironmentSettings({
         <summary><ChevronDown aria-hidden="true" size={15} />{t(group.title)}<small>{group.items.length}</small></summary>
         <div>{renderEnvSettingList(group.items)}</div>
       </details>)}
-      {!category && !relevant.length ? <p className="tool-configuration-empty">{t(normalized ? '没有匹配的配置' : '此工具没有额外的常用配置。')}</p> : null}
+      {category !== 'data' && !relevant.length ? <p className="tool-configuration-empty">{t(normalized ? '没有匹配的配置' : '此工具没有额外的常用配置。')}</p> : null}
     </>;
   }
 
@@ -2956,11 +2952,12 @@ export function EnvironmentSettings({
                         {group.items.map(({ item, index, definition }) => (
                           <div
                             className={`settings-row settings-env-row${highlightedSettingKey === item.key ? ' is-highlighted' : ''}`}
+                            data-setting-control={definition?.control}
                             data-setting-key={item.key}
                             key={item.key}
                             tabIndex={-1}
                           >
-                            <div className="env-name">
+                            <div className="env-name settings-row-copy">
                               <span className="settings-field-title-line">
                                 <strong>{definition?.label ? t(definition.label) : item.key}</strong>
                                 <small className={`settings-apply-badge is-${definition?.applyMode || 'runtime'}`}>{t(definition?.applyMode === 'recreate' ? '自动更新实例' : '即时生效')}</small>

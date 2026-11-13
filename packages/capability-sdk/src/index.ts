@@ -91,6 +91,18 @@ export type CapabilitySkill = {
   }>;
 };
 
+/** Tool names must belong to the same capability as these Skills. References
+ * without activation follow their owner; activation only controls tool-specific
+ * runtime instructions, not whether supporting references can be read. */
+export function capabilitySkillsForTools(
+  skills: readonly CapabilitySkill[],
+  toolNames: ReadonlySet<string>,
+): CapabilitySkill[] {
+  if (!toolNames.size) return [];
+  return skills.filter(skill => !skill.activation?.length
+    || skill.activation.some(activation => toolNames.has(activation.toolName)));
+}
+
 export function capabilitySkillReadJsonSchema(skillIds: readonly string[]): JsonSchema {
   return {
     type: 'object',
@@ -263,12 +275,7 @@ export class CapabilityRegistry {
         });
         runtimes.push(runtime);
         manifests.push(manifest);
-        for (const skill of manifest.skills || []) {
-          const owner = skillOwners.get(skill.id);
-          if (owner) throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, `Capability Skill id collision for ${skill.id}: ${owner} and ${manifest.id}.`);
-          skillOwners.set(skill.id, manifest.id);
-          skills.push(skill);
-        }
+        const capabilityToolNames = new Set<string>();
         for (const [registeredName, tool] of Object.entries(runtime.tools)) {
           const publicName = String(tool.name || registeredName).trim();
           if (!publicName || (input.allowedToolNames && !input.allowedToolNames.has(publicName))) continue;
@@ -276,6 +283,7 @@ export class CapabilityRegistry {
           if (existing) {
             throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, `Capability tool name collision for ${publicName}: ${existing.capabilityId} and ${manifest.id}.`);
           }
+          capabilityToolNames.add(publicName);
           tools[publicName] = Object.freeze({
             capabilityId: manifest.id,
             capabilityVersion: manifest.version,
@@ -295,6 +303,12 @@ export class CapabilityRegistry {
               },
             }),
           });
+        }
+        for (const skill of capabilitySkillsForTools(manifest.skills || [], capabilityToolNames)) {
+          const owner = skillOwners.get(skill.id);
+          if (owner) throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, `Capability Skill id collision for ${skill.id}: ${owner} and ${manifest.id}.`);
+          skillOwners.set(skill.id, manifest.id);
+          skills.push(skill);
         }
       }
       return Object.freeze({

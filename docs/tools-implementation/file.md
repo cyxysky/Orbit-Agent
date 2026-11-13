@@ -10,6 +10,8 @@ createFileToolInput 按宿主是否提供图像输入决定是否公布 visualIn
 
 Orbit 用 createBrowserChatFileOperations 将工具绑定到本轮工作区、附件清单、文件阅读回调、图像回调、产物 URL 和进度报告。SDK Node 默认实现则按 realpath 校验产物属于当前 run；附件必须来自已登记 binding。createNodeFileWorkspace 用 AsyncLocalStorage 绑定宿主的产物根目录、下载器、转换器和预览器，避免不同实例共享错误配置。
 
+托管 MCP 工具通过 createManagedToolProviders 转发。模型使用相对于 Orbit 全局产物根目录的 artifactId，工具内部使用相对于会话工作区的 artifactId；入参只转换一次，附件绑定也只执行一次。出参统一转换所有层级的产物 ID，顶层产物、visualIndex、nextRead、nextAction、contentRead 和 content 中的引用必须一致，不能只根据顶层下载 URL 修改 ID。structuredContent 和纯文本 JSON 结果使用相同规则，转换同时校验产物仍在当前会话目录内。
+
 ## 所有动作的处理链
 
 | 动作 | 完整职责与处理结果 |
@@ -46,6 +48,8 @@ workspace-source-editor 把 Codex 风格多 hunk patch 或精确 oldText/newText
 验证分静态程序分析、生成运行、生成特征/元素验证和渲染验证；结合 plan 指定的演示能力形成质量门槛。缓存键包含源码 digest、worker/runtime 指纹、素材指纹与文档信息。验证证据记录检查时间、作用域、阶段和修订匹配情况；源码、素材或运行环境变化后旧证据失效。
 
 render 只为当前有效源和产物给出就绪结果；不将上一版渲染当作本次成功。图像回调可继续检查版面，记录页面覆盖和失败项；源变更会清空活跃视觉 QA，保留历史证据。中断、验证失败和环境缺失保留可修复草稿并返回具体诊断/下一步。文件提取由有界 worker/pool 执行，PDF/Office 提取与源码编辑是不同入口。
+
+视觉版本校验同时核对源码摘要和当前渲染产物 ID。失败反馈以 source-changed 和 artifact-id-mismatch 区分原因，并提供 expectedArtifactId；摘要相同但引用不符时应修正 ID，重复渲染相同源码不能修复宿主的引用转换问题。
 
 ## 返回模型和前端
 

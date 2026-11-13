@@ -45,6 +45,10 @@ function stripModalClasses(node: ReactNode): ReactNode {
     if (!isValidElement<ModalContentProps>(child)) return child;
     const { children, className } = child.props;
     const { modalClasses } = splitModalClasses(className);
+    if (modalClasses.includes('ui-modal-body')) {
+      const { remainingClassName } = splitModalClasses(className);
+      return <Modal.Body className={joinModalSectionClasses('app-modal-body ui-modal-body', remainingClassName)}>{stripModalClasses(children)}</Modal.Body>;
+    }
     if (modalClasses.includes('ui-modal-title')) {
       return <Modal.Heading id={child.props.id} className={className}>{stripModalClasses(children)}</Modal.Heading>;
     }
@@ -83,9 +87,6 @@ function renderModalSections(children: ReactNode): ReactNode {
     }
     if (child.type === 'footer' || modalClasses.includes('ui-modal-footer')) {
       return <Modal.Footer className={joinModalSectionClasses('app-modal-footer ui-modal-footer', remainingClassName)}>{stripModalClasses(child.props.children)}</Modal.Footer>;
-    }
-    if (modalClasses.includes('ui-modal-body')) {
-      return <Modal.Body className={joinModalSectionClasses('app-modal-body ui-modal-body', remainingClassName)}>{stripModalClasses(child.props.children)}</Modal.Body>;
     }
     return stripModalClasses(child);
   });

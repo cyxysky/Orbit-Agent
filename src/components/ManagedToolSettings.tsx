@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Button } from '@heroui/react/button';
 import { TextArea } from '@heroui/react/textarea';
+import { Tabs, TabList, Tab, TabPanel } from 'react-aria-components';
 import { Download, Loader2, Plus, Search, Square, Trash2, X } from 'lucide-react';
 import { AppModal } from '@/components/ui/app-modal';
 import { AppInput } from '@/components/ui/app-input';
@@ -16,7 +17,7 @@ import { useI18n } from '@/i18n/I18nProvider';
 import { readApiJson } from '@/lib/api-client';
 import { readNdjsonStream } from '@/lib/read-ndjson-stream';
 import { withWebPilotBasePath } from '@/lib/webpilot-base-path';
-import { TOOL_CAPABILITY_SETTINGS_CHANGED_EVENT, toolCapabilitySettings } from '@/lib/tool-capability-settings';
+import { TOOL_CAPABILITY_SETTINGS_CHANGED_EVENT, toolCapabilitySettings, toolConfigurationSections } from '@/lib/tool-capability-settings';
 import type { ManagedToolStatus } from '@cjfclonedeep/capability-sdk/managed/node';
 import styles from './ManagedToolSettings.module.css';
 
@@ -26,7 +27,7 @@ type Props = {
   items: readonly { key: string; value: string; enabled?: boolean }[];
   onChange: (key: string, enabled: boolean) => void;
   onSave: () => Promise<void>;
-  renderConfiguration: (tool: string, query: string, onBusyChange: (busy: boolean) => void) => ReactNode;
+  renderConfiguration: (tool: string, query: string, onBusyChange: (busy: boolean) => void, section: string) => ReactNode;
   saving?: boolean;
   openTool?: string;
   onConfigurationClosed?: () => void;
@@ -54,7 +55,9 @@ export function ManagedToolSettings({ items, onChange, onSave, renderConfigurati
   const installing = tools.some(tool => tool.state === 'installing');
   const editing = tools.find(tool => tool.id === editingId);
   const definition = toolCapabilitySettings.find(tool => tool.name === editingId);
-  const locked = saving || busy.has(editingId) || configurationBusy;
+  const configurationSections = toolConfigurationSections[editingId] || [{ id: 'configuration', label: '配置', searchable: true }];
+  const working = saving || busy.has(editingId);
+  const locked = working || configurationBusy;
   const load = useCallback(async (signal?: AbortSignal) => {
     const data = await readApiJson<{ tools: Tool[] }>(await fetch(endpoint, { headers, signal, cache: 'no-store' }), t('读取工具组件失败'));
     if (!signal?.aborted) { setTools(data.tools); setError(''); }
@@ -118,7 +121,7 @@ export function ManagedToolSettings({ items, onChange, onSave, renderConfigurati
   }
   function configure(id: string) {
     const tool = tools.find(item => item.id === id);
-    setEditingId(id); setTab(tool && tool.state !== 'ready' ? 'runtime' : 'configuration'); setQuery(''); setFormError(''); setConfigurationBusy(false);
+    setEditingId(id); setTab(tool && tool.state !== 'ready' ? 'runtime' : toolConfigurationSections[id]?.[0]?.id || 'configuration'); setQuery(''); setFormError(''); setConfigurationBusy(false);
     setChecks([]); setStreamError('');
     setRows((tool?.configuration.envKeys || []).map(key => ({ id: crypto.randomUUID(), key, original: key, value: '' })));
     setConfig(JSON.stringify(tool?.configuration.config || {}, null, 2));
@@ -165,16 +168,17 @@ export function ManagedToolSettings({ items, onChange, onSave, renderConfigurati
     {definition ? <AppModal size="wide" dialogClassName={styles.modal} ariaLabel={t(definition.label) + ' · ' + t('工具配置')} dismissable={!locked} keyboardDismissable={!locked} onClose={close}>
       <header className="ui-modal-header"><h2 className="ui-modal-title">{t(definition.label)} · {t('工具配置')}</h2>
         <button type="button" className="ui-icon-button ui-modal-close" disabled={locked} aria-label={t('关闭')} onClick={close}><X size={18} /></button></header>
-      <div className={styles.tabs} role="tablist" aria-label={t('工具配置分组')}>
-        {[{ id: 'configuration', title: '配置' }, ...(editing ? [{ id: 'runtime', title: '安装与运行' }, { id: 'advanced', title: '高级' }] : [])].map(item =>
-          <button key={item.id} type="button" role="tab" aria-selected={tab === item.id} disabled={locked} onClick={() => setTab(item.id)}>{t(item.title)}</button>)}
-      </div>
+      <Tabs className={styles.tabWorkspace} selectedKey={tab} onSelectionChange={key => setTab(String(key))}>
+      <TabList className={styles.tabs} aria-label={t('工具配置分组')}>
+        {[...configurationSections, ...(editing ? [{ id: 'runtime', label: '安装与运行' }, { id: 'advanced', label: '高级' }] : [])].map(item =>
+          <Tab key={item.id} id={item.id} isDisabled={locked}>{t(item.label)}</Tab>)}
+      </TabList>
       <div className="ui-modal-body">
-        {tab === 'configuration' ? <div className={styles.configuration}>
-          <AppInput aria-label={t('搜索配置')} placeholder={t('搜索配置')} prefix={<Search size={15} />} value={query} onChange={event => setQuery(event.target.value)} />
-          {renderConfiguration(editingId, query, setConfigurationBusy)}
-        </div> : null}
-        {tab === 'runtime' && editing ? <section className={styles.configuration}>
+        {configurationSections.map(section => <TabPanel className={styles.configuration} id={section.id} key={section.id}>
+          {section.searchable ? <AppInput aria-label={t('搜索配置')} placeholder={t('搜索配置')} prefix={<Search size={15} />} value={query} onChange={event => setQuery(event.target.value)} /> : null}
+          {renderConfiguration(editingId, section.searchable ? query : '', setConfigurationBusy, section.id)}
+        </TabPanel>)}
+        {editing ? <TabPanel id="runtime" className={styles.configuration}>
           <div className={styles.sectionHeading}><h3>{t(editing.title)}</h3><span className={styles.state}>{t(editing.state === 'ready' ? '已安装' : editing.state === 'installing' ? '安装中' : editing.state === 'failed' ? '安装失败' : editing.state === 'cancelled' ? '已取消' : '未安装')}</span></div>
           <p className={styles.hint}>{t('仅安装当前工具及其必要依赖。对话和输出文件独立保留。')}</p>
           {editing.progress ? <ToolInstallationProgress tool={editing} />
@@ -189,8 +193,8 @@ export function ManagedToolSettings({ items, onChange, onSave, renderConfigurati
               <Button variant="danger-soft" isDisabled={locked} onPress={() => { setRemoveError(''); setRemoving(editing); }}><Trash2 size={15} />{t('卸载')}</Button>
             </> : null}
           </div>
-        </section> : null}
-        {tab === 'advanced' && editing ? <fieldset disabled={locked || editing.state === 'installing'} className={styles.configuration}>
+        </TabPanel> : null}
+        {editing ? <TabPanel id="advanced"><fieldset disabled={locked || editing.state === 'installing'} className={styles.configuration}>
           <section><div className={styles.sectionHeading}><h3>{t('环境变量')}</h3><Button size="sm" variant="secondary" onPress={() => setRows(current => [...current, { id: crypto.randomUUID(), key: '', original: '', value: '' }])}><Plus size={14} />{t('添加')}</Button></div>
             <p className={styles.hint}>{t('已保存的值不会回显；留空保留原值。保存后，下次调用使用新配置。')}</p>
             {rows.length ? rows.map(row => <div className={styles.environment} key={row.id}>
@@ -202,17 +206,18 @@ export function ManagedToolSettings({ items, onChange, onSave, renderConfigurati
           <section><h3>{t('SDK 配置')}</h3><p className={styles.hint}>{t('使用 SDK 的分组配置格式，例如 tools 下对应的工具配置。密钥请通过环境变量引用。')}</p>
             <TextArea aria-label={t('SDK 配置')} rows={8} style={{ minHeight: '12rem' }} spellCheck={false} value={config} onChange={event => setConfig(event.target.value)} className={styles.json} />
           </section>
-        </fieldset> : null}
+        </fieldset></TabPanel> : null}
         {formError ? <p role="alert" className={styles.error}>{formError}</p> : null}
       </div>
-      {!configurationBusy ? <footer className="ui-modal-footer">
+      </Tabs>
+      <footer className="ui-modal-footer">
         <Button variant="secondary" isDisabled={locked} onPress={close}>{t(tab === 'runtime' ? '关闭' : '取消')}</Button>
         {tab === 'runtime' && editing && editing.state !== 'ready'
           ? editing.state === 'installing'
             ? <Button variant="secondary" isDisabled={locked || editing.cancelRequested || !editing.jobId} onPress={() => void mutate(editing, 'cancel', { jobId: editing.jobId }).catch(value => setFormError(String(value.message || value)))}>{t(editing.cancelRequested ? '正在取消' : '取消安装')}</Button>
             : <Button isDisabled={locked} onPress={() => void install()}><Download size={15} />{t(['failed', 'cancelled'].includes(editing.state) ? '重试安装' : '安装')}</Button>
-          : <Button isDisabled={locked || editing?.state === 'installing'} onPress={() => void save()}>{locked ? <Loader2 className="spin" size={15} /> : null}{t('保存并关闭')}</Button>}
-      </footer> : null}
+          : <Button isDisabled={locked || editing?.state === 'installing'} onPress={() => void save()}>{working ? <Loader2 className="spin" size={15} /> : null}{t('保存并关闭')}</Button>}
+      </footer>
     </AppModal> : null}
     {removing ? <ConfirmDeleteModal id="uninstall-managed-tool" title={t('卸载工具')} itemTitle={t(removing.title)}
       description={t('卸载此工具的程序和依赖。对话、文件和其他工具使用的共享运行环境会保留。')}

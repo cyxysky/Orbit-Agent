@@ -64,7 +64,6 @@ export type AgentsBrowserHost = {
   approve: (name: string, args: unknown) => Promise<boolean>;
   summarizeTraces: (traces: Trace[]) => StepToolCall[];
   humanPause: (traces: Trace[]) => string | undefined;
-  validateFinalResponse: (response: StructuredResponse) => string | undefined;
 };
 
 /** Agents SDK owns the loop; Orbit owns durable history, tools and presentation. */
@@ -232,9 +231,8 @@ export async function executeAgentsBrowserTurn(input: Input, host: AgentsBrowser
       if (browserChatHasPendingHumanInput(host.summarizeTraces(traces))) return 'A human-input request is pending. Wait for its answer before declaring completion.';
       if (traces.some(trace => trace.name !== 'finalResponse' && !trace.completedAt)
         || journal.state.pending?.calls.some(call => call.toolName !== 'finalResponse' && !journal.state.pending?.results.some(result => result.role === 'tool' && result.content.some(part => part.type === 'tool-result' && part.toolCallId === call.toolCallId)))) return 'Tool calls are still running. Wait for their results before completing the request.';
-      const error = host.validateFinalResponse(response);
-      if (!error) accepted = response;
-      return error;
+      accepted = response;
+      return undefined;
     },
     onImage: image => { images.push(image); }, getCredentials: () => credentials, aiRequest,
     getAiRequestElapsedMs: () => modelRequestElapsedMs,
@@ -587,7 +585,7 @@ export async function executeAgentsBrowserTurn(input: Input, host: AgentsBrowser
       }
       if (accepted || pauseRequested) break;
       if (finalText) {
-        const proposal: StructuredResponse = { status: 'passed', blocks: [markdownBlock(finalText)], completion: { complete: true, remainingWork: [] } };
+        const proposal: StructuredResponse = { status: 'passed', blocks: [markdownBlock(finalText)] };
         const callId = 'host_final_' + aiRequest.id;
         await executeTool({ name: 'finalResponse', input: proposal, callId,
           invoke: () => definitions.finalResponse.execute!(proposal, { toolCallId: callId, messages: [], abortSignal: signal, context: undefined }) as Promise<unknown> });
@@ -599,7 +597,7 @@ export async function executeAgentsBrowserTurn(input: Input, host: AgentsBrowser
     }
     await agentSession.finish();
     const completedTools = host.summarizeTraces(traces).map(call => ({ name: call.name, result: call.rawResult }));
-    const status = pauseRequested ? 'blocked' : accepted?.status === 'failed' ? 'failed' : 'passed';
+    const status = pauseRequested ? 'blocked' : accepted?.status ?? 'passed';
     let blocks: BrowserChatFinalBlock[] = accepted?.blocks || [];
     let reply = accepted ? browserChatFinalBlocksToText(blocks) : host.humanPause(traces)
       || browserChatRequestedUserInput(host.summarizeTraces(traces)) || '等待用户补充信息或完成验证。';

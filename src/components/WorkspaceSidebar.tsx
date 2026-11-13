@@ -113,16 +113,7 @@ export function WorkspaceSidebar({
 
       {children}
 
-      <div
-        className="browser-chat-sidebar-footer"
-        style={{
-          alignItems: 'center',
-          display: 'flex',
-          flexDirection: collapsed ? 'column' : 'row',
-          gap: collapsed ? 2 : undefined,
-          justifyContent: collapsed ? 'center' : 'space-between',
-        }}
-      >
+      <div className="browser-chat-sidebar-footer">
         <WebPilotHelpCenter collapsed={collapsed} />
         <AdministratorLogoutButton />
         <AnimatedThemeToggler

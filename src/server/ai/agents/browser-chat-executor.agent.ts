@@ -540,19 +540,6 @@ function summarizeToolTraces(traces: ToolTrace[]): StepToolCall[] {
   });
 }
 
-function browserChatFinalResponseCompletionError(response: StructuredResponse) {
-  const completion = response.completion;
-  if (!completion) return 'finalResponse requires completion: { complete, remainingWork: string[] }. Check the active user request before ending the turn.';
-  if (!completion.complete) {
-    return 'finalResponse cannot end an incomplete request, regardless of status or model-declared blockers. Continue all feasible work now; a time/step budget, a new login, a prerequisite you can create, or a different interaction method is not an external blocker. Use waitForHumanVerification for user-owned browser verification or requestUserInput for essential user-owned information only after independent work is complete; report an actual runtime failure accurately.';
-  }
-  if (completion.remainingWork.length) {
-    return 'finalResponse says the request is complete but also lists remaining work. Continue the feasible work; do not end this turn or ask the user whether to continue.';
-  }
-  if (response.status === 'blocked') return 'A blocked response cannot declare the active request complete.';
-  return undefined;
-}
-
 function subagentHumanPauseReply(snapshots: readonly BrowserChatSubagentResultSnapshot[]) {
   const children = snapshots.flatMap(snapshot => {
     const actual = parseJsonObjectText(snapshot.result.actual);
@@ -881,7 +868,7 @@ async function makeBrowserTools(
     visualContext?: VisualContextManager;
     getAiRequest?: () => AiRequestSnapshot | undefined;
     archiveResult?: (name: string, id: string, result: BrowserActionResult) => Promise<string>;
-    validateFinalResponse: (response: StructuredResponse) => Promise<string | undefined>;
+    validateFinalResponse?: (response: StructuredResponse) => Promise<string | undefined>;
     getAiRequestElapsedMs?: (toolCallId?: string) => number | undefined;
     abortSignal?: AbortSignal;
     shouldContinue?: () => boolean;
@@ -1189,9 +1176,8 @@ async function makeBrowserTools(
       description: runtimeBuiltinToolPrompts.finalResponse,
       onAccept: async (input, execution) => {
         const result = await record('finalResponse', input, async () => {
-          const completionError = referenceOptions ? await referenceOptions.validateFinalResponse(input)
-            : browserChatFinalResponseCompletionError(input);
-          return completionError ? { ok: false, actual: completionError }
+          const validationError = await referenceOptions?.validateFinalResponse?.(input);
+          return validationError ? { ok: false, actual: validationError }
             : { ok: true, actual: JSON.stringify({ accepted: true, blockCount: input.blocks.length }) };
         }, execution);
         if (!result.ok) return { accepted: false, code: result.code, error: result.actual };
@@ -1216,7 +1202,7 @@ async function makeBrowserTools(
         if (hiddenContent) {
           return readableRuntimeSkills.has(input.skillId)
             ? { ok: true, actual: hiddenContent } satisfies BrowserActionResult
-            : { ok: false, actual: 'This capability Skill requires a tool absent from the current catalogue.' } satisfies BrowserActionResult;
+            : { ok: false, actual: `Capability Skill ${input.skillId} is unavailable because its owning capability has no enabled tool in this catalogue. Use an available Skill or enable the required capability in tool settings.` } satisfies BrowserActionResult;
         }
         return referenceOptions?.readSkill
           ? referenceOptions.readSkill(input.skillId)
@@ -1430,7 +1416,6 @@ export async function executeInteractiveBrowserTurn(input: {
     }) !== 'denied',
     summarizeTraces: summarizeToolTraces,
     humanPause: subagentHumanPauseReplyFromTraces,
-    validateFinalResponse: browserChatFinalResponseCompletionError,
   });
 }
 

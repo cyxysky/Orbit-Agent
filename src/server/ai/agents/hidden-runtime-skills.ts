@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { configurationCapabilityManifest } from '@/config/configuration-capability';
 import { extensionToolCatalog } from '@/server/capabilities/extension-catalog';
-import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
+import { capabilitySkillsForTools, CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 import { browserInteractionSkill } from './runtime-browser-interaction';
 import type { BrowserActionResult } from '@cjfclonedeep/capability-sdk/browser/node';
 import type { CapabilitySkill } from '@cjfclonedeep/capability-sdk';
@@ -28,7 +28,7 @@ function manifestRuntimeSkill(manifest: { id: string; skills?: readonly Capabili
 }
 
 const browserRuntimeSkill = browserInteractionSkill;
-const capabilityRuntimeSkills = [
+const capabilityRuntimeManifests = [
   configurationCapabilityManifest,
   browserCapabilityManifest,
   fileCapabilityManifest,
@@ -43,10 +43,12 @@ const capabilityRuntimeSkills = [
   communicationCapabilityManifest,
   terminalCapabilityManifest,
   computerCapabilityManifest,
-].flatMap((manifest) => {
+];
+const capabilityRuntimeSkillGroups: readonly (readonly CapabilitySkill[])[] = capabilityRuntimeManifests.map((manifest) => {
   manifestRuntimeSkill(manifest);
   return manifest.id === browserCapabilityManifest.id ? [browserInteractionSkill, ...manifest.skills!.slice(1)] : manifest.skills!;
 });
+const capabilityRuntimeSkills = capabilityRuntimeSkillGroups.flat();
 
 // Published activation names describe capability tools; each run still filters
 // its mounted catalogue. The Agent owns lazy Skill delivery.
@@ -90,8 +92,11 @@ export function hiddenRuntimeSkillIds() {
 }
 
 export function hiddenRuntimeSkillIdsForTools(tools: ReadonlySet<string>) {
-  return Object.values(hiddenRuntimeSkills).filter(skill =>
-    skill.activation?.some(activation => tools.has(activation.toolName))).map(skill => skill.id);
+  return [...capabilityRuntimeSkillGroups, [subagentRuntimeSkill]].flatMap(skills => {
+    const ownerTools = new Set(skills.flatMap(skill => (skill.activation || [])
+      .filter(activation => tools.has(activation.toolName)).map(activation => activation.toolName)));
+    return capabilitySkillsForTools(skills, ownerTools).map(skill => skill.id);
+  });
 }
 
 export function hiddenRuntimeSkillContent(skillId: string) {

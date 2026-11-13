@@ -195,7 +195,7 @@
   justify-content: stretch;
 }
 
-.app-modal-body .settings-row:not([data-setting-control="boolean"]) > .settings-row-control > * {
+.app-modal-body .settings-row[data-setting-control]:not([data-setting-control="boolean"]) > .settings-row-control > * {
   min-width: 0;
   width: 100%;
 }
@@ -203,6 +203,10 @@
 .app-modal-body .settings-row[data-setting-control="boolean"] {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 16px;
+}
+
+.app-modal-body [data-setting-control="boolean"] {
+  border-block-start: 0;
 }
 
 .settings-group-stack {

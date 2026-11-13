@@ -51,7 +51,6 @@ spawn 使用 system.subagent 规范，由宿主当前内容 gate 保证已读或
 - [systemPromptOf](../../src/server/ai/agents/browser-chat-executor.agent.ts#L507)?：函数，第?? 507 ?? 行。
 - [browserChatSystemPromptForRuntime](../../src/server/ai/agents/browser-chat-executor.agent.ts#L514)?：函数，第?? 514 ?? 行。
 - [summarizeToolTraces](../../src/server/ai/agents/browser-chat-executor.agent.ts#L518)?：函数，第?? 518 ?? 行。
-- [browserChatFinalResponseCompletionError](../../src/server/ai/agents/browser-chat-executor.agent.ts#L543)?：函数，第?? 543 ?? 行。
 - [subagentHumanPauseReply](../../src/server/ai/agents/browser-chat-executor.agent.ts#L556)?：函数，第?? 556 ?? 行。
 - [subagentHumanPauseReplyFromTraces](../../src/server/ai/agents/browser-chat-executor.agent.ts#L572)?：函数，第?? 572 ?? 行。
 - [imageTokenEstimatePerImage](../../src/server/ai/agents/browser-chat-executor.agent.ts#L587)?：函数，第?? 587 ?? 行。

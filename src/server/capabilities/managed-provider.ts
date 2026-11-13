@@ -14,19 +14,34 @@ import type { ComposeVideoInput, MediaArtifact } from '@cjfclonedeep/capability-
 import { saveCompositionProject } from './video-projects';
 
 async function toolResult(value: unknown, sessionId: string, toolId: string): Promise<CapabilityResult> {
-  function normalize(input: unknown): unknown {
+  const root = artifactsRoot();
+  const workspace = path.join(root, sessionId.replace(/[^a-zA-Z0-9_-]/g, '_'));
+  const artifactKeys = new Set(['artifactId', 'sourceArtifactId', 'expectedArtifactId', 'attachmentArtifactIds']);
+  function hostArtifactId(reference: string) {
+    const filename = path.resolve(workspace, reference);
+    const relative = path.relative(workspace, filename);
+    if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) {
+      throw new CodedError(ERROR_CODES.FORBIDDEN, 'MCP 返回了当前对话目录之外的文件。');
+    }
+    return path.relative(root, filename).replace(/\\/g, '/');
+  }
+  function normalize(input: unknown, key = ''): unknown {
     if (typeof input === 'string' && input.startsWith('file://')) {
       const filename = fileURLToPath(input);
-      const allowed = path.join(artifactsRoot(), sessionId.replace(/[^a-zA-Z0-9_-]/g, '_'));
-      const relative = path.relative(allowed, filename);
-      if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) throw new CodedError(ERROR_CODES.FORBIDDEN, 'MCP 返回了当前对话目录之外的文件。');
-      return artifactApiUrl(filename, { artifactsRoot: artifactsRoot() }) + new URL(input).search;
+      hostArtifactId(filename);
+      return artifactApiUrl(filename, { artifactsRoot: root }) + new URL(input).search;
     }
-    if (Array.isArray(input)) return input.map(normalize);
+    if (typeof input === 'string' && artifactKeys.has(key) && input && !/^[a-z][a-z\d+.-]*:/i.test(input)) {
+      return hostArtifactId(input);
+    }
+    if (Array.isArray(input)) return input.map(child => normalize(child, key));
     if (input && typeof input === 'object') {
-      const object = Object.fromEntries(Object.entries(input).map(([key, child]) => [key, normalize(child)]));
+      const object = Object.fromEntries(Object.entries(input).map(([name, child]) => [name, normalize(child, name)]));
       const url = [object.url, object.downloadUrl, object.uri].find(item => typeof item === 'string' && item.includes('/api/artifacts/'));
-      if (object.artifactId && typeof url === 'string') object.artifactId = decodeURIComponent(url.split('/api/artifacts/')[1].split('?')[0]);
+      if (object.artifactId && typeof url === 'string') {
+        const reference = decodeURIComponent(url.split('/api/artifacts/')[1].split('?')[0]);
+        object.artifactId = hostArtifactId(path.resolve(root, reference));
+      }
       return object;
     }
     return input;
@@ -59,7 +74,9 @@ async function toolResult(value: unknown, sessionId: string, toolId: string): Pr
     return { ...structured, content };
   }
   const text = raw.content?.filter(part => part.type === 'text').map(part => part.text || '').join('\n') || '';
-  try { const parsed = JSON.parse(text) as CapabilityResult; if (typeof parsed.ok === 'boolean') return parsed; } catch { /* third-party MCP text result */ }
+  let parsed: CapabilityResult | undefined;
+  try { parsed = JSON.parse(text) as CapabilityResult; } catch { /* third-party MCP text result */ }
+  if (parsed && typeof parsed.ok === 'boolean') return normalize(parsed) as CapabilityResult;
   return raw.isError ? { ok: false, error: { code: ERROR_CODES.CAPABILITY_EXECUTION_FAILED, message: text || 'MCP tool failed' }, data: raw }
     : { ok: true, summary: text.slice(0, 2000) || 'MCP tool completed', data: raw };
 }
@@ -109,8 +126,6 @@ export async function createManagedToolProviders(input: {
             if (typeof forwarded.attachmentId === 'string' && bindings.has(forwarded.attachmentId)) {
               forwarded.artifactId = await bind(forwarded.attachmentId); delete forwarded.attachmentId;
             }
-            for (const key of ['artifactId', 'sourceRef']) if (typeof forwarded[key] === 'string') forwarded[key] = await bind(forwarded[key]);
-            if (Array.isArray(forwarded.attachmentArtifactIds)) forwarded.attachmentArtifactIds = await Promise.all(forwarded.attachmentArtifactIds.map(value => typeof value === 'string' ? bind(value) : value));
             const env = await input.beforeCall?.(definition.id, forwarded, context);
             const metadata = definition.id === 'browser' ? { credentials: typeof input.credentials === 'function' ? input.credentials() : input.credentials, targetId: env?.BROWSER_CDP_TARGET_ID }
               : definition.id === 'file' ? { sourcePageUrl: input.sourcePageUrl?.(),

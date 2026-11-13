@@ -3,11 +3,7 @@ import { CodedError, ERROR_CODES } from './errors.ts';
 
 
 export type ResponseBlock<T = Record<string, unknown>> = { type: string; params: T };
-export type ResponseCompletion = {
-  complete: boolean;
-  remainingWork: string[];
-};
-export type StructuredResponse = { status: 'passed' | 'failed' | 'blocked'; blocks: ResponseBlock[]; completion?: ResponseCompletion };
+export type StructuredResponse = { status: 'passed' | 'failed' | 'blocked'; blocks: ResponseBlock[] };
 export type ResponseResource = { topic: string; id: string };
 export type ResponseInputFeedback = {
   message: string;
@@ -90,34 +86,21 @@ export class ResponseRegistry {
 
   parseResponse(value: unknown): StructuredResponse {
     const response = object(value);
-    if (Object.keys(response).some(key => key !== 'status' && key !== 'blocks' && key !== 'completion')) throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, 'Unknown response field.');
+    const extra = Object.keys(response).filter(key => key !== 'status' && key !== 'blocks');
+    if (extra.length) throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, `Unknown response fields: ${extra.join(', ')}. Allowed fields: status, blocks.`);
     const status = response.status;
     if (status !== 'passed' && status !== 'failed' && status !== 'blocked') throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, 'Invalid response status.');
     if (!Array.isArray(response.blocks) || !response.blocks.length || response.blocks.length > 64) throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, 'Expected 1 to 64 response blocks.');
-    let completion: ResponseCompletion | undefined;
-    if (response.completion !== undefined) {
-      const declared = object(response.completion);
-      if (Object.keys(declared).some(key => key !== 'complete' && key !== 'remainingWork')) throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, 'Unknown completion field.');
-      if (typeof declared.complete !== 'boolean') throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, 'completion.complete must be a boolean.');
-      if (!Array.isArray(declared.remainingWork) || declared.remainingWork.length > 64
-        || declared.remainingWork.some(item => typeof item !== 'string' || !item.trim() || item.length > 500)) {
-        throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, 'completion.remainingWork must be an array of at most 64 nonempty strings.');
-      }
-      completion = {
-        complete: declared.complete,
-        remainingWork: declared.remainingWork.map(item => (item as string).trim()),
-      };
-    }
     const errors: string[] = [];
     const blocks = response.blocks.flatMap((block, index) => {
       try { return [this.parse(block)]; }
       catch (error) { errors.push(`blocks.${index}: ${error instanceof Error ? error.message : String(error)}`); return []; }
     });
     if (errors.length) throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, errors.join('\n'));
-    return { status, ...(completion ? { completion } : {}), blocks };
+    return { status, blocks };
   }
 
-  /** Preserve authored content and completion; infer a missing type only from one matching schema. */
+  /** Preserve authored content and status; infer a missing type only from one matching schema. */
   repairInput(raw: string): string | undefined {
     try {
       const response = object(JSON.parse(closeResponseBlocksArray(raw)));
@@ -155,7 +138,7 @@ export class ResponseRegistry {
         if (matches.length !== 1) return undefined;
         blocks.push(matches[0]);
       }
-      // Keep the entire response subject to the original schema and host completion review.
+      // Keep the entire response subject to the registered schema.
       const valid = this.parseResponse({ ...response, blocks });
       const serialized = JSON.stringify(valid);
       return serialized !== raw ? serialized : undefined;
@@ -201,7 +184,7 @@ export class ResponseRegistry {
         unexpectedParams: schema?.additionalProperties === false ? Object.keys(params).filter(key => !properties.includes(key)) : [],
         matchingTypes: matching.map(candidate => candidate.type), examples });
     }
-    return { message: 'The response was not accepted. Keep the authored content and completion declaration; correct the block type/params and call finalResponse again. For generated resources, copy the exact response block returned by the successful tool. Several types may share a params schema: do not guess between them or regenerate a resource merely to repair its response block.',
+    return { message: 'The response was not accepted. Keep the authored content and status; correct the response fields or block type/params and call finalResponse again. For generated resources, copy the exact response block returned by the successful tool. Several types may share a params schema: do not guess between them or regenerate a resource merely to repair its response block.',
       availableTypes: this.definitions().map(definition => definition.type), blocks };
   }
 
@@ -209,6 +192,7 @@ export class ResponseRegistry {
   modelInstructions() {
     return [
       'Every final answer, including prose-only answers and clarification questions, must be submitted through finalResponse. Ordinary assistant text is progress narration, not a completed response.',
+      'The response input has exactly two fields: status (passed, failed or blocked) and blocks (ordered registered response blocks). An accepted finalResponse delivers the turn.',
       'Completion is about delivered results, not intentions. Before finalResponse, compare the active user request with the actual blocks and successful execution receipts. Looking up documentation, reading a Skill, reasoning about a design, or writing an introduction does not create or deliver the requested output.',
       'Include each promised deliverable in this call: actual visual content for a requested visual, an existing resource block for a generated resource, or an accessible artifact link for a file. Do not submit prose that says "shown below", "generated", "attached", or describes a layout when the corresponding output is absent. Continue the missing work instead. If the user specifies a tool or output format, honor it rather than silently substituting another.',
       'When a successful tool returns content entries with type="response", finish with finalResponse and include their exact block values. Plain text identifiers do not render registered views.',
@@ -234,14 +218,6 @@ export class ResponseRegistry {
       type: 'object', additionalProperties: false, required: ['status', 'blocks'],
       properties: {
         status: { type: 'string', enum: ['passed', 'failed', 'blocked'] },
-        completion: {
-          type: 'object', additionalProperties: false, required: ['complete', 'remainingWork'],
-          description: 'Declare whether the active user request is complete and list any unfinished work. Hosts may require this declaration before accepting a final response.',
-          properties: {
-            complete: { type: 'boolean', description: 'True only after the active user request is fully handled and its promised deliverables are actually present in the response or backed by successful execution receipts. Planning and documentation reads are not delivery.' },
-            remainingWork: { type: 'array', maxItems: 64, items: { type: 'string', minLength: 1, maxLength: 500 } },
-          },
-        },
         blocks: { type: 'array', minItems: 1, maxItems: 64, description: 'Ordered {type, params} blocks. All content is inside params; put HTML and its CSS in the same core.html block, never in a separate text fragment.', items: { anyOf: variants } },
       },
     };
@@ -347,7 +323,7 @@ function closeResponseBlocksArray(raw: string): string {
     else if (char === '}' || char === ']') {
       if (stack.pop() !== (char === '}' ? '{' : '[')) return raw;
     } else if (char === ',' && stack.length === 2 && stack[0] === '{' && stack[1] === '['
-      && /^\s*"(?:completion|status)"\s*:/.test(raw.slice(index + 1))) {
+      && /^\s*"status"\s*:/.test(raw.slice(index + 1))) {
       const candidate = raw.slice(0, index) + ']' + raw.slice(index);
       try {
         const parsed = object(JSON.parse(candidate));
@@ -386,7 +362,6 @@ export class ResponseSession {
     }
     return {
       status: this.#explicit?.status ?? fallback.status ?? 'passed',
-      ...(this.#explicit?.completion ? { completion: this.#explicit.completion } : {}),
       blocks: this.registry.assemble(this.#explicit?.blocks ?? fallback.blocks ?? [], [...this.#generated.values()]),
     };
   }

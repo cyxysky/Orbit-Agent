@@ -8,7 +8,9 @@
 
 先 hiddenRuntimeSkillContent(skillId) 查系统技能目录，存在则返回当前完整原文作为 actual；否则调用宿主 referenceOptions.readSkill，读取用户 Skill。没有读取回调或找不到 ID 返回 unavailable。工具返回正文，不是执行 Skill 中提到的动作。
 
-hidden-runtime-skills 从 13 个 manifest 的 skills 收集系统技能，再加入 subagentRuntimeSkill；浏览器使用宿主 browserInteractionSkill 替换 SDK 主技能，其他附加参考技能保留。文件包括多个按特定动作激活的参考技能。activation 的 toolName/actions 建立工具调用所需内容检查。
+hidden-runtime-skills 从能力 manifest 的 skills 收集系统技能，再加入 subagentRuntimeSkill；浏览器使用宿主 browserInteractionSkill 替换 SDK 主技能，其他附加参考技能保留。activation 的 toolName/actions 建立工具调用所需内容检查，不是所有 Skill 的读取前提。
+
+可读目录以能力归属和当前挂载工具为准，Orbit 和 SDK 统一使用 capabilitySkillsForTools：带 activation 的运行规范只随对应工具开放；没有 activation 的设计指导、API 手册、图示参考随所属能力开放。所属能力没有任何可用工具时，其全部 Skill 隐藏。文件 plan 返回的设计 Skill ID 因而可以直接读取，无需为参考资料伪造 activation，也不会把这些可选参考变成每次工具调用的前置条件。
 
 ## 内容在上下文中的有效性
 
@@ -49,7 +51,6 @@ Skill gate 的补正文和授权检查由宿主负责，能力包只发布内容
 - [systemPromptOf](../../src/server/ai/agents/browser-chat-executor.agent.ts#L507)?：函数，第?? 507 ?? 行。
 - [browserChatSystemPromptForRuntime](../../src/server/ai/agents/browser-chat-executor.agent.ts#L514)?：函数，第?? 514 ?? 行。
 - [summarizeToolTraces](../../src/server/ai/agents/browser-chat-executor.agent.ts#L518)?：函数，第?? 518 ?? 行。
-- [browserChatFinalResponseCompletionError](../../src/server/ai/agents/browser-chat-executor.agent.ts#L543)?：函数，第?? 543 ?? 行。
 - [subagentHumanPauseReply](../../src/server/ai/agents/browser-chat-executor.agent.ts#L556)?：函数，第?? 556 ?? 行。
 - [subagentHumanPauseReplyFromTraces](../../src/server/ai/agents/browser-chat-executor.agent.ts#L572)?：函数，第?? 572 ?? 行。
 - [imageTokenEstimatePerImage](../../src/server/ai/agents/browser-chat-executor.agent.ts#L587)?：函数，第?? 587 ?? 行。

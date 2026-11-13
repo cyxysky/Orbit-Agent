@@ -25,6 +25,13 @@ export const toolConfigurationTargets: Record<string, string> = {
   connectors: 'integration:connector', knowledge: '知识库', data: 'integration:data',
   media: '媒体', communication: 'integration:communication', terminal: '本地终端', computer: '计算机',
 };
+export type ToolConfigurationSection = { id: string; label: string; searchable: boolean };
+export const toolConfigurationSections: Readonly<Record<string, readonly ToolConfigurationSection[]>> = {
+  communication: [
+    { id: 'parameters', label: '参数', searchable: true },
+    { id: 'channels', label: '通信渠道', searchable: false },
+  ],
+};
 export const TOOL_CAPABILITY_SETTINGS_CHANGED_EVENT = 'orbit:tool-capability-settings-changed';
 
 const settingsByName = new Map<string, typeof toolCapabilitySettings[number]>(

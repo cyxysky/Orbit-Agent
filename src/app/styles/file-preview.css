@@ -76,6 +76,10 @@ html .settlement-modal.file-preview-dialog .app-modal-body.file-preview-stage {
 }
 
 .file-preview-stage > .beautiful-loading-state {
+  align-self: center;
+  justify-content: center;
+  margin: auto;
+  max-width: 100%;
   padding: 16px 24px;
 }
 

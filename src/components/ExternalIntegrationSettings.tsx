@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@heroui/react/button';
 import {
   Cable,
@@ -150,18 +150,12 @@ async function readIntegrationTestResult(
   return result;
 }
 
-function IntegrationEditorFrame({ embedded, ...props }: ComponentProps<typeof AppModal> & { embedded?: boolean }) {
-  return embedded ? <section className="tool-integration-editor">{props.children}</section> : <AppModal {...props} />;
-}
-
 export function ExternalIntegrationSettings({
   category,
   permission,
-  embedded = false,
   onBusyChange,
 }: {
   category: IntegrationCategory;
-  embedded?: boolean;
   onBusyChange?: (busy: boolean) => void;
   permission?: {
     enabled: boolean;
@@ -499,7 +493,7 @@ export function ExternalIntegrationSettings({
   }
 
   const editorContent = editor && activeDriver ? (
-          <div className={embedded ? "external-integration-form" : "ui-modal-body external-integration-form"}>
+          <div className="ui-modal-body external-integration-form">
             {form.fields.filter(field => field.key !== 'enabled').map(field => <label key={field.key}>
               <span>{t(field.key === 'driverId' ? definition.typeLabel : field.label)}</span>
               <SettingsFieldControl field={{ ...field, options: field.key === 'driverId' ? drivers.map(driver => ({ label: driver.label, value: driver.id })) : field.options, placeholder: field.key === 'name' ? definition.namePlaceholder : field.placeholder }}
@@ -530,7 +524,7 @@ export function ExternalIntegrationSettings({
               );
             })}
 
-            {form.fields.filter(field => field.key === 'enabled').map(field => <div className="external-integration-enabled-field wide" key={field.key}>
+            {form.fields.filter(field => field.key === 'enabled').map(field => <div className="external-integration-enabled-field wide" data-setting-control={field.control} key={field.key}>
               <div><strong>{t(field.label)}</strong><span>{t(field.description || '')}</span></div>
               <SettingsFieldControl field={field} value={editor.enabled} disabled={saving || testing} onChange={value => setEditor(current => current ? { ...current, enabled: value === 'true' } : current)} />
             </div>)}
@@ -581,9 +575,9 @@ export function ExternalIntegrationSettings({
           </div>
   ) : null;
   const editorActions = editor && activeDriver ? (
-          <footer className={embedded ? "tool-configuration-actions" : "ui-modal-footer"}>
+          <footer className="ui-modal-footer">
             {editor.id ? <button className="ui-button ui-button--danger" disabled={saving || testing} type="button" onClick={() => { const item = items.find(item => item.id === editor.id); if (item) setDeleteTarget(item); }}><Trash2 size={15} />{t('删除')}</button> : null}
-            <button className="ui-button ui-button--neutral" disabled={saving} onClick={closeEditor} type="button">{t(embedded ? '返回列表' : '取消')}</button>
+            <button className="ui-button ui-button--neutral" disabled={saving} onClick={closeEditor} type="button">{t('取消')}</button>
             <button className="ui-button ui-button--neutral" disabled={saving} onClick={() => void test()} type="button">
               {testing ? <X size={15} /> : integrationIcon(category, 15)}
               {t(testing ? '停止测试' : activeDriver.testLabel)}
@@ -606,7 +600,7 @@ export function ExternalIntegrationSettings({
       </div>
 
       {permission ? (
-        <div className="external-integration-permission">
+        <div className="external-integration-permission" data-setting-control="boolean">
           <div>
             <strong>{t(permission.label)}</strong>
             <span>{t(permission.description)}</span>
@@ -662,7 +656,7 @@ export function ExternalIntegrationSettings({
         integration={{ id: editor.id, name: editor.name, enabled: editor.enabled }} headers={headers} onClose={closeEditor}
         connection={editorContent} connectionActions={editorActions} connectionBusy={saving || testing || deleting}
         connectionDirty={JSON.stringify(editor) !== editorBaseline} /> : (
-        <IntegrationEditorFrame embedded={embedded}
+        <AppModal
           ariaLabelledBy={`${category}-integration-modal-title`}
           dialogClassName="ui-modal ui-modal--form external-integration-modal"
           dismissable={!saving}
@@ -670,7 +664,7 @@ export function ExternalIntegrationSettings({
           onClose={closeEditor}
           size="wide"
         >
-          {!embedded ? <header className="ui-modal-header">
+          <header className="ui-modal-header">
             <div className="ui-modal-heading ui-modal-heading--with-icon">
               <span className="ui-modal-heading-icon external-integration-modal-icon" aria-hidden="true">
                 {integrationIcon(category, 18)}
@@ -681,12 +675,12 @@ export function ExternalIntegrationSettings({
               </div>
             </div>
             <button aria-label={t('关闭')} className="ui-icon-button ui-modal-close" disabled={saving} onClick={closeEditor} type="button"><X size={16} /></button>
-          </header> : null}
+          </header>
 
           {editorContent}
 
           {editorActions}
-        </IntegrationEditorFrame>
+        </AppModal>
       )) : null}
 
       {deleteTarget ? (
