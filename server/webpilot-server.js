@@ -88,6 +88,9 @@ function publicPath(pathname) {
     || pathname === '/apple-icon.png'
     || pathname === '/robots.txt'
     || pathname.startsWith('/_next/')
+    // Next's dev-overlay fonts use a root URL outside the application's cookie
+    // path. They are static assets, so never redirect them to the login page.
+    || /^\/__nextjs_font\/[^/]+\.woff2$/.test(pathname)
     || pathname.startsWith('/assets/')
     || pathname === '/api/embed/browser-chat/init'
     || pathname === '/embed/webpilot.js'

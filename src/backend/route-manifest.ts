@@ -1,5 +1,8 @@
 // Explicit lazy imports keep Node route loading independent of Next.
 import { authorizeAdminSettingsRequest, authorizeSettingsMenuRequest } from '@/server/settings/admin-settings-access';
+import * as authenticationLogin from './routes/auth/login/route';
+import * as authenticationLogout from './routes/auth/logout/route';
+import * as authenticationSession from './routes/auth/session/route';
 
 const settingsRoutes = [
   { path: '/api/settings/tools', load: () => import('./routes/settings/tools/route') },
@@ -19,9 +22,11 @@ const settingsRoutes = [
 ].map(route => ({ ...route, authorize: authorizeAdminSettingsRequest }));
 
 export const routes = [
-  { path: '/api/auth/login', load: () => import('./routes/auth/login/route') },
-  { path: '/api/auth/logout', load: () => import('./routes/auth/logout/route') },
-  { path: '/api/auth/session', load: () => import('./routes/auth/session/route') },
+  // Resolve the authentication control plane before advertising API readiness.
+  // Its first request must not queue behind lazy-loaded execution routes.
+  { path: '/api/auth/login', load: async () => authenticationLogin },
+  { path: '/api/auth/logout', load: async () => authenticationLogout },
+  { path: '/api/auth/session', load: async () => authenticationSession },
   ...settingsRoutes,
   { path: '/api/knowledge', load: () => import('./routes/knowledge/route') },
   { path: '/api/settings/preferences', load: () => import('./routes/settings/preferences/route') },

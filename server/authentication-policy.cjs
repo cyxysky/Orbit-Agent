@@ -38,7 +38,7 @@ function safeReturnPath(value, basePath = '') {
     const url = new URL(value, 'https://orbit.invalid');
     if (url.origin !== 'https://orbit.invalid' || prefix && !url.pathname.startsWith(prefix + '/')) return fallback;
     const pathname = prefix ? url.pathname.slice(prefix.length) : url.pathname;
-    if (pathname === '/login' || pathname.startsWith('/api/') || pathname.startsWith('/_next/')) return fallback;
+    if (pathname === '/login' || pathname.startsWith('/api/') || pathname.startsWith('/_next/') || pathname.startsWith('/__nextjs_font/')) return fallback;
     return url.pathname + url.search + url.hash;
   } catch { return fallback; }
 }

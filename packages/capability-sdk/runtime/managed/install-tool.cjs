@@ -99,11 +99,11 @@ async function installTool({ root, id, sdkRoot, env = {}, config = {}, jobId = r
   try {
     await fsp.mkdir(stage, { recursive: true });
     if (!(await fsp.realpath(stage)).startsWith((await fsp.realpath(root)) + path.sep)) throw new Error('Tool staging escapes its workspace.');
-    state('source', '正在准备此工具的 SDK 源码');
+    await state('source', '正在准备此工具的 SDK 源码');
     const cli = npmCli();
     if (!cli) throw new Error('The Node.js npm CLI is required to install a tool.');
     if (!sdkRoot || !fs.existsSync(path.join(sdkRoot, 'scripts', 'mcp-providers.mjs'))) {
-      state('source', '正在获取 SDK 下载信息');
+      await state('source', '正在获取 SDK 下载信息');
       const cached = path.join(stage, '.source');
       if (fs.existsSync(path.join(cached, 'scripts/mcp-providers.mjs'))) sdkRoot = cached;
     }
@@ -115,7 +115,7 @@ async function installTool({ root, id, sdkRoot, env = {}, config = {}, jobId = r
       if (!response.ok) throw new Error('SDK release metadata is unavailable: HTTP ' + response.status);
       const metadata = await response.json();
       if (!metadata.dist?.tarball || !metadata.dist?.integrity) throw new Error('SDK release has no integrity-protected archive.');
-      state('source', '正在下载 SDK 源码');
+      await state('source', '正在下载 SDK 源码');
       const archive = await proxyFetch(metadata.dist.tarball, { dispatcher, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(180000)]) });
       if (!archive.ok) throw new Error('SDK download failed: HTTP ' + archive.status);
       const chunks = []; let length = 0;
@@ -128,7 +128,7 @@ async function installTool({ root, id, sdkRoot, env = {}, config = {}, jobId = r
       const bytes = Buffer.concat(chunks);
       const integrity = metadata.dist.integrity.split(' ').find(value => value.startsWith('sha512-'));
       if (!integrity || createHash('sha512').update(bytes).digest('base64') !== integrity.slice(7)) throw new Error('SDK release integrity verification failed.');
-      state('source', '正在解压并校验 SDK 源码');
+      await state('source', '正在解压并校验 SDK 源码');
       const tar = createRequire(cli)('tar');
       const source = path.join(stage, '.source'); await fsp.mkdir(source, { recursive: true });
       const unpack = tar.x({ cwd: source, strip: 1, strict: true, preservePaths: false,
@@ -137,14 +137,14 @@ async function installTool({ root, id, sdkRoot, env = {}, config = {}, jobId = r
       sdkRoot = source;
       } finally { await dispatcher.close(); }
     }
-    state('graph', '正在收集此工具的模块和依赖');
+    await state('graph', '正在收集此工具的模块和依赖');
     const packaged = await packageTool({ sdkRoot, output: stage, tool });
     const sharedRuntime = path.join(root, 'runtime', process.platform + '-' + process.arch);
     const runtimeBefore = require('./layout.cjs').readManagedRuntime({ CAPABILITY_RUNTIME_HOME: sharedRuntime });
     // The installer and catalog from this release govern runtime provisioning.
     for (const file of ['runtime.cjs']) fs.copyFileSync(path.resolve(__dirname, '../../scripts', file), path.join(stage, 'sdk/scripts', file));
     for (const file of ['layout.cjs', 'spec.json', 'linux-system.cjs']) if (fs.existsSync(path.join(__dirname, file))) fs.copyFileSync(path.join(__dirname, file), path.join(stage, 'sdk/runtime/managed', file));
-    state('dependencies', '正在安装 ' + tool.title + ' 的独立依赖', { packages: Object.keys(packaged.dependencies) });
+    await state('dependencies', '正在安装 ' + tool.title + ' 的独立依赖', { packages: Object.keys(packaged.dependencies) });
     await run(process.execPath, [cli, 'install', '--prefix', stage, '--omit=dev', '--no-audit', '--no-fund', '--prefer-offline', '--loglevel=http', '--registry', registry], {
       cwd: stage, env: { ...process.env, ...Object.fromEntries(Object.entries(env).filter(([key]) => /^(?:FFMPEG_BINARIES_URL|FFMPEG_BINARY_RELEASE|HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY)$/i.test(key))),
         ...(runtimeBefore?.ffmpeg ? { FFMPEG_BIN: runtimeBefore.ffmpeg } : {}),
@@ -165,7 +165,7 @@ async function installTool({ root, id, sdkRoot, env = {}, config = {}, jobId = r
     }
     await prune(path.join(stage, 'node_modules'));
     if (tool.runtime) {
-      state('runtime', '正在准备 ' + tool.title + ' 所需的运行环境');
+      await state('runtime', '正在准备 ' + tool.title + ' 所需的运行环境');
       await run(process.execPath, [path.join(stage, 'sdk/scripts/runtime.cjs'), 'install', tool.runtime], {
         cwd: stage, env: { ...process.env, ...env, CAPABILITY_INSTALL_PROGRESS: '1', CAPABILITY_SKIP_RUNTIME_INSTALL: '0', CAPABILITY_RUNTIME_HOME: sharedRuntime },
       });
@@ -177,7 +177,7 @@ async function installTool({ root, id, sdkRoot, env = {}, config = {}, jobId = r
       try { await fsp.link(runtimeAfter.ffmpeg, binary); }
       catch (error) { if (error.code !== 'EXDEV') throw error; await fsp.copyFile(runtimeAfter.ffmpeg, binary); }
     }
-    state('verify', '正在校验工具入口');
+    await state('verify', '正在校验工具入口');
     const entry = path.join(stage, packaged.entry);
     if (!fs.existsSync(entry)) throw new Error('Installed MCP entry is missing.');
     const probeDirectory = path.join(stage, '.verification');
@@ -198,7 +198,7 @@ async function installTool({ root, id, sdkRoot, env = {}, config = {}, jobId = r
       if (!tools.length) throw new Error('The MCP component did not expose any tools.');
     } finally { if (client) await client.close(); else await transport.close(); }
     // Installation paths never contain npm file: links into the staging directory.
-    state('publish', '正在保存工具并清理安装临时文件');
+    await state('publish', '正在保存工具并清理安装临时文件');
     const release = path.join(root, 'packages', id, token);
     await fsp.mkdir(path.dirname(release), { recursive: true });
     await removeWithin(stage, path.join(stage, '.source'));
@@ -212,19 +212,25 @@ async function installTool({ root, id, sdkRoot, env = {}, config = {}, jobId = r
         await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
       }
     }
-    state('ready', '工具已安装', { state: 'ready', release, version: packaged.version, packages: Object.keys(packaged.dependencies), finishedAt: new Date().toISOString() });
+    await state('ready', '工具已安装', { state: 'ready', release, version: packaged.version, packages: Object.keys(packaged.dependencies), finishedAt: new Date().toISOString() });
     return installed;
   } catch (error) {
-    const phase = controller.signal.aborted ? 'cancelled' : 'failed';
-    state(phase, phase === 'cancelled' ? '安装已取消，缓存已保留' : '工具安装失败，可以重试', { state: phase, error: String(error.message || error).slice(-4000), finishedAt: new Date().toISOString() });
+    const phase = controller.signal.aborted && !journal.writeError ? 'cancelled' : 'failed';
+    await state(phase, phase === 'cancelled' ? '安装已取消，缓存已保留' : '工具安装失败，可以重试', { state: phase, error: String(error.message || error).slice(-4000), finishedAt: new Date().toISOString() });
     throw error;
   } finally {
-    journal.close();
-    const owner = JSON.parse(fs.readFileSync(lock, 'utf8'));
-    if (owner.token === token) await fsp.unlink(lock);
+    try { await journal.close(); }
+    finally {
+      try {
+        let owner;
+        try { owner = JSON.parse(await fsp.readFile(lock, 'utf8')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+        if (owner?.token === token) await fsp.unlink(lock);
+      } finally {
+        // Configuration files can contain secrets, even after a journal error.
+        if (fs.existsSync(stage)) await removeWithin(root, path.join(stage, '.verification'));
+      }
+    }
     // Keep source, npm dependencies and download caches for the next attempt.
-    // Configuration files can contain secrets and are never retained.
-    if (fs.existsSync(stage)) await removeWithin(root, path.join(stage, '.verification'));
   }
 }
 module.exports = { installTool, npmCli };

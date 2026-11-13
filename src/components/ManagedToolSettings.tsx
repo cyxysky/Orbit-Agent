@@ -179,13 +179,15 @@ export function ManagedToolSettings({ items, onChange, onSave, renderConfigurati
           {renderConfiguration(editingId, section.searchable ? query : '', setConfigurationBusy, section.id)}
         </TabPanel>)}
         {editing ? <TabPanel id="runtime" className={styles.configuration}>
-          <div className={styles.sectionHeading}><h3>{t(editing.title)}</h3><span className={styles.state}>{t(editing.state === 'ready' ? '已安装' : editing.state === 'installing' ? '安装中' : editing.state === 'failed' ? '安装失败' : editing.state === 'cancelled' ? '已取消' : '未安装')}</span></div>
-          <p className={styles.hint}>{t('仅安装当前工具及其必要依赖。对话和输出文件独立保留。')}</p>
+          <div className={styles.runtimeOverview}>
+            <div className={styles.sectionHeading}><h3>{t(editing.title)}</h3><span className={styles.runtimeState} data-state={editing.state}>{editing.state === 'installing' ? <Loader2 className="spin" size={13} /> : null}{t(editing.state === 'ready' ? '已安装' : editing.state === 'installing' ? '安装中' : editing.state === 'failed' ? '安装失败' : editing.state === 'cancelled' ? '已取消' : '未安装')}</span></div>
+            <p className={styles.hint}>{t('仅安装当前工具及其必要依赖。对话和输出文件独立保留。')}</p>
+          </div>
           {editing.progress ? <ToolInstallationProgress tool={editing} />
             : editing.state === 'installing' ? <p role="status"><Loader2 className="spin" size={14} /> {t(editing.message)}</p> : null}
           {editing.error && editing.state === 'failed' ? <details><summary>{t('查看错误详情')}</summary><pre className={styles.installError}>{editing.error}</pre></details> : null}
           {streamError ? <p className={styles.error} role="status">{streamError}</p> : null}
-          {checks.length ? <ul className={styles.runtimeChecks}>{checks.map(check => <li key={check.name} data-ok={check.ok}><strong>{check.name}</strong><span>{check.ok ? t('通过') : t('未通过')} · {check.detail}</span></li>)}</ul> : null}
+          {checks.length ? <details className={styles.runtimeDiagnostics} open={checks.some(check => !check.ok)}><summary>{t('环境检查')}<span className={styles.state}>{t('通过')} {checks.filter(check => check.ok).length} / {checks.length}</span></summary><ul className={styles.runtimeChecks}>{checks.map(check => <li key={check.name} data-ok={check.ok}><strong>{check.name}</strong><span>{check.ok ? t('通过') : t('未通过')} · {check.detail}</span></li>)}</ul></details> : null}
           <div className={styles.runtimeActions}>
             <Button variant="secondary" isDisabled={locked || editing.state === 'installing'} onPress={() => void mutate(editing, 'check').catch(value => setFormError(String(value.message || value)))}>{t('检查环境')}</Button>
             {editing.state === 'ready' ? <>

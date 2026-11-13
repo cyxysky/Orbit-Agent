@@ -3,13 +3,17 @@ const http = require('node:http');
 const { createHash } = require('node:crypto');
 const { ADMIN_SESSION_COOKIE_NAME, readCookie } = require('./authentication-policy.cjs');
 const principalRequests = new WeakMap();
+// Include cold route loading and local event-loop contention in this total
+// deadline. A socket inactivity timeout would be extended by a trickling body.
+const AUTHENTICATION_REQUEST_TIMEOUT_MS = 15_000;
 
 class AuthenticationServiceError extends Error {
-  constructor(message, cause) {
+  constructor(message, cause, details) {
     super(message, { cause });
     this.name = 'AuthenticationServiceError';
     this.code = 'authentication_service_unavailable';
     this.statusCode = 503;
+    if (details) Object.assign(this, details);
   }
 }
 
@@ -20,25 +24,33 @@ function administratorSessionKey(request) {
 function authenticationRequest(request, runtime, path, method = 'GET') {
   return new Promise((resolve, reject) => {
     let deadline;
-    const fail = cause => { clearTimeout(deadline); reject(cause instanceof AuthenticationServiceError ? cause : new AuthenticationServiceError('Authentication service unavailable', cause)); };
+    const startedAt = performance.now();
+    let stage = 'connecting';
+    const unavailable = (message, cause) => new AuthenticationServiceError(message, cause, {
+      endpoint: path, stage, elapsedMs: Math.round(performance.now() - startedAt), timeoutMs: AUTHENTICATION_REQUEST_TIMEOUT_MS,
+    });
+    const fail = cause => { clearTimeout(deadline); reject(cause instanceof AuthenticationServiceError ? cause : unavailable('Authentication service unavailable', cause)); };
     const check = http.request({ hostname: runtime.hostname, port: runtime.port, path, method,
       headers: { cookie: request.headers.cookie || '', ...(process.env.WEBPILOT_INTERNAL_REQUEST_TOKEN ? { 'x-webpilot-backend-token': process.env.WEBPILOT_INTERNAL_REQUEST_TOKEN } : {}) } }, response => {
+      stage = 'reading-response';
       let body = '';
       response.setEncoding('utf8');
       response.on('data', chunk => { body += chunk; if (body.length > 8192) check.destroy(new Error('Invalid authentication response')); });
       response.once('error', fail);
-      response.once('aborted', () => check.destroy(new AuthenticationServiceError('Authentication response interrupted')));
+      response.once('aborted', () => check.destroy(unavailable('Authentication response interrupted')));
       response.once('end', () => {
         clearTimeout(deadline);
         try {
-          if (response.statusCode !== 200) throw new AuthenticationServiceError('Authentication service unavailable');
+          stage = 'validating-response';
+          if (response.statusCode !== 200) throw unavailable('Authentication service unavailable');
           const data = JSON.parse(body);
           resolve(data);
         } catch (error) { fail(error); }
       });
     });
-    deadline = setTimeout(() => check.destroy(new AuthenticationServiceError('Authentication service timeout')), 5000);
+    deadline = setTimeout(() => check.destroy(unavailable('Authentication service timeout')), AUTHENTICATION_REQUEST_TIMEOUT_MS);
     deadline.unref();
+    check.once('finish', () => { stage = 'waiting-response'; });
     check.once('error', fail);
     check.end();
   });

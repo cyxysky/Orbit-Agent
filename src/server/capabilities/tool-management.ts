@@ -19,7 +19,7 @@ export async function manageTools(raw: unknown, caller: { userId: string; model:
   if (request.action === 'check') return installer.check(request.id);
   if (request.action === 'install' || request.action === 'retry') {
     const configured = (await managedToolConfigurations())[request.id];
-    return { tool: installer.start(request.id, configured) };
+    return { tool: await installer.start(request.id, configured) };
   }
   if (request.action === 'cancel') return { tool: installer.cancel(request.id, request.jobId) };
   if (request.action === 'wait') {

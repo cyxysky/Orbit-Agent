@@ -55,7 +55,9 @@ export default function nextConfig(phase: string): NextConfig {
       // after HMR, so keep the ordinary Turbopack import graph in both runtimes.
       turbopackLazyDynamicImports: false,
       turbopackLazyDynamicImportsSSR: false,
-      turbopackGc: phase === PHASE_DEVELOPMENT_SERVER,
+      // HMR reported missing/collected task references on Next 16.4. Leave
+      // experimental task GC off; normal memory eviction stays enabled.
+      turbopackGc: false,
       // Leave the plugin runtime at Next's default.
       // Keep the Webpack fallback/build path at a lower peak, and avoid eagerly
       // loading every route into the long-lived server process.

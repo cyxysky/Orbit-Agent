@@ -1,12 +1,13 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, openSync, closeSync, unlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, openSync, closeSync, unlinkSync } from 'node:fs';
 import { realpath, rm, access } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { createInstallProgress, advanceInstallProgress, type ManagedToolInstallProgress } from '../../runtime/managed/install-progress.cjs';
+import { writeJson } from '../../runtime/managed/atomic-json.cjs';
 export { resolveToolModule, requireToolModule, importToolModule } from './modules.ts';
 export type { ManagedToolInstallProgress, ManagedToolInstallStep } from '../../runtime/managed/install-progress.cjs';
 
@@ -59,10 +60,7 @@ export function createManagedToolInstaller(input: { root: string; sdkRoot?: stri
     return tool;
   }
   const stateFile = (id: string) => path.join(root, '.state', id + '.json');
-  const writeState = (id: string, state: unknown) => {
-    const temporary = stateFile(id) + '.' + randomUUID() + '.tmp';
-    writeFileSync(temporary, JSON.stringify(state), { mode: 0o600 }); renameSync(temporary, stateFile(id));
-  };
+  const writeState = (id: string, state: unknown) => writeJson(stateFile(id), state);
   function installed(id: string): InstalledTool | undefined {
     definition(id);
     const state = readJson<ManagedToolStatus>(stateFile(id));
@@ -112,7 +110,7 @@ export function createManagedToolInstaller(input: { root: string; sdkRoot?: stri
       }
       return { tool: status(id), readyToInstall: checks.every(check => check.ok), checks };
     },
-    start(id: string, configuration: { env?: Record<string, string>; config?: Record<string, unknown> } = {}) {
+    async start(id: string, configuration: { env?: Record<string, string>; config?: Record<string, unknown> } = {}) {
       const before = status(id);
       if (before.state === 'ready' || before.state === 'installing') return before;
       const directory = path.join(root, '.state');
@@ -137,43 +135,46 @@ export function createManagedToolInstaller(input: { root: string; sdkRoot?: stri
       let child: ChildProcess;
       try {
         writeFileSync(request, JSON.stringify({ ...input, ...configuration, sdkRoot, root, id, jobId }), { mode: 0o600 });
-        writeState(id, initial);
+        await writeState(id, initial);
         child = spawn(process.execPath, [path.join(installerDirectory(), 'install-tool.cjs'), request], {
           windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
           env: { ...minimalProcessEnvironment(), CAPABILITY_SKIP_RUNTIME_INSTALL: '1', npm_config_cache: path.join(root, '.cache', 'npm') },
         });
       } catch (error) {
         if (readJson<{ token: string }>(lock)?.token === jobId) unlinkSync(lock);
-        void rm(request, { force: true });
+        await rm(request, { force: true });
         throw error;
       }
       const key = root + ':' + id;
       jobs.set(key, child);
       initial.pid = child.pid;
-      if (readJson<ManagedToolStatus>(stateFile(id))?.phase === 'starting') {
-        try { writeState(id, initial); } catch { /* The worker publishes its own PID on startup. */ }
-      }
+      // Only the worker writes progress after spawn. A parent snapshot could
+      // otherwise race with and replace the worker's first published phase.
       let output = '';
       child.stdout?.setEncoding('utf8'); child.stderr?.setEncoding('utf8');
       const read = (chunk: string) => { output = (output + chunk).slice(-6000); };
       child.stdout?.on('data', read); child.stderr?.on('data', read);
       let finished = false;
-      const finish = (error?: string) => {
+      const finish = async (error?: string) => {
         if (finished) return;
         finished = true;
-        jobs.delete(key);
-        void rm(request, { force: true });
-        if (readJson<{ token: string }>(lock)?.token === jobId) { try { unlinkSync(lock); } catch { /* worker released it */ } }
-        const latest = readJson<ManagedToolStatus>(stateFile(id));
-        if (latest?.jobId !== jobId || ['ready', 'failed', 'cancelled'].includes(latest.state)) return;
-        if (error || latest.state === 'installing') {
-          const { redact } = createRequire(import.meta.url)(path.join(installerDirectory(), 'install-journal.cjs'));
-          writeState(id, { ...initial, ...latest, state: 'failed', phase: 'failed', message: '安装失败，可以重试',
-            progress: advanceInstallProgress(latest?.progress || initial.progress!, 'failed'), error: redact(error || 'Installer exited without a completed result.', Object.values(configuration.env || {})).slice(-4000), updatedAt: new Date().toISOString(), finishedAt: new Date().toISOString() });
+        try {
+          await rm(request, { force: true });
+          const latest = readJson<ManagedToolStatus>(stateFile(id));
+          if (latest?.jobId !== jobId || ['ready', 'failed', 'cancelled'].includes(latest.state)) return;
+          if (error || latest.state === 'installing') {
+            const { redact } = createRequire(import.meta.url)(path.join(installerDirectory(), 'install-journal.cjs'));
+            await writeState(id, { ...initial, ...latest, state: 'failed', phase: 'failed', message: '安装失败，可以重试',
+              progress: advanceInstallProgress(latest?.progress || initial.progress!, 'failed'), error: redact(error || 'Installer exited without a completed result.', Object.values(configuration.env || {})).slice(-4000), updatedAt: new Date().toISOString(), finishedAt: new Date().toISOString() });
+          }
+        } finally {
+          if (jobs.get(key) === child) jobs.delete(key);
+          if (readJson<{ token: string }>(lock)?.token === jobId) { try { unlinkSync(lock); } catch { /* worker released it */ } }
         }
       };
-      child.once('error', error => finish(error.message));
-      child.once('close', (code, signal) => finish(code !== 0 ? output || 'Installer exited: ' + (signal || code) : undefined));
+      const reportWriteError = (error: unknown) => console.error('[tool-installer] Unable to save installation result:', error);
+      child.once('error', error => { void finish(error.message).catch(reportWriteError); });
+      child.once('close', (code, signal) => { void finish(code !== 0 ? output || 'Installer exited: ' + (signal || code) : undefined).catch(reportWriteError); });
       return { ...initial, state: 'installing' as const };
     },
     async uninstall(id: string) {
