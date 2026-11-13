@@ -1,10 +1,10 @@
 import { proposeReviewedMemory } from './runtime-memory-lifecycle';
 import { memoryContentHash } from '@/server/storage/memory-content-hash';
 import { createHash, randomUUID } from 'node:crypto';
-import { generateText } from 'ai';
 import { z } from 'zod';
 import { aiTelemetry } from './ai-sdk-runtime';
 import { getModel } from './model';
+import { generateStructuredOutput } from './structured-generation';
 import type { StepExecutionResult } from './schemas/runtime.schema';
 import {
   normalizeMemoryDraft, normalizePersonalMemoryDomain, normalizePersonalMemoryUserId,
@@ -15,7 +15,7 @@ import {
 } from './personal-memory';
 import {
   evidenceIsInMessage, memoryCandidateSchema, memoryExtractionSchema, memoryReviewSchema,
-  parseMemoryJson, personalMemoryQualityPolicy, type MemoryCandidate,
+  personalMemoryQualityPolicy, type MemoryCandidate,
 } from './personal-memory-policy';
 import {
   commitPersonalMemoryReview, hasPersonalMemoryReceipt, readPersonalMemoryRecords,
@@ -122,16 +122,15 @@ function sourceForModel(input: LearningSource) {
   };
 }
 
-async function askMemoryModel(schema: z.ZodType, instruction: string, data: unknown, abortSignal?: AbortSignal) {
+async function askMemoryModel<T>(schema: z.ZodType<T>, instruction: string, data: unknown, abortSignal?: AbortSignal) {
   const serialized = JSON.stringify(data);
   if (serialized.length > personalMemoryExtractionInputLimit()) throw new CodedError(ERROR_CODES.CONTEXT_READ_FAILED, 'Memory evidence exceeds input budget; no memory was changed.');
-  const response = await generateText({
-    model: getModel(), temperature: 0.1, maxRetries: 1,
+  return generateStructuredOutput({ schema,
+    model: getModel(), temperature: 0.1, maxOutputTokens: 8192,
     abortSignal: abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000),
-    system: `${personalMemoryQualityPolicy}\n${instruction}\nReturn only JSON matching this schema:\n${JSON.stringify(z.toJSONSchema(schema))}`,
+    system: `${personalMemoryQualityPolicy}\n${instruction}`,
     prompt: serialized, telemetry: aiTelemetry('personal-memory-learning'),
   });
-  return { data: schema.parse(parseMemoryJson(response.text)), rawText: response.text };
 }
 
 function unchangedValue(a: PersonalMemoryItem, b: PersonalMemoryItem) {

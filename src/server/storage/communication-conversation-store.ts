@@ -3,17 +3,21 @@ import { createHash } from 'node:crypto';
 import type { WeComInboundMessage, WeComInboundAttachment } from '@cjfclonedeep/capability-sdk/integrations/communication/node';
 import type { BrowserChatAttachment } from '@/server/ai/agents/browser-chat-attachments';
 import type { CommunicationContent } from '@cjfclonedeep/capability-sdk/integrations/communication';
-import { executeDatabase, queryDatabase, queryDatabaseOne } from '@/server/db/database';
+import { databaseDriver, executeDatabase, queryDatabase, queryDatabaseOne } from '@/server/db/database';
 import type { RuntimeModelSelection } from '@/lib/model-selection';
 
 export type CommunicationConversation = {
-  id: string; integrationId: string; botId: string; userId: string;
-  target: WeComInboundMessage['target']; activeSessionId?: string;
-  sessions: Array<{ id: string; title: string }>;
+  // userId owns the personal/group Agent session; ownerUserId binds the channel.
+  id: string; integrationId: string; botId: string; userId: string; ownerUserId: string;
+  scope: WeComInboundMessage['target']; contextPeriod?: string;
+  // Discovered delivery destinations do not partition the user's context.
+  targets: WeComInboundMessage['target'][]; activeSessionId?: string;
+  sessions: Array<{ id: string; title: string; period?: string }>;
   modelSelection?: RuntimeModelSelection;
 };
 export type CommunicationInbound = {
-  id: string; conversationId: string; text: string; senderId: string;
+  id: string; conversationId: string; text: string; senderId: string; target: WeComInboundMessage['target'];
+  contextPeriod?: string;
   status: 'received' | 'waiting' | 'running' | 'replying' | 'done' | 'failed' | 'cancelled';
   sessionId?: string;
   replies?: Array<{ content: CommunicationContent; status: 'pending' | 'sending' | 'sent' }>;
@@ -88,11 +92,12 @@ export async function saveCommunicationInbound(value: CommunicationInbound) {
   await executeDatabase(`UPDATE workspace_record SET status = ?, record_json = ?, updated_at = ? WHERE collection='communication' AND id = ?`,
     [value.status, JSON.stringify(value), new Date().toISOString(), value.id]);
 }
-export async function listPendingCommunicationMessages(receivers: Array<{ id: string; botId: string; userId: string }>) {
+export async function listPendingCommunicationMessages(receivers: Array<{ id: string; botId: string; ownerUserId: string }>) {
   if (!receivers.length) return [];
+  const owner = databaseDriver() === 'postgres' ? "CAST(c.record_json AS jsonb)->>'ownerUserId'" : "json_extract(c.record_json, '$.ownerUserId')";
   const rows = await queryDatabase<{ record_json: string }>(`SELECT m.record_json FROM ${workspaceRecords('communication')} m
     JOIN ${workspaceEntities('communication')} c ON c.id = m.conversation_id
-    WHERE m.status IN ('received', 'running', 'replying') AND (${receivers.map(() => '(c.integration_id = ? AND c.bot_id = ? AND c.user_id = ?)').join(' OR ')})
-    ORDER BY CASE WHEN m.status = 'running' THEN 1 ELSE 0 END, m.created_at, m.id LIMIT 200`, receivers.flatMap(receiver => [receiver.id, receiver.botId, receiver.userId]));
+    WHERE m.status IN ('received', 'running', 'replying') AND (${receivers.map(() => `(c.integration_id = ? AND c.bot_id = ? AND ${owner} = ?)`).join(' OR ')})
+    ORDER BY CASE WHEN m.status = 'running' THEN 1 ELSE 0 END, m.created_at, m.id LIMIT 200`, receivers.flatMap(receiver => [receiver.id, receiver.botId, receiver.ownerUserId]));
   return rows.map(row => JSON.parse(row.record_json) as CommunicationInbound);
 }

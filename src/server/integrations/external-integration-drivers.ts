@@ -307,7 +307,7 @@ function verifiedWeComTarget(configuration: ExternalIntegrationConfiguration) {
 
 async function weComBotTargets(integration: ResolvedExternalIntegration) {
   const conversations = await listCommunicationConversations(integration.id, integration.configuration.botId);
-  return [...new Map(conversations.map(({ target }) => [`${target.kind}:${target.id}`, {
+  return [...new Map(conversations.filter(item => item.ownerUserId === integration.configuration.ownerUserId).flatMap(item => item.targets).map(target => [`${target.kind}:${target.id}`, {
     ...target, transport: 'wecom-websocket', name: `${target.kind === 'group' ? '群聊' : '单聊'} · ${target.id}（可上传附件）`,
   }])).values()];
 }
@@ -803,8 +803,8 @@ function weComAiBotDriver(): ExternalIntegrationDriver {
       { key: 'botSecret', label: 'Secret', control: 'password', secret: true, description: '机器人的长连接 Secret，将加密保存。无需额外配置媒体上传地址。' },
       { key: 'receiveMessages', label: '接收消息并运行 Agent', control: 'select', defaultValue: 'false',
         options: [{ label: '关闭', value: 'false' }, { label: '开启', value: 'true' }],
-        description: '单聊直接发送，群聊中 @机器人。支持 /help、/start、/delete、/list offset limit、/select id、/model-list、/model-switch id；可点击确认卡片，或使用 /confirm id、/cancel id 处理工具确认。新对话默认完全模式，切换已有对话保留原有模式。' },
-      { key: 'ownerUserId', label: '对话所属账号', control: 'text', hidden: true },
+        description: '私聊按提问者 userid 建立对话，网页相同 userId 可查看。群聊按群 ID 共享上下文，每周一北京时间 00:00 后首次提问新建对话，历史保留。当前长连接只接收群内 @ 消息，普通群消息需要另行开通并接入可调用的群消息读取接口。支持 /help、/start、/delete、/list offset limit、/select id、/model-list、/model-switch id，以及确认卡片和 /confirm id、/cancel id。新对话默认完全模式，切换已有对话保留原有模式。' },
+      { key: 'ownerUserId', label: '渠道所属账号', control: 'text', hidden: true },
       {
         key: 'defaultTargetKind', label: '已验证会话类型', control: 'select', hidden: true,
         defaultValue: 'user', options: [{ label: '单聊', value: 'user' }, { label: '群聊', value: 'group' }],

@@ -84,7 +84,10 @@ export function nativeRuntimeToolNames() {
 }
 
 export function normalizeDisabledCapabilityTools(value: unknown) {
-  const capabilityToolNames = new Set([...capabilityRuntimeToolCatalog().map((tool) => tool.name), ...toolCapabilitySettings.map(tool => tool.name)]);
+  // Optional host tools are mounted alongside SDK capabilities and must retain
+  // the same per-session restrictions, even without a capability manifest.
+  const hostOptionalToolNames = ['memory'];
+  const capabilityToolNames = new Set([...capabilityRuntimeToolCatalog().map((tool) => tool.name), ...toolCapabilitySettings.map(tool => tool.name), ...hostOptionalToolNames]);
   // Preserve dynamic-tool preferences before startup discovery, and while an
   // extension is inactive. Availability must not erase the user's restriction.
   return normalizeDisabledBrowserChatTools(value).filter((name) => capabilityToolNames.has(name) || isExtensionToolName(name));

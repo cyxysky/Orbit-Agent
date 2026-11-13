@@ -24,6 +24,7 @@ import { closeUnusedWeComConnections, getWeComConnection } from './wecom-connect
 import { communicationReplyContents, splitCommunicationText } from './communication-reply';
 import { communicationReplyWithResponseExports } from './communication-response-exports';
 import { importCommunicationAttachments } from './communication-attachments';
+import { communicationContext } from './communication-context';
 import { CodedError, ERROR_CODES } from '@cjfclonedeep/capability-sdk';
 
 
@@ -93,9 +94,10 @@ function enqueue(key: string, work: () => Promise<void>) {
 }
 
 async function receive(integration: ResolvedExternalIntegration, message: WeComInboundMessage, requestId: string) {
-  const userId = integration.configuration.ownerUserId;
-  if (!userId) return;
-  const conversationId = communicationId(integration.id, message.botId, userId, message.target.kind, message.target.id);
+  const ownerUserId = integration.configuration.ownerUserId;
+  if (!ownerUserId || !message.senderId) return;
+  const context = communicationContext({ integrationId: integration.id, botId: message.botId, ownerUserId, message });
+  const conversationId = context.id;
   if (message.cardAction) {
     if (integration.configuration.receiveMessages !== 'true') return;
     const conversation = await readCommunicationConversation(conversationId);
@@ -118,7 +120,11 @@ async function receive(integration: ResolvedExternalIntegration, message: WeComI
   await enqueue(`receive:${conversationId}`, async () => {
     let conversation = await readCommunicationConversation(conversationId);
     if (!conversation) {
-      conversation = { id: conversationId, integrationId: integration.id, botId: message.botId, userId, target: message.target, sessions: [] };
+      conversation = { id: conversationId, integrationId: integration.id, botId: message.botId, ownerUserId,
+        userId: context.userId, scope: context.scope, targets: [message.target], sessions: [] };
+      await saveCommunicationConversation(conversation);
+    } else if (!conversation.targets.some(target => target.kind === message.target.kind && target.id === message.target.id)) {
+      conversation.targets.push(message.target);
       await saveCommunicationConversation(conversation);
     }
     if (integration.configuration.receiveMessages === 'true') {
@@ -126,7 +132,7 @@ async function receive(integration: ResolvedExternalIntegration, message: WeComI
       if (await readCommunicationInbound(id)) return;
       const item: CommunicationInbound = {
         id, conversationId,
-        text: message.text, senderId: message.senderId, status: 'received',
+        text: message.text, senderId: message.senderId, target: message.target, contextPeriod: context.period, status: 'received',
         media: message.media,
       };
       const stream: NonNullable<CommunicationInbound['replyStream']> = {
@@ -191,7 +197,7 @@ function receiverFor(conversation: CommunicationConversation) {
   const receiver = state.receivers.get(conversation.integrationId);
   if (!receiver || receiver.integration.configuration.receiveMessages !== 'true'
     || receiver.integration.configuration.botId !== conversation.botId
-    || receiver.integration.configuration.ownerUserId !== conversation.userId) return undefined;
+    || receiver.integration.configuration.ownerUserId !== conversation.ownerUserId) return undefined;
   return receiver;
 }
 
@@ -220,7 +226,7 @@ async function sendReplyText(conversation: CommunicationConversation, item: Comm
       }
     }
   }
-  await receiver.bot.sendText(conversation.target.id, text);
+  await receiver.bot.sendText(item.target.id, text);
 }
 
 async function cancelItem(id: string) {
@@ -265,12 +271,12 @@ async function deliver(conversation: CommunicationConversation, item: Communicat
       } else {
         const context = { invocationId: item.id };
         const args = await createWeComMessageArguments({
-          content: reply.content, target: conversation.target, context,
+          content: reply.content, target: item.target, context,
           media: { readArtifact: communicationArtifactReader(conversation.userId), upload: receiver.bot.upload },
         });
         const body = args[reply.content.format] as { media_id: string; title?: string; description?: string };
         reply.status = 'sending'; await saveCommunicationInbound(item);
-        await receiver.bot.sendMedia(conversation.target.id, reply.content.format, body.media_id, body);
+        await receiver.bot.sendMedia(item.target.id, reply.content.format, body.media_id, body);
       }
       reply.status = 'sent'; await saveCommunicationInbound(item);
     }
@@ -337,7 +343,7 @@ async function notifyConfirmation(
   try {
     const receiver = receiverFor(conversation);
     if (!receiver) throw new Error('企微连接不可用');
-    await receiver.bot.sendTemplateCard(conversation.target.id, {
+    await receiver.bot.sendTemplateCard(latest.target.id, {
       card_type: 'button_interaction', task_id: pending.id,
       main_title: { title: '需要你的确认', desc: pending.toolName.slice(0, 30) },
       sub_title_text: pending.prompt.slice(0, 112),
@@ -367,25 +373,51 @@ function watch(conversation: CommunicationConversation, item: CommunicationInbou
   });
 }
 
+function sessionForMessage(conversation: CommunicationConversation, item: CommunicationInbound) {
+  if (conversation.scope.kind !== 'group') return conversation.activeSessionId;
+  return conversation.sessions.find(entry => entry.id === conversation.activeSessionId && entry.period === item.contextPeriod)?.id
+    || conversation.sessions.findLast(entry => entry.period === item.contextPeriod)?.id;
+}
+
+function selectSession(conversation: CommunicationConversation, item: CommunicationInbound, sessionId: string) {
+  if (conversation.scope.kind !== 'group' || !conversation.contextPeriod || item.contextPeriod! >= conversation.contextPeriod) {
+    conversation.activeSessionId = sessionId;
+    conversation.contextPeriod = item.contextPeriod;
+  }
+}
+
 async function createSession(conversation: CommunicationConversation, item: CommunicationInbound) {
   const existing = item.sessionId ? await getBrowserChatSession(item.sessionId, conversation.userId) : undefined;
-  const session = existing || await createBrowserChatSession({ userId: conversation.userId, title: '企业微信对话', safetyMode: 'full', selectRuntime: false });
+  const group = conversation.scope.kind === 'group';
+  const session = existing || await createBrowserChatSession({ userId: conversation.userId,
+    title: group ? `企业微信群 · ${conversation.scope.id} · ${item.contextPeriod}` : '企业微信对话',
+    disabledTools: group ? ['memory'] : [], safetyMode: 'full', selectRuntime: false });
   item.sessionId = session.id;
   await saveCommunicationInbound(item);
-  if (!conversation.sessions.some(entry => entry.id === session.id)) conversation.sessions.push({ id: session.id, title: session.title });
-  conversation.activeSessionId = session.id;
+  if (!conversation.sessions.some(entry => entry.id === session.id)) conversation.sessions.push({ id: session.id, title: session.title, period: item.contextPeriod });
+  // A delayed message from last week keeps its own context without moving this
+  // week's active session backwards. Running tasks retain their persisted IDs.
+  selectSession(conversation, item, session.id);
   await saveCommunicationConversation(conversation);
   return session.id;
 }
 
 async function processReceived(conversation: CommunicationConversation, item: CommunicationInbound) {
+  const group = conversation.scope.kind === 'group';
+  const periodSession = group ? conversation.sessions.findLast(entry => entry.period === item.contextPeriod)?.id : undefined;
+  if (group && (!conversation.contextPeriod || item.contextPeriod! > conversation.contextPeriod)) {
+    conversation.contextPeriod = item.contextPeriod;
+    conversation.activeSessionId = periodSession;
+    await saveCommunicationConversation(conversation);
+  }
   const [commandToken, ...args] = item.text.trim().split(/\s+/);
   const command = commandToken.toLowerCase();
   const help = [
     '/help 查看帮助',
     '/start 新建对话',
     '/delete 删除当前对话',
-    '/list [offset] [limit] 分页查看当前网页账号的对话，按创建时间从新到旧排列；offset 从 0 开始，limit 为 1～500，默认 /list 10 10。例：/list 10 5 跳过前 10 个，取后面 5 个；/list 0 10 查看第一页。',
+    group ? '/list [offset] [limit] 查看本群对话。本群每周一北京时间 00:00 开始新上下文，历史对话保留；私聊上下文独立。'
+      : '/list [offset] [limit] 分页查看当前网页账号的对话，按创建时间从新到旧排列；offset 从 0 开始，limit 为 1～500，默认 /list 10 10。例：/list 10 5 跳过前 10 个，取后面 5 个；/list 0 10 查看第一页。',
     '/select chat_xxx 切换对话',
     '/confirm confirm_xxx 确认对应卡片的工具操作',
     '/cancel confirm_xxx 取消对应卡片的工具操作',
@@ -404,7 +436,7 @@ async function processReceived(conversation: CommunicationConversation, item: Co
     } else {
       if (command === '/start') {
         const id = await createSession(conversation, item);
-        await replyText(item, `已开启新对话：${id}。后续消息将在此对话继续，网页中也可查看。`);
+        await replyText(item, group ? `已开启本群共享对话：${id}。本周后续提问将在此对话继续。` : `已开启新对话：${id}。后续消息将在此对话继续，网页中也可查看。`);
       } else if (command === '/list') {
         const sessions = await readBrowserChatSessionSummaries<{ id: string; title: string }>({ userId: conversation.userId, offset, limit: limit + 1 });
         const page = sessions.slice(0, limit);
@@ -437,13 +469,15 @@ async function processReceived(conversation: CommunicationConversation, item: Co
       } else if (command === '/select') {
         const session = await getBrowserChatSession(args[0], conversation.userId);
         if (!session || session.status === 'closed') await replyText(item, '对话不存在、已关闭或不属于当前网页账号。请用 /list 查看可用 ID。');
-        else {
+        else if (group && !conversation.sessions.some(entry => entry.id === session.id && entry.period === item.contextPeriod)) {
+          await replyText(item, '本群只能切换本周的对话；往周历史保留，不会重新加入本周上下文。');
+        } else {
           if (!conversation.sessions.some(entry => entry.id === session.id)) conversation.sessions.push({ id: session.id, title: session.title });
-          conversation.activeSessionId = session.id; await saveCommunicationConversation(conversation);
+          selectSession(conversation, item, session.id); await saveCommunicationConversation(conversation);
           await replyText(item, `已切换到 ${session.id}：${session.title || '新对话'}。将保留原有上下文继续。`);
         }
       } else {
-        const id = conversation.activeSessionId;
+        const id = sessionForMessage(conversation, item);
         if (!id) await replyText(item, '当前没有选中的对话。');
         else {
           for (const [key, watcher] of state.watchers) {
@@ -454,14 +488,15 @@ async function processReceived(conversation: CommunicationConversation, item: Co
           await deleteBrowserChatSession(id, conversation.userId);
           await cancelCommunicationAttachments(id);
           conversation.sessions = conversation.sessions.filter(session => session.id !== id);
-          conversation.activeSessionId = undefined; await saveCommunicationConversation(conversation);
+          if (conversation.activeSessionId === id) conversation.activeSessionId = undefined;
+          await saveCommunicationConversation(conversation);
           await replyText(item, `已删除对话 ${id}。下一条消息会创建新对话。`);
         }
       }
     }
     await deliver(conversation, item); return;
   }
-  let sessionId = item.sessionId || conversation.activeSessionId;
+  let sessionId = item.sessionId || sessionForMessage(conversation, item);
   if (sessionId) {
     const session = await getBrowserChatSession(sessionId, conversation.userId);
     if (!session || session.status === 'closed') {
@@ -493,7 +528,8 @@ async function processReceived(conversation: CommunicationConversation, item: Co
   watch(conversation, item);
   try {
     const currentSession = await getBrowserChatSession(sessionId, conversation.userId);
-    await sendBrowserChatMessage(sessionId, item.text, currentSession?.safetyMode || 'full', conversation.modelSelection?.provider, conversation.modelSelection?.model, item.id, attachments, undefined, conversation.userId);
+    const text = group ? `[企微群消息，发送者 userid=${JSON.stringify(item.senderId)}]\n${item.text}` : item.text;
+    await sendBrowserChatMessage(sessionId, text, currentSession?.safetyMode || 'full', conversation.modelSelection?.provider, conversation.modelSelection?.model, item.id, attachments, undefined, conversation.userId);
   } catch (error) {
     state.watchers.get(item.id)?.stop(); state.watchers.delete(item.id);
     if (attachments.length) {
@@ -536,7 +572,7 @@ async function tick() {
   try {
     if (Date.now() - state.lastRefresh > 15_000) await reconcile();
     const receiving = [...state.receivers.values()].filter(receiver => receiver.integration.configuration.receiveMessages === 'true').map(({ integration }) => ({
-      id: integration.id, botId: integration.configuration.botId, userId: integration.configuration.ownerUserId,
+      id: integration.id, botId: integration.configuration.botId, ownerUserId: integration.configuration.ownerUserId,
     }));
     for (const item of await listPendingCommunicationMessages(receiving)) {
       if (state.watchers.has(item.id) || state.scheduled.has(item.id)) continue;

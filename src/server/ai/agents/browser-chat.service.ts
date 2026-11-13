@@ -935,7 +935,7 @@ async function queuePersonalMemoryExtraction(input: {
   userMessageId: string;
   assistantMessageId: string;
 }) {
-  if (!personalMemoryExtractionEnabled()) return;
+  if (!personalMemoryExtractionEnabled() || input.session.disabledTools?.includes('memory')) return;
   const sessionId = input.session.id;
   const sessionUserId = input.session.userId;
   const targetUrl = input.session.targetUrl;
@@ -1377,7 +1377,8 @@ async function createBrowserChatRuntimeOperationalContext(input: {
     revisions: (domain) => readRuntimeKnowledgeRevisions(normalizeUserId(input.session.userId), domain),
     listSkills: () => readRuntimeSkillCatalog(normalizeUserId(input.session.userId)),
     getSkill: (id) => store.getSkill(id, input.session.userId),
-    searchMemory: (domain) => personalMemoryEnabled() ? searchPersonalMemory({ userId: input.session.userId, query, domain }) : Promise.resolve([]),
+    searchMemory: (domain) => personalMemoryEnabled() && !input.session.disabledTools?.includes('memory')
+      ? searchPersonalMemory({ userId: input.session.userId, query, domain }) : Promise.resolve([]),
     formatMemory: formatPersonalMemoryForRuntime,
   });
   let lastMemorySelection = '';
@@ -1387,7 +1388,7 @@ async function createBrowserChatRuntimeOperationalContext(input: {
     const enabled = new Set(availableTools.filter(name => !input.session.disabledTools?.includes(name) && isRuntimeToolEnabled(name, runtimeConfiguration())));
     const domain = normalizePersonalMemoryDomain(browserChatMemoryUrl(input.browser, input.session));
     const knowledge = await resolver.refresh(domain, JSON.stringify([
-      personalMemoryEnabled(), runtimeSetting('AI_PERSONAL_MEMORY_PROMPT_LIMIT'),
+      personalMemoryEnabled() && !input.session.disabledTools?.includes('memory'), runtimeSetting('AI_PERSONAL_MEMORY_PROMPT_LIMIT'),
     ]));
     const credentials = enabled.has('browser') ? await browserChatCredentialContext(input.session, credentialReferences) : { credentials: [], bindings: [] };
     const officeDraftCatalog = enabled.has('file') ? await officeDraftCatalogForPrompt(input.session.id) : '';
@@ -7155,6 +7156,7 @@ export async function requestBrowserChatMemoryExtraction(sessionId: string, user
   const runtimeSession = sessions.get(sessionId);
   const session = runtimeSession ? await durableBrowserChatSnapshot(runtimeSession) : await readSessionSnapshot(sessionId);
   if (!session || !sessionBelongsToUser(session, userId)) throw new ApiRequestError('会话不存在。', { status: 404, code: ERROR_CODES.NOT_FOUND });
+  if (session.disabledTools?.includes('memory')) throw new ApiRequestError('此对话已关闭个人记忆。', { status: 409, code: ERROR_CODES.MEMORY_EXTRACTION_DISABLED });
   if (session.busy) throw new ApiRequestError('请等待当前操作停止后提炼记忆。', { status: 409, code: ERROR_CODES.BUSY });
   const userIndex = session.messages.findLastIndex(message => message.role === 'user' && message.status !== 'queued');
   const user = session.messages[userIndex];

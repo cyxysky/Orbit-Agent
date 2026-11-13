@@ -4,7 +4,7 @@ import { CommunicationDeliveryError } from './index.ts';
 import { CodedError, ERROR_CODES } from '../../errors.ts';
 
 
-export const WECOM_BOT_RUNTIME_REVISION = 7;
+export const WECOM_BOT_RUNTIME_REVISION = 8;
 
 export type WeComInboundAttachment = {
   type: 'image' | 'file' | 'video';
@@ -34,11 +34,12 @@ export function normalizeWeComInboundMessage(
   const reject = (reason: string) => { rejected?.(reason); return undefined; };
   if (!body?.msgid) return reject('消息缺少 msgid');
   if (body.aibotid !== botId) return reject('消息的机器人 ID 与连接不一致');
-  if (!body.from?.userid) return reject('消息缺少发送人 userid');
+  const senderId = typeof body.from?.userid === 'string' ? body.from.userid.trim() : '';
+  if (!senderId) return reject('消息缺少发送人 userid');
   if (!['single', 'group'].includes(body.chattype)) return reject('消息的 chattype 无效');
   const target = body.chattype === 'group'
     ? { kind: 'group' as const, id: body.chatid || '' }
-    : { kind: 'user' as const, id: body.from.userid };
+    : { kind: 'user' as const, id: senderId };
   if (!target.id) return reject('群聊消息缺少 chatid');
   const parts = body.msgtype === 'mixed' && Array.isArray(body.mixed?.msg_item) ? body.mixed.msg_item : [body];
   const texts: string[] = [];
@@ -55,7 +56,7 @@ export function normalizeWeComInboundMessage(
   }
   const text = normalizeWeComMessageText(texts.join('\n'), body.chattype);
   if (!text && !media.length) return reject('消息没有可处理的文字或附件');
-  return { id: body.msgid, botId, senderId: body.from.userid, target, text, media };
+  return { id: body.msgid, botId, senderId, target, text, media };
 }
 
 /** Card callbacks are structured interactions, never conversational text. */
@@ -63,7 +64,8 @@ export function normalizeWeComCardAction(
   body: EventMessage | undefined, botId: string, rejected?: (reason: string) => void,
 ): WeComInboundMessage | undefined {
   const reject = (reason: string) => { rejected?.(reason); return undefined; };
-  if (!body?.msgid || body.aibotid !== botId || !body.from?.userid) return reject('卡片事件身份无效');
+  const senderId = typeof body?.from?.userid === 'string' ? body.from.userid.trim() : '';
+  if (!body?.msgid || body.aibotid !== botId || !senderId) return reject('卡片事件身份无效');
   if (body.msgtype !== 'event' || body.event?.eventtype !== 'template_card_event') return reject('卡片事件类型无效');
   const { task_id: taskId, event_key: key } = body.event;
   if (typeof taskId !== 'string' || !taskId.trim() || typeof key !== 'string' || !key.trim()) return reject('卡片事件缺少任务或操作标识');
@@ -71,9 +73,9 @@ export function normalizeWeComCardAction(
   if (!['single', 'group'].includes(chatType)) return reject('卡片事件会话类型无效');
   const target = chatType === 'group'
     ? { kind: 'group' as const, id: body.chatid || '' }
-    : { kind: 'user' as const, id: body.from.userid };
+    : { kind: 'user' as const, id: senderId };
   if (!target.id) return reject('卡片事件缺少会话 ID');
-  return { id: body.msgid, botId, senderId: body.from.userid, target, text: '', media: [], cardAction: { taskId, key } };
+  return { id: body.msgid, botId, senderId, target, text: '', media: [], cardAction: { taskId, key } };
 }
 
 export function createWeComBotConnection(input: { botId: string; secret: string }) {
