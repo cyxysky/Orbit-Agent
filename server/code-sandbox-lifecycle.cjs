@@ -95,6 +95,7 @@ async function startManagedRunner({ appDir, environment, url }) {
       CODE_SANDBOX_RUNNER_PORT: url.port || '80',
       CODE_SANDBOX_RUNNER_TOKEN: token,
       CODE_SANDBOX_RUNNER_CONCURRENCY: environment.AGENT_CODE_SANDBOX_MAX_CONCURRENCY || '2',
+      CAPABILITY_RUNTIME_HOME: environment.CAPABILITY_RUNTIME_HOME || process.env.CAPABILITY_RUNTIME_HOME || '',
       CODE_SANDBOX_PYTHON_PATH: environment.CODE_SANDBOX_PYTHON_PATH || process.env.CODE_SANDBOX_PYTHON_PATH || process.env.GLINER_PYTHON_PATH || '',
     },
     stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
@@ -147,12 +148,13 @@ function createCodeSandboxRunnerManager({ appDir, canReconfigure = () => true })
   let runner, key, latestEnvironment, closed = false, lastCheck = 0, retryAfter = 0, failures = 0;
   let pending;
   let queue = Promise.resolve();
-  const sync = (environment = process.env) => {
+  const sync = (environment = process.env, runtimeIdentity = '') => {
     const snapshot = { ...environment };
-    latestEnvironment = snapshot;
+    latestEnvironment = { snapshot, runtimeIdentity };
     const url = managedRunnerUrl(snapshot);
     const nextKey = JSON.stringify([url?.href, snapshot.AGENT_CODE_SANDBOX_RUNNER_TOKEN,
-      snapshot.AGENT_CODE_SANDBOX_MAX_CONCURRENCY, snapshot.CODE_SANDBOX_PYTHON_PATH, snapshot.GLINER_PYTHON_PATH]);
+      snapshot.AGENT_CODE_SANDBOX_MAX_CONCURRENCY, snapshot.CODE_SANDBOX_PYTHON_PATH, snapshot.GLINER_PYTHON_PATH,
+      snapshot.CAPABILITY_RUNTIME_HOME, runtimeIdentity]);
     if (pending?.key === nextKey) return pending.operation;
     const operation = queue.then(async () => {
       if (closed) return;
@@ -173,7 +175,7 @@ function createCodeSandboxRunnerManager({ appDir, canReconfigure = () => true })
       } catch (error) {
         if (error.retryable === false) {
           await runner?.stop(); runner = undefined;
-          retryAfter = Infinity; // Retry after configuration changes or a new host lifecycle.
+          retryAfter = Infinity; // Configuration changes and installed releases invalidate this failure.
         } else retryAfter = Date.now() + Math.min(60_000, 5_000 * 2 ** Math.min(failures++, 4));
         throw error;
       }
@@ -185,7 +187,7 @@ function createCodeSandboxRunnerManager({ appDir, canReconfigure = () => true })
     return operation;
   };
   const monitor = setInterval(() => {
-    if (!closed && latestEnvironment) void sync(latestEnvironment).catch(error => console.error('[code-sandbox] Runner recovery failed', error));
+    if (!closed && latestEnvironment) void sync(latestEnvironment.snapshot, latestEnvironment.runtimeIdentity).catch(error => console.error('[code-sandbox] Runner recovery failed', error));
   }, 5_000);
   monitor.unref();
   return {

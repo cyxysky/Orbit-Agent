@@ -17,13 +17,23 @@ function authorized(value: unknown) {
 
 type CodeSandboxLifecycle = {
   managedRunnerUrl(configuration: Readonly<Record<string, string | undefined>>): URL | undefined;
-  sync(configuration: Readonly<Record<string, string | undefined>>): Promise<void>;
+  sync(configuration: Readonly<Record<string, string | undefined>>, runtimeIdentity?: string): Promise<void>;
   close(): Promise<void>;
 };
 
 export async function startBackend({ codeSandbox }: { codeSandbox?: CodeSandboxLifecycle } = {}) {
   // Complete migrations before the execution child opens the same database.
   const { store } = await import('@/server/db/store');
+  let runnerConfiguration = runtimeConfiguration();
+  let runnerRuntimeIdentity = '';
+  const resolveRunnerConfiguration = async () => {
+    const { managedToolRuntime } = await import('@/server/capabilities/managed-tools');
+    const runtime = await managedToolRuntime('codeSandbox');
+    runnerConfiguration = { ...runtime.environment,
+      AGENT_CODE_SANDBOX_ENABLED: runtime.enabled ? 'true' : 'false',
+      ...(runtime.installed ? { CAPABILITY_RUNTIME_HOME: runtime.installed.runtimeDirectory } : {}) };
+    runnerRuntimeIdentity = runtime.installed?.release || '';
+  };
   let refreshing: Promise<void> | undefined;
   const refreshRuntime = () => {
     if (refreshing) return refreshing;
@@ -31,13 +41,17 @@ export async function startBackend({ codeSandbox }: { codeSandbox?: CodeSandboxL
       await store.refreshRuntimeSettings();
       if (!codeSandbox) return;
       try {
-        if (codeSandbox.managedRunnerUrl(runtimeConfiguration()) && !runtimeSetting('AGENT_CODE_SANDBOX_RUNNER_TOKEN')?.trim()) {
+        await resolveRunnerConfiguration();
+        if (codeSandbox.managedRunnerUrl(runnerConfiguration) && !runnerConfiguration.AGENT_CODE_SANDBOX_RUNNER_TOKEN?.trim()
+          && !runtimeSetting('AGENT_CODE_SANDBOX_RUNNER_TOKEN')?.trim()) {
           await store.saveRuntimeSettings([{
             key: 'AGENT_CODE_SANDBOX_RUNNER_TOKEN', value: randomBytes(32).toString('base64url'), enabled: true, secret: true,
           }]);
           await store.refreshRuntimeSettings();
+          await resolveRunnerConfiguration();
         }
       } catch (error) {
+        runnerConfiguration = { AGENT_CODE_SANDBOX_ENABLED: 'false' };
         // A misconfigured sandbox must not prevent opening Settings to repair it.
         console.error('[code-sandbox] Runner startup failed', error);
       }
@@ -54,7 +68,7 @@ export async function startBackend({ codeSandbox }: { codeSandbox?: CodeSandboxL
     });
   }, 1000);
   configurationTimer.unref();
-  const syncCodeSandbox = () => codeSandbox?.sync(runtimeConfiguration()).catch(error => {
+  const syncCodeSandbox = () => codeSandbox?.sync(runnerConfiguration, runnerRuntimeIdentity).catch(error => {
     console.error('[code-sandbox] Runner synchronization failed', error);
   });
   await syncCodeSandbox();

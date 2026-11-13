@@ -25,14 +25,24 @@ export function toolInstaller() {
   return createManagedToolInstaller({ root: root(), sdkRoot: existsSync(path.join(source, 'scripts/mcp-providers.mjs')) ? source : undefined,
     version: process.env.CAPABILITY_SDK_VERSION || '0.3.0', registry: process.env.CAPABILITY_TOOL_REGISTRY || 'https://registry.npmjs.org' });
 }
+async function readManagedToolConfiguration(id: string): Promise<ManagedToolConfiguration | undefined> {
+  const stored = await readRuntimeMeta(settingsKey + ':' + id);
+  if (!stored) return undefined;
+  const plaintext = decryptCredentialSecret({ aad: aad(id), envelope: stored, formatError: '工具配置密文无效', keyMismatchError: '无法解密工具配置', decryptionError: '读取工具配置失败' });
+  return JSON.parse(plaintext) as ManagedToolConfiguration;
+}
 export async function managedToolConfigurations(): Promise<Record<string, ManagedToolConfiguration>> {
-  const entries = await Promise.all(managedToolCatalog().map(async tool => {
-    const stored = await readRuntimeMeta(settingsKey + ':' + tool.id);
-    if (!stored) return [tool.id, undefined] as const;
-    const plaintext = decryptCredentialSecret({ aad: aad(tool.id), envelope: stored, formatError: '工具配置密文无效', keyMismatchError: '无法解密工具配置', decryptionError: '读取工具配置失败' });
-    return [tool.id, JSON.parse(plaintext) as ManagedToolConfiguration] as const;
-  }));
+  const entries = await Promise.all(managedToolCatalog().map(async tool => [tool.id, await readManagedToolConfiguration(tool.id)] as const));
   return Object.fromEntries(entries.filter((entry): entry is readonly [string, ManagedToolConfiguration] => Boolean(entry[1])));
+}
+/** Lifecycle owners and MCP callers must resolve the same installed tool settings. */
+export async function managedToolRuntime(id: string, overrides: Record<string, string> = {}) {
+  const installed = toolInstaller().installed(id);
+  const configuration = await readManagedToolConfiguration(id);
+  const environment = { ...runtimeConfiguration(), ...configuration?.env, ...overrides };
+  Object.assign(environment, await managedToolRuntimeConfiguration(id, configuration?.config || {}, process.cwd(), environment));
+  return { installed, configuration, environment,
+    enabled: Boolean(installed && configuration?.enabled && isRuntimeToolEnabled(id, environment)) };
 }
 export async function saveManagedToolConfiguration(id: string, value: ManagedToolConfiguration) {
   if (!managedToolCatalog().some(tool => tool.id === id)) throw new CodedError(ERROR_CODES.APPLICATION_ERROR, '未知工具');
@@ -79,12 +89,9 @@ export async function stopManagedTool(id: string, options: { force?: boolean } =
 }
 export async function managedToolConnector(input: { id: string; userId: string; sessionId: string; runId: string;
   env?: Record<string, string>; metadata?: Record<string, unknown>; observe?: boolean }): Promise<AgentConnector> {
-  const installed = toolInstaller().installed(input.id);
+  const { installed, configuration, environment: effective } = await managedToolRuntime(input.id, input.env);
   if (!installed) throw new CodedError(ERROR_CODES.CAPABILITY_EXECUTION_FAILED, '请先在设置 → 工具能力中单独安装此工具。');
-  const configuration = (await managedToolConfigurations())[input.id];
   if (!configuration?.enabled) throw new CodedError(ERROR_CODES.FORBIDDEN, '此工具尚未启用。');
-  const effective = { ...runtimeConfiguration(), ...configuration.env, ...input.env };
-  Object.assign(effective, await managedToolRuntimeConfiguration(input.id, configuration.config, process.cwd(), effective));
   if (!isRuntimeToolEnabled(input.id, effective)) throw new CodedError(ERROR_CODES.FORBIDDEN, '部署权限或全局设置禁止执行此工具。');
   if (!/^[a-zA-Z0-9_-]+$/.test(input.sessionId) || !input.userId || !input.runId) throw new CodedError(ERROR_CODES.INVALID_INPUT, '工具需要有效的用户、对话和执行范围。');
   const prefixes: Record<string, string[]> = {
